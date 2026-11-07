@@ -122,29 +122,39 @@ malformed nodes, invalid child image binding, rejected load and pool-free
 failures. These tests do not validate actual firmware Windows handoff,
 vendor GOP teardown or Windows 617.42 operation.
 
-### First physical-capture troubleshooting (2026-11-07)
+### Physical B850 capture status and next passive test (2026-11-07)
 
-The user-supplied first USB diagnostic log recorded
-`PCI_CAPTURE=0 PCI_NODES=0`, `GOP_CAPTURE=1 GOP_NODES=2`,
-`CONOUT_CAPTURE=1 CONOUT_PATHS=2`, `STATUS=ERROR TOPOLOGY=3` and
-`EXACT_PAIR=0`. Both `ConOut` paths matched the two GOP paths, but
-**the display owners remain unknown** because PCI association failed.
-No NVIDIA/AMD physical or proprietary GOP identity can be concluded.
-The value `HARDWARE_TESTED=0` is a static marker in the EFI image; the
-uploaded log is not cryptographically tied to a particular test machine.
-The `WINDOWS_HANDOFF=REQUESTED` marker records intent, **not** the
-actual result of Windows `StartImage`.
+The second supplied log, `GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT` (SHA-256
+`1acc874082ace67413f57b180c571969e58d1e05bbca164c3c97c78009d7b4ef`),
+locates **50 PCI protocol handles**, below the strict limit of 128. The
+first handle's two 256-byte configuration reads differ:
+`PCI_READ_FAILURE STAGE=pci-refresh-config-changed`,
+`INDEX=0`, `EFI_COMPROMISED_DATA`. Until the changed DWORDs are identified,
+do not skip that handle or relax the full-read stability check.
 
-The next passive diagnostic build logs `PCI_LOCATE_STATUS`,
-`PCI_HANDLE_COUNT`, the 128-handle bound, and exact
-`PCI_READ_FAILURE STAGE` / first bad handle index or error from
-`FreePool`. Do not increase limits, skip a handle, ignore a config
-change or enable detachment until the actual error is understood.
-After recovering a complete PCI inventory, only the full exact-card,
-bridge, GOP, protocol ownership and console report can be evaluated.
-An `ERROR` or `PARTIAL` topology result never licenses an active GPU
-unlock attempt. Source/host tests and this log do not establish safe
-NVIDIA GOP `Stop`, driver 617.42 signed Booter compatibility or recovery.
+The supplementary observer completes independently with **579** firmware
+handles, **50** PCI protocols, **19** detailed display/bridge records,
+and **zero errors**. It identifies the exact RTX 4090 (`01:00.0`,
+`10de:2684 1043:88e6`), RTX 3080 (`04:00.0`,
+`10de:220a 19da:b612`) and AMD iGPU (`0f:00.0`, `1002:13c0`).
+Both captured GOP paths extend the respective NVIDIA GPU PCI paths,
+and both `ConOut` paths match those GOP paths; **neither matches AMD**.
+The user confirmed that no monitor was attached to the AMD motherboard
+output in this run. This may explain the current NVIDIA preboot console
+paths, but does not prove that attaching an AMD display will change them.
+
+The next *read-only* build reports bounded `PCI_CONFIG_DRIFT_DWORD` records
+(`OFFSET`, `FIRST`, `SECOND`, `XOR`, maximum 12 displayed) and the
+full changed-DWORD count, while still returning `STATUS=ERROR` on any drift.
+Connect an AMD iGPU monitor **before a cold boot**, retain the NVIDIA
+monitor cables, run the diagnostic again, and compare console paths and
+config drift. A different monitor setup is a documented changed condition,
+not a controlled replication of the previous configuration.
+
+`WINDOWS_HANDOFF=REQUESTED` and a saved log do **not** by themselves prove
+the handoff succeeded. A successful passive report would not establish safe
+NVIDIA DriverBinding.Stop, recovery, signed 617.42 Booter or SEC2
+compatibility. Active unlocking remains blocked.
 
 ### Independent passive PCI evidence on strict-collector failure
 

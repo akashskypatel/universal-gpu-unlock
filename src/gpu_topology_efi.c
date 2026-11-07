@@ -210,8 +210,28 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
       return PciCaptureFailure("pci-refresh-location-changed",EFI_COMPROMISED_DATA);
     status=io->Pci.Read(io,EfiPciIoWidthUint32,0,64,verify);
     if(EFI_ERROR(status))return PciCaptureFailure("pci-refresh-config-read",status);
-    if(memcmp(cfg,verify,sizeof(cfg)))
+    if(memcmp(cfg,verify,sizeof(cfg))) {
+      UINTN changed=0,reported=0;
+      /* Do not waive drift (including volatile bits) until exact offsets
+       * and before/after values have been captured on the real firmware. */
+      Say("PCI_CONFIG_DRIFT_BDF=%04x:%02x:%02x.%u ID=%04x:%04x CLASS=%04x\r\n",
+          (unsigned)s,(unsigned)b,(unsigned)d,(unsigned)f,
+          (unsigned)(cfg[0]&65535U),(unsigned)(cfg[0]>>16),
+          (unsigned)(cfg[2]>>16));
+      for(i=0;i<64;i++) {
+        if(cfg[i]==verify[i])continue;
+        changed++;
+        if(reported<12) {
+          Say("PCI_CONFIG_DRIFT_DWORD OFFSET=%#llx FIRST=%08x SECOND=%08x XOR=%08x\r\n",
+              (unsigned long long)(i*4U),(unsigned)cfg[i],(unsigned)verify[i],
+              (unsigned)(cfg[i]^verify[i]));
+          reported++;
+        }
+      }
+      Say("PCI_CONFIG_DRIFT_SUMMARY CHANGED_DWORDS=%zu REPORTED=%zu TOTAL_DWORDS=64\r\n",
+          (size_t)changed,(size_t)reported);
       return PciCaptureFailure("pci-refresh-config-changed",EFI_COMPROMISED_DATA);
+    }
   }
   return 1;
 }
