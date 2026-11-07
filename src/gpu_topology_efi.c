@@ -14,6 +14,7 @@
 #include <Protocol/SimpleFileSystem.h>
 #endif
 #include "gpu_topology.h"
+#include "gpu_pci_observation.h"
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #include "gpu_windows_handoff.h"
 #endif
@@ -27,6 +28,8 @@ static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
+/* Independent, read-only *evidence*, never used as a topology pass. */
+static GU_PCI_OBS_CAPTURE Supplemental;
 static EFI_SYSTEM_TABLE *System;
 #ifdef GU_TOPO_SAVE_LOG
 static char LogBytes[131072];
@@ -252,6 +255,65 @@ static int CapturePci(EFI_BOOT_SERVICES *bs) {
   return okay;
 }
 
+/* Adapt the bounded AllHandles/PCI reporting approach from
+ * Windows-GPU-UNLOCK internal-boot/boot/diagnostic.c. This supplementary
+ * inventory is strictly diagnostic. Never feed it to GuTopoAssess or GuInit. */
+static void ReportPciEvidence(EFI_BOOT_SERVICES *bs) {
+  UINTN i;
+  UINTN expanded_bridges=0;
+  int complete=GuPciObserveReadOnly(bs,&Supplemental);
+  Say("PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0\r\n");
+  Say("PCI_OBS_SUMMARY COMPLETE=%u ALL_HANDLES=%zu PCI_PROTOCOLS=%zu RELEVANT=%zu RECORDS=%zu ERRORS=%zu TRUNCATED=%u\r\n",
+      (unsigned)complete,(size_t)Supplemental.handle_count,
+      (size_t)Supplemental.pci_protocol_count,(size_t)Supplemental.relevant_count,
+      (size_t)Supplemental.record_count,(size_t)Supplemental.failures,
+      (unsigned)Supplemental.truncated);
+  Say("PCI_OBS_STATUS LOCATE=%#llx FREE=%#llx FIRST_STAGE=%u FIRST_INDEX=%zu FIRST_STATUS=%#llx\r\n",
+      (unsigned long long)Supplemental.locate_status,
+      (unsigned long long)Supplemental.free_status,
+      (unsigned)Supplemental.first_failure_stage,
+      (size_t)Supplemental.first_failure_index,
+      (unsigned long long)Supplemental.first_failure_status);
+  for(i=0;i<Supplemental.record_count;i++) {
+    const GU_PCI_OBS_RECORD *p=&Supplemental.records[i];
+    UINT32 id=p->config[0];
+    UINT32 class_code=p->config[2]>>16;
+    int bridge=class_code==0x0604U;
+    int display=(class_code>>8)==0x03U;
+    int details=display || (bridge && expanded_bridges++<16);
+    Say("PCI_OBS[%zu] ALL_INDEX=%zu %04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x BY_DRIVER=%zu OWNERS_KNOWN=%u OWNER_AGENT=%p PATH_OK=%u PATH_LEN=%zu\r\n",
+        (size_t)i,(size_t)p->index,(unsigned)p->segment,(unsigned)p->bus,
+        (unsigned)p->device,(unsigned)p->function,
+        (unsigned)(id&65535U),(unsigned)(id>>16),
+        (unsigned)(p->config[11]&65535U),(unsigned)(p->config[11]>>16),
+        (unsigned)class_code,(size_t)p->by_driver,
+        (unsigned)p->owners_known,p->first_agent,
+        (unsigned)p->path_ok,(size_t)p->path_bytes);
+    if(bridge) {
+      UINT32 window=p->config[6];
+      Say("PCI_OBS_BRIDGE[%zu] PRIMARY=%02x SECONDARY=%02x SUBORDINATE=%02x\r\n",
+          (size_t)i,(unsigned)(window&255U),
+          (unsigned)((window>>8)&255U),(unsigned)((window>>16)&255U));
+    }
+    if(details) {
+      GU_TOPO_PATH path;
+      Say("PCI_OBS_CFG[%zu] %08x %08x %08x %08x %08x %08x %08x %08x\r\n",
+          (size_t)i,p->config[0],p->config[1],p->config[2],p->config[3],
+          p->config[4],p->config[5],p->config[6],p->config[7]);
+      Say("PCI_OBS_CFG[%zu] %08x %08x %08x %08x %08x %08x %08x %08x\r\n",
+          (size_t)i,p->config[8],p->config[9],p->config[10],p->config[11],
+          p->config[12],p->config[13],p->config[14],p->config[15]);
+      if(p->path_ok) {
+        memset(&path,0,sizeof(path));
+        path.length=(size_t)p->path_bytes;
+        memcpy(path.bytes,p->path,p->path_bytes);
+        SayPath("PCI_OBS",i,&path);
+      }
+    }
+  }
+  Say("PCI_OBSERVATION_NOT_ACCEPTANCE=1\r\n");
+}
+
 static int CaptureGop(EFI_BOOT_SERVICES *bs) {
   EFI_HANDLE *handles=NULL;
   UINTN count=0,i;
@@ -341,6 +403,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   Say("GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls\r\n");
   Say("READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n");
   pci_ok=CapturePci(bs);
+  if(!pci_ok)ReportPciEvidence(bs);
   gop_ok=CaptureGop(bs);
   console_ok=ConsoleRead(table);
   result=(pci_ok && gop_ok)?GuTopoAssess(&Snapshot,&Report):GU_TOPO_INVALID;

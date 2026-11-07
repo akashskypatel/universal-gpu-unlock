@@ -5,6 +5,9 @@ on:
     paths:
       - 'src/gpu_topology*'
       - 'src/gpu_inventory*'
+      - 'src/gpu_pci_observation*'
+      - 'tests/gpu_pci_observation_mock.h'
+      - 'tests/test_gpu_pci_observation.c'
       - 'src/gpu_windows_*'
       - 'tests/test_gpu_windows_*'
       - 'tests/gpu_windows_handoff_mock.h'
@@ -54,6 +57,12 @@ jobs:
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_$compiler"
               "$RUNNER_TEMP/test_gpu_windows_handoff_$compiler"
             done
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_GPU_DIAGNOSTIC_ONLY -DGU_PCI_OBSERVATION_HOST_TEST -Isrc tests/test_gpu_pci_observation.c src/gpu_pci_observation.c -o "$RUNNER_TEMP/test_gpu_pci_observation_$compiler"
+              "$RUNNER_TEMP/test_gpu_pci_observation_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_GPU_DIAGNOSTIC_ONLY -DGU_PCI_OBSERVATION_HOST_TEST -Isrc tests/test_gpu_pci_observation.c src/gpu_pci_observation.c -o "$RUNNER_TEMP/test_gpu_pci_observation_ubsan"
+            "$RUNNER_TEMP/test_gpu_pci_observation_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
             "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
           ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"

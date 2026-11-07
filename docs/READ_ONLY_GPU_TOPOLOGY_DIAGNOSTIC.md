@@ -146,6 +146,16 @@ An `ERROR` or `PARTIAL` topology result never licenses an active GPU
 unlock attempt. Source/host tests and this log do not establish safe
 NVIDIA GOP `Stop`, driver 617.42 signed Booter compatibility or recovery.
 
+### Independent passive PCI evidence on strict-collector failure
+
+The original strict topology assessment still requires a complete bounded set of at most **128 PCI records**. Earlier USB evidence gave `PCI_CAPTURE=0 PCI_NODES=0`, so failure could not be attributed to missing GPUs, a count limit, or a first-handle error.
+
+The supplementary, diagnostic-only observer borrows the **read-only reporting method**, not the GPU mutation/teardown code, from [Windows-GPU-UNLOCK's passive handle collector](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/internal-boot/boot/diagnostic.c). When the strict capture fails, it independently snapshots up to **4,096 EFI handles** using `AllHandles`, probes for `EFI_PCI_IO_PROTOCOL` with `HandleProtocol`, reads the first 64 PCI configuration bytes, obtains PCI location, captures a bounded device path, and inspects BY_DRIVER open records. Each allocated firmware pool is released. No GPU MMIO, PCI configuration writes, ROM reads, driver detachment, reset or UEFI variable writes are introduced.
+
+The log marks the secondary report `PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0`, followed by `PCI_OBS_SUMMARY`, `PCI_OBS_STATUS`, and selected `PCI_OBS[]` display/bridge identity/path/ownership records. It records at most 96 relevant endpoints and explicitly marks truncation or a failed UEFI call. Paths or owner identities that could not be observed remain unknown. The report never changes `PCI_CAPTURE`, `EXACT_PAIR`, or the topology result and cannot authorize active GPU firmware operations. It is independent evidence useful for *diagnosing* a failed strict collector.
+
+This logic has mock-only tests at `tests/test_gpu_pci_observation.c`; no real motherboard validation is claimed until a fresh signed USB capture is supplied.
+
 ## Host verification and fault boundaries
 
 ```sh

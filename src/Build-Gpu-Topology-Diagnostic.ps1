@@ -20,7 +20,7 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     $output = Join-Path $PSScriptRoot 'build_diagnostic'
     New-Item -ItemType Directory -Force -Path $output | Out-Null
-    $sources = @('gpu_inventory.c','gpu_topology.c','gpu_topology_efi.c','gpu_windows_path.c','format.c','runtime.c')
+    $sources = @('gpu_inventory.c','gpu_topology.c','gpu_pci_observation.c','gpu_topology_efi.c','gpu_windows_path.c','format.c','runtime.c')
     if ($WindowsEspGuid) {
         if (-not $SaveLog) { throw '-WindowsEspGuid requires -SaveLog to preserve diagnostic evidence before handoff.' }
         $parsed = [guid]::Empty
