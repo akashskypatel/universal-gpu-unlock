@@ -5,6 +5,9 @@ on:
     paths:
       - 'src/gpu_topology*'
       - 'src/gpu_inventory*'
+      - 'src/gpu_windows_*'
+      - 'tests/test_gpu_windows_*'
+      - 'tests/gpu_windows_handoff_mock.h'
       - 'src/Build-Gpu-Topology-Diagnostic.ps1'
       - 'tests/test_gpu_topology.c'
       - '.github/workflows/gpu-topology-diagnostic.yml'
@@ -45,6 +48,14 @@ jobs:
                 "$RUNNER_TEMP/test_${test}_${compiler}"
               done
             done
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_windows_path.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_path_$compiler"
+              "$RUNNER_TEMP/test_gpu_windows_path_$compiler"
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_$compiler"
+              "$RUNNER_TEMP/test_gpu_windows_handoff_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
+            "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
           ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
       - name: Preserve final host status
         if: always()
@@ -71,6 +82,11 @@ jobs:
         run: |
           try {
             $ErrorActionPreference='Stop'
+            # Synthetic, non-deployable partition GUID: compile coverage only.
+            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -WindowsEspGuid '12345678-1234-4234-8234-123456789abc' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC handoff variant failed: $LASTEXITCODE"}
+            'HANDOFF_COMPILE_EXIT=0 SYNTHETIC_WINDOWS_ESP_GUID=1 NOT_FOR_DEPLOYMENT=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Restore ordinary console-only output for the uploaded artifact.
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI)){throw 'EFI missing'}

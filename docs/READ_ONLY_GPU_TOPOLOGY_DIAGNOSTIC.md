@@ -46,9 +46,10 @@ its pre-boot PCI bus will remain the same across firmware configuration changes.
 No vendor unlock sources, `app.c`, `dxe_main.c`, `msi_release.c`, DMA, BAR0
 MMIO or firmware transactions are linked. The default image only outputs
 verbose Unicode text through `ConOut` and does not write a disk or NVRAM.
-**Optional** `-SaveLog` intentionally creates a *new* `GPU-TOPOLOGY-DIAGNOSTIC.TXT`
-on the boot application's EFI volume; it refuses to overwrite an existing file.
-This optional log file is the only persistent mutation by the application.
+**Optional** `-SaveLog` creates a new, numbered
+`GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT` (then `-0001.TXT`, etc.) on the
+application's EFI volume, refusing overwrites and file-operation failures.
+This log file is the only intended persistent mutation by the diagnostic.
 
 ## Build, inspect and run
 
@@ -69,12 +70,57 @@ Do not enroll new Secure Boot keys merely to run a diagnostic.
 
 On removable media with UEFI Shell, run the image by its explicitly chosen
 path, e.g. `fs0:\GPU-TOPOLOGY-DIAGNOSTIC.EFI`. Filesystem mappings vary.
-With `-SaveLog`, archive or delete the **diagnostic log file** before running
-again; the program refuses overwrites to preserve original evidence.
+With `-SaveLog`, each run chooses the next unused numbered diagnostic log
+(up to 10,000), preserving preceding captures. Full media, failed file
+operations or log-closure failures are reported rather than ignored.
 Capture all `PCI[n]`, `PCI PATH_OFFSET`, `GPU[n]`, `GOP[n]`, `CONOUT[n]`
 path hex chunks and final `STATUS` lines,
 and retain the SHA-256 and build arguments. Never interpret `STATUS=COMPLETE`
 as permission to detach a driver or proceed to a firmware transaction.
+
+
+## Optional, pinned Windows Boot Manager handoff
+
+The normal diagnostic image **does not automatically start Windows**. A
+separately built diagnostic variant can run the same read-only capture,
+save/flush/close its numbered log, then invoke UEFI `LoadImage` and
+`StartImage` on precisely `\EFI\\Microsoft\\Boot\\bootmgfw.efi` on a
+**build-time pinned GPT Windows EFI System Partition**:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -WindowsEspGuid "<verified-Windows-ESP-unique-partition-GUID>"
+```
+
+The GUID is the selected **Windows ESP's unique GPT partition GUID**, not
+the volume label, disk GUID or USB partition. Obtain and verify it locally,
+for example by inspecting Windows system and ESP partitions with
+`Get-Partition`. A GUID is required; there is **no** auto-select-first-disk
+fallback. The header containing the selected GUID is generated under the
+ignored `src/build_diagnostic` directory and **must not be committed**.
+
+The diagnostic searches EFI Simple File System handles, rejects absent or
+duplicate matching GPT partition paths, excludes its own boot volume,
+validates the complete device path and the returned Windows image's
+`DeviceHandle`, and makes a single direct `StartImage` attempt. It does
+not write `BootOrder`, `BootNext`, NVRAM, firmware or GPU state. A passive
+`STATUS=PARTIAL` or `STATUS=ERROR` does not prevent normal Windows startup
+*if the diagnostic log was durably saved and closed*: these results are
+observations, not evidence of altered GPU hardware.
+
+On log save failure, ambiguous Windows ESP, image-load failure or returned
+`StartImage` error, the application **does not reset or retry**. EFI
+firmware controls what happens after the image returns. Recovery must remain
+available via independent Windows Boot Manager boot selection. This variant
+is still **unsigned** as built; any local signing, drive replacement, key
+handling and USB deployment occur **outside this repository**. The
+repository intentionally includes **no** build-and-sign/deploy script,
+machine-specific Windows ESP GUID or signing credential.
+
+The host-only negative checks are `tests/test_gpu_windows_path.c` and
+`tests/test_gpu_windows_handoff.c`. They cover wrong/duplicate GPT paths,
+malformed nodes, invalid child image binding, rejected load and pool-free
+failures. These tests do not validate actual firmware Windows handoff,
+vendor GOP teardown or Windows 617.42 operation.
 
 ## Host verification and fault boundaries
 

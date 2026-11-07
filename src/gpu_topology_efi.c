@@ -14,6 +14,9 @@
 #include <Protocol/SimpleFileSystem.h>
 #endif
 #include "gpu_topology.h"
+#ifdef GU_TOPO_WINDOWS_HANDOFF
+#include "gpu_windows_handoff.h"
+#endif
 #include "format.h"
 #include <stdarg.h>
 #include <string.h>
@@ -229,17 +232,37 @@ static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   if(EFI_ERROR(s)||!fs||!fs->OpenVolume)return EFI_UNSUPPORTED;
   s=fs->OpenVolume(fs,&root);
   if(EFI_ERROR(s)||!root||!root->Open||!root->Close)return EFI_UNSUPPORTED;
-  s=root->Open(root,&prior,L"\\GPU-TOPOLOGY-DIAGNOSTIC.TXT",EFI_FILE_MODE_READ,0);
-  if(s!=EFI_NOT_FOUND) {
-    if(s==EFI_SUCCESS && prior && prior->Close)(VOID)prior->Close(prior);
-    (VOID)root->Close(root);
-    return s==EFI_SUCCESS?EFI_ALREADY_STARTED:s;
-  }
-  s=root->Open(root,&file,L"\\GPU-TOPOLOGY-DIAGNOSTIC.TXT",
-               EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
-  if(EFI_ERROR(s)||!file||!file->Write||!file->Close) {
-    if(file && file->Close)(VOID)file->Close(file);
-    (VOID)root->Close(root);return EFI_DEVICE_ERROR;
+  /* Windows-GPU-UNLOCK style non-overwriting numbered captures: repeated
+   * USB boots must not block Windows merely because an older log exists. */
+  {
+    UINTN attempt;
+    CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
+    UINTN chars=0;
+    while(name[chars])chars++;
+    for(attempt=0;attempt<10000;attempt++) {
+      name[chars-8]=(CHAR16)('0'+attempt/1000);
+      name[chars-7]=(CHAR16)('0'+(attempt/100)%10);
+      name[chars-6]=(CHAR16)('0'+(attempt/10)%10);
+      name[chars-5]=(CHAR16)('0'+attempt%10);
+      prior=NULL;
+      s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
+      if(s==EFI_SUCCESS) {
+        if(!prior || !prior->Close || EFI_ERROR(prior->Close(prior))) {
+          (VOID)root->Close(root);return EFI_DEVICE_ERROR;
+        }
+        continue;
+      }
+      if(s!=EFI_NOT_FOUND) { (VOID)root->Close(root);return s; }
+      s=root->Open(root,&file,name,
+                   EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+      if(EFI_ERROR(s) || !file || !file->Write || !file->Close) {
+        if(file && file->Close)(VOID)file->Close(file);
+        (VOID)root->Close(root);return EFI_DEVICE_ERROR;
+      }
+      Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
+      break;
+    }
+    if(attempt==10000) {(VOID)root->Close(root);return EFI_VOLUME_FULL;}
   }
   bytes=(UINTN)LogUsed;
   s=file->Write(file,&bytes,LogBytes);
@@ -308,13 +331,28 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result==GU_TOPO_COMPLETE?"COMPLETE":result==GU_TOPO_INVALID?"ERROR":"PARTIAL",
       result,(unsigned)Report.pair_exact);
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
+#ifdef GU_TOPO_WINDOWS_HANDOFF
+  Say("WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write\r\n");
+#endif
 #ifdef GU_TOPO_SAVE_LOG
   {
     EFI_STATUS written=SaveLog(image,table);
-    Say("SAVE_LOG_STATUS=%#llx FILE=\\GPU-TOPOLOGY-DIAGNOSTIC.TXT (new file only)\r\n",
+    Say("SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT\r\n",
         (unsigned long long)written);
     if(EFI_ERROR(written))return written;
   }
 #endif
+#ifdef GU_TOPO_WINDOWS_HANDOFF
+  /* A partial passive observation does not change GPU state. Always attempt
+   * normal Windows startup after successful durable capture/close. */
+  Say("Starting the explicitly pinned Windows Boot Manager directly.\r\n");
+  {
+    EFI_STATUS handoff=GuWindowsBootManager(image,table);
+    Say("WINDOWS_HANDOFF_RETURNED=%#llx; no retry or reset\r\n",
+        (unsigned long long)handoff);
+    return handoff;
+  }
+#else
   return result==GU_TOPO_COMPLETE?EFI_SUCCESS:EFI_UNSUPPORTED;
+#endif
 }
