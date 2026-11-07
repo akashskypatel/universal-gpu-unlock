@@ -143,6 +143,7 @@ proof that `DisconnectController()` is safe.
 
 - Pure topology host checks are implemented. EFI source and isolated build
   recipe are provided; physical execution remains **not tested**.
+- [GitHub Actions run 42422191256](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42422191256) passed the 21-path and 17-handoff negative checks under GCC/Clang (handoff also GCC UBSan); Windows MSVC compiled the opt-in handoff variant using a deliberately **synthetic, non-deployable Windows ESP GUID**, then rebuilt the console-only variant for artifact upload. No signing, USB boot or real Windows handoff was exercised.
 - No changes are made to the legacy active entrypoint's strict multi-GPU
   refusal. No dual-GPU write-enabled path is introduced.
 - Revalidate all build and host results against a specific commit and hardware
