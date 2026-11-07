@@ -154,7 +154,7 @@ The supplementary, diagnostic-only observer borrows the **read-only reporting me
 
 The log marks the secondary report `PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0`, followed by `PCI_OBS_SUMMARY`, `PCI_OBS_STATUS`, and selected `PCI_OBS[]` display/bridge identity/path/ownership records. It records at most 96 relevant endpoints and explicitly marks truncation or a failed UEFI call. Paths or owner identities that could not be observed remain unknown. The report never changes `PCI_CAPTURE`, `EXACT_PAIR`, or the topology result and cannot authorize active GPU firmware operations. It is independent evidence useful for *diagnosing* a failed strict collector.
 
-This logic has mock-only tests at `tests/test_gpu_pci_observation.c`; no real motherboard validation is claimed until a fresh signed USB capture is supplied.
+[GitHub Actions run 42425559424](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42425559424) **PASS**: `tests/test_gpu_pci_observation.c` contains **30 assertions**, run with GCC, Clang and GCC UBSan; existing inventory/topology/handoff host checks also pass, and MSVC builds the diagnostic EFI with/without Windows handoff. The CI handoff variant uses a synthetic, non-deployable ESP GUID. These are host mock and build results, **not a successful physical B850 inventory**, real signed USB execution, or proof of driver release.
 
 ## Host verification and fault boundaries
 
