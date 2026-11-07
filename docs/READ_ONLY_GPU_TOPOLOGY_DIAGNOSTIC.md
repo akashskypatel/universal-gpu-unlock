@@ -146,9 +146,11 @@ paths, but does not prove that attaching an AMD display will change them.
 The next *read-only* build reports bounded `PCI_CONFIG_DRIFT_DWORD` records
 (`OFFSET`, `FIRST`, `SECOND`, `XOR`, maximum 12 displayed) and the
 full changed-DWORD count, while still returning `STATUS=ERROR` on any drift.
-Connect an AMD iGPU monitor **before a cold boot**, retain the NVIDIA
-monitor cables, run the diagnostic again, and compare console paths and
-config drift. A different monitor setup is a documented changed condition,
+The user subsequently connected a display to the AMD motherboard output
+and observed BIOS setup rendering on the iGPU. This validates the BIOS
+setup display path, but not the UEFI application's `ConOut` variable.
+Keep the NVIDIA monitor cables unchanged, **cold boot** the updated
+read-only EFI, and compare console paths and config drift. A different monitor setup is a documented changed condition,
 not a controlled replication of the previous configuration.
 
 `WINDOWS_HANDOFF=REQUESTED` and a saved log do **not** by themselves prove
