@@ -122,6 +122,30 @@ malformed nodes, invalid child image binding, rejected load and pool-free
 failures. These tests do not validate actual firmware Windows handoff,
 vendor GOP teardown or Windows 617.42 operation.
 
+### First physical-capture troubleshooting (2026-11-07)
+
+The user-supplied first USB diagnostic log recorded
+`PCI_CAPTURE=0 PCI_NODES=0`, `GOP_CAPTURE=1 GOP_NODES=2`,
+`CONOUT_CAPTURE=1 CONOUT_PATHS=2`, `STATUS=ERROR TOPOLOGY=3` and
+`EXACT_PAIR=0`. Both `ConOut` paths matched the two GOP paths, but
+**the display owners remain unknown** because PCI association failed.
+No NVIDIA/AMD physical or proprietary GOP identity can be concluded.
+The value `HARDWARE_TESTED=0` is a static marker in the EFI image; the
+uploaded log is not cryptographically tied to a particular test machine.
+The `WINDOWS_HANDOFF=REQUESTED` marker records intent, **not** the
+actual result of Windows `StartImage`.
+
+The next passive diagnostic build logs `PCI_LOCATE_STATUS`,
+`PCI_HANDLE_COUNT`, the 128-handle bound, and exact
+`PCI_READ_FAILURE STAGE` / first bad handle index or error from
+`FreePool`. Do not increase limits, skip a handle, ignore a config
+change or enable detachment until the actual error is understood.
+After recovering a complete PCI inventory, only the full exact-card,
+bridge, GOP, protocol ownership and console report can be evaluated.
+An `ERROR` or `PARTIAL` topology result never licenses an active GPU
+unlock attempt. Source/host tests and this log do not establish safe
+NVIDIA GOP `Stop`, driver 617.42 signed Booter compatibility or recovery.
+
 ## Host verification and fault boundaries
 
 ```sh

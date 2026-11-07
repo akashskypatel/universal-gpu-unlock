@@ -122,6 +122,13 @@ static int PcieRootPort(const UINT32 config[64]) {
   return 0;
 }
 
+/* Every failed PCI read must identify its exact stage in the USB log.
+ * This changes error reporting only: no rejected device is skipped. */
+static int PciCaptureFailure(const char *stage, EFI_STATUS status) {
+  Say("PCI_READ_FAILURE STAGE=%s EFI_STATUS=%#llx\r\n",
+      stage,(unsigned long long)status);
+  return 0;
+}
 static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   EFI_PCI_IO_PROTOCOL *io=NULL;
   EFI_DEVICE_PATH_PROTOCOL *path=NULL;
@@ -131,13 +138,19 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   EFI_STATUS status;
   memset(node,0,sizeof(*node));
   status=bs->HandleProtocol(h,&PciGuid,(VOID **)&io);
-  if(EFI_ERROR(status)||!io||!io->Pci.Read||!io->GetLocation)return 0;
+  if(EFI_ERROR(status))return PciCaptureFailure("pci-handle-protocol",status);
+  if(!io || !io->Pci.Read || !io->GetLocation)
+    return PciCaptureFailure("pci-interface-missing",EFI_COMPROMISED_DATA);
   status=io->GetLocation(io,&s,&b,&d,&f);
-  if(EFI_ERROR(status)||s>65535 || b>255 || d>31 || f>7)return 0;
+  if(EFI_ERROR(status))return PciCaptureFailure("pci-get-location",status);
+  if(s>65535 || b>255 || d>31 || f>7)
+    return PciCaptureFailure("pci-location-invalid",EFI_COMPROMISED_DATA);
   status=io->Pci.Read(io,EfiPciIoWidthUint32,0,64,cfg);
-  if(EFI_ERROR(status))return 0;
+  if(EFI_ERROR(status))return PciCaptureFailure("pci-config-read",status);
   status=bs->HandleProtocol(h,&PathGuid,(VOID **)&path);
-  if(EFI_ERROR(status)||!PathCopy(path,&node->path))return 0;
+  if(EFI_ERROR(status))return PciCaptureFailure("pci-path-protocol",status);
+  if(!PathCopy(path,&node->path))
+    return PciCaptureFailure("pci-path-invalid",EFI_COMPROMISED_DATA);
   node->identity.handle=h;node->identity.pci=io;
   node->identity.segment=(UINT32)s;node->identity.bus=(UINT32)b;
   node->identity.device=(UINT32)d;node->identity.function=(UINT32)f;
@@ -156,7 +169,7 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
       node->openers_known=1;
       if(count>1024 || (count && !entries)) {
         if(entries && bs->FreePool)(VOID)bs->FreePool(entries);
-        return 0;
+        return PciCaptureFailure("pci-openers-invalid",EFI_COMPROMISED_DATA);
       }
       for(i=0;i<count;i++) {
         if(entries[i].Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER) {
@@ -165,22 +178,37 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
         }
       }
     }
-    if(entries && ( !bs->FreePool || EFI_ERROR(bs->FreePool(entries))))return 0;
+    if(entries) {
+      if(!bs->FreePool)
+        return PciCaptureFailure("pci-openers-free-unavailable",EFI_UNSUPPORTED);
+      status=bs->FreePool(entries);
+      if(EFI_ERROR(status))return PciCaptureFailure("pci-openers-free",status);
+    }
   }
-  /* Re-resolve and verify that the entire PCI snapshot and binding are stable. */
+  /* Fail closed if re-resolved protocols or the *entire* snapshot drift.
+   * Do not weaken any stability assertion until the reason is known. */
   {
     EFI_PCI_IO_PROTOCOL *again=NULL;
     EFI_DEVICE_PATH_PROTOCOL *again_path=NULL;
     GU_TOPO_PATH fresh;
     UINTN ss=~(UINTN)0,bb=~(UINTN)0,dd=~(UINTN)0,ff=~(UINTN)0;
-    if(EFI_ERROR(bs->HandleProtocol(h,&PciGuid,(VOID **)&again)) || again!=io ||
-       EFI_ERROR(bs->HandleProtocol(h,&PathGuid,(VOID **)&again_path)) ||
-       !PathCopy(again_path,&fresh) || fresh.length!=node->path.length ||
-       memcmp(fresh.bytes,node->path.bytes,fresh.length) ||
-       EFI_ERROR(io->GetLocation(io,&ss,&bb,&dd,&ff)) ||
-       ss!=s || bb!=b || dd!=d || ff!=f ||
-       EFI_ERROR(io->Pci.Read(io,EfiPciIoWidthUint32,0,64,verify)) ||
-       memcmp(cfg,verify,sizeof(cfg)))return 0;
+    status=bs->HandleProtocol(h,&PciGuid,(VOID **)&again);
+    if(EFI_ERROR(status))return PciCaptureFailure("pci-refresh-protocol",status);
+    if(again!=io)
+      return PciCaptureFailure("pci-refresh-protocol-changed",EFI_COMPROMISED_DATA);
+    status=bs->HandleProtocol(h,&PathGuid,(VOID **)&again_path);
+    if(EFI_ERROR(status))return PciCaptureFailure("pci-refresh-path-protocol",status);
+    if(!PathCopy(again_path,&fresh) || fresh.length!=node->path.length ||
+       memcmp(fresh.bytes,node->path.bytes,fresh.length))
+      return PciCaptureFailure("pci-refresh-path-changed",EFI_COMPROMISED_DATA);
+    status=io->GetLocation(io,&ss,&bb,&dd,&ff);
+    if(EFI_ERROR(status))return PciCaptureFailure("pci-refresh-location",status);
+    if(ss!=s || bb!=b || dd!=d || ff!=f)
+      return PciCaptureFailure("pci-refresh-location-changed",EFI_COMPROMISED_DATA);
+    status=io->Pci.Read(io,EfiPciIoWidthUint32,0,64,verify);
+    if(EFI_ERROR(status))return PciCaptureFailure("pci-refresh-config-read",status);
+    if(memcmp(cfg,verify,sizeof(cfg)))
+      return PciCaptureFailure("pci-refresh-config-changed",EFI_COMPROMISED_DATA);
   }
   return 1;
 }
@@ -190,13 +218,37 @@ static int CapturePci(EFI_BOOT_SERVICES *bs) {
   UINTN count=0,i;
   EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
   int okay=1;
-  if(EFI_ERROR(status)||count==0 || count>GU_TOPO_MAX_PCI || !handles)okay=0;
+  Say("PCI_LOCATE_STATUS=%#llx PCI_HANDLE_COUNT=%zu PCI_LIMIT=%u\r\n",
+      (unsigned long long)status,(size_t)count,(unsigned)GU_TOPO_MAX_PCI);
+  if(EFI_ERROR(status)) {
+    Say("PCI_ENUM_FAILURE STAGE=locate-handles\r\n");okay=0;
+  } else if(count==0) {
+    Say("PCI_ENUM_FAILURE STAGE=zero-handles\r\n");okay=0;
+  } else if(count>GU_TOPO_MAX_PCI) {
+    Say("PCI_ENUM_FAILURE STAGE=handle-capacity\r\n");okay=0;
+  } else if(!handles) {
+    Say("PCI_ENUM_FAILURE STAGE=missing-handle-array\r\n");okay=0;
+  }
   if(okay)for(i=0;i<count;i++) {
     GU_TOPO_PCI *p=&Snapshot.pci[Snapshot.pci_count];
-    if(!ReadPci(bs,handles[i],p)){okay=0;break;}
+    if(!ReadPci(bs,handles[i],p)) {
+      Say("PCI_ENUM_FAILURE STAGE=device-read INDEX=%zu HANDLE=%p\r\n",
+          (size_t)i,handles[i]);
+      okay=0;break;
+    }
     Snapshot.pci_count++;
   }
-  if(handles && (!bs->FreePool || EFI_ERROR(bs->FreePool(handles))))okay=0;
+  if(handles) {
+    if(!bs->FreePool) {
+      Say("PCI_ENUM_FAILURE STAGE=handles-free-unavailable\r\n");okay=0;
+    } else {
+      status=bs->FreePool(handles);
+      if(EFI_ERROR(status)) {
+        Say("PCI_ENUM_FAILURE STAGE=handles-free EFI_STATUS=%#llx\r\n",
+            (unsigned long long)status);okay=0;
+      }
+    }
+  }
   return okay;
 }
 
