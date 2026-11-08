@@ -63,6 +63,13 @@ jobs:
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_active_preparation_$compiler"
               "$RUNNER_TEMP/test_active_preparation_$compiler"
             done
+            # Also exercise the selected-build guard when the machine has
+            # exactly one GPU, not merely a missing second requested target.
+            printf '#define GU_GPU_SELECTION_COUNT 1U\n#define GU_GPU_SELECTION_LOCATIONS { { 0U,3U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_active_preparation_single_$compiler"
+              "$RUNNER_TEMP/test_active_preparation_single_$compiler"
+            done
             for compiler in gcc clang; do
               for test in gpu_inventory gpu_discovery; do
                 "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc "tests/test_${test}.c" src/gpu_inventory.c -o "$RUNNER_TEMP/test_${test}_${compiler}"
@@ -144,6 +151,10 @@ jobs:
             if(-not (Test-Path .\src\build_dxe\GPU-ACTIVE-PREP-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Active DXE preparation EFI missing'}
             . .\src\Gpu-Selection-Build.ps1
             $more = New-GuGpuSelectionSpec -SelectionBdfs '0000:09:02.0,0001:2A:03.1,0000:0A:04.0' -OutputDirectory $env:RUNNER_TEMP
+            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:09:02.0,0001:2A:03.1,0000:0A:04.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC three-target diagnostic build failed: $LASTEXITCODE"}
+            if(-not (Get-ChildItem .\src\build_diagnostic\GPU-SELECTION-N3-*-DIAGNOSTIC.EFI -ErrorAction SilentlyContinue)){throw 'Three-target diagnostic EFI missing'}
+            'THREE_TARGET_EFI_COMPILE=PASS READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             if($more.Count -ne 3 -or $more.Label -notmatch '^N3-[0-9A-F]{12}$') {throw 'N-GPU selection validation failed'}
             'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=16 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
