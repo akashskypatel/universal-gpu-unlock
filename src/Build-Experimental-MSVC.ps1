@@ -69,7 +69,7 @@ try {
 
     if ($selection.Count) {
         # Selected builds are intentionally non-mutating preparation artifacts.
-        $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY'
+        $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY /DGU_HOST_TEST_PROFILE'
     }
 
     foreach ($src in $sources) {
