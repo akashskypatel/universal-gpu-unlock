@@ -4,6 +4,7 @@
 #include "gpu_inventory.h"
 
 #define GU_TOPO_MAX_PCI 128U
+#define GU_TOPO_MAX_HANDLES 4096U
 #define GU_TOPO_MAX_GOPS 32U
 #define GU_TOPO_MAX_CONSOLES 8U
 #define GU_TOPO_PATH_BYTES 192U
@@ -36,12 +37,21 @@ typedef struct {
   uint8_t console_available;
 } GU_TOPO_CAPTURE;
 
+/* Arbitrary 1..N NVIDIA endpoints; AMD/Intel/other display controllers are
+ * independent console candidates. Topology completeness is observational,
+ * never an authorization to disconnect or write hardware. */
 typedef struct {
-  size_t gpu_index[2], parent_index[2], root_index[2];
-  unsigned depth[2], gop_count[2], nvidia_console_count;
-  unsigned amd_gop_count, amd_console_count, unmatched_gops;
-  uint8_t pair_exact, ancestry_verified[2], root_port_verified[2];
-  uint8_t distinct_roots, amd_console_independent, gop_relationships_observed;
+  size_t gpu_count;
+  size_t gpu_index[GU_INVENTORY_MAX_NVIDIA];
+  size_t parent_index[GU_INVENTORY_MAX_NVIDIA];
+  size_t root_index[GU_INVENTORY_MAX_NVIDIA];
+  unsigned depth[GU_INVENTORY_MAX_NVIDIA];
+  unsigned gop_count[GU_INVENTORY_MAX_NVIDIA];
+  uint8_t ancestry_verified[GU_INVENTORY_MAX_NVIDIA];
+  uint8_t root_port_verified[GU_INVENTORY_MAX_NVIDIA];
+  unsigned nvidia_console_count;
+  unsigned independent_gop_count, independent_console_count, unmatched_gops;
+  uint8_t independent_console_observed, gop_relationships_observed;
   int status;
 } GU_TOPO_REPORT;
 
