@@ -149,8 +149,7 @@ NVIDIA_CONOUT_MATCH=2 GOP_UNMATCHED=0 AMD_CONSOLE_ASSOCIATION=0`.
 Both NVIDIA device paths remain configured in UEFI `ConOut` despite
 the AMD path being present. The current source logs this as
 `STATUS=PARTIAL TOPOLOGY=2`; **2 means conflict**, not incomplete
-GPU inventory. Supplementary `TOPOLOGY_VERDICT=CONFLICT` reporting
-is being added without changing the legacy `STATUS` field.
+GPU inventory. Supplementary `TOPOLOGY_VERDICT=CONFLICT` reporting is committed without changing the legacy `STATUS` field. [GitHub Actions run `42433578045`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42433578045) PASS: 58 topology host checks under GCC/Clang/UBSan and Windows EFI builds with/without handoff. The new label has not been validated by a physical USB boot yet.
 
 `ConsoleOutHandle` matches `SystemTable.ConOut` SimpleTextOut but
 does not expose a DevicePath, so the active console controller may be
