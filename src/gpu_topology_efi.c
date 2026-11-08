@@ -116,6 +116,7 @@ static int ReportPassiveSelection(int pci_ok) {
       }
     }
   }
+  if(status==GU_INVENTORY_OK && !match)status=GU_INVENTORY_NOT_FOUND;
   Say("SELECTION_VERDICT=%s TARGET=%s CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
       match?"PASSIVE_EXACT_PAIR":"REFUSED",target_name,status,Report.status);
   return match;
