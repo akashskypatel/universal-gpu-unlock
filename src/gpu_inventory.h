@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Read-only GPU inventory and exact identity selection. No UEFI or hardware writes. */
+/* Read-only NVIDIA display inventory and optional identity selection. */
 #pragma once
 
 #include <stddef.h>
@@ -38,9 +38,9 @@ enum {
   GU_INVENTORY_NOT_FOUND = 5
 };
 
-/* Identity pins are observations from the B850 host, not general GPU support. */
-extern const GU_GPU_IDENTITY GuPinnedAd102;
-extern const GU_GPU_IDENTITY GuPinnedGa102;
+typedef struct {
+  uint32_t segment, bus, device, function;
+} GU_GPU_LOCATION;
 
 /* Reader must produce a complete CPU-owned record for every handle or fail. */
 int GuCollectGpuInventory(size_t handle_count, GU_GPU_READER reader,
@@ -48,16 +48,8 @@ int GuCollectGpuInventory(size_t handle_count, GU_GPU_READER reader,
 /* Explicit selection is observational; it never arms or mutates a GPU. */
 int GuFindExactGpu(const GU_GPU_INVENTORY *inventory,
                    const GU_GPU_IDENTITY *expected, size_t *index);
-int GuFindPinnedGpuPair(const GU_GPU_INVENTORY *inventory,
-                        size_t *ad102_index, size_t *ga102_index);
-
-/* A positive result selects ONE card only for read-only evidence collection.
- * It never authorizes PCI claiming, GOP Stop, DMA, firmware or FLR. */
-typedef enum {
-  GU_GPU_TARGET_AD102 = 1,
-  GU_GPU_TARGET_GA102 = 2
-} GU_GPU_TARGET;
-int GuFindPinnedGpuTarget(const GU_GPU_INVENTORY *inventory,
-                          GU_GPU_TARGET requested, size_t *target_index,
-                          size_t *other_index);
-
+/* No model, subsystem, slot, root port or GPU count is assumed. A caller
+ * must explicitly identify the BDF in the CURRENT snapshot. The selected
+ * record still needs later, independent policy checks before any actuation. */
+int GuFindGpuAtLocation(const GU_GPU_INVENTORY *inventory,
+                        const GU_GPU_LOCATION *location, size_t *index);
