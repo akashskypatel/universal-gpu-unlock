@@ -104,6 +104,8 @@ inventory, ordered target selection and topology. Windows MSVC compiles the
 real interactive app and DXE source trees as selected preparation-only EFI
 images, as well as the separate passive diagnostic variants.
 
+**Verified CI:** [Run 42525760457](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42525760457) completed both `host` and `efi` jobs successfully at source commit `4e69a7c8cdc46023fbd21d6de7855f914a10cfd5`. Inventory/ordered-selection tests: **73 checks** under GCC, Clang and GCC UBSan. Topology tests: **72 checks** under GCC, Clang and GCC UBSan. Legacy UEFI discovery adapter: **39 checks** each under GCC and Clang; selected-entrypoint refusal: **4 checks per configuration** under GCC and Clang for both one- and two-target generated configurations, with zero `GuInit` calls. Windows MSVC built the default diagnostic, ordered single/two/three-target diagnostics, and genuine app and DXE selected preparation-only binaries. [Active app/DXE preparation build artifacts](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42525760457/artifacts/13635198013); [passive selected EFIs](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42525760457/artifacts/13635163109). The workflow deliberately does not execute these EFI binaries.
+
 None of these tests actually execute an EFI image on the physical host.
 Neither PCI device ownership, GPU detachment, signed firmware acceptance,
 real GPU mutation, Windows recovery nor performance improvement is proven.
