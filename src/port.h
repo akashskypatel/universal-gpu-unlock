@@ -4,10 +4,7 @@
 #include <Protocol/DevicePath.h>
 #include <stddef.h>
 
-#define GU_BOARD_ID 0x268410deU
-#define GU_BOARD_SUBSYSTEM 0x40c31458U
-#define GU_BAR0_BASE 0xfb000000ULL
-#define GU_PCI_BUS 45U
+/* Hardware PCI locations and BAR addresses are discovered at runtime. */
 
 static inline BOOLEAN GuIsAdaDeviceId(UINT16 dev) {
   return (dev == 0x2684U || dev == 0x2685U ||  /* RTX 4090, 4090D (AD102) */
