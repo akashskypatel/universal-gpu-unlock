@@ -116,7 +116,7 @@ static int DisplayOwner(const GU_TOPO_CAPTURE *s, const GU_TOPO_PATH *path) {
   for(i=0;i<s->pci_count;i++) {
     const GU_GPU_RECORD *r=&s->pci[i].identity;
     size_t length=Body(&s->pci[i].path);
-    if(r->class_code != 0x0300U && r->class_code != 0x0302U) continue;
+    if((r->class_code & 0xff00U) != 0x0300U) continue;
     if(length < 6 || length < longest || !Prefix(&s->pci[i].path,path)) continue;
     if(length == longest) { result=-2; continue; }
     longest=length;result=(int)i;
