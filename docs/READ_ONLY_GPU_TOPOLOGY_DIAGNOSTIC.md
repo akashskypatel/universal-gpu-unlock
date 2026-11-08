@@ -57,8 +57,8 @@ verify local signing/Secure Boot policy before any optional hardware run.
 **Verified source/CI:** the bounded host inventory selector now passes 73
 assertions under GCC, Clang and GCC UBSan, including reversed ordering and
 negative cases. Windows MSVC compiled both independent selection-image
-variants in [Actions run 42517771258](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42517771258).
-The CI-produced unsigned EFI artifact is [available here](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42517771258/artifacts/13632117434).
+variants in [Actions run 42517891533](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42517891533).
+The CI-produced unsigned EFI artifact is [available here](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42517891533/artifacts/13632107704).
 These are **not physical tests** on the B850; neither active
 `GuDiscoverSingleGpu` nor its intentional `EFI_UNSUPPORTED` refusal
 for two NVIDIA GPUs has been modified. All active-transaction readiness
