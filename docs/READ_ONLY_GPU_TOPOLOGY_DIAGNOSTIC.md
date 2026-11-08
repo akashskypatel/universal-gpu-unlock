@@ -15,6 +15,55 @@ bus ranges, root-port types, GOP paths, or `ConOut` device paths are missing,
 changed or contradictory. In particular, a Windows device number does not prove
 its pre-boot PCI bus will remain the same across firmware configuration changes.
 
+## Independent read-only target-selection EFI (2026-11-08)
+
+A **separate output binary for each requested GPU** now tests exact-pair
+selection without entering the legacy unlock application or DXE driver.
+`GuFindPinnedGpuTarget` accepts only the existing exact AD102 + GA102
+inventory, resolves either explicitly requested card regardless of enumeration
+order, returns the other card as a distinct non-target, and rejects a wrong
+PCI/subsystem/BDF, an extra NVIDIA display, an incomplete inventory, an unknown
+target or aliased output pointers. It does **not** call `GuInit`.
+
+Build the two images independently with Visual Studio MSVC on Windows:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionTarget AD102
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionTarget GA102
+```
+
+They produce `src\build_diagnostic\GPU-DISCOVERY-AD102-DIAGNOSTIC.EFI`
+and `GPU-DISCOVERY-GA102-DIAGNOSTIC.EFI`, respectively. Each reuses the
+standalone strict topology EFI's PCI/GOP/ConOut snapshot and checks the
+selected inventory identity against the matching topology node. The log
+distinguishes `PASSIVE_SELECTION=EXACT_PAIR`,
+`NON_TARGET_PRESENT=1` and `SELECTION_VERDICT=PASSIVE_EXACT_PAIR` from
+`TOPOLOGY_VERDICT` (which may still be `CONFLICT` when NVIDIA ConOut
+paths are configured). A refusal is logged and retained in the numbered USB
+log, not silently dropped. `SELECTION_VERDICT=PASSIVE_EXACT_PAIR` is only
+an identity-selection result; it never implies detachment readiness.
+
+No `app.c`, `dxe_main.c`, `msi_release.c`, unlock core, GPU register write,
+DMA, FLR, firmware stage, NVRAM write or Windows handoff is compiled into
+these two selection images. Supplying `-WindowsEspGuid` together with
+`-SelectionTarget` is rejected. Without `-SaveLog` the probe does not
+write disk; with it, the **only** intended persistent change is creation
+of one new numbered topology log on the EFI media. Binaries are **unsigned**;
+verify local signing/Secure Boot policy before any optional hardware run.
+
+**Verified source/CI:** the bounded host inventory selector now passes 73
+assertions under GCC, Clang and GCC UBSan, including reversed ordering and
+negative cases. Windows MSVC compiled both independent selection-image
+variants in [Actions run 42517771258](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42517771258).
+The CI-produced unsigned EFI artifact is [available here](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42517771258/artifacts/13632117434).
+These are **not physical tests** on the B850; neither active
+`GuDiscoverSingleGpu` nor its intentional `EFI_UNSUPPORTED` refusal
+for two NVIDIA GPUs has been modified. All active-transaction readiness
+flags remain false.
+
 ## Diagnostic observations and limitations
 
 - Enumerates all EFI `PCI_IO` endpoints using bounded `LocateHandleBuffer`,
