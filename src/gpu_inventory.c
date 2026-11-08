@@ -2,13 +2,6 @@
 #include "gpu_inventory.h"
 #include <string.h>
 
-const GU_GPU_IDENTITY GuPinnedAd102 = {
-  0x268410deU, 0x88e61043U, 0U, 1U, 0U, 0U
-};
-const GU_GPU_IDENTITY GuPinnedGa102 = {
-  0x220a10deU, 0xb61219daU, 0U, 4U, 0U, 0U
-};
-
 static int SameLocation(const GU_GPU_RECORD *a, const GU_GPU_RECORD *b) {
   return a->segment == b->segment && a->bus == b->bus &&
          a->device == b->device && a->function == b->function;
@@ -72,39 +65,25 @@ int GuFindExactGpu(const GU_GPU_INVENTORY *inventory,
   return GU_INVENTORY_NOT_FOUND;
 }
 
-int GuFindPinnedGpuPair(const GU_GPU_INVENTORY *inventory,
-                        size_t *ad102_index, size_t *ga102_index) {
-  size_t ad, ga;
-  if (ad102_index) *ad102_index = 0;
-  if (ga102_index) *ga102_index = 0;
-  if (!inventory || !ad102_index || !ga102_index ||
-      ad102_index == ga102_index)
+/* Resolve an operator-supplied location against the current enumeration.
+ * No GPU model or physical motherboard layout is part of discovery. */
+int GuFindGpuAtLocation(const GU_GPU_INVENTORY *inventory,
+                        const GU_GPU_LOCATION *location, size_t *index) {
+  size_t i;
+  if (index) *index = 0;
+  if (!inventory || !location || !index ||
+      inventory->count > GU_INVENTORY_MAX_NVIDIA ||
+      location->segment > 0xffffU || location->bus > 255U ||
+      location->device > 31U || location->function > 7U)
     return GU_INVENTORY_INVALID;
-  if (inventory->count != 2 ||
-      GuFindExactGpu(inventory, &GuPinnedAd102, &ad) != GU_INVENTORY_OK ||
-      GuFindExactGpu(inventory, &GuPinnedGa102, &ga) != GU_INVENTORY_OK ||
-      ad == ga)
-    return GU_INVENTORY_NOT_FOUND;
-  *ad102_index = ad;
-  *ga102_index = ga;
-  return GU_INVENTORY_OK;
-}
-
-/* Select one of the two independently pinned devices without global state.
- * The other exact device remains visible to callers for non-target checks. */
-int GuFindPinnedGpuTarget(const GU_GPU_INVENTORY *inventory,
-                          GU_GPU_TARGET requested, size_t *target_index,
-                          size_t *other_index) {
-  size_t ad = 0, ga = 0;
-  int result;
-  if (!target_index || !other_index || target_index == other_index)
-    return GU_INVENTORY_INVALID;
-  *target_index = *other_index = 0;
-  if (requested != GU_GPU_TARGET_AD102 && requested != GU_GPU_TARGET_GA102)
-    return GU_INVENTORY_INVALID;
-  result = GuFindPinnedGpuPair(inventory, &ad, &ga);
-  if (result != GU_INVENTORY_OK) return result;
-  *target_index = requested == GU_GPU_TARGET_AD102 ? ad : ga;
-  *other_index = requested == GU_GPU_TARGET_AD102 ? ga : ad;
-  return GU_INVENTORY_OK;
+  for (i = 0; i < inventory->count; i++) {
+    const GU_GPU_RECORD *gpu = &inventory->nvidia[i];
+    if (gpu->segment == location->segment && gpu->bus == location->bus &&
+        gpu->device == location->device &&
+        gpu->function == location->function) {
+      *index = i;
+      return GU_INVENTORY_OK;
+    }
+  }
+  return GU_INVENTORY_NOT_FOUND;
 }
