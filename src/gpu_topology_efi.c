@@ -9,6 +9,7 @@
 #include <Protocol/PciIo.h>
 #include <Protocol/DevicePath.h>
 #include <Protocol/GraphicsOutput.h>
+#include <Protocol/SimpleTextOut.h>
 #ifdef GU_TOPO_SAVE_LOG
 #include <Protocol/LoadedImage.h>
 #include <Protocol/SimpleFileSystem.h>
@@ -25,6 +26,7 @@
 static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID;
 static EFI_GUID PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
+static EFI_GUID TextOutGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
@@ -113,6 +115,80 @@ static int ConsoleRead(EFI_SYSTEM_TABLE *table) {
     at+=n;
   }
   return 0;
+}
+
+/* Independent, observational console inventory. ConOutDev is the list of
+ * POSSIBLE output devices; ConsoleOutHandle identifies the *active* simple-
+ * text output interface, which may be a virtual/aggregate console handle.
+ * Neither report qualifies a physical GOP for detachment. */
+static void ReportConsoleBinding(EFI_SYSTEM_TABLE *table) {
+  EFI_BOOT_SERVICES *bs=table->BootServices;
+  EFI_DEVICE_PATH_PROTOCOL *device_path=NULL;
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *out=NULL;
+  EFI_STATUS status;
+  GU_TOPO_PATH path;
+  UINT32 attrs=0;
+  UINTN bytes=0,at=0,start=0,index=0;
+  static UINT8 data[8192];
+  CHAR16 name[]=L"ConOutDev";
+
+  Say("CONSOLE_BINDING_ONLY=1 NOT_DETACH_EVIDENCE=1\r\n");
+  Say("CONSOLE_HANDLE ACTIVE=%p ERROR=%p CONOUT_IFACE=%p\r\n",
+      table->ConsoleOutHandle,table->StandardErrorHandle,table->ConOut);
+
+  status=table->ConsoleOutHandle ?
+      bs->HandleProtocol(table->ConsoleOutHandle,&TextOutGuid,(VOID **)&out) :
+      EFI_INVALID_PARAMETER;
+  Say("CONSOLE_HANDLE_TEXTOUT STATUS=%#llx IFACE=%p MATCHES_SYSTEM=%u\r\n",
+      (unsigned long long)status,out,
+      (unsigned)(!EFI_ERROR(status) && out && out==table->ConOut));
+
+  status=table->ConsoleOutHandle ?
+      bs->HandleProtocol(table->ConsoleOutHandle,&PathGuid,(VOID **)&device_path) :
+      EFI_INVALID_PARAMETER;
+  Say("CONSOLE_HANDLE_DEVICE_PATH STATUS=%#llx PATH_PRESENT=%u\r\n",
+      (unsigned long long)status,(unsigned)(!EFI_ERROR(status) && !!device_path));
+  if(!EFI_ERROR(status) && device_path) {
+    if(PathCopy(device_path,&path)) {
+      Say("CONSOLE_HANDLE_PATH LEN=%zu\r\n",path.length);
+      SayPath("CONSOLE_HANDLE",0,&path);
+    } else Say("CONSOLE_HANDLE_PATH INVALID_OR_OVERLONG=1\r\n");
+  }
+
+  if(!table->RuntimeServices || !table->RuntimeServices->GetVariable) {
+    Say("CONOUTDEV_STATUS=UNAVAILABLE\r\n");return;
+  }
+  bytes=sizeof(data);
+  status=table->RuntimeServices->GetVariable(name,&GlobalGuid,&attrs,&bytes,data);
+  Say("CONOUTDEV_VARIABLE STATUS=%#llx BYTES=%zu ATTRS=%#x POSSIBLE_ONLY=1\r\n",
+      (unsigned long long)status,(size_t)bytes,(unsigned)attrs);
+  if(EFI_ERROR(status) || !bytes || bytes>sizeof(data))return;
+
+  while(at+4<=bytes && index<32) {
+    UINTN n=(UINTN)data[at+2] | ((UINTN)data[at+3]<<8);
+    if(n<4 || n>bytes-at)break;
+    if(data[at]==0x7f) {
+      if(n!=4 || (data[at+1]!=1 && data[at+1]!=0xff) ||
+         at+n-start>GU_TOPO_PATH_BYTES)break;
+      memset(&path,0,sizeof(path));
+      memcpy(path.bytes,data+start,at+n-start);
+      path.length=at+n-start;
+      path.bytes[path.length-3]=0xff;
+      if(!GuTopoPathValid(&path))break;
+      Say("CONOUTDEV[%zu] PATH_LEN=%zu POSSIBLE_ONLY=1\r\n",
+          (size_t)index,path.length);
+      SayPath("CONOUTDEV",index,&path);
+      index++;
+      if(data[at+1]==0xff) {
+        Say("CONOUTDEV_PARSE_COMPLETE=%u PATHS=%zu\r\n",
+            (unsigned)(at+n==bytes),(size_t)index);
+        return;
+      }
+      start=at+n;
+    }
+    at+=n;
+  }
+  Say("CONOUTDEV_PARSE_COMPLETE=0 PATHS=%zu\r\n",(size_t)index);
 }
 
 static int PcieRootPort(const UINT32 config[64]) {
@@ -426,6 +502,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   if(!pci_ok)ReportPciEvidence(bs);
   gop_ok=CaptureGop(bs);
   console_ok=ConsoleRead(table);
+  ReportConsoleBinding(table);
   result=(pci_ok && gop_ok)?GuTopoAssess(&Snapshot,&Report):GU_TOPO_INVALID;
   Say("PCI_CAPTURE=%u GOP_CAPTURE=%u CONOUT_CAPTURE=%u PCI_NODES=%zu GOP_NODES=%zu CONOUT_PATHS=%zu\r\n",
       (unsigned)pci_ok,(unsigned)gop_ok,(unsigned)console_ok,

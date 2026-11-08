@@ -122,44 +122,41 @@ malformed nodes, invalid child image binding, rejected load and pool-free
 failures. These tests do not validate actual firmware Windows handoff,
 vendor GOP teardown or Windows 617.42 operation.
 
-### Physical B850 passive capture: reproducible AMD root-complex drift and three console paths (2026-11-07)
+### B850 passive evidence: repeating AMD root-complex drift and three console paths (2026-11-07)
 
-The latest user-supplied log `GPU-TOPOLOGY-DIAGNOSTIC-0003.TXT`
-(SHA-256 `33eee83dcc74f808af92febe831cbc70d6bea17f8f96c24164d73c80ec9a9235`)
-identifies the *exact* strict validation failure: on PCI handle index zero,
-`0000:00:00.0 1022:14d8` (`CLASS=0600`, AMD host/root complex),
-the first and second 256-byte PCI config reads differ only at **DWORD
-offset `0xBC`**, `0xB000A851` versus `0x18571ECB` (XOR
-`0xA857B69A`). All other 63 DWORDs match. The device-specific meaning
-of this register is not established. Do **not** silently ignore its changes,
-raise the PCI limit, skip the host bridge, or treat the observational
-fallback as successful strict topology. The strict result remains
-`PCI_CAPTURE=0 STATUS=ERROR EXACT_PAIR=0` until accepted rules are
-independently justified and tested.
+Uploaded `GPU-TOPOLOGY-DIAGNOSTIC-0004.TXT` (11,607 bytes, SHA-256
+`7431bccd33d3ead0f064cacc91044f1bb73d32d99a91d83e631704a73fbf147f`)
+differs from `0003` only in the strict PCI config drift readings and the log
+filename. PCI handle count remains **50** (strict limit 128). Only the
+single DWORD at offset `0xBC` on AMD host bridge
+`0000:00:00.0 1022:14d8 CLASS=0600` changes:
+`FIRST=ef020000 SECOND=17cbd4cb XOR=f8c9d4cb`. Previous `0003`
+values at the same offset were `b000a851` and `18571ecb`.
+The other 63 words match within each capture. The meaning of this
+device-specific register is **not validated**. Strict PCI still fails
+closed: `PCI_CAPTURE=0 STATUS=ERROR EXACT_PAIR=0`.
 
-The supplementary observer reports `COMPLETE=1`, 579 total EFI handles,
-50 PCI protocols, 19 display/bridge records, zero errors, no truncation.
-Identity/path associations locate RTX 4090 `01:00.0`, RTX 3080
-`04:00.0` and AMD iGPU `0f:00.0` as distinct devices.
-With a monitor now connected to the motherboard, the user confirms BIOS
-setup displays through the AMD iGPU. The log captures **three GOP paths
-and three ConOut variable paths**, each GOP/ConOut pair matching, mapped
-by complete PCI prefix to RTX 4090, RTX 3080 and AMD iGPU respectively.
-The AMD path is now present, but **both NVIDIA paths remain in
-`ConOut`**. This does not meet the existing assessor's requirement for
-an AMD console with **zero** NVIDIA `ConOut` associations. Neither the
-UEFI `ConsoleOutHandle` nor `ConOutDev` path has been verified, and
-the AMD console's survival after stopping any proprietary NVIDIA GOP is
-untested.
+The independent observer still completes with 579 EFI handles, 50 PCI
+protocols, 19 relevant display/bridge records and no errors. Both NVIDIA
+cards and AMD iGPU are path-associated with their own GOP and `ConOut`
+variable entries, but both NVIDIA console paths remain configured.
+This demonstrates AMD GOP and configured-console presence, **not**
+exclusive active console routing or independent recovery if NVIDIA
+drivers are stopped.
 
-Supplied logs `0002` and `0003` contain identical observations except
-for the three extra PCI-drift instrumentation lines and the numbered
-log filename; they should not be counted as independent cold-boot proof.
-The log records `WINDOWS_HANDOFF=REQUESTED`, **not** Windows
-`StartImage` success. The safe next engineering step is read-only
-mapping of the live console output handle, together with authoritative
-characterization or separately tested stable-topology validation for the
-root-complex register; active detachment/unlock remains blocked.
+The next passive image adds **supplementary** `CONSOLE_HANDLE_*` reporting
+for `EFI_SYSTEM_TABLE.ConsoleOutHandle` (the current Simple Text Output
+console handle, which can be an aggregate) and `CONOUTDEV_*` for the
+read-only `ConOutDev` variable. Per the UEFI Boot Manager specification,
+`ConOutDev` enumerates **possible** output devices; it is **not** an
+active-console ownership claim. Device paths are copied under explicit
+bounds; errors are reported, not promoted to successful topology. No
+UEFI variables or console routing are modified. The original `ConOut`
+snapshot and strict PCI validation remain unchanged.
+
+Until real EFI output confirms an AMD-independent active console, the
+proprietary NVIDIA GOP driver identity/release, 617.42 signed firmware
+path and recovery gates are still **open**. No active unlock is permitted.
 
 ### Independent passive PCI evidence on strict-collector failure
 
