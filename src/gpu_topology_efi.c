@@ -15,6 +15,15 @@
 #include <Protocol/SimpleFileSystem.h>
 #endif
 #include "gpu_topology.h"
+#if defined(GU_TOPO_SELECTION_AD102) && defined(GU_TOPO_SELECTION_GA102)
+#error Only one pinned GPU may be selected for observation
+#endif
+#if defined(GU_TOPO_SELECTION_AD102) || defined(GU_TOPO_SELECTION_GA102)
+#define GU_TOPO_SELECTION_ENABLED 1
+#ifdef GU_TOPO_WINDOWS_HANDOFF
+#error Selection-only diagnostic must not include Windows handoff
+#endif
+#endif
 #include "gpu_pci_observation.h"
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #include "gpu_windows_handoff.h"
@@ -30,6 +39,15 @@ static EFI_GUID TextOutGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
+#ifdef GU_TOPO_SELECTION_ENABLED
+/* Uses only already captured PCI identities; no fresh MMIO or EFI mutation. */
+static int SelectionRead(void *opaque, size_t index, GU_GPU_RECORD *out) {
+  const GU_TOPO_CAPTURE *capture=(const GU_TOPO_CAPTURE *)opaque;
+  if(!capture || !out || index>=capture->pci_count)return -1;
+  *out=capture->pci[index].identity;
+  return 0;
+}
+#endif
 /* Independent, read-only *evidence*, never used as a topology pass. */
 static GU_PCI_OBS_CAPTURE Supplemental;
 static EFI_SYSTEM_TABLE *System;
@@ -53,6 +71,53 @@ static void Say(const char *format, ...) {
   if(System && System->ConOut && System->ConOut->OutputString)
     (VOID)System->ConOut->OutputString(System->ConOut,wide);
 }
+
+#ifdef GU_TOPO_SELECTION_ENABLED
+/* Report explicit one-card observation, never actuation eligibility.
+ * Match the selected inventory record back to the validated topology node. */
+static int ReportPassiveSelection(int pci_ok) {
+#ifdef GU_TOPO_SELECTION_AD102
+  const GU_GPU_TARGET requested=GU_GPU_TARGET_AD102;
+  const char *target_name="AD102";
+  const size_t topo_selected=Report.gpu_index[0], topo_other=Report.gpu_index[1];
+#else
+  const GU_GPU_TARGET requested=GU_GPU_TARGET_GA102;
+  const char *target_name="GA102";
+  const size_t topo_selected=Report.gpu_index[1], topo_other=Report.gpu_index[0];
+#endif
+  GU_GPU_INVENTORY inventory;
+  size_t selected=0,other=0;
+  int status=GU_INVENTORY_INVALID,match=0;
+  if(pci_ok) {
+    status=GuCollectGpuInventory(Snapshot.pci_count,SelectionRead,&Snapshot,&inventory);
+    if(status==GU_INVENTORY_OK)
+      status=GuFindPinnedGpuTarget(&inventory,requested,&selected,&other);
+    if(status==GU_INVENTORY_OK && Report.pair_exact &&
+       topo_selected<Snapshot.pci_count && topo_other<Snapshot.pci_count) {
+      const GU_GPU_RECORD *a=&inventory.nvidia[selected],*b=&inventory.nvidia[other];
+      const GU_GPU_RECORD *ta=&Snapshot.pci[topo_selected].identity;
+      const GU_GPU_RECORD *tb=&Snapshot.pci[topo_other].identity;
+      match=a->handle==ta->handle && a->pci==ta->pci &&
+            b->handle==tb->handle && b->pci==tb->pci &&
+            a->pci_id==ta->pci_id && a->subsystem_id==ta->subsystem_id &&
+            b->pci_id==tb->pci_id && b->subsystem_id==tb->subsystem_id;
+      if(match) {
+        Say("PASSIVE_SELECTION=EXACT_PAIR REQUESTED_TARGET=%s SELECTED=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x\\r\\n",
+            target_name,(unsigned)a->segment,(unsigned)a->bus,(unsigned)a->device,
+            (unsigned)a->function,(unsigned)(a->pci_id&65535U),(unsigned)(a->pci_id>>16),
+            (unsigned)(a->subsystem_id&65535U),(unsigned)(a->subsystem_id>>16));
+        Say("NON_TARGET_PRESENT=1 OTHER=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x\\r\\n",
+            (unsigned)b->segment,(unsigned)b->bus,(unsigned)b->device,(unsigned)b->function,
+            (unsigned)(b->pci_id&65535U),(unsigned)(b->pci_id>>16),
+            (unsigned)(b->subsystem_id&65535U),(unsigned)(b->subsystem_id>>16));
+      }
+    }
+  }
+  Say("SELECTION_VERDICT=%s TARGET=%s CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\\r\\n",
+      match?"PASSIVE_EXACT_PAIR":"REFUSED",target_name,status,Report.status);
+  return match;
+}
+#endif
 
 /* Emit bounded device-path evidence; lengths alone cannot verify ancestry. */
 static void SayPath(const char *kind, size_t index, const GU_TOPO_PATH *path) {
@@ -570,6 +635,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result==GU_TOPO_INCOMPLETE?"INCOMPLETE":
       result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID",
       (unsigned)(Report.nvidia_console_count!=0));
+#ifdef GU_TOPO_SELECTION_ENABLED
+  {
+    int selection_ok=ReportPassiveSelection(pci_ok);
+    if(!selection_ok)return EFI_UNSUPPORTED;
+  }
+#endif
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
 #ifdef GU_TOPO_WINDOWS_HANDOFF
   Say("WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write\r\n");
