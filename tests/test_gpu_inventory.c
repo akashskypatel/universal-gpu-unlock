@@ -60,13 +60,24 @@ int main(void) {
   CHECK(GuFindPinnedGpuPair(&inventory, &ad, &ga) == GU_INVENTORY_OK);
   CHECK(ad == 0 && ga == 1);
   CHECK(GuFindExactGpu(&inventory, &GuPinnedGa102, &selected) == GU_INVENTORY_OK && selected == 1);
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_AD102, &selected, &i) == GU_INVENTORY_OK);
+  CHECK(selected == 0 && i == 1);
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_GA102, &selected, &i) == GU_INVENTORY_OK);
+  CHECK(selected == 1 && i == 0);
   swap = m.rows[0]; m.rows[0] = m.rows[1]; m.rows[1] = swap;
   CHECK(GuCollectGpuInventory(m.count, Reader, &m, &inventory) == GU_INVENTORY_OK);
   CHECK(GuFindPinnedGpuPair(&inventory, &ad, &ga) == GU_INVENTORY_OK && ad == 1 && ga == 0);
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_AD102, &selected, &i) == GU_INVENTORY_OK);
+  CHECK(selected == 1 && i == 0);
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_GA102, &selected, &i) == GU_INVENTORY_OK);
+  CHECK(selected == 0 && i == 1);
 
   Pair(&m); m.rows[1].subsystem_id ^= 1;
   CHECK(GuCollectGpuInventory(m.count, Reader, &m, &inventory) == GU_INVENTORY_OK);
   CHECK(GuFindPinnedGpuPair(&inventory, &ad, &ga) == GU_INVENTORY_NOT_FOUND);
+  selected = 55; i = 66;
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_GA102, &selected, &i) == GU_INVENTORY_NOT_FOUND);
+  CHECK(selected == 0 && i == 0);
   CHECK(GuFindExactGpu(&inventory, &GuPinnedGa102, &selected) == GU_INVENTORY_NOT_FOUND && selected == 0);
 
   Pair(&m); m.rows[1].bus = 5;
@@ -133,6 +144,12 @@ int main(void) {
   CHECK(GuFindExactGpu(NULL, &GuPinnedAd102, &selected) == GU_INVENTORY_INVALID);
   CHECK(GuFindExactGpu(&inventory, &GuPinnedAd102, NULL) == GU_INVENTORY_INVALID);
   CHECK(GuFindPinnedGpuPair(&inventory, &ad, &ad) == GU_INVENTORY_INVALID);
+  CHECK(GuFindPinnedGpuTarget(&inventory, (GU_GPU_TARGET)0, &selected, &i) == GU_INVENTORY_INVALID);
+  CHECK(GuFindPinnedGpuTarget(&inventory, (GU_GPU_TARGET)3, &selected, &i) == GU_INVENTORY_INVALID);
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_AD102, NULL, &i) == GU_INVENTORY_INVALID);
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_AD102, &selected, NULL) == GU_INVENTORY_INVALID);
+  CHECK(GuFindPinnedGpuTarget(&inventory, GU_GPU_TARGET_AD102, &selected, &selected) == GU_INVENTORY_INVALID);
+  CHECK(GuFindPinnedGpuTarget(NULL, GU_GPU_TARGET_AD102, &selected, &i) == GU_INVENTORY_INVALID);
 
   /* A passing result must depend on both actual independent pins. */
   CHECK(GuPinnedAd102.pci_id != GuPinnedGa102.pci_id);
