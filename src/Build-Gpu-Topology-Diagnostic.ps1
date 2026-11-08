@@ -1,7 +1,8 @@
 param(
     [string]$VcVars,
     [switch]$SaveLog,
-    [string]$WindowsEspGuid
+    [string]$WindowsEspGuid,
+    [ValidateSet('AD102','GA102')][string]$SelectionTarget
 )
 $ErrorActionPreference = 'Stop'
 # A separate, strict read-only PE/COFF EFI application. Never build the
@@ -20,6 +21,9 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     $output = Join-Path $PSScriptRoot 'build_diagnostic'
     New-Item -ItemType Directory -Force -Path $output | Out-Null
+    if ($SelectionTarget -and $WindowsEspGuid) {
+        throw 'Selection-only diagnostic cannot include Windows handoff.'
+    }
     $sources = @('gpu_inventory.c','gpu_topology.c','gpu_pci_observation.c','gpu_topology_efi.c','gpu_windows_path.c','format.c','runtime.c')
     if ($WindowsEspGuid) {
         if (-not $SaveLog) { throw '-WindowsEspGuid requires -SaveLog to preserve diagnostic evidence before handoff.' }
@@ -37,6 +41,8 @@ try {
     }
     $flags = '/nologo /O2 /Oi- /GS- /Gs65536 /Zl /c /TC /DGU_GPU_DIAGNOSTIC_ONLY /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild_diagnostic /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
     if ($SaveLog) { $flags += ' /DGU_TOPO_SAVE_LOG' }
+    if ($SelectionTarget) { $flags += " /DGU_TOPO_SELECTION_$SelectionTarget" }
+    $binaryName = if ($SelectionTarget) { "GPU-DISCOVERY-$SelectionTarget-DIAGNOSTIC.EFI" } else { 'GPU-TOPOLOGY-DIAGNOSTIC.EFI' }
     if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }
     $commands = @('@echo off', "call `"$VcVars`" >nul", 'if errorlevel 1 exit /b 1', "cd /d `"$PSScriptRoot`"")
     $objects = @()
@@ -47,16 +53,16 @@ try {
         $commands += 'if errorlevel 1 exit /b 1'
     }
     $joined = ($objects | ForEach-Object { '"' + $_ + '"' }) -join ' '
-    $commands += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI $joined"
+    $commands += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_diagnostic\$binaryName $joined"
     $commands += 'if errorlevel 1 exit /b 1'
     $batch = Join-Path $output 'build-diagnostic.cmd'
     Set-Content -LiteralPath $batch -Encoding ascii -Value $commands
     & $env:ComSpec /d /c $batch
     if ($LASTEXITCODE -ne 0) { throw "Diagnostic EFI build failed (exit=$LASTEXITCODE)" }
-    $binary = Join-Path $output 'GPU-TOPOLOGY-DIAGNOSTIC.EFI'
+    $binary = Join-Path $output $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'No diagnostic EFI output produced' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SELECTION_TARGET=$SelectionTarget CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
 } finally {
     Pop-Location
 }
