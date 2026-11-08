@@ -78,7 +78,7 @@ static void Say(const char *format, ...) {
 #ifdef GU_TOPO_SELECTION_ENABLED
 /* Report explicit one-card observation, never actuation eligibility.
  * Match the selected inventory record back to the validated topology node. */
-static int ReportPassiveSelection(int pci_ok) {
+static int ReportPassiveSelection(int pci_ok, int topology_result) {
 #ifdef GU_TOPO_SELECTION_AD102
   const GU_GPU_TARGET requested=GU_GPU_TARGET_AD102;
   const char *target_name="AD102";
@@ -118,7 +118,7 @@ static int ReportPassiveSelection(int pci_ok) {
   }
   if(status==GU_INVENTORY_OK && !match)status=GU_INVENTORY_NOT_FOUND;
   Say("SELECTION_VERDICT=%s TARGET=%s CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
-      match?"PASSIVE_EXACT_PAIR":"REFUSED",target_name,status,Report.status);
+      match?"PASSIVE_EXACT_PAIR":"REFUSED",target_name,status,topology_result);
   return match;
 }
 #endif
@@ -640,7 +640,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID",
       (unsigned)(Report.nvidia_console_count!=0));
 #ifdef GU_TOPO_SELECTION_ENABLED
-  SelectionOk=ReportPassiveSelection(pci_ok);
+  SelectionOk=ReportPassiveSelection(pci_ok,result);
 #endif
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
 #ifdef GU_TOPO_WINDOWS_HANDOFF
