@@ -124,14 +124,17 @@ static int DisplayOwner(const GU_TOPO_CAPTURE *s, const GU_TOPO_PATH *path) {
   return result;
 }
 
+/* Topology is derived from the captured device paths, not a selected board,
+ * GPU model, PCI slot ordering or assumption that root ports are distinct. */
 int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
   GU_GPU_INVENTORY inventory;
-  size_t i,j, ad,ga;
-  int result, bad=0, incomplete=0;
-  if (!r) return GU_TOPO_INVALID;
+  size_t i,j;
+  int result,bad=0,incomplete=0;
+  if(!r)return GU_TOPO_INVALID;
   memset(r,0,sizeof(*r));r->status=GU_TOPO_INVALID;
-  for(i=0;i<2;i++)r->gpu_index[i]=r->parent_index[i]=r->root_index[i]=GU_TOPO_MAX_PCI;
-  if(!s || s->pci_count==0 || s->pci_count>GU_TOPO_MAX_PCI ||
+  for(i=0;i<GU_INVENTORY_MAX_NVIDIA;i++)
+    r->gpu_index[i]=r->parent_index[i]=r->root_index[i]=GU_TOPO_MAX_PCI;
+  if(!s || !s->pci_count || s->pci_count>GU_TOPO_MAX_PCI ||
      s->gop_count>GU_TOPO_MAX_GOPS || s->console_count>GU_TOPO_MAX_CONSOLES ||
      (s->console_count && !s->console_available))return r->status;
   for(i=0;i<s->pci_count;i++) {
@@ -139,68 +142,72 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
     if(!id->handle || !id->pci || id->segment>65535 || id->bus>255 ||
        id->device>31 || id->function>7 || !GuTopoPathValid(&s->pci[i].path) ||
        !EndpointMatches(&s->pci[i]))
-       return r->status;
+      return r->status;
     for(j=0;j<i;j++)
-      if(SameBdf(id,&s->pci[j].identity) || id->handle==s->pci[j].identity.handle ||
-         id->pci==s->pci[j].identity.pci) return r->status;
+      if(SameBdf(id,&s->pci[j].identity) ||
+         id->handle==s->pci[j].identity.handle ||
+         id->pci==s->pci[j].identity.pci)return r->status;
   }
-  for(i=0;i<s->gop_count;i++)if(!GuTopoPathValid(&s->gop[i].path))return r->status;
-  for(i=0;i<s->console_count;i++)if(!GuTopoPathValid(&s->console[i]))return r->status;
+  for(i=0;i<s->gop_count;i++)
+    if(!GuTopoPathValid(&s->gop[i].path))return r->status;
+  for(i=0;i<s->console_count;i++)
+    if(!GuTopoPathValid(&s->console[i]))return r->status;
   result=GuCollectGpuInventory(s->pci_count,Record,(void *)s,&inventory);
-  if(result!=GU_INVENTORY_OK || GuFindPinnedGpuPair(&inventory,&ad,&ga)!=GU_INVENTORY_OK) {
-    r->status=GU_TOPO_INCOMPLETE;return r->status;
-  }
-  r->pair_exact=1;
-  /* Lookup by handles returned from the same shared inventory collector. */
-  for(i=0;i<s->pci_count;i++) {
-    if(s->pci[i].identity.handle==inventory.nvidia[ad].handle)r->gpu_index[0]=i;
-    if(s->pci[i].identity.handle==inventory.nvidia[ga].handle)r->gpu_index[1]=i;
-  }
-  if(r->gpu_index[0]==GU_TOPO_MAX_PCI || r->gpu_index[1]==GU_TOPO_MAX_PCI)
+  if(result!=GU_INVENTORY_OK)return r->status;
+  r->gpu_count=inventory.count;
+  if(!r->gpu_count) {
+    r->status=GU_TOPO_INCOMPLETE;
     return r->status;
-  for(i=0;i<2;i++) {
-    int found=Root(s,r->gpu_index[i],&r->parent_index[i],&r->root_index[i],&r->depth[i]);
-    if(found<0)bad=1;
-    if(found>0)r->ancestry_verified[i]=r->root_port_verified[i]=1;
-    else incomplete=1;
   }
-  if(r->root_port_verified[0] && r->root_port_verified[1]) {
-    r->distinct_roots=r->root_index[0]!=r->root_index[1];
-    if(!r->distinct_roots)bad=1;
+  /* Map every NVIDIA record back to the same captured PCI handle. */
+  for(j=0;j<r->gpu_count;j++) {
+    const GU_GPU_RECORD *gpu=&inventory.nvidia[j];
+    for(i=0;i<s->pci_count;i++) {
+      if(s->pci[i].identity.handle!=gpu->handle)continue;
+      if(r->gpu_index[j]!=GU_TOPO_MAX_PCI)return r->status;
+      r->gpu_index[j]=i;
+    }
+    if(r->gpu_index[j]==GU_TOPO_MAX_PCI)return r->status;
+    {
+      int found=Root(s,r->gpu_index[j],&r->parent_index[j],
+                     &r->root_index[j],&r->depth[j]);
+      if(found<0)bad=1;
+      else if(found>0)r->ancestry_verified[j]=r->root_port_verified[j]=1;
+      else incomplete=1;
+    }
   }
   for(i=0;i<s->gop_count;i++) {
     int owner=DisplayOwner(s,&s->gop[i].path);
     if(owner==-2)bad=1;
     if(owner<0) {r->unmatched_gops++;continue;}
-    if((size_t)owner==r->gpu_index[0])r->gop_count[0]++;
-    else if((size_t)owner==r->gpu_index[1])r->gop_count[1]++;
-    else if((s->pci[owner].identity.pci_id&0xffffU)==0x1002U)r->amd_gop_count++;
+    if((s->pci[owner].identity.pci_id&0xffffU)==0x10deU) {
+      for(j=0;j<r->gpu_count;j++)
+        if((size_t)owner==r->gpu_index[j])r->gop_count[j]++;
+    } else r->independent_gop_count++;
   }
-  r->gop_relationships_observed=(r->gop_count[0] && r->gop_count[1]);
-  /* Each GPU needs an actual associated GOP path. Absence is not evidence that
-   * the proprietary NVIDIA firmware driver is detached or safe to Stop. */
-  if(!r->gop_relationships_observed)incomplete=1;
-  /* Lack of an OpenProtocolInformation result on either target makes UEFI
-   * protocol ownership unknown, even if its PCI ancestry is established. */
-  for(i=0;i<2;i++) {
-    const GU_TOPO_PCI *node=&s->pci[r->gpu_index[i]];
+  r->gop_relationships_observed=1;
+  for(j=0;j<r->gpu_count;j++) {
+    const GU_TOPO_PCI *node=&s->pci[r->gpu_index[j]];
+    if(!r->gop_count[j]) {
+      incomplete=1;
+      r->gop_relationships_observed=0;
+    }
     if(!node->openers_known || !node->by_driver)incomplete=1;
     if(node->by_driver>1)bad=1;
   }
-  /* NVIDIA GOP absence is recorded, never interpreted as unbound/independent. */
   for(i=0;i<s->console_count;i++) {
     int owner=DisplayOwner(s,&s->console[i]);
     if(owner==-2)bad=1;
     if(owner<0)continue;
-    if((size_t)owner==r->gpu_index[0] || (size_t)owner==r->gpu_index[1])
+    if((s->pci[owner].identity.pci_id&0xffffU)==0x10deU)
       r->nvidia_console_count++;
-    else if((s->pci[owner].identity.pci_id&0xffffU)==0x1002U)
-      r->amd_console_count++;
+    else r->independent_console_count++;
   }
   if(r->nvidia_console_count)bad=1;
-  r->amd_console_independent=(s->console_available && r->amd_console_count &&
-     r->amd_gop_count && !r->nvidia_console_count);
-  if(!r->amd_console_independent)incomplete=1;
+  r->independent_console_observed=(s->console_available &&
+      r->independent_console_count && r->independent_gop_count &&
+      !r->nvidia_console_count);
+  if(!r->independent_console_observed)incomplete=1;
   r->status=bad?GU_TOPO_CONFLICT:incomplete?GU_TOPO_INCOMPLETE:GU_TOPO_COMPLETE;
   return r->status;
 }
