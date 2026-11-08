@@ -31,20 +31,22 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology
 ```
 
 The example produces `src\build_diagnostic\GPU-SELECTION-0000-09-02-0-DIAGNOSTIC.EFI`.
-An ordered, read-only **dual-target** diagnostic can be compiled with
-`-SelectionBdfs` and exactly two comma-separated PCI locations:
+An ordered, read-only **multi-target** diagnostic can be compiled with
+`-SelectionBdfs` and 2–16 comma-separated PCI locations (the example below uses two):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:09:02.0,0001:2A:03.1'
 ```
 
 The example PCI locations are synthetic; substitute the *current* target
-system's observed PCI addresses. The resulting binary name contains **both**
-locations in order. Duplicate locations, invalid PCI syntax, or a missing
+system's observed PCI addresses. A one- or two-target binary name contains
+the locations in order; for three or more the name carries the target count
+and a deterministic SHA-256 prefix to avoid excessively long filenames.
+The ordered locations remain recorded in the selection log. Duplicate locations, invalid PCI syntax, or a missing
 target refuse the sequence, with no partial selection. At runtime, the
 diagnostic obtains **one** immutable PCI/GOP/ConOut snapshot, resolves both
 requested NVIDIA devices before processing, and emits sequential
-`SELECTION_STEP[0]` and `SELECTION_STEP[1]` identity/ancestry/GOP/owner
+`SELECTION_STEP[n]` identity/ancestry/GOP/owner
 reports followed by `SELECTION_SEQUENCE` summary. There is no repeated
 hardware initialization or separate acquisition between steps. A topology
 conflict is reported independently and still prevents an overall EFI success.
@@ -57,7 +59,7 @@ retained in the numbered log when `-SaveLog` is used. For the existing
 single-target build, the legacy `SELECTION_VERDICT=REFUSED` or
 `SELECTION_VERDICT=PASSIVE_IDENTIFIED`, `PASSIVE_SELECTION`, and
 `NON_TARGET_NVIDIA_COUNT` fields remain available for log consumers.
-A dual-target build uses ordered `SELECTION_STEP[n]` and the aggregate
+A multi-target build uses ordered `SELECTION_STEP[n]` and the aggregate
 `SELECTION_SEQUENCE`; it does not claim any GPU firmware was executed.
 Any `TOPOLOGY_VERDICT=CONFLICT` remains a separate console/ownership finding.
 The selection build rejects `-WindowsEspGuid`; neither the selection binary
@@ -73,6 +75,19 @@ the build also rejected a duplicate-BDF pair before compilation.
 These are build and host-mock results, **not a physical test** of this new
 dynamic diagnostic. Legacy active discovery still refuses multiple NVIDIA
 devices before `GuInit`.
+
+## Shared active-preparation boundary
+
+The same `src/Gpu-Selection-Build.ps1` validator is used by this passive
+diagnostic and the separately built **non-diagnostic active app/DXE
+preparation-only images**. It validates 1–16 ordered, distinct PCI segment:BDF
+locations, independent of GPU model and motherboard. The active app/DXE
+preparation images do **not** use this passive diagnostic's full PCI/GOP/ConOut
+collector; their common UEFI discovery routine currently records bounded
+PCI identity/inventory only and refuses any GPU actuation.
+
+See [Active GPU preparation](ACTIVE_GPU_PREPARATION.md). This is a distinct
+source/verification boundary from the previous passive diagnostic captures.
 
 ## Diagnostic observations and limitations
 
