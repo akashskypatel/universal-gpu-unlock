@@ -31,6 +31,27 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology
 ```
 
 The example produces `src\build_diagnostic\GPU-SELECTION-0000-09-02-0-DIAGNOSTIC.EFI`.
+An ordered, read-only **dual-target** diagnostic can be compiled with
+`-SelectionBdfs` and exactly two comma-separated PCI locations:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:09:02.0,0001:2A:03.1'
+```
+
+The example PCI locations are synthetic; substitute the *current* target
+system's observed PCI addresses. The resulting binary name contains **both**
+locations in order. Duplicate locations, invalid PCI syntax, or a missing
+target refuse the sequence, with no partial selection. At runtime, the
+diagnostic obtains **one** immutable PCI/GOP/ConOut snapshot, resolves both
+requested NVIDIA devices before processing, and emits sequential
+`SELECTION_STEP[0]` and `SELECTION_STEP[1]` identity/ancestry/GOP/owner
+reports followed by `SELECTION_SEQUENCE` summary. There is no repeated
+hardware initialization or separate acquisition between steps. A topology
+conflict is reported independently and still prevents an overall EFI success.
+This is **not** sequential NVIDIA secure firmware execution, GPU driver Stop,
+or unlock authorization. `GuDiscoverSingleGpu` still refuses the
+write-enabled multi-NVIDIA entrypoints.
+
 A missing or incorrect location gives `SELECTION_VERDICT=REFUSED`, retained
 in the numbered log when `-SaveLog` is used. A valid observed target gives
 `SELECTION_VERDICT=PASSIVE_IDENTIFIED` and `NON_TARGET_NVIDIA_COUNT`.

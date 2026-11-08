@@ -53,3 +53,9 @@ int GuFindExactGpu(const GU_GPU_INVENTORY *inventory,
  * record still needs later, independent policy checks before any actuation. */
 int GuFindGpuAtLocation(const GU_GPU_INVENTORY *inventory,
                         const GU_GPU_LOCATION *location, size_t *index);
+
+/* Atomically resolve an ordered sequence of observed NVIDIA PCI locations.
+ * On any error all output indices are zero. No driver or GPU state changes. */
+int GuFindGpuSequence(const GU_GPU_INVENTORY *inventory,
+                      const GU_GPU_LOCATION *locations, size_t count,
+                      size_t *indices);

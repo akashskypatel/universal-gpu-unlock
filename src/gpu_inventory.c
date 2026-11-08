@@ -87,3 +87,29 @@ int GuFindGpuAtLocation(const GU_GPU_INVENTORY *inventory,
   }
   return GU_INVENTORY_NOT_FOUND;
 }
+
+int GuFindGpuSequence(const GU_GPU_INVENTORY *inventory,
+                      const GU_GPU_LOCATION *locations, size_t count,
+                      size_t *indices) {
+  size_t resolved[GU_INVENTORY_MAX_NVIDIA], i, j;
+  int result;
+  if (!indices || !locations || !inventory || !count ||
+      count > GU_INVENTORY_MAX_NVIDIA ||
+      inventory->count > GU_INVENTORY_MAX_NVIDIA)
+    return GU_INVENTORY_INVALID;
+  for (i = 0; i < count; i++) indices[i] = 0;
+  for (i = 0; i < count; i++) {
+    for (j = 0; j < i; j++)
+      if (locations[i].segment == locations[j].segment &&
+          locations[i].bus == locations[j].bus &&
+          locations[i].device == locations[j].device &&
+          locations[i].function == locations[j].function)
+        return GU_INVENTORY_DUPLICATE;
+    result = GuFindGpuAtLocation(inventory, &locations[i], &resolved[i]);
+    if (result != GU_INVENTORY_OK) return result;
+    for (j = 0; j < i; j++)
+      if (resolved[i] == resolved[j]) return GU_INVENTORY_DUPLICATE;
+  }
+  for (i = 0; i < count; i++) indices[i] = resolved[i];
+  return GU_INVENTORY_OK;
+}

@@ -58,11 +58,39 @@ int main(void) {
   CHECK(GuFindGpuAtLocation(&inv,&other,&index)==GU_INVENTORY_OK && index==1);
   CHECK(GuFindExactGpu(&inv,&exact,&index)==GU_INVENTORY_OK && index==1);
 
+  /* Ordered resolution commits only when both independent locations exist. */
+  {
+    const GU_GPU_LOCATION ordered[2]={{1,7,4,1},{0,3,0,0}};
+    const GU_GPU_LOCATION duplicate[2]={{0,3,0,0},{0,3,0,0}};
+    const GU_GPU_LOCATION missing[2]={{0,3,0,0},{0,9,0,0}};
+    size_t resolved[2]={99,99};
+    CHECK(GuFindGpuSequence(&inv,ordered,2,resolved)==GU_INVENTORY_OK);
+    CHECK(resolved[0]==1 && resolved[1]==0);
+    resolved[0]=resolved[1]=99;
+    CHECK(GuFindGpuSequence(&inv,duplicate,2,resolved)==GU_INVENTORY_DUPLICATE);
+    CHECK(resolved[0]==0 && resolved[1]==0);
+    resolved[0]=resolved[1]=99;
+    CHECK(GuFindGpuSequence(&inv,missing,2,resolved)==GU_INVENTORY_NOT_FOUND);
+    CHECK(resolved[0]==0 && resolved[1]==0);
+    CHECK(GuFindGpuSequence(&inv,ordered,0,resolved)==GU_INVENTORY_INVALID);
+    CHECK(GuFindGpuSequence(&inv,ordered,GU_INVENTORY_MAX_NVIDIA+1,resolved)==GU_INVENTORY_INVALID);
+    CHECK(GuFindGpuSequence(NULL,ordered,2,resolved)==GU_INVENTORY_INVALID);
+    CHECK(GuFindGpuSequence(&inv,NULL,2,resolved)==GU_INVENTORY_INVALID);
+    CHECK(GuFindGpuSequence(&inv,ordered,2,NULL)==GU_INVENTORY_INVALID);
+  }
+
+
   swap=m.records[0];m.records[0]=m.records[1];m.records[1]=swap;
   CHECK(GuCollectGpuInventory(m.count,Reader,&m,&inv)==GU_INVENTORY_OK);
   CHECK(inv.count==2);
   CHECK(GuFindGpuAtLocation(&inv,&location,&index)==GU_INVENTORY_OK && index==1);
   CHECK(GuFindGpuAtLocation(&inv,&other,&index)==GU_INVENTORY_OK && index==0);
+  {
+    const GU_GPU_LOCATION order[2]={{1,7,4,1},{0,3,0,0}};
+    size_t result[2]={99,99};
+    CHECK(GuFindGpuSequence(&inv,order,2,result)==GU_INVENTORY_OK);
+    CHECK(result[0]==0 && result[1]==1);
+  }
 
   Setup(&m);m.count=3;
   m.records[2]=Gpu(0x278210deU,0xabcdef01U,0,9,2,0,3);
@@ -71,6 +99,12 @@ int main(void) {
   CHECK(GuFindGpuAtLocation(&inv,&other,&index)==GU_INVENTORY_OK && index==1);
   location.bus=9;location.device=2;
   CHECK(GuFindGpuAtLocation(&inv,&location,&index)==GU_INVENTORY_OK && index==2);
+  {
+    const GU_GPU_LOCATION order[2]={{0,9,2,0},{1,7,4,1}};
+    size_t result[2]={99,99};
+    CHECK(GuFindGpuSequence(&inv,order,2,result)==GU_INVENTORY_OK);
+    CHECK(result[0]==2 && result[1]==1);
+  }
   location.bus=3;location.device=0;
 
   Setup(&m);m.count=1;

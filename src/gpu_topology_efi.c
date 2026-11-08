@@ -19,7 +19,12 @@
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #error Selection-only diagnostic cannot automatically hand off to Windows
 #endif
-#include "gpu-selection.h" /* Generated from operator-supplied PCI location. */
+#include "gpu-selection.h" /* Generated from operator-supplied PCI locations. */
+#if GU_TOPO_SELECTED_COUNT < 1 || GU_TOPO_SELECTED_COUNT > GU_INVENTORY_MAX_NVIDIA
+#error Invalid number of selected PCI locations
+#endif
+static const GU_GPU_LOCATION SelectedLocations[GU_TOPO_SELECTED_COUNT] =
+    GU_TOPO_SELECTED_LOCATIONS;
 #endif
 #include "gpu_pci_observation.h"
 #ifdef GU_TOPO_WINDOWS_HANDOFF
@@ -73,61 +78,69 @@ static void Say(const char *format, ...) {
 }
 
 #ifdef GU_TOPO_SELECTION_ENABLED
-/* A PCI location selects a read-only snapshot record, not a GPU transaction. */
-static int ReportPassiveSelection(int pci_ok, int topology_result) {
-  const GU_GPU_LOCATION requested={
-    GU_TOPO_SELECTED_SEGMENT, GU_TOPO_SELECTED_BUS,
-    GU_TOPO_SELECTED_DEVICE, GU_TOPO_SELECTED_FUNCTION
-  };
+/* Resolve all requested devices before emitting ordered per-device results.
+ * These are sequential CPU-side reports against ONE immutable passive snapshot,
+ * never sequential firmware transactions or new GPU hardware reads. */
+static int ReportPassiveSelections(int pci_ok, int topology_result) {
   GU_GPU_INVENTORY inventory;
-  size_t selected=0,i;
-  int status=GU_INVENTORY_INVALID,match=0;
+  size_t indices[GU_TOPO_SELECTED_COUNT], nodes[GU_TOPO_SELECTED_COUNT];
+  size_t i,j;
+  int status=GU_INVENTORY_INVALID;
+  Say("SELECTION_SEQUENCE=BEGIN REQUESTED=%u READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
+      (unsigned)GU_TOPO_SELECTED_COUNT);
+  for(i=0;i<GU_TOPO_SELECTED_COUNT;i++) {
+    const GU_GPU_LOCATION *p=&SelectedLocations[i];
+    Say("SELECTION_REQUEST[%zu] BDF=%04x:%02x:%02x.%u\r\n",
+        i,(unsigned)p->segment,(unsigned)p->bus,
+        (unsigned)p->device,(unsigned)p->function);
+  }
   if(pci_ok) {
     status=GuCollectGpuInventory(Snapshot.pci_count,SelectionRead,
                                  &Snapshot,&inventory);
     if(status==GU_INVENTORY_OK)
-      status=GuFindGpuAtLocation(&inventory,&requested,&selected);
-    if(status==GU_INVENTORY_OK && Report.gpu_count==inventory.count) {
-      const GU_GPU_RECORD *a=&inventory.nvidia[selected];
-      for(i=0;i<Report.gpu_count;i++) {
-        size_t node=Report.gpu_index[i];
-        const GU_GPU_RECORD *b;
-        if(node>=Snapshot.pci_count)continue;
-        b=&Snapshot.pci[node].identity;
-        if(a->handle==b->handle && a->pci==b->pci &&
-           a->pci_id==b->pci_id && a->subsystem_id==b->subsystem_id &&
-           a->class_code==b->class_code &&
-           a->segment==b->segment && a->bus==b->bus &&
-           a->device==b->device && a->function==b->function) {
-          match=1;break;
-        }
+      status=GuFindGpuSequence(&inventory,SelectedLocations,
+                               GU_TOPO_SELECTED_COUNT,indices);
+    if(status==GU_INVENTORY_OK && Report.gpu_count!=inventory.count)
+      status=GU_INVENTORY_NOT_FOUND;
+    if(status==GU_INVENTORY_OK)for(i=0;i<GU_TOPO_SELECTED_COUNT;i++) {
+      const GU_GPU_RECORD *a=&inventory.nvidia[indices[i]];
+      size_t node=Report.gpu_index[indices[i]];
+      const GU_GPU_RECORD *b;
+      if(node>=Snapshot.pci_count) {status=GU_INVENTORY_NOT_FOUND;break;}
+      b=&Snapshot.pci[node].identity;
+      if(a->handle!=b->handle || a->pci!=b->pci ||
+         a->pci_id!=b->pci_id || a->subsystem_id!=b->subsystem_id ||
+         a->class_code!=b->class_code ||
+         a->segment!=b->segment || a->bus!=b->bus ||
+         a->device!=b->device || a->function!=b->function) {
+        status=GU_INVENTORY_NOT_FOUND;break;
       }
-      if(match) {
-        Say("PASSIVE_SELECTION=GPU_IDENTIFIED TARGET=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x\r\n",
-            (unsigned)a->segment,(unsigned)a->bus,(unsigned)a->device,
-            (unsigned)a->function,(unsigned)(a->pci_id&65535U),
-            (unsigned)(a->pci_id>>16),(unsigned)(a->subsystem_id&65535U),
-            (unsigned)(a->subsystem_id>>16),(unsigned)a->class_code);
-        Say("NON_TARGET_NVIDIA_COUNT=%zu\r\n",inventory.count-1);
-        for(i=0;i<inventory.count;i++) {
-          const GU_GPU_RECORD *b=&inventory.nvidia[i];
-          if(i==selected)continue;
-          Say("NON_TARGET[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x\r\n",
-              i,(unsigned)b->segment,(unsigned)b->bus,(unsigned)b->device,
-              (unsigned)b->function,(unsigned)(b->pci_id&65535U),
-              (unsigned)(b->pci_id>>16),(unsigned)(b->subsystem_id&65535U),
-              (unsigned)(b->subsystem_id>>16));
-        }
-      }
+      nodes[i]=node;
     }
   }
-  if(status==GU_INVENTORY_OK && !match)status=GU_INVENTORY_NOT_FOUND;
-  Say("SELECTION_VERDICT=%s REQUESTED=%04x:%02x:%02x.%u CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
-      match?"PASSIVE_IDENTIFIED":"REFUSED",
-      (unsigned)requested.segment,(unsigned)requested.bus,
-      (unsigned)requested.device,(unsigned)requested.function,
-      status,topology_result);
-  return match;
+  if(status!=GU_INVENTORY_OK) {
+    Say("SELECTION_SEQUENCE=REFUSED CODE=%d COMPLETED=0 REQUESTED=%u TOPOLOGY_VERDICT=%d\r\n",
+        status,(unsigned)GU_TOPO_SELECTED_COUNT,topology_result);
+    return 0;
+  }
+  for(i=0;i<GU_TOPO_SELECTED_COUNT;i++) {
+    const GU_GPU_RECORD *a=&inventory.nvidia[indices[i]];
+    const GU_TOPO_PCI *node=&Snapshot.pci[nodes[i]];
+    Say("SELECTION_STEP[%zu]=BEGIN BDF=%04x:%02x:%02x.%u\r\n",
+        i,(unsigned)a->segment,(unsigned)a->bus,
+        (unsigned)a->device,(unsigned)a->function);
+    Say("SELECTION_STEP[%zu]=PASSIVE_IDENTIFIED ID=%04x:%04x SUB=%04x:%04x CLASS=%04x ROOT_INDEX=%zu DEPTH=%u GOP_COUNT=%u BY_DRIVER=%u OPENERS_KNOWN=%u\r\n",
+        i,(unsigned)(a->pci_id&65535U),(unsigned)(a->pci_id>>16),
+        (unsigned)(a->subsystem_id&65535U),(unsigned)(a->subsystem_id>>16),
+        (unsigned)a->class_code,Report.root_index[indices[i]],
+        Report.depth[indices[i]],Report.gop_count[indices[i]],
+        node->by_driver,(unsigned)node->openers_known);
+    Say("SELECTION_STEP[%zu]=END STATUS=OBSERVED READ_ONLY=1\r\n",i);
+  }
+  Say("SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=%u NON_SELECTED_NVIDIA_COUNT=%zu TOPOLOGY_VERDICT=%d CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
+      (unsigned)GU_TOPO_SELECTED_COUNT,
+      inventory.count-GU_TOPO_SELECTED_COUNT,topology_result);
+  return 1;
 }
 #endif
 
@@ -657,7 +670,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID",
       (unsigned)(Report.nvidia_console_count!=0));
 #ifdef GU_TOPO_SELECTION_ENABLED
-  SelectionOk=ReportPassiveSelection(pci_ok,result);
+  SelectionOk=ReportPassiveSelections(pci_ok,result);
 #endif
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
 #ifdef GU_TOPO_WINDOWS_HANDOFF
