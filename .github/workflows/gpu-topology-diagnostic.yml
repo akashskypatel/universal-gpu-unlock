@@ -101,12 +101,12 @@ jobs:
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI)){throw 'EFI missing'}
-            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionTarget AD102 *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
-            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC AD102 selection diagnostic failed: $LASTEXITCODE"}
-            if(-not (Test-Path .\src\build_diagnostic\GPU-DISCOVERY-AD102-DIAGNOSTIC.EFI)){throw 'AD102 selection EFI missing'}
-            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionTarget GA102 *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
-            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC GA102 selection diagnostic failed: $LASTEXITCODE"}
-            if(-not (Test-Path .\src\build_diagnostic\GPU-DISCOVERY-GA102-DIAGNOSTIC.EFI)){throw 'GA102 selection EFI missing'}
+            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdf '0000:09:02.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC synthetic BDF A diagnostic failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_diagnostic\GPU-SELECTION-0000-09-02-0-DIAGNOSTIC.EFI)){throw 'PCI BDF A selection EFI missing'}
+            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdf '0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC synthetic BDF B diagnostic failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_diagnostic\GPU-SELECTION-0001-2A-03-1-DIAGNOSTIC.EFI)){throw 'PCI BDF B selection EFI missing'}
             'SELECTION_EFI_COMPILE_EXIT=0 UNMODIFIED_ACTIVE_ENTRYPOINTS=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
           } catch {
@@ -136,5 +136,5 @@ jobs:
         if: success()
         with:
           name: gpu-discovery-selection-unsigned-${{ github.sha }}
-          path: src/build_diagnostic/GPU-DISCOVERY-*-DIAGNOSTIC.EFI
+          path: src/build_diagnostic/GPU-SELECTION-*-DIAGNOSTIC.EFI
           if-no-files-found: error
