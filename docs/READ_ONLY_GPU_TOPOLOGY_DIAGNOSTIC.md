@@ -38,11 +38,11 @@ Any `TOPOLOGY_VERDICT=CONFLICT` remains a separate console/ownership finding.
 The selection build rejects `-WindowsEspGuid`; neither the selection binary
 nor the generic topology EFI links the GPU unlock/DMA/FLR/vendor Stop engine.
 
-**Verification:** [CI run 42519827927](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42519827927)
-passed 70 generic topology host assertions (GCC/Clang/UBSan), 57 inventory
+**Verification:** [CI run 42520307922](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42520307922)
+passed 72 generic topology host assertions (GCC/Clang/UBSan), 58 inventory
 assertions (GCC/Clang/UBSan), and 15 discovery adapter mocks (GCC/Clang).
 MSVC built the generic image and two synthetic PCI-location selection variants.
-[Unsigned selection EFI artifacts](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42519827927/artifacts/13632208787).
+[Unsigned selection EFI artifacts](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42520307922/artifacts/13632589349).
 These are build and host-mock results, **not a physical test** of this new
 dynamic diagnostic. Legacy active discovery still refuses multiple NVIDIA
 devices before `GuInit`.
