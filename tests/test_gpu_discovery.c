@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <string.h>
 
+static const GU_GPU_IDENTITY Primary={0x20b010deU,0xa12310deU,0,3,0,0};
+static const GU_GPU_IDENTITY Secondary={0x250310deU,0xb45610deU,1,7,4,1};
 static unsigned checks;
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -27,9 +29,9 @@ void GuInit(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *pci) {
 }
 void GuLog(const char *format, ...) { (void)format; log_calls++; }
 int GuIsSupportedPciId(UINT32 pci) {
-  return pci == 0x268410deU || pci == 0x220a10deU;
+  return pci == Primary.pci_id || pci == Secondary.pci_id;
 }
-int GuIsAmpereDeviceId(UINT16 dev) { return dev == 0x220aU; }
+int GuIsAmpereDeviceId(UINT16 dev) { return dev == 0x2503U; }
 int GuIsTuringDeviceId(UINT16 dev) { (void)dev; return 0; }
 int GuCheckConfig(const UINT32 c[64], UINTN seg, UINTN bus, UINTN dev, UINTN fun, GU_CAPS *caps) {
   if (!c || !caps || seg != 0 || bus > 255 || dev > 31 || fun > 7 ||
@@ -82,7 +84,7 @@ static void Populate(size_t i, GU_GPU_IDENTITY id) {
 static void ResetPair(void) {
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
   fail_pool_free = redirect_on_refresh = 0; resolve_calls = 0; count = 2;
-  Populate(0, GuPinnedAd102); Populate(1, GuPinnedGa102);
+  Populate(0, Primary); Populate(1, Secondary);
 }
 #include "../src/gpu_discovery.c"
 
@@ -93,7 +95,7 @@ int main(void) {
   CHECK(status == EFI_UNSUPPORTED && init_calls == 0 && free_calls == 1 && log_calls >= 3);
 
   ResetPair();
-  Populate(0, GuPinnedGa102); Populate(1, GuPinnedAd102);
+  Populate(0, Secondary); Populate(1, Primary);
   status = GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table);
   CHECK(status == EFI_UNSUPPORTED && init_calls == 0 && free_calls == 1);
 
@@ -109,12 +111,12 @@ int main(void) {
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
 
   ResetPair(); count = 3;
-  Populate(2, GuPinnedAd102); gpu[2].bus = 6;
+  Populate(2, Primary); gpu[2].bus = 6;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
 
   ResetPair(); count = 1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_SUCCESS && init_calls == 1);
-  CHECK(Gu.handle == handles[0] && Gu.device_id == 0x2684 && !Gu.is_ampere);
+  CHECK(Gu.handle == handles[0] && Gu.device_id == 0x20b0 && !Gu.is_ampere);
 
   ResetPair(); count = 1; gpu[0].mutate_at_full_read = 1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_UNSUPPORTED && !init_calls);
