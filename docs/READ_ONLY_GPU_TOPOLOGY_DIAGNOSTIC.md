@@ -162,8 +162,7 @@ not inputs to the graph. Separate `PCI_OBS` inventory is still
 independently reported if strict collection fails.
 
 The `PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES` line will show how
-many handles were included and excluded. Host unit tests cover the
-scope and changing classifier fields. Even a successful strict
+many handles were included and excluded. [GitHub Actions run `42432931241`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42432931241) **PASS**: 58 topology assertions (14 added) under GCC, Clang and GCC UBSan, existing tests, plus Windows MSVC diagnostic EFI builds with/without handoff (synthetic ESP GUID for CI). The classifier and strict topology collector still require physical B850 validation. Even a successful strict
 capture may return `TOPOLOGY=CONFLICT` because both NVIDIA `ConOut`
 entries are still configured. **No active detach, firmware execution
 or unlock is enabled by this change.**
