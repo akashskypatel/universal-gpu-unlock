@@ -20,7 +20,7 @@ int GuCollectGpuInventory(size_t handle_count, GU_GPU_READER reader,
     if (reader(context, i, &record)) goto read_failed;
     if (!record.handle || !record.pci) goto read_failed;
     if ((record.pci_id & 0xffffU) != 0x10deU ||
-        (record.class_code != 0x0300U && record.class_code != 0x0302U))
+        ((record.class_code & 0xff00U) != 0x0300U))
       continue;
     if (record.segment > 0xffffU || record.bus > 255U ||
         record.device > 31U || record.function > 7U)
