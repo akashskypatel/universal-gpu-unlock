@@ -110,6 +110,15 @@ jobs:
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC ordered dual selection EFI failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_diagnostic\GPU-SELECTION-0000-09-02-0--0001-2A-03-1-DIAGNOSTIC.EFI)){throw 'Ordered dual selection EFI missing'}
+            # A malformed/duplicate target list must be rejected before compilation.
+            $duplicateRejected = $false
+            try {
+              & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:09:02.0,0000:09:02.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            } catch {
+              $duplicateRejected = $_.Exception.Message -match 'Duplicate PCI target'
+            }
+            if(-not $duplicateRejected) {throw 'Duplicate target build was not rejected'}
+            'DUPLICATE_SELECTION_REJECTED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'SELECTION_EFI_COMPILE_EXIT=0 UNMODIFIED_ACTIVE_ENTRYPOINTS=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
           } catch {

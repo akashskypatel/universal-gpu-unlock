@@ -52,18 +52,23 @@ This is **not** sequential NVIDIA secure firmware execution, GPU driver Stop,
 or unlock authorization. `GuDiscoverSingleGpu` still refuses the
 write-enabled multi-NVIDIA entrypoints.
 
-A missing or incorrect location gives `SELECTION_VERDICT=REFUSED`, retained
-in the numbered log when `-SaveLog` is used. A valid observed target gives
-`SELECTION_VERDICT=PASSIVE_IDENTIFIED` and `NON_TARGET_NVIDIA_COUNT`.
+An absent or incorrect location gives `SELECTION_SEQUENCE=REFUSED`,
+retained in the numbered log when `-SaveLog` is used. For the existing
+single-target build, the legacy `SELECTION_VERDICT=REFUSED` or
+`SELECTION_VERDICT=PASSIVE_IDENTIFIED`, `PASSIVE_SELECTION`, and
+`NON_TARGET_NVIDIA_COUNT` fields remain available for log consumers.
+A dual-target build uses ordered `SELECTION_STEP[n]` and the aggregate
+`SELECTION_SEQUENCE`; it does not claim any GPU firmware was executed.
 Any `TOPOLOGY_VERDICT=CONFLICT` remains a separate console/ownership finding.
 The selection build rejects `-WindowsEspGuid`; neither the selection binary
 nor the generic topology EFI links the GPU unlock/DMA/FLR/vendor Stop engine.
 
-**Verification:** [CI run 42520307922](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42520307922)
-passed 72 generic topology host assertions (GCC/Clang/UBSan), 58 inventory
-assertions (GCC/Clang/UBSan), and 15 discovery adapter mocks (GCC/Clang).
-MSVC built the generic image and two synthetic PCI-location selection variants.
-[Unsigned selection EFI artifacts](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42520307922/artifacts/13632589349).
+**Verification:** [CI run 42522013851](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42522013851)
+passed 72 generic topology checks (GCC/Clang/UBSan), 73 ordered inventory
+and selection checks (GCC/Clang/UBSan), and 15 legacy discovery adapter
+mocks (GCC/Clang). MSVC built the untargeted diagnostic, two synthetic
+single-target selection images and one synthetic ordered dual-target image.
+[Unsigned selection EFI artifacts](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42522013851/artifacts/13633483451).
 These are build and host-mock results, **not a physical test** of this new
 dynamic diagnostic. Legacy active discovery still refuses multiple NVIDIA
 devices before `GuInit`.

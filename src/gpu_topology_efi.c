@@ -84,7 +84,7 @@ static void Say(const char *format, ...) {
 static int ReportPassiveSelections(int pci_ok, int topology_result) {
   GU_GPU_INVENTORY inventory;
   size_t indices[GU_TOPO_SELECTED_COUNT], nodes[GU_TOPO_SELECTED_COUNT];
-  size_t i,j;
+  size_t i;
   int status=GU_INVENTORY_INVALID;
   Say("SELECTION_SEQUENCE=BEGIN REQUESTED=%u READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
       (unsigned)GU_TOPO_SELECTED_COUNT);
@@ -119,6 +119,11 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
     }
   }
   if(status!=GU_INVENTORY_OK) {
+    if(GU_TOPO_SELECTED_COUNT==1)
+      Say("SELECTION_VERDICT=REFUSED REQUESTED=%04x:%02x:%02x.%u CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1\r\n",
+          (unsigned)SelectedLocations[0].segment,(unsigned)SelectedLocations[0].bus,
+          (unsigned)SelectedLocations[0].device,(unsigned)SelectedLocations[0].function,
+          status,topology_result);
     Say("SELECTION_SEQUENCE=REFUSED CODE=%d COMPLETED=0 REQUESTED=%u TOPOLOGY_VERDICT=%d\r\n",
         status,(unsigned)GU_TOPO_SELECTED_COUNT,topology_result);
     return 0;
@@ -136,6 +141,18 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
         Report.depth[indices[i]],Report.gop_count[indices[i]],
         node->by_driver,(unsigned)node->openers_known);
     Say("SELECTION_STEP[%zu]=END STATUS=OBSERVED READ_ONLY=1\r\n",i);
+  }
+  if(GU_TOPO_SELECTED_COUNT==1) {
+    const GU_GPU_RECORD *a=&inventory.nvidia[indices[0]];
+    Say("PASSIVE_SELECTION=GPU_IDENTIFIED TARGET=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x\r\n",
+        (unsigned)a->segment,(unsigned)a->bus,(unsigned)a->device,
+        (unsigned)a->function,(unsigned)(a->pci_id&65535U),
+        (unsigned)(a->pci_id>>16),(unsigned)(a->subsystem_id&65535U),
+        (unsigned)(a->subsystem_id>>16),(unsigned)a->class_code);
+    Say("NON_TARGET_NVIDIA_COUNT=%zu\r\n",inventory.count-1);
+    Say("SELECTION_VERDICT=PASSIVE_IDENTIFIED REQUESTED=%04x:%02x:%02x.%u CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
+        (unsigned)a->segment,(unsigned)a->bus,(unsigned)a->device,
+        (unsigned)a->function,GU_INVENTORY_OK,topology_result);
   }
   Say("SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=%u NON_SELECTED_NVIDIA_COUNT=%zu TOPOLOGY_VERDICT=%d CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
       (unsigned)GU_TOPO_SELECTED_COUNT,
