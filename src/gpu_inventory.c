@@ -89,3 +89,22 @@ int GuFindPinnedGpuPair(const GU_GPU_INVENTORY *inventory,
   *ga102_index = ga;
   return GU_INVENTORY_OK;
 }
+
+/* Select one of the two independently pinned devices without global state.
+ * The other exact device remains visible to callers for non-target checks. */
+int GuFindPinnedGpuTarget(const GU_GPU_INVENTORY *inventory,
+                          GU_GPU_TARGET requested, size_t *target_index,
+                          size_t *other_index) {
+  size_t ad = 0, ga = 0;
+  int result;
+  if (!target_index || !other_index || target_index == other_index)
+    return GU_INVENTORY_INVALID;
+  *target_index = *other_index = 0;
+  if (requested != GU_GPU_TARGET_AD102 && requested != GU_GPU_TARGET_GA102)
+    return GU_INVENTORY_INVALID;
+  result = GuFindPinnedGpuPair(inventory, &ad, &ga);
+  if (result != GU_INVENTORY_OK) return result;
+  *target_index = requested == GU_GPU_TARGET_AD102 ? ad : ga;
+  *other_index = requested == GU_GPU_TARGET_AD102 ? ga : ad;
+  return GU_INVENTORY_OK;
+}
