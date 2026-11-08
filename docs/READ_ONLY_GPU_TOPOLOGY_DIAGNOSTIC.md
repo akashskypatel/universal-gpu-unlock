@@ -122,41 +122,44 @@ malformed nodes, invalid child image binding, rejected load and pool-free
 failures. These tests do not validate actual firmware Windows handoff,
 vendor GOP teardown or Windows 617.42 operation.
 
-### Physical B850 capture status and next passive test (2026-11-07)
+### Physical B850 passive capture: reproducible AMD root-complex drift and three console paths (2026-11-07)
 
-The second supplied log, `GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT` (SHA-256
-`1acc874082ace67413f57b180c571969e58d1e05bbca164c3c97c78009d7b4ef`),
-locates **50 PCI protocol handles**, below the strict limit of 128. The
-first handle's two 256-byte configuration reads differ:
-`PCI_READ_FAILURE STAGE=pci-refresh-config-changed`,
-`INDEX=0`, `EFI_COMPROMISED_DATA`. Until the changed DWORDs are identified,
-do not skip that handle or relax the full-read stability check.
+The latest user-supplied log `GPU-TOPOLOGY-DIAGNOSTIC-0003.TXT`
+(SHA-256 `33eee83dcc74f808af92febe831cbc70d6bea17f8f96c24164d73c80ec9a9235`)
+identifies the *exact* strict validation failure: on PCI handle index zero,
+`0000:00:00.0 1022:14d8` (`CLASS=0600`, AMD host/root complex),
+the first and second 256-byte PCI config reads differ only at **DWORD
+offset `0xBC`**, `0xB000A851` versus `0x18571ECB` (XOR
+`0xA857B69A`). All other 63 DWORDs match. The device-specific meaning
+of this register is not established. Do **not** silently ignore its changes,
+raise the PCI limit, skip the host bridge, or treat the observational
+fallback as successful strict topology. The strict result remains
+`PCI_CAPTURE=0 STATUS=ERROR EXACT_PAIR=0` until accepted rules are
+independently justified and tested.
 
-The supplementary observer completes independently with **579** firmware
-handles, **50** PCI protocols, **19** detailed display/bridge records,
-and **zero errors**. It identifies the exact RTX 4090 (`01:00.0`,
-`10de:2684 1043:88e6`), RTX 3080 (`04:00.0`,
-`10de:220a 19da:b612`) and AMD iGPU (`0f:00.0`, `1002:13c0`).
-Both captured GOP paths extend the respective NVIDIA GPU PCI paths,
-and both `ConOut` paths match those GOP paths; **neither matches AMD**.
-The user confirmed that no monitor was attached to the AMD motherboard
-output in this run. This may explain the current NVIDIA preboot console
-paths, but does not prove that attaching an AMD display will change them.
+The supplementary observer reports `COMPLETE=1`, 579 total EFI handles,
+50 PCI protocols, 19 display/bridge records, zero errors, no truncation.
+Identity/path associations locate RTX 4090 `01:00.0`, RTX 3080
+`04:00.0` and AMD iGPU `0f:00.0` as distinct devices.
+With a monitor now connected to the motherboard, the user confirms BIOS
+setup displays through the AMD iGPU. The log captures **three GOP paths
+and three ConOut variable paths**, each GOP/ConOut pair matching, mapped
+by complete PCI prefix to RTX 4090, RTX 3080 and AMD iGPU respectively.
+The AMD path is now present, but **both NVIDIA paths remain in
+`ConOut`**. This does not meet the existing assessor's requirement for
+an AMD console with **zero** NVIDIA `ConOut` associations. Neither the
+UEFI `ConsoleOutHandle` nor `ConOutDev` path has been verified, and
+the AMD console's survival after stopping any proprietary NVIDIA GOP is
+untested.
 
-The next *read-only* build reports bounded `PCI_CONFIG_DRIFT_DWORD` records
-(`OFFSET`, `FIRST`, `SECOND`, `XOR`, maximum 12 displayed) and the
-full changed-DWORD count, while still returning `STATUS=ERROR` on any drift.
-The user subsequently connected a display to the AMD motherboard output
-and observed BIOS setup rendering on the iGPU. This validates the BIOS
-setup display path, but not the UEFI application's `ConOut` variable.
-Keep the NVIDIA monitor cables unchanged, **cold boot** the updated
-read-only EFI, and compare console paths and config drift. A different monitor setup is a documented changed condition,
-not a controlled replication of the previous configuration.
-
-`WINDOWS_HANDOFF=REQUESTED` and a saved log do **not** by themselves prove
-the handoff succeeded. A successful passive report would not establish safe
-NVIDIA DriverBinding.Stop, recovery, signed 617.42 Booter or SEC2
-compatibility. Active unlocking remains blocked.
+Supplied logs `0002` and `0003` contain identical observations except
+for the three extra PCI-drift instrumentation lines and the numbered
+log filename; they should not be counted as independent cold-boot proof.
+The log records `WINDOWS_HANDOFF=REQUESTED`, **not** Windows
+`StartImage` success. The safe next engineering step is read-only
+mapping of the live console output handle, together with authoritative
+characterization or separately tested stable-topology validation for the
+root-complex register; active detachment/unlock remains blocked.
 
 ### Independent passive PCI evidence on strict-collector failure
 
