@@ -56,7 +56,7 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   EFI_PCI_IO_PROTOCOL *io;
   UINT32 config[64];
   GU_CAPS caps;
-  size_t i, ad102 = 0, ga102 = 0;
+  size_t i;
   int result;
   EFI_STATUS s, released;
   if (!image || !table || !table->BootServices ||
@@ -89,10 +89,9 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
           (unsigned)(p->subsystem_id >> 16), (unsigned)p->class_code);
   }
   if (inventory.count > 1) {
-    result = GuFindPinnedGpuPair(&inventory, &ad102, &ga102);
-    GuLog("PCI inventory: NVIDIA display count=%zu exact B850 pair=%u (AD102 index=%zu GA102 index=%zu); active dual-GPU path BLOCKED\n",
-          inventory.count, (unsigned)(result == GU_INVENTORY_OK), ad102, ga102);
-    return EFI_UNSUPPORTED; /* Never use the single global Gu for two GPUs. */
+    GuLog("PCI inventory: NVIDIA display count=%zu; active multi-GPU path refused because the unlock engine has single-device state\n",
+          inventory.count);
+    return EFI_UNSUPPORTED;
   }
   if (inventory.count != 1) return EFI_UNSUPPORTED;
   selected = &inventory.nvidia[0];
