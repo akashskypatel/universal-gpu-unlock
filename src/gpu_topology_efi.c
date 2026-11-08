@@ -563,6 +563,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   Say("STATUS=%s TOPOLOGY=%d EXACT_PAIR=%u HARDWARE_TESTED=0 PHYSICAL_DISPLAY_OWNER=UNKNOWN\r\n",
       result==GU_TOPO_COMPLETE?"COMPLETE":result==GU_TOPO_INVALID?"ERROR":"PARTIAL",
       result,(unsigned)Report.pair_exact);
+  /* Keep legacy STATUS=PARTIAL for existing log consumers, but distinguish
+   * an incomplete graph from an explicit topology conflict in the log. */
+  Say("TOPOLOGY_VERDICT=%s NVIDIA_CONOUT_BLOCKER=%u\r\n",
+      result==GU_TOPO_COMPLETE?"COMPLETE":
+      result==GU_TOPO_INCOMPLETE?"INCOMPLETE":
+      result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID",
+      (unsigned)(Report.nvidia_console_count!=0));
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
 #ifdef GU_TOPO_WINDOWS_HANDOFF
   Say("WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write\r\n");

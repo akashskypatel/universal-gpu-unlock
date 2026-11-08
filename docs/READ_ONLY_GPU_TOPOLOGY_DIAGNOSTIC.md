@@ -122,50 +122,51 @@ malformed nodes, invalid child image binding, rejected load and pool-free
 failures. These tests do not validate actual firmware Windows handoff,
 vendor GOP teardown or Windows 617.42 operation.
 
-### Physical B850 evidence through log 0005 (2026-11-07)
+### Physical B850 result from diagnostic 0006 — strict graph succeeds, console conflict (2026-11-07)
 
-The user-supplied `GPU-TOPOLOGY-DIAGNOSTIC-0005.TXT` (12,574 bytes,
-SHA-256 `3698eec60fd84769cdf2e15f5a34b8c5e2c578e0b0d56eb159311f67b5b37d0f`)
-still fails the strict full-256-byte PCI config reread on **unrelated
-AMD host bridge** `0000:00:00.0 1022:14d8 CLASS=0600` due to
-one changing DWORD at `0xBC` (`b000a851` to `1831e7e1`). The
-precise vendor register meaning remains unverified. The independent,
-passive observer succeeds: 578 total EFI handles, 50 PCI protocols,
-19 display/bridge records, zero errors/truncation. Exact RTX 4090,
-RTX 3080 and AMD iGPU identities and device paths remain observed.
+The uploaded `GPU-TOPOLOGY-DIAGNOSTIC-0006.TXT` (7,525 bytes, 97
+text lines; SHA-256 `9f21795f3fe2112eb7ea3131952c109f42627935d2df31c4f37c4f2a9fa2edc5`)
+is the first supplied preboot capture in which the scoped strict
+collector succeeds on the actual B850: `PCI_TOPOLOGY_SCOPE` shows
+**50** PCI protocols visited, **19** display/PCI-bridge nodes
+included and **31** excluded. Every included node retains strict
+256-byte config rereads, BDF, device-path and ownership checks.
+`PCI_CAPTURE=1 GOP_CAPTURE=1 CONOUT_CAPTURE=1`; `EXACT_PAIR=1`.
+The earlier AMD host-complex `1022:14d8` config offset `0xBC`
+no longer blocks classification because this unrelated host bridge
+does not belong to the GPU topology graph; the exact register meaning
+remains unknown, and its changing value is not masked or called safe.
 
-Three GOP device paths, three `ConOut` configured output paths, and
-three `ConOutDev` *possible* output paths correspond to the three
-GPUs. Firmware setup was observed through the AMD motherboard display,
-but both NVIDIA paths remain configured as console outputs.
-`ConsoleOutHandle` equals `StandardErrorHandle` and exposes the same
-SimpleTextOut protocol interface as `SystemTable.ConOut`;
-`HandleProtocol(DevicePath)` returns `EFI_UNSUPPORTED`. That handle
-could be virtual/aggregate: its physical GOP ownership cannot be
-established from this evidence. Neither it nor the possible-device
-variable proves that a proprietary NVIDIA GOP can be stopped.
+RTX 4090 `01:00.0` sits beneath root port `00:01.1` at
+ancestry depth **1**. RTX 3080 `04:00.0` sits beneath root
+port `00:02.1`, via bridges `02:00.0` and `03:00.0`, depth **3**.
+Both have `ANCESTRY=1 ROOT_VALID=1 GOP_COUNT=1` and the roots
+are distinct. The AMD iGPU `0f:00.0` also has a mapped GOP.
 
-### Scope-correct strict PCI topology collection (next passive image)
+The remaining outcome is an explicit `GU_TOPO_CONFLICT`:
+`DISTINCT_ROOTS=1 AMD_GOP_COUNT=1 AMD_CONOUT_MATCH=1
+NVIDIA_CONOUT_MATCH=2 GOP_UNMATCHED=0 AMD_CONSOLE_ASSOCIATION=0`.
+Both NVIDIA device paths remain configured in UEFI `ConOut` despite
+the AMD path being present. The current source logs this as
+`STATUS=PARTIAL TOPOLOGY=2`; **2 means conflict**, not incomplete
+GPU inventory. Supplementary `TOPOLOGY_VERDICT=CONFLICT` reporting
+is being added without changing the legacy `STATUS` field.
 
-Rather than skip a PCI handle or mask a changing `0xBC` register, the
-strict collector is being narrowed to the devices the topology graph
-actually needs: PCI **display endpoints (class 03xx)** and
-**PCI-to-PCI bridges (class 0604)**. It still visits every protocol
-handle and reads the standard identity/classifier twice on every
-function. Changing vendor/device or class fails closed, including on
-excluded devices. Included display/bridge functions still receive two
-**full 256-byte PCI config reads** checked for exact equality,
-unchanged PCI BDF, device path, protocol objects and ownership. This
-retains all ancestry, bus-window and root-port checks while avoiding
-a full read of unrelated host-bridge vendor config registers that are
-not inputs to the graph. Separate `PCI_OBS` inventory is still
-independently reported if strict collection fails.
+`ConsoleOutHandle` matches `SystemTable.ConOut` SimpleTextOut but
+does not expose a DevicePath, so the active console controller may be
+virtual/aggregate and cannot be attributed to AMD alone. `ConOutDev`
+continues to list all three **possible** output paths. User-observed
+AMD BIOS video is evidence of AMD firmware output, not proof of
+surviving a proprietary NVIDIA GOP release.
 
-The `PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES` line will show how
-many handles were included and excluded. [GitHub Actions run `42432931241`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42432931241) **PASS**: 58 topology assertions (14 added) under GCC, Clang and GCC UBSan, existing tests, plus Windows MSVC diagnostic EFI builds with/without handoff (synthetic ESP GUID for CI). The classifier and strict topology collector still require physical B850 validation. Even a successful strict
-capture may return `TOPOLOGY=CONFLICT` because both NVIDIA `ConOut`
-entries are still configured. **No active detach, firmware execution
-or unlock is enabled by this change.**
+The next diagnostic comparison can be passive with only an AMD
+motherboard monitor connected **and both NVIDIA GPU boards kept in
+place**. After a complete shutdown, temporarily disconnect NVIDIA
+video cables, run the diagnostic and check whether `NVIDIA_CONOUT_MATCH`
+decreases to zero. If a monitor configuration changes these paths,
+that still does not validate GOP `Stop`, Windows driver 617.42
+firmware compatibility, or GPU recovery. No NVRAM, GPU, PCI or boot
+mutation is permitted by this diagnostic.
 
 ### Independent passive PCI evidence on strict-collector failure
 
