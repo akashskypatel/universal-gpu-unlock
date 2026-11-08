@@ -1,68 +1,51 @@
-# Read-only PCI/GOP topology diagnostic (AD102 + GA102)
+# Dynamic read-only NVIDIA GPU and PCI/GOP topology diagnostic
 
-This is a standalone, **diagnostic-only EFI application**, not a GPU unlocker.
-It extends the shared `gpu_inventory` selector already used by both legacy EFI
-entrypoints. It checks the exact pinned B850 cards:
+This standalone, **non-mutating UEFI application** discovers hardware without a
+hardcoded motherboard, NVIDIA GPU model, subsystem ID, BDF, or fixed two-card
+layout. It inventories NVIDIA display/3D controllers, PCI-to-PCI bridges,
+and independent non-NVIDIA display paths, including AMD and Intel consoles.
 
-| Card | PCI ID | Subsystem ID | Segment:BDF |
-|---|---|---|---|
-| AD102 RTX 4090 | `10de:2684` | `1043:88e6` | `0000:01:00.0` |
-| GA102 RTX 3080 | `10de:220a` | `19da:b612` | `0000:04:00.0` |
+Dynamic topology supports 1–16 NVIDIA devices and multiple GPUs on the same
+root port. The scan examines up to 4096 PCI handles and retains at most 128
+display/bridge nodes; exceeding either limit fails closed. The generic
+diagnostic requires no target-specific build setting.
 
-These are observed identities and **not generic model claims**. The result
-remains `PARTIAL` or `ERROR` if PCI handles, locations, path prefixes, bridge
-bus ranges, root-port types, GOP paths, or `ConOut` device paths are missing,
-changed or contradictory. In particular, a Windows device number does not prove
-its pre-boot PCI bus will remain the same across firmware configuration changes.
+## Optional read-only selection by PCI location
 
-## Independent read-only target-selection EFI (2026-11-08)
+After observing the actual segment:BDF on a machine, an operator may build
+a separately selected diagnostic. This does not constrain which *models*
+are discoverable or qualify any firmware transactions. The BDF identifies
+one GPU in the current snapshot; its observed PCI/device/subsystem identity
+is recorded, and all other NVIDIA GPUs remain visible as non-targets.
 
-A **separate output binary for each requested GPU** now tests exact-pair
-selection without entering the legacy unlock application or DXE driver.
-`GuFindPinnedGpuTarget` accepts only the existing exact AD102 + GA102
-inventory, resolves either explicitly requested card regardless of enumeration
-order, returns the other card as a distinct non-target, and rejects a wrong
-PCI/subsystem/BDF, an extra NVIDIA display, an incomplete inventory, an unknown
-target or aliased output pointers. It does **not** call `GuInit`.
-
-Build the two images independently with Visual Studio MSVC on Windows:
+Generic diagnostic build:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionTarget AD102
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog
 ```
+
+Optional explicit BDF selection, with a **synthetic example address**:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionTarget GA102
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdf '0000:09:02.0'
 ```
 
-They produce `src\build_diagnostic\GPU-DISCOVERY-AD102-DIAGNOSTIC.EFI`
-and `GPU-DISCOVERY-GA102-DIAGNOSTIC.EFI`, respectively. Each reuses the
-standalone strict topology EFI's PCI/GOP/ConOut snapshot and checks the
-selected inventory identity against the matching topology node. The log
-distinguishes `PASSIVE_SELECTION=EXACT_PAIR`,
-`NON_TARGET_PRESENT=1` and `SELECTION_VERDICT=PASSIVE_EXACT_PAIR` from
-`TOPOLOGY_VERDICT` (which may still be `CONFLICT` when NVIDIA ConOut
-paths are configured). A refusal is logged and retained in the numbered USB
-log, not silently dropped. `SELECTION_VERDICT=PASSIVE_EXACT_PAIR` is only
-an identity-selection result; it never implies detachment readiness.
+The example produces `src\build_diagnostic\GPU-SELECTION-0000-09-02-0-DIAGNOSTIC.EFI`.
+A missing or incorrect location gives `SELECTION_VERDICT=REFUSED`, retained
+in the numbered log when `-SaveLog` is used. A valid observed target gives
+`SELECTION_VERDICT=PASSIVE_IDENTIFIED` and `NON_TARGET_NVIDIA_COUNT`.
+Any `TOPOLOGY_VERDICT=CONFLICT` remains a separate console/ownership finding.
+The selection build rejects `-WindowsEspGuid`; neither the selection binary
+nor the generic topology EFI links the GPU unlock/DMA/FLR/vendor Stop engine.
 
-No `app.c`, `dxe_main.c`, `msi_release.c`, unlock core, GPU register write,
-DMA, FLR, firmware stage, NVRAM write or Windows handoff is compiled into
-these two selection images. Supplying `-WindowsEspGuid` together with
-`-SelectionTarget` is rejected. Without `-SaveLog` the probe does not
-write disk; with it, the **only** intended persistent change is creation
-of one new numbered topology log on the EFI media. Binaries are **unsigned**;
-verify local signing/Secure Boot policy before any optional hardware run.
-
-**Verified source/CI:** the bounded host inventory selector now passes 73
-assertions under GCC, Clang and GCC UBSan, including reversed ordering and
-negative cases. Windows MSVC compiled both independent selection-image
-variants in [Actions run 42518171170](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42518171170).
-The CI-produced unsigned EFI artifact is [available here](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42518171170/artifacts/13631899107).
-These are **not physical tests** on the B850; neither active
-`GuDiscoverSingleGpu` nor its intentional `EFI_UNSUPPORTED` refusal
-for two NVIDIA GPUs has been modified. All active-transaction readiness
-flags remain false.
+**Verification:** [CI run 42519827927](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42519827927)
+passed 70 generic topology host assertions (GCC/Clang/UBSan), 57 inventory
+assertions (GCC/Clang/UBSan), and 15 discovery adapter mocks (GCC/Clang).
+MSVC built the generic image and two synthetic PCI-location selection variants.
+[Unsigned selection EFI artifacts](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42519827927/artifacts/13632208787).
+These are build and host-mock results, **not a physical test** of this new
+dynamic diagnostic. Legacy active discovery still refuses multiple NVIDIA
+devices before `GuInit`.
 
 ## Diagnostic observations and limitations
 
@@ -71,20 +54,20 @@ flags remain false.
   Re-resolves each PCI protocol and re-reads its entire config and device path
   for stability. A read/FreePool failure makes the capture incomplete.
 - Identifies exact GPUs through **the same** `GuCollectGpuInventory` and
-  `GuFindPinnedGpuPair` routine as the existing source, not by array position.
+  `GuFindGpuAtLocation` (on optional selection); GPU models and arbitrary
+  array positions are not used as discovery criteria.
 - Validates nearest PCI bridge parents using complete path-prefix ancestry;
   bridge bus windows must contain the GPU bus. Each terminal PCI path node must agree with its BDF device/function. A PCIe Root Port requires PCIe
-  capability Port Type 4. Roots must be distinct. Missing handles cannot be
+  capability Port Type 4. Root ports may be shared. Missing handles cannot be
   invented from PCI bus numbers.
 - Enumerates `EFI_GRAPHICS_OUTPUT_PROTOCOL` handles and associates each GOP
-  device path with its longest matching display-controller PCI path. Both
-  NVIDIA GOP associations and successful PCI owner queries are required for
-  a complete topology observation. A missing or multiple BY_DRIVER owner record
+  device path with its longest matching display-controller PCI path. Each discovered NVIDIA GPU's GOP association and PCI owner observations
+  are required for a complete topology report. A missing or multiple BY_DRIVER owner record
   for an NVIDIA GPU is not accepted as a complete owner observation. Logs
   `OpenProtocolInformation` BY_DRIVER counts and first agent handle token; an owner count is not proof of
   a particular NVIDIA driver's private GOP context or of a safe Stop operation.
 - Reads `ConOut` device path(s) from the UEFI global variable **without
-  writing it**; demands an AMD display GOP association and no NVIDIA ConOut
+  writing it**; demands a non-NVIDIA GOP association and no NVIDIA ConOut
   path before declaring *observed console-path separation*. That still does
   **not** prove which physical cable/monitor is lit, GOP destructor safety,
   firmware ownership teardown, or NVIDIA hardware recovery.
@@ -180,7 +163,8 @@ collector succeeds on the actual B850: `PCI_TOPOLOGY_SCOPE` shows
 **50** PCI protocols visited, **19** display/PCI-bridge nodes
 included and **31** excluded. Every included node retains strict
 256-byte config rereads, BDF, device-path and ownership checks.
-`PCI_CAPTURE=1 GOP_CAPTURE=1 CONOUT_CAPTURE=1`; `EXACT_PAIR=1`.
+`PCI_CAPTURE=1 GOP_CAPTURE=1 CONOUT_CAPTURE=1`; the **older captured EFI**
+printed `EXACT_PAIR=1`, a field removed from the new generic output.
 The earlier AMD host-complex `1022:14d8` config offset `0xBC`
 no longer blocks classification because this unrelated host bridge
 does not belong to the GPU topology graph; the exact register meaning
@@ -247,10 +231,10 @@ The log marks the secondary report `PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DE
 cc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o /tmp/test_gpu_topology && /tmp/test_gpu_topology
 ```
 
-The host tests validate reversed PCI enumeration, exact card pins, wrong PCI
-IDs/BDF/subsystem, duplicated handles/BDF/protocols, absent or shared root
-ports, bridge windows, broken parent paths, malformed GOP and ConOut paths,
-NVIDIA ConOut ownership, missing AMD GOP and console observations, and bounds.
+The host tests validate one/two/three NVIDIA devices, mixed models and
+subsystems, reversed enumeration, shared roots, Intel/AMD console paths,
+PCI-location lookup, duplicate handles/BDFs, bridge windows, malformed paths,
+NVIDIA ConOut ownership and capacity bounds.
 They cannot prove genuine firmware methods, GOP driver safety or display
 ownership. See `Windows-GPU-UNLOCK`'s read-only `research/pci-decode/efi-capture.*`,
 `internal-boot/boot/probe-parent.c` and `research/gop/nvgop_stop_model.py`
@@ -260,8 +244,9 @@ proof that `DisconnectController()` is safe.
 
 ## Current status
 
-- Pure topology host checks are implemented. EFI source and isolated build
-  recipe are provided; physical execution remains **not tested**.
+- Generic host checks and isolated MSVC EFI builds are verified; physical
+  execution of the new generic diagnostic has **not** been tested. The
+  historical B850 `0006` output came from the earlier fixed-pair image.
 - [GitHub Actions run 42422191256](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42422191256) passed the 21-path and 17-handoff negative checks under GCC/Clang (handoff also GCC UBSan); Windows MSVC compiled the opt-in handoff variant using a deliberately **synthetic, non-deployable Windows ESP GUID**, then rebuilt the console-only variant for artifact upload. No signing, USB boot or real Windows handoff was exercised.
 - No changes are made to the legacy active entrypoint's strict multi-GPU
   refusal. No dual-GPU write-enabled path is introduced.
