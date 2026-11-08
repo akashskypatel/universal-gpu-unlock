@@ -411,27 +411,31 @@ static int CapturePci(EFI_BOOT_SERVICES *bs) {
   UINTN count=0,i,skipped=0;
   EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
   int okay=1;
-  Say("PCI_LOCATE_STATUS=%#llx PCI_HANDLE_COUNT=%zu PCI_LIMIT=%u\r\n",
-      (unsigned long long)status,(size_t)count,(unsigned)GU_TOPO_MAX_PCI);
+  Say("PCI_LOCATE_STATUS=%#llx PCI_HANDLE_COUNT=%zu PCI_LIMIT=%u PCI_NODE_LIMIT=%u\r\n",
+      (unsigned long long)status,(size_t)count,(unsigned)GU_TOPO_MAX_HANDLES,
+      (unsigned)GU_TOPO_MAX_PCI);
   if(EFI_ERROR(status)) {
     Say("PCI_ENUM_FAILURE STAGE=locate-handles\r\n");okay=0;
   } else if(count==0) {
     Say("PCI_ENUM_FAILURE STAGE=zero-handles\r\n");okay=0;
-  } else if(count>GU_TOPO_MAX_PCI) {
+  } else if(count>GU_TOPO_MAX_HANDLES) {
     Say("PCI_ENUM_FAILURE STAGE=handle-capacity\r\n");okay=0;
   } else if(!handles) {
     Say("PCI_ENUM_FAILURE STAGE=missing-handle-array\r\n");okay=0;
   }
   if(okay)for(i=0;i<count;i++) {
-    GU_TOPO_PCI *p=&Snapshot.pci[Snapshot.pci_count];
-    int collected=ReadPci(bs,handles[i],p);
+    GU_TOPO_PCI candidate;
+    int collected=ReadPci(bs,handles[i],&candidate);
     if(!collected) {
       Say("PCI_ENUM_FAILURE STAGE=device-read INDEX=%zu HANDLE=%p\r\n",
           (size_t)i,handles[i]);
       okay=0;break;
     }
     if(collected==2)skipped++;
-    else Snapshot.pci_count++;
+    else if(Snapshot.pci_count==GU_TOPO_MAX_PCI) {
+      Say("PCI_ENUM_FAILURE STAGE=relevant-node-capacity INDEX=%zu\r\n",(size_t)i);
+      okay=0;break;
+    } else Snapshot.pci[Snapshot.pci_count++]=candidate;
   }
   Say("PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES INCLUDED=%zu EXCLUDED=%zu TOTAL_PROTOCOL_HANDLES=%zu STRICT_INCLUDED_FULL_256=1\r\n",
       Snapshot.pci_count,(size_t)skipped,(size_t)count);
