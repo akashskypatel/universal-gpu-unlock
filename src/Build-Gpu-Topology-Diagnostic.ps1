@@ -22,43 +22,10 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     $output = Join-Path $PSScriptRoot 'build_diagnostic'
     New-Item -ItemType Directory -Force -Path $output | Out-Null
-    if ($SelectionBdf -and $SelectionBdfs) {
-        throw '-SelectionBdf and -SelectionBdfs cannot be combined.'
-    }
-    $requested = @()
-    if ($SelectionBdf) { $requested = @($SelectionBdf) }
-    elseif ($SelectionBdfs) {
-        $requested = @($SelectionBdfs.Split(','))
-        if ($requested.Count -ne 2) {
-            throw '-SelectionBdfs requires exactly two comma-separated PCI locations.'
-        }
-    }
-    if ($requested.Count -gt 0 -and $WindowsEspGuid) {
+    . (Join-Path $PSScriptRoot 'Gpu-Selection-Build.ps1')
+    $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $output
+    if ($selection.Count -and $WindowsEspGuid) {
         throw 'Selection-only diagnostic cannot include Windows handoff.'
-    }
-    $canonical = @()
-    $entries = @()
-    foreach ($location in $requested) {
-        $value = $location.Trim()
-        if ($value -notmatch '^(?<seg>[0-9a-fA-F]{4}):(?<bus>[0-9a-fA-F]{2}):(?<dev>[0-9a-fA-F]{2})\.(?<fun>[0-7])$') {
-            throw 'Each target must be PCI location SSSS:BB:DD.F.'
-        }
-        $segment = [Convert]::ToUInt32($Matches['seg'],16)
-        $bus = [Convert]::ToUInt32($Matches['bus'],16)
-        $device = [Convert]::ToUInt32($Matches['dev'],16)
-        $function = [Convert]::ToUInt32($Matches['fun'],10)
-        if ($device -gt 31) { throw 'PCI device number must be 00-1f.' }
-        $key = '{0:X4}:{1:X2}:{2:X2}.{3}' -f $segment,$bus,$device,$function
-        if ($canonical -contains $key) { throw 'Duplicate PCI target in selection sequence.' }
-        $canonical += $key
-        $entries += "{ $($segment)U, $($bus)U, $($device)U, $($function)U }"
-    }
-    if ($canonical.Count) {
-        $selectionHeader = Join-Path $output 'gpu-selection.h'
-        @(
-            "#define GU_TOPO_SELECTED_COUNT $($canonical.Count)U",
-            "#define GU_TOPO_SELECTED_LOCATIONS { $($entries -join ', ') }"
-        ) | Set-Content -LiteralPath $selectionHeader -Encoding ascii
     }
     $sources = @('gpu_inventory.c','gpu_topology.c','gpu_pci_observation.c','gpu_topology_efi.c','gpu_windows_path.c','format.c','runtime.c')
     if ($WindowsEspGuid) {
@@ -77,9 +44,9 @@ try {
     }
     $flags = '/nologo /O2 /Oi- /GS- /Gs65536 /Zl /c /TC /DGU_GPU_DIAGNOSTIC_ONLY /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild_diagnostic /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
     if ($SaveLog) { $flags += ' /DGU_TOPO_SAVE_LOG' }
-    if ($canonical.Count) { $flags += ' /DGU_TOPO_SELECTION_ENABLED' }
-    $binaryName = if ($canonical.Count) {
-        'GPU-SELECTION-' + (($canonical | ForEach-Object { $_ -replace '[:.]','-' }) -join '--') + '-DIAGNOSTIC.EFI'
+    if ($selection.Count) { $flags += ' /DGU_TOPO_SELECTION_ENABLED' }
+    $binaryName = if ($selection.Count) {
+        'GPU-SELECTION-' + $selection.Label + '-DIAGNOSTIC.EFI'
     } else { 'GPU-TOPOLOGY-DIAGNOSTIC.EFI' }
     if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }
     $commands = @('@echo off', "call `"$VcVars`" >nul", 'if errorlevel 1 exit /b 1', "cd /d `"$PSScriptRoot`"")
@@ -100,7 +67,7 @@ try {
     $binary = Join-Path $output $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'No diagnostic EFI output produced' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SELECTION_BDFS=$($canonical -join ',') SELECTION_COUNT=$($canonical.Count) CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SELECTION_BDFS=$($selection.Locations -join ',') SELECTION_COUNT=$($selection.Count) CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
 } finally {
     Pop-Location
 }

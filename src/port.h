@@ -84,7 +84,12 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #elif defined(GU_STOCK_PROFILE_ORIGINAL_03100062) || defined(GU_STOCK_PROFILE_OBSERVED_03000062) || defined(GU_ENTRY_LATCHED_SS1_PRESERVE) || defined(GU_ENTRY_LATCHED_SS1_FULL)
 #error Stock profile selection requires experimental firmware
 #endif
-#if defined(GU_AD104_TRANSACTION) || (defined(GU_AD104_HOST_TEST) && __STDC_HOSTED__ == 1)
+/* Selected active artifacts are restricted to inventory/plan preparation.
+ * The legacy engine is linked for compile coverage, but GPU I/O write,
+ * DMA and FLR helpers also refuse in this configuration. */
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+#define GU_PREFLIGHT_ONLY 1
+#elif defined(GU_AD104_TRANSACTION) || (defined(GU_AD104_HOST_TEST) && __STDC_HOSTED__ == 1)
 #define GU_PREFLIGHT_ONLY 0
 #else
 #define GU_PREFLIGHT_ONLY 1

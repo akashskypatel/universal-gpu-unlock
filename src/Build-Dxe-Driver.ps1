@@ -1,5 +1,7 @@
 param(
-    [string]$VcVars
+    [string]$VcVars,
+    [string]$SelectionBdf,
+    [string]$SelectionBdfs
 )
 $ErrorActionPreference = 'Stop'
 if (-not $VcVars) {
@@ -31,6 +33,8 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     $buildDir = Join-Path $PSScriptRoot 'build_dxe'
     New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
+    . (Join-Path $PSScriptRoot 'Gpu-Selection-Build.ps1')
+    $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $buildDir
 
     $sources = @(
         'dxe_main.c',
@@ -60,7 +64,12 @@ try {
         "cd /d `"$PSScriptRoot`""
     )
 
-    $clFlags = '/nologo /O2 /Oi /GS- /Gs65536 /Zl /c /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /I. /Icompat /Ivendor /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
+    $clFlags = '/nologo /O2 /Oi /GS- /Gs65536 /Zl /c /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild_dxe /Icompat /Ivendor /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
+
+    if ($selection.Count) {
+        # Selected builds are intentionally non-mutating preparation artifacts.
+        $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY'
+    }
 
     foreach ($src in $sources) {
         $base = [System.IO.Path]::GetFileNameWithoutExtension($src)
@@ -76,7 +85,8 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $compileCmds += "link /nologo /subsystem:efi_boot_service_driver /entry:AdaUnlockDriverEntryPoint /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_dxe\AdaUnlockDxe.efi $linkObjs"
+    $binaryName = if ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
+    $compileCmds += "link /nologo /subsystem:efi_boot_service_driver /entry:AdaUnlockDriverEntryPoint /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_dxe\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
     $batchFile = Join-Path $buildDir 'build-dxe.cmd'
@@ -85,7 +95,10 @@ try {
     & $env:ComSpec /d /c $batchFile
     if ($LASTEXITCODE -ne 0) { throw 'DXE Compilation failed' }
 
-    Write-Output "Successfully compiled: build_dxe\AdaUnlockDxe.efi"
+    $binary = Join-Path $buildDir $binaryName
+    if (-not (Test-Path -LiteralPath $binary)) { throw 'DXE EFI output missing' }
+    $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int][bool]$selection.Count) MULTI_GPU_MUTATION_ALLOWED=0"
 } finally {
     Pop-Location
 }
