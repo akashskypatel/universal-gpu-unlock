@@ -1,12 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifdef GU_DISCOVERY_HOST_TEST
-#include "../tests/gpu_discovery_mock.h"
-#else
 #include "gpu_discovery.h"
+#include <string.h>
+#ifndef GU_DISCOVERY_HOST_TEST
 #include "port.h"
 #include "checks.h"
 #endif
-#include "gpu_inventory.h"
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+#include "gpu-selection.h" /* Generated operator-supplied PCI addresses. */
+#if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_INVENTORY_MAX_NVIDIA
+#error Invalid active preparation target count
+#endif
+static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
+    GU_GPU_SELECTION_LOCATIONS;
+#endif
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
 
@@ -47,25 +53,34 @@ static int ReadPciIdentity(void *opaque, size_t index, GU_GPU_RECORD *record) {
   return 0;
 }
 
-EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
+/* Shared active/DXE read-only preparation. In the absence of an explicit
+ * request, multiple NVIDIA GPUs are enumerated but not implicitly selected.
+ * There is intentionally no call to GuInit, no PCI configuration writes,
+ * no driver binding changes, no BAR access and no GPU reset here. */
+EFI_STATUS GuPrepareGpuSequence(EFI_SYSTEM_TABLE *table,
+                                const GU_GPU_LOCATION *requested,
+                                size_t requested_count,
+                                GU_GPU_PREPARED_SEQUENCE *prepared) {
   EFI_HANDLE *handles = NULL;
-  UINTN count = 0, seg, bus, dev, fun;
-  GU_GPU_INVENTORY inventory;
+  UINTN count = 0;
   GU_PCI_READER_CONTEXT context;
-  const GU_GPU_RECORD *selected;
-  EFI_PCI_IO_PROTOCOL *io;
-  UINT32 config[64];
-  GU_CAPS caps;
+  GU_GPU_INVENTORY inventory;
   size_t i;
+  EFI_STATUS status, released;
   int result;
-  EFI_STATUS s, released;
-  if (!image || !table || !table->BootServices ||
+  if (!prepared) return EFI_INVALID_PARAMETER;
+  memset(prepared, 0, sizeof(*prepared));
+  if (!table || !table->BootServices ||
       !table->BootServices->LocateHandleBuffer ||
       !table->BootServices->HandleProtocol ||
-      !table->BootServices->FreePool) return EFI_INVALID_PARAMETER;
-  s = table->BootServices->LocateHandleBuffer(ByProtocol, &PciGuid, NULL,
-                                               &count, &handles);
-  if (EFI_ERROR(s)) return EFI_UNSUPPORTED;
+      !table->BootServices->FreePool ||
+      requested_count > GU_INVENTORY_MAX_NVIDIA ||
+      ((requested_count != 0) != (requested != NULL)))
+    return EFI_INVALID_PARAMETER;
+
+  status = table->BootServices->LocateHandleBuffer(ByProtocol, &PciGuid,
+                                                    NULL, &count, &handles);
+  if (EFI_ERROR(status)) return EFI_UNSUPPORTED;
   if (!handles || !count || count > GU_INVENTORY_MAX_HANDLES) {
     if (handles) (VOID)table->BootServices->FreePool(handles);
     return EFI_UNSUPPORTED;
@@ -76,25 +91,78 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
                                  &inventory);
   released = table->BootServices->FreePool(handles);
   if (result != GU_INVENTORY_OK || EFI_ERROR(released)) {
-    GuLog("PCI inventory refused: scan=%d free=%#llx\n", result,
-          (unsigned long long)released);
+    GuLog("ACTIVE_PREPARE=REFUSED INVENTORY_CODE=%d FREE=%#llx\n",
+          result, (unsigned long long)released);
     return EFI_UNSUPPORTED;
   }
+
+  GuLog("ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1\n",
+        inventory.count, requested_count);
   for (i = 0; i < inventory.count; i++) {
     const GU_GPU_RECORD *p = &inventory.nvidia[i];
-    GuLog("PCI inventory: %04x:%02x:%02x.%u id=%04x:%04x subsystem=%04x:%04x class=%04x\n",
-          (unsigned)p->segment, (unsigned)p->bus, (unsigned)p->device,
-          (unsigned)p->function, (unsigned)(p->pci_id & 0xffffU),
-          (unsigned)(p->pci_id >> 16), (unsigned)(p->subsystem_id & 0xffffU),
-          (unsigned)(p->subsystem_id >> 16), (unsigned)p->class_code);
+    GuLog("ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x LEGACY_UNLOCK_DEVICE_ID=%u\n",
+          i, (unsigned)p->segment, (unsigned)p->bus, (unsigned)p->device,
+          (unsigned)p->function, (unsigned)(p->pci_id & 65535U),
+          (unsigned)(p->pci_id >> 16), (unsigned)(p->subsystem_id & 65535U),
+          (unsigned)(p->subsystem_id >> 16), (unsigned)p->class_code,
+          (unsigned)GuIsSupportedPciId(p->pci_id));
   }
-  if (inventory.count > 1) {
-    GuLog("PCI inventory: NVIDIA display count=%zu; active multi-GPU path refused because the unlock engine has single-device state\n",
-          inventory.count);
+  if (requested_count != 0) {
+    result = GuFindGpuSequence(&inventory, requested, requested_count,
+                               prepared->selected_indices);
+    if (result != GU_INVENTORY_OK) {
+      GuLog("ACTIVE_PREPARE=REFUSED SELECTION_CODE=%d REQUESTED=%zu\n",
+            result, requested_count);
+      return EFI_UNSUPPORTED;
+    }
+    prepared->selected_count = requested_count;
+  } else if (inventory.count == 1) {
+    prepared->selected_count = 1;
+    prepared->selected_indices[0] = 0;
+  }
+  prepared->inventory = inventory;
+  for (i = 0; i < prepared->selected_count; i++) {
+    const GU_GPU_RECORD *p = &prepared->inventory.nvidia[prepared->selected_indices[i]];
+    GuLog("ACTIVE_PREPARED_STEP[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x LEGACY_UNLOCK_DEVICE_ID=%u READ_ONLY=1\n",
+          i, (unsigned)p->segment, (unsigned)p->bus, (unsigned)p->device,
+          (unsigned)p->function, (unsigned)(p->pci_id & 65535U),
+          (unsigned)(p->pci_id >> 16), (unsigned)(p->subsystem_id & 65535U),
+          (unsigned)(p->subsystem_id >> 16), (unsigned)GuIsSupportedPciId(p->pci_id));
+  }
+  GuLog("ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0\n",
+        prepared->selected_count, prepared->inventory.count);
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
+  UINTN seg, bus, dev, fun;
+  GU_GPU_PREPARED_SEQUENCE prepared;
+  const GU_GPU_RECORD *selected;
+  EFI_PCI_IO_PROTOCOL *io;
+  UINT32 config[64];
+  GU_CAPS caps;
+  EFI_STATUS s;
+  if (!image || !table) return EFI_INVALID_PARAMETER;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  s = GuPrepareGpuSequence(table, ActiveRequested, GU_GPU_SELECTION_COUNT,
+                           &prepared);
+#else
+  s = GuPrepareGpuSequence(table, NULL, 0, &prepared);
+#endif
+  if (s != EFI_SUCCESS) return s;
+  if (prepared.inventory.count > 1) {
+    GuLog("ACTIVE_EXECUTION=REFUSED REASON=MULTI_NVIDIA_GLOBAL_STATE NVIDIA_COUNT=%zu SELECTED=%zu BEFORE_GU_INIT=1\n",
+          prepared.inventory.count, prepared.selected_count);
+    return EFI_UNSUPPORTED; /* Never reuse global Gu for multiple GPUs. */
+  }
+  if (prepared.inventory.count != 1 || prepared.selected_count != 1 ||
+      prepared.selected_indices[0] != 0)
     return EFI_UNSUPPORTED;
-  }
-  if (inventory.count != 1) return EFI_UNSUPPORTED;
-  selected = &inventory.nvidia[0];
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  GuLog("ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\n");
+  return EFI_UNSUPPORTED;
+#endif
+  selected = &prepared.inventory.nvidia[0];
   if (!GuIsSupportedPciId(selected->pci_id)) return EFI_UNSUPPORTED;
   s = table->BootServices->HandleProtocol((EFI_HANDLE)selected->handle,
                                             &PciGuid, (VOID **)&io);

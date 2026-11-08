@@ -90,6 +90,43 @@ static void ResetPair(void) {
 
 int main(void) {
   EFI_STATUS status;
+  /* Prepare requested targets without any active GuInit; preserve operator
+   * order even when UEFI enumerates devices in the opposite order. */
+  {
+    GU_GPU_PREPARED_SEQUENCE plan;
+    const GU_GPU_LOCATION requested[2] = {{1,7,4,1},{0,3,0,0}};
+    const GU_GPU_LOCATION missing[2] = {{1,7,4,1},{0,9,0,0}};
+    const GU_GPU_LOCATION repeated[2] = {{0,3,0,0},{0,3,0,0}};
+    ResetPair();
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&plan)==EFI_SUCCESS);
+    CHECK(init_calls==0 && plan.inventory.count==2 && plan.selected_count==2);
+    CHECK(plan.selected_indices[0]==1 && plan.selected_indices[1]==0);
+    CHECK(plan.inventory.nvidia[plan.selected_indices[0]].pci_id==Secondary.pci_id);
+    CHECK(GuPrepareGpuSequence(&system_table,NULL,0,&plan)==EFI_SUCCESS);
+    CHECK(plan.inventory.count==2 && plan.selected_count==0 && init_calls==0);
+    CHECK(GuPrepareGpuSequence(&system_table,missing,2,&plan)==EFI_UNSUPPORTED);
+    CHECK(plan.selected_count==0 && plan.inventory.count==0 && !init_calls);
+    CHECK(GuPrepareGpuSequence(&system_table,repeated,2,&plan)==EFI_UNSUPPORTED);
+    CHECK(plan.selected_count==0 && plan.inventory.count==0 && !init_calls);
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,NULL)==EFI_INVALID_PARAMETER);
+    CHECK(GuPrepareGpuSequence(&system_table,NULL,2,&plan)==EFI_INVALID_PARAMETER);
+    CHECK(GuPrepareGpuSequence(&system_table,requested,0,&plan)==EFI_INVALID_PARAMETER);
+    CHECK(GuPrepareGpuSequence(&system_table,requested,GU_INVENTORY_MAX_NVIDIA+1,&plan)==EFI_INVALID_PARAMETER);
+    CHECK(GuPrepareGpuSequence(NULL,requested,2,&plan)==EFI_INVALID_PARAMETER);
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&plan)==EFI_SUCCESS);
+    ResetPair();Populate(0,Secondary);Populate(1,Primary);
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&plan)==EFI_SUCCESS);
+    CHECK(plan.selected_indices[0]==0 && plan.selected_indices[1]==1 && !init_calls);
+    ResetPair();count=3;Populate(2,Primary);gpu[2].bus=6;
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&plan)==EFI_SUCCESS);
+    CHECK(plan.inventory.count==3 && plan.selected_count==2 && !init_calls);
+    ResetPair();fail_pool_free=1;
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&plan)==EFI_UNSUPPORTED);
+    CHECK(plan.inventory.count==0 && plan.selected_count==0 && !init_calls);
+    ResetPair();gpu[1].read_fail=1;
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&plan)==EFI_UNSUPPORTED);
+    CHECK(plan.inventory.count==0 && plan.selected_count==0 && !init_calls);
+  }
   ResetPair();
   status = GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table);
   CHECK(status == EFI_UNSUPPORTED && init_calls == 0 && free_calls == 1 && log_calls >= 3);
