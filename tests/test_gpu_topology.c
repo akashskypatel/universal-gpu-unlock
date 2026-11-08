@@ -60,6 +60,29 @@ static void Baseline(void) {
 }
 int main(void) {
   GU_TOPO_PCI swap;
+  uint32_t classifier_first[3]={0x14d81022U,0x00100007U,0x06000010U};
+  uint32_t classifier_after[3]={0x14d81022U,0x00100007U,0x06000010U};
+
+  /* The fluctuating AMD 1022:14d8 host-bridge tail is not topology input.
+   * Display and bridge functions must always be strictly captured. */
+  CHECK(!GuTopoClassRelevant(0x0600U));
+  CHECK(!GuTopoClassRelevant(0x0601U));
+  CHECK(!GuTopoClassRelevant(0x0200U));
+  CHECK(!GuTopoClassRelevant(0x0403U));
+  CHECK(GuTopoClassRelevant(0x0604U));
+  CHECK(GuTopoClassRelevant(0x0300U));
+  CHECK(GuTopoClassRelevant(0x0302U));
+  CHECK(GuTopoClassRelevant(0x0380U));
+  CHECK(GuTopoClassifierStable(classifier_first,classifier_after));
+  classifier_after[1]^=0x00010000U; /* status is not a classifier field */
+  CHECK(GuTopoClassifierStable(classifier_first,classifier_after));
+  classifier_after[0]^=0x00010000U;
+  CHECK(!GuTopoClassifierStable(classifier_first,classifier_after));
+  classifier_after[0]=classifier_first[0];
+  classifier_after[2]^=0x00010000U;
+  CHECK(!GuTopoClassifierStable(classifier_first,classifier_after));
+  CHECK(!GuTopoClassifierStable(NULL,classifier_after));
+  CHECK(!GuTopoClassifierStable(classifier_first,NULL));
   Baseline();
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
   CHECK(report.pair_exact && report.ancestry_verified[0] && report.ancestry_verified[1]);

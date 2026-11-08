@@ -49,5 +49,15 @@ enum { GU_TOPO_COMPLETE=0, GU_TOPO_INCOMPLETE=1, GU_TOPO_CONFLICT=2, GU_TOPO_INV
 
 /* Reject malformed/overlong or multi-instance paths. PCI paths must be
  * unique; any unknown/ambiguous fact is explicitly incomplete. */
+/* A topology graph needs display endpoints and PCI-to-PCI bridges, not
+ * unrelated host, audio, network or USB functions. All protocol handles are
+ * still visited; excluded classes never participate in GuTopoAssess. */
+int GuTopoClassRelevant(uint16_t class_code);
+
+/* Compare the only initial header words used to classify a handle: PCI
+ * vendor/device identity and class/revision. Command/status is deliberately
+ * not a classification field. Selected topology devices still get two full
+ * 256-byte reads and a strict bytewise comparison. */
+int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]);
 int GuTopoPathValid(const GU_TOPO_PATH *p);
 int GuTopoAssess(const GU_TOPO_CAPTURE *capture, GU_TOPO_REPORT *report);

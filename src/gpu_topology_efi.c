@@ -213,7 +213,7 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   EFI_DEVICE_PATH_PROTOCOL *path=NULL;
   EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
   UINTN count=0,s=0,b=0,d=0,f=0,i;
-  UINT32 cfg[64],verify[64];
+  UINT32 cfg[64],verify[64],classifier[3],classifier_check[3];
   EFI_STATUS status;
   memset(node,0,sizeof(*node));
   status=bs->HandleProtocol(h,&PciGuid,(VOID **)&io);
@@ -224,8 +224,25 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   if(EFI_ERROR(status))return PciCaptureFailure("pci-get-location",status);
   if(s>65535 || b>255 || d>31 || f>7)
     return PciCaptureFailure("pci-location-invalid",EFI_COMPROMISED_DATA);
+  /* Enumerate every PCI protocol handle but include only display functions
+   * and PCI-to-PCI bridges in the strict topology graph. Unrelated host
+   * bridges can expose vendor-specific, changing config DWORDs (B850: 0xBC).
+   * Read only the standard ID/class header for those unrelated functions.
+   * A change in classifier identity fails closed instead of hiding a GPU. */
+  status=io->Pci.Read(io,EfiPciIoWidthUint32,0,3,classifier);
+  if(EFI_ERROR(status))return PciCaptureFailure("pci-classifier-first",status);
+  status=io->Pci.Read(io,EfiPciIoWidthUint32,0,3,classifier_check);
+  if(EFI_ERROR(status))return PciCaptureFailure("pci-classifier-second",status);
+  if(!GuTopoClassifierStable(classifier,classifier_check))
+    return PciCaptureFailure("pci-classifier-changed",EFI_COMPROMISED_DATA);
+  if(!GuTopoClassRelevant((UINT16)(classifier[2]>>16)))return 2;
+
+  /* Included GPU/bridge functions retain full 256-byte reread stability,
+   * BDF/device-path re-resolution and owner-record validation. */
   status=io->Pci.Read(io,EfiPciIoWidthUint32,0,64,cfg);
   if(EFI_ERROR(status))return PciCaptureFailure("pci-config-read",status);
+  if(cfg[0]!=classifier[0] || cfg[2]!=classifier[2])
+    return PciCaptureFailure("pci-classifier-full-changed",EFI_COMPROMISED_DATA);
   status=bs->HandleProtocol(h,&PathGuid,(VOID **)&path);
   if(EFI_ERROR(status))return PciCaptureFailure("pci-path-protocol",status);
   if(!PathCopy(path,&node->path))
@@ -314,7 +331,7 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
 
 static int CapturePci(EFI_BOOT_SERVICES *bs) {
   EFI_HANDLE *handles=NULL;
-  UINTN count=0,i;
+  UINTN count=0,i,skipped=0;
   EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
   int okay=1;
   Say("PCI_LOCATE_STATUS=%#llx PCI_HANDLE_COUNT=%zu PCI_LIMIT=%u\r\n",
@@ -330,13 +347,17 @@ static int CapturePci(EFI_BOOT_SERVICES *bs) {
   }
   if(okay)for(i=0;i<count;i++) {
     GU_TOPO_PCI *p=&Snapshot.pci[Snapshot.pci_count];
-    if(!ReadPci(bs,handles[i],p)) {
+    int collected=ReadPci(bs,handles[i],p);
+    if(!collected) {
       Say("PCI_ENUM_FAILURE STAGE=device-read INDEX=%zu HANDLE=%p\r\n",
           (size_t)i,handles[i]);
       okay=0;break;
     }
-    Snapshot.pci_count++;
+    if(collected==2)skipped++;
+    else Snapshot.pci_count++;
   }
+  Say("PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES INCLUDED=%zu EXCLUDED=%zu TOTAL_PROTOCOL_HANDLES=%zu STRICT_INCLUDED_FULL_256=1\r\n",
+      Snapshot.pci_count,(size_t)skipped,(size_t)count);
   if(handles) {
     if(!bs->FreePool) {
       Say("PCI_ENUM_FAILURE STAGE=handles-free-unavailable\r\n");okay=0;

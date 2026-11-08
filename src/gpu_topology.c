@@ -2,6 +2,14 @@
 #include "gpu_topology.h"
 #include <string.h>
 
+int GuTopoClassRelevant(uint16_t class_code) {
+  return class_code == 0x0604U || (class_code & 0xff00U) == 0x0300U;
+}
+
+int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]) {
+  return first && second && first[0] == second[0] && first[2] == second[2];
+}
+
 static size_t Body(const GU_TOPO_PATH *p) { return p->length - 4U; }
 
 int GuTopoPathValid(const GU_TOPO_PATH *p) {
