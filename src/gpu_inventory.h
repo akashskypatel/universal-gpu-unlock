@@ -50,3 +50,14 @@ int GuFindExactGpu(const GU_GPU_INVENTORY *inventory,
                    const GU_GPU_IDENTITY *expected, size_t *index);
 int GuFindPinnedGpuPair(const GU_GPU_INVENTORY *inventory,
                         size_t *ad102_index, size_t *ga102_index);
+
+/* A positive result selects ONE card only for read-only evidence collection.
+ * It never authorizes PCI claiming, GOP Stop, DMA, firmware or FLR. */
+typedef enum {
+  GU_GPU_TARGET_AD102 = 1,
+  GU_GPU_TARGET_GA102 = 2
+} GU_GPU_TARGET;
+int GuFindPinnedGpuTarget(const GU_GPU_INVENTORY *inventory,
+                          GU_GPU_TARGET requested, size_t *target_index,
+                          size_t *other_index);
+
