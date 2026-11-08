@@ -88,6 +88,8 @@ int main(void) {
   CHECK(GuCollectGpuInventory(m.count,Reader,&m,&inv)==GU_INVENTORY_OK && inv.count==2);
   m.records[2].class_code=0x0302; /* NVIDIA 3D controller */
   CHECK(GuCollectGpuInventory(m.count,Reader,&m,&inv)==GU_INVENTORY_OK && inv.count==3);
+  m.records[2].class_code=0x0380; /* Other PCI display subclass */
+  CHECK(GuCollectGpuInventory(m.count,Reader,&m,&inv)==GU_INVENTORY_OK && inv.count==3);
 
   Setup(&m);m.records[1].subsystem_id^=1;
   CHECK(GuCollectGpuInventory(m.count,Reader,&m,&inv)==GU_INVENTORY_OK);
