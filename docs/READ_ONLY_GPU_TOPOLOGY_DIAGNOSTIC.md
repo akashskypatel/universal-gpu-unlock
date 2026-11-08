@@ -158,14 +158,29 @@ continues to list all three **possible** output paths. User-observed
 AMD BIOS video is evidence of AMD firmware output, not proof of
 surviving a proprietary NVIDIA GOP release.
 
-The next diagnostic comparison can be passive with only an AMD
-motherboard monitor connected **and both NVIDIA GPU boards kept in
-place**. After a complete shutdown, temporarily disconnect NVIDIA
-video cables, run the diagnostic and check whether `NVIDIA_CONOUT_MATCH`
-decreases to zero. If a monitor configuration changes these paths,
-that still does not validate GOP `Stop`, Windows driver 617.42
-firmware compatibility, or GPU recovery. No NVRAM, GPU, PCI or boot
-mutation is permitted by this diagnostic.
+**Prior controlled AMD-only console test is already complete.**
+`Windows-GPU-UNLOCK` historical DIAG07 (SHA-256
+`16c4beb57abc9d2d695ab0b2e93bebafcdecc33021c4a07de522f89eb59a8872`)
+was collected with the AMD motherboard monitor **as the only connected
+monitor**, both NVIDIA boards still physically installed and their
+UEFI GOP drivers bound through PCI `BY_DRIVER`. It contained only
+one AMD GOP; `ConOut`, `ConOutDev`, `ErrOut`, `ErrOutDev` all
+mapped exclusively to AMD. The original
+[`verify-console-survivor.py`](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/profile/verify-console-survivor.py)
+accepted that capture as `observed_amd_only_console`. DIAG08 and
+DIAG10 continued the AMD-only passive configuration, with DIAG10
+capturing both NVIDIA loaded-driver contexts. Historical source:
+[Windows investigation notes](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia-tensor-core-unlock-investigation.md),
+sections v77 and v93.
+
+Therefore the new universal capture `0006`, with all three GPU displays
+connected and `NVIDIA_CONOUT_MATCH=2`, is **not a contradiction**
+or a new AMD-only-monitor test obligation. Different cabling leads to
+different configured GOP/console device paths. A redundant cable-only
+retest is not required to rediscover this fact. Reconcile original
+NVIDIA driver ownership/Stop/rollback evidence with the verified
+strict topology instead. AMD console **survival after a real proprietary
+NVIDIA GOP Stop** is still untested; no active unlock is authorized.
 
 ### Independent passive PCI evidence on strict-collector failure
 
