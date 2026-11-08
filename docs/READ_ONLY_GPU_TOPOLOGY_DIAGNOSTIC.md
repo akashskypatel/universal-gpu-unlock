@@ -144,7 +144,7 @@ This demonstrates AMD GOP and configured-console presence, **not**
 exclusive active console routing or independent recovery if NVIDIA
 drivers are stopped.
 
-The next passive image adds **supplementary** `CONSOLE_HANDLE_*` reporting
+[GitHub Actions run `42431717899`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42431717899) passed the Windows MSVC EFI build and existing host test jobs for the console-binding source at commit `35f97fa`. The new `ConOutDev` parser has not been independently host-mock tested or physically tested. The next passive image adds **supplementary** `CONSOLE_HANDLE_*` reporting
 for `EFI_SYSTEM_TABLE.ConsoleOutHandle` (the current Simple Text Output
 console handle, which can be an aggregate) and `CONOUTDEV_*` for the
 read-only `ConOutDev` variable. Per the UEFI Boot Manager specification,
