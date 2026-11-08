@@ -124,6 +124,11 @@ int main(void) {
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
   CHECK(report.gpu_count==2 && report.root_index[0]==report.root_index[1]);
 
+  /* Other PCI display subclasses are included and GOP-associated. */
+  Baseline();snapshot.pci[3].identity.class_code=0x0380;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
+  CHECK(report.gpu_count==2 && report.gop_count[1]==1);
+
   /* Model and subsystem changes do not invalidate dynamic hardware discovery. */
   Baseline();snapshot.pci[3].identity.subsystem_id^=1U;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
