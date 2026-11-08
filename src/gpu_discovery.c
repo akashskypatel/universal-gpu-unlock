@@ -4,6 +4,9 @@
 #ifndef GU_DISCOVERY_HOST_TEST
 #include "port.h"
 #include "checks.h"
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) && GU_PREFLIGHT_ONLY != 1
+#error Preparation-only active EFI must also prohibit GPU writes, DMA and FLR
+#endif
 #endif
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
 #include "gpu-selection.h" /* Generated operator-supplied PCI addresses. */

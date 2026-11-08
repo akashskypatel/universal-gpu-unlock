@@ -19,6 +19,10 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
   const char *stage = "dxe-discover";
   s = GuDiscoverSingleGpu(image, t);
   if (s != EFI_SUCCESS) goto finish;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  GuLog("ACTIVE_DXE=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1\n");
+  s = EFI_UNSUPPORTED; goto finish;
+#endif
 
   if (Gu.is_ampere) {
     GuLog("DXE-DRIVER: Ampere GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);

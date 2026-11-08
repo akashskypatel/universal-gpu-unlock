@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define GU_INVENTORY_MAX_HANDLES 1024U
+#define GU_INVENTORY_MAX_HANDLES 4096U
 #define GU_INVENTORY_MAX_NVIDIA 16U
 
 typedef struct {

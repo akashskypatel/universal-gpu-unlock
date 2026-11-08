@@ -55,6 +55,14 @@ jobs:
             "$RUNNER_TEMP/test_gpu_topology_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_inventory.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_inventory_ubsan"
             "$RUNNER_TEMP/test_gpu_inventory_ubsan"
+            # The real discovery entrypoint must reject selected active EFI
+            # builds before GuInit even on one or three GPUs.
+            mkdir -p "$RUNNER_TEMP/active-selected"
+            printf '#define GU_GPU_SELECTION_COUNT 2U\n#define GU_GPU_SELECTION_LOCATIONS { { 1U,7U,4U,1U }, { 0U,3U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_active_preparation_$compiler"
+              "$RUNNER_TEMP/test_active_preparation_$compiler"
+            done
             for compiler in gcc clang; do
               for test in gpu_inventory gpu_discovery; do
                 "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc "tests/test_${test}.c" src/gpu_inventory.c -o "$RUNNER_TEMP/test_${test}_${compiler}"

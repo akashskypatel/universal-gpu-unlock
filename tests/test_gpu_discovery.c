@@ -88,6 +88,23 @@ static void ResetPair(void) {
 }
 #include "../src/gpu_discovery.c"
 
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+int main(void) {
+  EFI_STATUS status;
+  ResetPair();
+  status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
+  CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==1);
+  ResetPair(); count=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+  ResetPair(); count=3;
+  Populate(2,Primary);gpu[2].bus=6;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+  ResetPair(); fail_pool_free=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+  printf("PASS active selected-entrypoint refusal: %u checks; GuInit never called\n",checks);
+  return 0;
+}
+#else
 int main(void) {
   EFI_STATUS status;
   /* Prepare requested targets without any active GuInit; preserve operator
@@ -170,3 +187,4 @@ int main(void) {
   printf("PASS UEFI discovery adapter: %u checks; mocked protocols only\n", checks);
   return 0;
 }
+#endif

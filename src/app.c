@@ -38,6 +38,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   const char *stage="discover";CHAR16 choice=L'S';
 
   s=GuDiscoverSingleGpu(image,t);if(s!=EFI_SUCCESS)goto failed;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  /* Defense in depth: selected active preparation images never enter the
+   * asset, driver-release, firmware, DMA or FLR stages even if discovery
+   * behavior changes in the future. */
+  GuLog("ACTIVE_APP=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1\n");
+  s=EFI_UNSUPPORTED;goto failed;
+#endif
 
   if (Gu.is_ampere) {
 
