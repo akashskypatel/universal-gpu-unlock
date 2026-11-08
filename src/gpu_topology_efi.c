@@ -40,6 +40,9 @@ static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
 #ifdef GU_TOPO_SELECTION_ENABLED
+static int SelectionOk;
+#endif
+#ifdef GU_TOPO_SELECTION_ENABLED
 /* Uses only already captured PCI identities; no fresh MMIO or EFI mutation. */
 static int SelectionRead(void *opaque, size_t index, GU_GPU_RECORD *out) {
   const GU_TOPO_CAPTURE *capture=(const GU_TOPO_CAPTURE *)opaque;
@@ -102,18 +105,18 @@ static int ReportPassiveSelection(int pci_ok) {
             a->pci_id==ta->pci_id && a->subsystem_id==ta->subsystem_id &&
             b->pci_id==tb->pci_id && b->subsystem_id==tb->subsystem_id;
       if(match) {
-        Say("PASSIVE_SELECTION=EXACT_PAIR REQUESTED_TARGET=%s SELECTED=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x\\r\\n",
+        Say("PASSIVE_SELECTION=EXACT_PAIR REQUESTED_TARGET=%s SELECTED=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x\r\n",
             target_name,(unsigned)a->segment,(unsigned)a->bus,(unsigned)a->device,
             (unsigned)a->function,(unsigned)(a->pci_id&65535U),(unsigned)(a->pci_id>>16),
             (unsigned)(a->subsystem_id&65535U),(unsigned)(a->subsystem_id>>16));
-        Say("NON_TARGET_PRESENT=1 OTHER=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x\\r\\n",
+        Say("NON_TARGET_PRESENT=1 OTHER=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x\r\n",
             (unsigned)b->segment,(unsigned)b->bus,(unsigned)b->device,(unsigned)b->function,
             (unsigned)(b->pci_id&65535U),(unsigned)(b->pci_id>>16),
             (unsigned)(b->subsystem_id&65535U),(unsigned)(b->subsystem_id>>16));
       }
     }
   }
-  Say("SELECTION_VERDICT=%s TARGET=%s CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\\r\\n",
+  Say("SELECTION_VERDICT=%s TARGET=%s CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
       match?"PASSIVE_EXACT_PAIR":"REFUSED",target_name,status,Report.status);
   return match;
 }
@@ -636,10 +639,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID",
       (unsigned)(Report.nvidia_console_count!=0));
 #ifdef GU_TOPO_SELECTION_ENABLED
-  {
-    int selection_ok=ReportPassiveSelection(pci_ok);
-    if(!selection_ok)return EFI_UNSUPPORTED;
-  }
+  SelectionOk=ReportPassiveSelection(pci_ok);
 #endif
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
 #ifdef GU_TOPO_WINDOWS_HANDOFF
@@ -664,6 +664,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     return handoff;
   }
 #else
+#ifdef GU_TOPO_SELECTION_ENABLED
+  return result==GU_TOPO_COMPLETE && SelectionOk?EFI_SUCCESS:EFI_UNSUPPORTED;
+#else
   return result==GU_TOPO_COMPLETE?EFI_SUCCESS:EFI_UNSUPPORTED;
+#endif
 #endif
 }
