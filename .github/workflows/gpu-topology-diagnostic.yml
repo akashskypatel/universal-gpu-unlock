@@ -1,10 +1,18 @@
-name: Read-only GPU topology verification
+name: GPU discovery and gated active preparation verification
 on:
   push:
     branches: [main]
     paths:
       - 'src/gpu_topology*'
       - 'src/gpu_inventory*'
+      - 'src/gpu_discovery*'
+      - 'src/Gpu-Selection-Build.ps1'
+      - 'src/Build-Experimental-MSVC.ps1'
+      - 'src/Build-Dxe-Driver.ps1'
+      - 'src/port.h'
+      - 'src/app.c'
+      - 'src/dxe_main.c'
+      - 'tests/test_gpu_discovery.c'
       - 'src/gpu_pci_observation*'
       - 'tests/gpu_pci_observation_mock.h'
       - 'tests/test_gpu_pci_observation.c'
@@ -119,7 +127,59 @@ jobs:
             }
             if(-not $duplicateRejected) {throw 'Duplicate target build was not rejected'}
             'DUPLICATE_SELECTION_REJECTED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
-            'SELECTION_EFI_COMPILE_EXIT=0 UNMODIFIED_ACTIVE_ENTRYPOINTS=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Genuine active app/DXE entrypoints are compiled and linked but
+            # these selected builds stop before GuInit and use PREFLIGHT_ONLY.
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "Active app prep compilation failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build\GPU-ACTIVE-PREP-0000-09-02-0--0001-2A-03-1.EFI)){throw 'Active app preparation EFI missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "Active DXE prep compilation failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_dxe\GPU-ACTIVE-PREP-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Active DXE preparation EFI missing'}
+            . .\src\Gpu-Selection-Build.ps1
+            $more = New-GuGpuSelectionSpec -SelectionBdfs '0000:09:02.0,0001:2A:03.1,0000:0A:04.0' -OutputDirectory $env:RUNNER_TEMP
+            if($more.Count -ne 3 -or $more.Label -notmatch '^N3-[0-9A-F]{12}
+            'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          } catch {
+            "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            throw
+          }
+      - name: Preserve final EFI status
+        if: always()
+        shell: pwsh
+        run: |
+          "final_utc=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          git status --short 2>&1 | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          Get-PSDrive -PSProvider FileSystem | Format-Table | Out-String | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-topology-efi-activity-${{ github.run_id }}
+          path: ${{ runner.temp }}/gu-log/efi.log
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gpu-topology-diagnostic-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/GPU-TOPOLOGY-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gpu-discovery-selection-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/GPU-SELECTION-*-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gpu-active-preparation-unsigned-${{ github.sha }}
+          path: |
+            src/build/GPU-ACTIVE-PREP-*.EFI
+            src/build_dxe/GPU-ACTIVE-PREP-DXE-*.efi
+          if-no-files-found: error
+) {throw 'Generic N-GPU selector validation failed'}
+            'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=16 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'SELECTION_EFI_COMPILE_EXIT=0 ACTIVE_ENTRYPOINTS_COMPILED=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
           } catch {
             "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
