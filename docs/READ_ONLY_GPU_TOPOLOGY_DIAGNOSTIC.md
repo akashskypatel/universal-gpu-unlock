@@ -37,6 +37,25 @@ diagnostic requires no target-specific build setting.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:01:00.0,0000:04:00.0'
 ```
 
+## Read-only GOP opener graph and mapped-image fingerprints
+
+[Implementation `a864841`](https://github.com/akashskypatel/universal-gpu-unlock/commit/a864841132523babd4c61bf5a522af994665b566) extends the standalone diagnostic without linking NVIDIA `Stop`, controller disconnect, GPU DMA, firmware execution or FLR. [CI 42549815967](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42549815967) **PASS** for host path-boundary tests and MSVC EFI compilation; **physical behavior of these new fields remains untested**.
+
+- `NVIDIA_PCI_EDGE[PCI_INDEX,EDGE]` reports every bounded `EFI_PCI_IO_PROTOCOL` opener with attributes, opening agent, controller/child handle, `BY_DRIVER` and `BY_CHILD_CONTROLLER` flags, and whether the opening agent matches that card's previously observed PCI owner.
+- `NVIDIA_PCI_CHILD[PCI_INDEX,EDGE]` maps a recorded child-controller handle to the presence of GOP, exact captured GOP handle, and a validated complete PCI device-path prefix (not a root-port guess).
+- `NVIDIA_GOP_OPENERS[PCI_INDEX,GOP_INDEX]` and `NVIDIA_GOP_EDGE[PCI_INDEX,GOP_INDEX,EDGE]` enumerate each mapped GOP protocol's current openers with the original handle tokens, attributes and opening agents; `GRAPH_STATUS=PARTIAL_OR_DRIFT` or `UNKNOWN_OR_OVERFLOW` means the graph is **not verified**. Openers may legitimately be empty. The report deliberately makes **no safe-detach conclusion**.
+- `NVIDIA_DRIVER_OWNER[PCI_INDEX] MAPPED_IMAGE_SHA256=...` fingerprints up to 8 MiB of the `LoadedImage.ImageBase` memory region using the existing SHA-256 implementation. This is **not a trusted original EFI file SHA**: the mapping may be relocated, read-back proves no digital signature, and no trusted vendor reference or authentication chain has been established. `SIGNATURE_NOT_VERIFIED=1` is mandatory. An unavailable mapping remains `UNAVAILABLE`; never treat absence as authentication success.
+
+**Recommended next capture:** The previously observed all-three-monitor configuration (`0012`) has one GOP per GPU and is most informative for `BY_CHILD_CONTROLLER` and `NVIDIA_GOP_OPENERS`. On the target machine, from the current fork's root, build the selected **read-only** EFI with MSVC:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:01:00.0,0000:04:00.0'
+```
+
+Boot with the same three display connections, using your established trusted USB signing/boot procedure; capture the next numbered `GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT`. There is no need to repeat older cable-only tests with the prior EFI. Do **not** deploy a legacy mutating app, enable DXE persistence, write `ConOut`/`ErrOut`/NVRAM, or call NVIDIA `DriverBinding.Stop`. The three-monitor `TOPOLOGY_VERDICT=CONFLICT` is expected and does **not** invalidate the value of a **read-only** GOP owner capture. A later AMD-only capture may clarify headless child/open edges if they differ. All mutating gates stay disabled.
+
+**Stop/rollback is a separate problem.** `Stop` can return error after partial changes, return success without expected ownership changes, or never return at all. A synchronous caller cannot recover from a non-returning vendor callback by choosing a shorter in-process timeout. A future design must prove independent recovery, model terminal unsafe states, refuse Windows handoff and avoid a second GPU transaction on any ambiguous post-Stop state; host models are not hardware recovery proof.
+
 ## Optional read-only selection by PCI location
 
 After observing the actual segment:BDF on a machine, an operator may build
