@@ -187,13 +187,41 @@ malformed nodes, invalid child image binding, rejected load and pool-free
 failures. These tests do not validate actual firmware Windows handoff,
 vendor GOP teardown or Windows 617.42 operation.
 
+### Physical B850 result from generic ordered two-target diagnostic 0008 — AMD-only console confirmed; NVIDIA GOPs absent (2026-11-08)
+
+**Actual boot evidence:** uploaded `GPU-TOPOLOGY-DIAGNOSTIC-0008.TXT`, **7,284 bytes, 89 physical lines**, SHA-256 `549301ee28fb0b8ee286b3083375b1431ff7358c9e04f5e57243a5c53f7bca6a`. The operator reports **one monitor connected to the AMD iGPU, all NVIDIA display cables disconnected**; this is a different physical cable configuration from the mixed-monitor `0007`.
+
+The same generalized ordered two-target EFI completed a strict, full 256-byte re-read PCI scan of **50 PCI handles**, retained **19** display/bridge nodes (31 excluded), and identified both NVIDIA GPUs in requested order: RTX 4090 `0000:01:00.0` (`10de:2684`, `1043:88e6`, root index 0, depth 1) and RTX 3080 `0000:04:00.0` (`10de:220a`, `19da:b612`, root index 2, depth 3). Both retained `ANCESTRY=1 ROOT_VALID=1 BY_DRIVER=1 OPENERS_KNOWN=1` and `SELECTION_STEP[n]=PASSIVE_IDENTIFIED`; aggregate `SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=2`.
+
+**Key same-source comparison:**
+
+| Passive evidence | `0007` (mixed outputs) | `0008` (AMD-only connected) |
+|---|---:|---:|
+| Included PCI display/bridge nodes | 19 | 19 |
+| NVIDIA GPU discovery and ordered selection | 2/2 | 2/2 |
+| All GOP handles | 3 | 1 |
+| Each NVIDIA GPU `GOP_COUNT` | 1 / 1 | **0 / 0** |
+| Independent AMD GOP | 1 | 1 |
+| `ConOut` device paths | 3 | 1 |
+| NVIDIA `ConOut` matches | 2 | **0** |
+| Independent `ConOut` match | 1 | 1 |
+| `INDEPENDENT_CONSOLE_ASSOCIATION` | 0 | **1** |
+| `NVIDIA_CONOUT_BLOCKER` | 1 | **0** |
+| `TOPOLOGY_VERDICT` | `CONFLICT` (2) | `INCOMPLETE` (1) |
+
+The **AMD-only firmware console policy is satisfied** in `0008`; there are no remaining NVIDIA `ConOut` paths. The overall `TOPOLOGY_VERDICT=INCOMPLETE` is **not a renewed console conflict**. Current `gpu_topology.c::GuTopoAssess` independently marks the assessment incomplete when *any identified NVIDIA GPU has zero observed GOP handles*. Both cards have `GOP_COUNT=0` here. This is consistent with the unplugged NVIDIA monitor configuration; the log does not establish the underlying reason GOP protocols were not produced.
+
+The NVIDIA drivers remain bound at the PCI layer (`BY_DRIVER=1`). Absence of NVIDIA GOP handles must **not** be interpreted as completed proprietary `DriverBinding.Stop`, driver detachment, or a demonstrated safety/rollback path. The system's console handle still lacks a DevicePath and the log still says `PHYSICAL_DISPLAY_OWNER=UNKNOWN`; the physical iGPU monitor connection is **operator-reported**, independently consistent with the observed AMD-only GOP/`ConOut` snapshot. `HARDWARE_TESTED=0` and `READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0` retain their established *no mutation* meaning.
+
+**Design consequence, not permission to unlock:** distinguish `PCI_TARGETS_IDENTIFIED`, `AMD_ONLY_CONSOLE_OBSERVED`, `NVIDIA_GOP_PRESENCE`, and `PROPRIETARY_STOP_READY` as separate read-only reasons. Do not globally relax or discard the missing-GOP `INCOMPLETE` flag to turn this report green: the real ownership, Stop and rollback protocols are still unresolved. Further AMD-only-cabling-only repeats are low value unless the current boot exposes new live driver-binding/ownership evidence.
+
 ### Physical B850 result from generic ordered two-target diagnostic 0007 — selection succeeds, console conflict (2026-11-08)
 
 The uploaded `GPU-TOPOLOGY-DIAGNOSTIC-0007.TXT` is **8,407 bytes, 107 physical lines**, SHA-256 `67302542890272d2b45942b885e5ef054d9e3e8515551da79a8940c4a3770787`. This is the first supplied physical boot log **of the generalized ordered BDF selection implementation**; the earlier `0006` belongs to the fixed-pair implementation. The current generic diagnostic scanned 50 EFI PCI handles, retained 19 PCI display/bridge nodes, excluded 31, and captured 3 GOP paths and 3 `ConOut` paths. Both requested targets were observed **in order**: `SELECTION_STEP[0]=PASSIVE_IDENTIFIED` for `0000:01:00.0` (`10de:2684`, subsystem `1043:88e6`, root index 0, depth 1); `SELECTION_STEP[1]=PASSIVE_IDENTIFIED` for `0000:04:00.0` (`10de:220a`, subsystem `19da:b612`, root index 2, depth 3). Both have `GOP_COUNT=1 BY_DRIVER=1 OPENERS_KNOWN=1`. The aggregate reads `SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=2 NON_SELECTED_NVIDIA_COUNT=0`.
 
 The **separate topology/console verdict** remains `STATUS=PARTIAL TOPOLOGY=2` / `TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1`: one independent AMD GOP and independent `ConOut` path exist, **but two NVIDIA `ConOut` paths remain**. `INDEPENDENT_CONSOLE_ASSOCIATION=0` follows directly from those two configured NVIDIA paths, not absent independent hardware. The console handle exposes no DevicePath, and `ConOutDev` paths remain `POSSIBLE_ONLY=1`; actual cable owner remains `PHYSICAL_DISPLAY_OWNER=UNKNOWN`. `HARDWARE_TESTED=0` means **no GPU actuation or firmware/driver release was tried**; actual passive EFI boot and PCI/GOP/console observations are established. The 0007 log does not separately attest the Secure Boot signature, backup or boot-manager handoff.
 
-Historical Windows DIAG07 already observed AMD-only output with the NVIDIA boards installed and bound under a different monitor configuration. Repeating that passive cabling arrangement with the new generic EFI would be an optional same-version confirmation, **not a substitute for proving NVIDIA GOP Stop safety** or a newly required precursor to investigating the existing driver/firmware blockers.
+Historical Windows DIAG07 already observed AMD-only output with the NVIDIA boards installed and bound under a different monitor configuration. That optional same-version AMD-only passive confirmation has now been supplied as `0008`, which clears the NVIDIA console-path conflict but reports **zero NVIDIA GOP handles**, hence a separate `INCOMPLETE` verdict. It is not evidence of NVIDIA GOP Stop safety or an active unlock prerequisite being satisfied.
 
 ### Physical B850 result from diagnostic 0006 — strict graph succeeds, console conflict (2026-11-07)
 
@@ -287,8 +315,9 @@ proof that `DisconnectController()` is safe.
 
 - Generic host checks and isolated MSVC EFI builds are verified; physical
   execution of the new generic **ordered two-target passive diagnostic** is
-  now documented by B850 `0007`; the historical B850 `0006` used an earlier
-  fixed-pair image. Neither physical capture executes the active mutation path.
+  now documented in both B850 `0007` (mixed-monitor console conflict) and
+  `0008` (AMD-only console PASS but NVIDIA GOPs 0/0 and overall topology INCOMPLETE);
+  the historical `0006` used a fixed-pair image. None executes the active mutation path.
 - [GitHub Actions run 42422191256](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42422191256) passed the 21-path and 17-handoff negative checks under GCC/Clang (handoff also GCC UBSan); Windows MSVC compiled the opt-in handoff variant using a deliberately **synthetic, non-deployable Windows ESP GUID**, then rebuilt the console-only variant for artifact upload. No signing, USB boot or real Windows handoff was exercised.
 - No changes are made to the legacy active entrypoint's strict multi-GPU
   refusal. No dual-GPU write-enabled path is introduced.
