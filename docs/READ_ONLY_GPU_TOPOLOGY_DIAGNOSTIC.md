@@ -10,28 +10,32 @@ root port. The scan examines up to 4096 PCI handles and retains at most 128
 display/bridge nodes; exceeding either limit fails closed. The generic
 diagnostic requires no target-specific build setting.
 
-## Resolve a configured NVIDIA firmware console (MSI B850)
+## Physical B850 console ownership and GOP-driver mapping — latest `0011`/`0012`
 
-**Current physical verdict:** Under all-three-display cabling, `0009` and newer `0010` both have the RTX 4090 and AMD iGPU in configured `ConOut` (`NVIDIA_CONOUT_MATCH=1 NVIDIA_CONOUT_BLOCKER=1 TOPOLOGY_VERDICT=CONFLICT`). `0010` successfully exercised separate configured `ErrOut`: `ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1 NVIDIA=1 INDEPENDENT=1 UNMATCHED=0 AMBIGUOUS=0 ERROR_CONSOLE_ISOLATION=CONFLICT`. The new `ErrOut` finding confirms that the 4090 also remains an error-console destination, not just a `ConOutDev` *possible* device. The log cannot prove whether the firmware **Initiate Graphic Adapter → IGD** setting was applied, but the proposed three-monitor trial **did not establish** isolation. Repeating it with no configuration change adds little evidence.
+**Corrected cable configurations:** Earlier `0009` and `0010` were incorrectly described as *all three GPUs connected*; the operator confirms that only AMD iGPU and RTX 4090 monitors were connected. Their missing 3080 GOP cannot be treated as an unexplained three-display firmware behavior. `0011` is the **AMD iGPU monitor only**; `0012` is the actual **AMD iGPU + RTX 4090 + RTX 3080 monitors** configuration.
 
-**Non-mutating workaround:** The previously run `0008` cold-booted with **only the AMD motherboard monitor connected**, producing AMD-only configured `ConOut` and no NVIDIA `ConOut` blocker. This still has `TOPOLOGY_VERDICT=INCOMPLETE` from zero NVIDIA GOPs, with NVIDIA PCI drivers remaining bound, and no `ErrOut` capture. The AMD-only cable state does **not** prove safe NVIDIA `DriverBinding.Stop` or unlock.
+| Physical passive observation | `0011`: AMD-only display | `0012`: all three displays |
+|---|---|---|
+| PCI scoped capture / selected target list | 50 total PCI, 19 relevant, both BDFs identified | Same |
+| GOPs AMD / RTX 4090 / RTX 3080 | **1 / 0 / 0** | **1 / 1 / 1** |
+| Configured `ConOut` AMD / NVIDIA paths | **1 / 0**, `NVIDIA_CONOUT_BLOCKER=0` | **1 / 2**, `NVIDIA_CONOUT_BLOCKER=1` |
+| Configured `ErrOut` AMD / NVIDIA paths | **1 / 0**, `ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED` | **1 / 2**, `ERROR_CONSOLE_ISOLATION=CONFLICT` |
+| Strict topology | `INCOMPLETE` (missing NVIDIA GOPs) | `CONFLICT` (configured NVIDIA consoles) |
+| NVIDIA PCI driver binding → loaded image | **Both linked** | **Both linked** |
 
-**Next physical diagnostic (read-only only):**
+**Raw artifact fingerprints:** `GPU-TOPOLOGY-DIAGNOSTIC-0011.TXT` = 9,548 bytes, 121 lines, SHA-256 `cda76fe9179aee1c1245bcc1968d0b1c3dc96710570d74c812ba5d7b627dfaa1`. `GPU-TOPOLOGY-DIAGNOSTIC-0012.TXT` = 11,025 bytes, 145 lines, SHA-256 `83e51f5f0bb60b7acbd403538aade4cc10c68815807b57c49656999f2aac6b76`. Both report `READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0`, `HARDWARE_TESTED=0` (no GPU **mutation**), `PHYSICAL_DISPLAY_OWNER=UNKNOWN`, and `SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=2`. The cable descriptions are operator-supplied; the EFI confirms paths and GOP inventories, not physical connectors.
 
-1. Preserve your BIOS settings/recovery information, fully shut down, and connect the preboot display **only to the AMD iGPU motherboard output**. Unplug both NVIDIA monitor cables for the complete cold boot and diagnostic; both GPUs remain installed and powered. Keep Secure Boot/BitLocker and firmware console variables unchanged. Reconnect NVIDIA displays after normal stock Windows startup if required.
-2. Build the latest *standalone passive selection* EFI from this fork's `main` using the already observed exact BDFs, from the repository root with MSVC installed:
+**New physically validated image associations, from both logs:** RTX 4090 `0000:01:00.0` `BY_DRIVER=1 OPENERS_KNOWN=1 BINDING_STATUS=0 LOADED_IMAGE_STATUS=0`, EFI FilePath `nvgop-ad1xx`, `ImageSize=162016` bytes; RTX 3080 `0000:04:00.0` has the same read-only owner/protocol status, EFI FilePath `nvgop-ga1xx`, `ImageSize=158432` bytes. `NVIDIA_OWNER_SOURCE` device paths agree with each card's PCI ancestry. This is actual physical passive exercise of the [driver-owner-reporting code](https://github.com/akashskypatel/universal-gpu-unlock/commit/e1fc407a2573611ffde5c3c29b61318bb800cd15), beyond its earlier [successful host/EFI CI](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42546463301). **Loaded Image properties do not authenticate original VBIOS ROM bytes, driver signing, code identity, child ownership or the safety of proprietary `DriverBinding.Stop`.**
 
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:01:00.0,0000:04:00.0'
-   ```
+**Decision:** `0011` **passes passive configured `ConOut` and `ErrOut` isolation** for AMD-only preboot cabling but fails the *independent* strict full-topology condition requiring NVIDIA GOPs. `0012` shows valid GOPs for all three GPUs but has a **real firmware-console configuration conflict** because both NVIDIA paths appear in `ConOut` and `ErrOut`. Neither represents a verified post-Stop console. Do not rewrite `ConOut`/`ErrOut` NVRAM, edit `DriverOrder`, detach GOPs or relax `GuTopoAssess` to make either label `COMPLETE`. Physical GPU mutation, firmware signing/acceptance and recovery are still unauthorized (`CAN_DETACH=false CAN_UNLOCK=false CAN_FLASH=false RECOVERY_VERIFIED=false`).
 
-   Use only your existing trusted USB boot/signing process. **Do not use legacy active EFI, DXE persistence, `-WindowsEspGuid`, device disconnects or firmware variable editors.**
-3. Boot that passive EFI and retain the new numbered `GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT`. Required **Stage 3 observations** are `NVIDIA_CONOUT_MATCH=0`, `NVIDIA_CONOUT_BLOCKER=0`, at least one `INDEPENDENT_GOP_COUNT` and `INDEPENDENT_CONOUT_MATCH`, plus `ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1` and `ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED` with `NVIDIA=0 UNMATCHED=0 AMBIGUOUS=0`. A missing `ErrOut` is `UNKNOWN`, not a pass.
-4. Inspect the new **Stage 4 observational** `NVIDIA_DRIVER_OWNER[n]` reports: for each expected `0000:01:00.0`/ `0000:04:00.0`, check unique `BY_DRIVER=1 OPENERS_KNOWN=1`, `BINDING_STATUS=0`, `LOADED_IMAGE_STATUS=0`, and any `NVIDIA_OWNER_FILE` / `NVIDIA_OWNER_SOURCE` path bytes. Missing paths, unusual image source, mismatched owner, or absent DriverBinding remain unresolved, **not reasons to bypass a check**. The image-handle link/path are boot-local *observations*, **not verified driver bytes, signatures, Stop readiness or recovery**.
+**Next engineering work, not a repeat cable test:** reconcile current-boot GOP handles, PCI protocol opener/child edges and **authenticated exact driver-image bytes** against older Windows DIAG07/DIAG10 private-context evidence, using stable BDF/subsystem/source fingerprints rather than reusing EFI handle tokens across boots. Then build and verify a fail-closed offline model of selective NVIDIA `Stop`, partial failures and nonreturning calls before any separately approved active test. If using all three displays during preboot remains necessary, a firmware policy that genuinely clears **both** configured NVIDIA `ConOut` and `ErrOut` paths would require separate passive verification; no such configuration has yet been demonstrated.
 
-[Read-only driver-owner inspection `e1fc407a`](https://github.com/akashskypatel/universal-gpu-unlock/commit/e1fc407a2573611ffde5c3c29b61318bb800cd15) passed [host and Windows EFI compile CI 42546463301](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42546463301); **no physical owner-image run yet**. The separate [configured `ErrOut` change](https://github.com/akashskypatel/universal-gpu-unlock/commit/e145ce18bbc44e51de3790d96462e11d56b66dfa) passed [CI 42545089397](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42545089397) and was physically executed in `0010`, with the expected all-three conflict.
+**Rebuild command for future source changes only** (run from repository root with MSVC installed; do not invoke active app or DXE):
 
-**If all three monitors must remain connected during preboot**, no validated software resolution has been established. The evidence shows the firmware still configures the RTX 4090 as a console output. Do not directly write `ConOut`, `ErrOut`, `DriverOrder`, detach GOP drivers, or weaken `GuTopoAssess` to relabel `CONFLICT` as complete. Any further BIOS graphics-option experiment must change a documented setting and be recorded in a new passive log; cable configuration and live console routing are not proved by the log alone. `CAN_DETACH=false CAN_UNLOCK=false CAN_FLASH=false RECOVERY_VERIFIED=false`.
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:01:00.0,0000:04:00.0'
+```
 
 ## Optional read-only selection by PCI location
 
