@@ -990,7 +990,8 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
         (EFI_ERROR(freed)||!by_driver)?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
   }
   Say("INDEPENDENT_GOP_GRAPH_SUMMARY GOP_PATH_MATCHED=%zu UNRESOLVED=%zu STATUS=%s NO_STOP_EVIDENCE=1\r\n",
-      observed,unresolved,unresolved?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
+      observed,unresolved,!observed?"NO_NON_NVIDIA_GOP_OBSERVED":
+      unresolved?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
 }
 
 static int CaptureGop(EFI_BOOT_SERVICES *bs) {
