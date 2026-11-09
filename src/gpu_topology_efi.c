@@ -16,6 +16,7 @@
 #include <Protocol/SimpleFileSystem.h>
 #endif
 #include "gpu_topology.h"
+#include "sha256.h"
 #ifdef GU_TOPO_SELECTION_ENABLED
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #error Selection-only diagnostic cannot automatically hand off to Windows
@@ -43,6 +44,8 @@ static EFI_GUID DriverBindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID;
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 static GU_TOPO_CAPTURE Snapshot;
+/* The underlying GOP handles are boot-local: never persist or use for Stop. */
+static EFI_HANDLE GopHandles[GU_TOPO_MAX_GOPS];
 static GU_TOPO_REPORT Report;
 #ifdef GU_TOPO_SELECTION_ENABLED
 static int SelectionOk;
@@ -592,6 +595,25 @@ static void ReportNvidiaDriverOwners(EFI_BOOT_SERVICES *bs) {
     }
     Say("NVIDIA_DRIVER_OWNER[%zu] IMAGE_LINK=OBSERVED_ONLY IMAGE_BYTES=%llu SOURCE_DEVICE=%p\r\n",
         i,(unsigned long long)loaded->ImageSize,loaded->DeviceHandle);
+    /* SHA-256 of the mapped/possibly relocated in-memory image, NOT a
+     * signed file digest, Authenticode decision or proof of GPU ROM origin.
+     * Only the bounded LoadedImage-provided mapping is read. */
+    if(loaded->ImageBase && loaded->ImageSize &&
+       loaded->ImageSize<=8U*1024U*1024U) {
+      UINT8 digest[32];
+      char hex[65];
+      static const char digits[]="0123456789abcdef";
+      size_t k;
+      GuSha256(loaded->ImageBase,(UINTN)loaded->ImageSize,digest);
+      for(k=0;k<32;k++) {
+        hex[2*k]=digits[digest[k]>>4];
+        hex[2*k+1]=digits[digest[k]&15U];
+      }
+      hex[64]=0;
+      Say("NVIDIA_DRIVER_OWNER[%zu] MAPPED_IMAGE_SHA256=%s RELOCATED_POSSIBLE=1 SIGNATURE_NOT_VERIFIED=1\r\n",i,hex);
+    } else {
+      Say("NVIDIA_DRIVER_OWNER[%zu] MAPPED_IMAGE_SHA256=UNAVAILABLE IMAGE_SIZE_OUT_OF_BOUNDS_OR_BASE_MISSING=1 SIGNATURE_NOT_VERIFIED=1\r\n",i);
+    }
     if(loaded->FilePath && PathCopy(loaded->FilePath,&path)) {
       Say("NVIDIA_DRIVER_OWNER[%zu] FILE_PATH_LEN=%zu\r\n",i,path.length);
       SayPath("NVIDIA_OWNER_FILE",i,&path);
@@ -610,6 +632,109 @@ static void ReportNvidiaDriverOwners(EFI_BOOT_SERVICES *bs) {
   }
 }
 
+/* Read the current PCI controller opener graph. A BY_CHILD_CONTROLLER
+ * record points at its child handle; matching an observed GOP is evidence,
+ * not proof of private driver state, Stop semantics, or detach eligibility.
+ * Every EFI allocation is bounded and explicitly released. */
+static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
+  size_t i;
+  if(!bs->OpenProtocolInformation || !bs->FreePool) {
+    Say("NVIDIA_GOP_GRAPH=UNAVAILABLE NO_OPEN_PROTOCOL_INFORMATION=1\r\n");
+    return;
+  }
+  Say("NVIDIA_GOP_GRAPH=READ_ONLY NO_DRIVER_CALLBACKS=1 NO_DETACH=1\r\n");
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *p=&Snapshot.pci[i];
+    const GU_GPU_RECORD *id=&p->identity;
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *edges=NULL;
+    EFI_STATUS status,release;
+    UINTN count=0,j;
+    size_t by_driver=0,by_child=0,gop_children=0,matched=0;
+    int complete=1;
+    if((id->pci_id&0xffffU)!=0x10deU ||
+       (id->class_code&0xff00U)!=0x0300U)continue;
+    status=bs->OpenProtocolInformation(id->handle,&PciGuid,&edges,&count);
+    if(EFI_ERROR(status) || count>256U || (count && !edges)) {
+      Say("NVIDIA_GOP_GRAPH[%zu] PCI_OPEN_STATUS=%#llx OPENERS=%zu GRAPH=UNKNOWN_OR_OVERFLOW\r\n",
+          i,(unsigned long long)status,(size_t)count);
+      if(edges) {
+        release=bs->FreePool(edges);
+        Say("NVIDIA_GOP_GRAPH[%zu] FREE_STATUS=%#llx\r\n",i,
+            (unsigned long long)release);
+      }
+      continue;
+    }
+    Say("NVIDIA_GOP_GRAPH[%zu] PCI_OPEN_STATUS=%#llx OPENERS=%zu\r\n",
+        i,(unsigned long long)status,(size_t)count);
+    for(j=0;j<count;j++) {
+      const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&edges[j];
+      unsigned is_driver=(unsigned)!!(e->Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER);
+      unsigned is_child=(unsigned)!!(e->Attributes&EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER);
+      unsigned same_agent=(unsigned)(e->AgentHandle==p->first_owner_agent);
+      size_t k;
+      if(is_driver)by_driver++;
+      if(is_child)by_child++;
+      Say("NVIDIA_PCI_EDGE[%zu,%zu] ATTR=%#x OPEN_COUNT=%u AGENT=%p CHILD=%p DRIVER=%u CHILD_EDGE=%u SAME_AGENT=%u\r\n",
+          i,(size_t)j,(unsigned)e->Attributes,(unsigned)e->OpenCount,
+          e->AgentHandle,e->ControllerHandle,is_driver,is_child,same_agent);
+      if(!is_child)continue;
+      if(!e->ControllerHandle) {complete=0;continue;}
+      {
+        EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+        EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+        GU_TOPO_PATH copied;
+        EFI_STATUS gs=bs->HandleProtocol(e->ControllerHandle,&GopGuid,(VOID **)&gop);
+        EFI_STATUS ps=bs->HandleProtocol(e->ControllerHandle,&PathGuid,(VOID **)&path);
+        unsigned path_matches=(unsigned)(!EFI_ERROR(ps) && path &&
+             PathCopy(path,&copied) && GuTopoPathOnController(&p->path,&copied));
+        unsigned handle_matches=0;
+        if(!EFI_ERROR(gs) && gop)gop_children++;
+        for(k=0;k<Snapshot.gop_count;k++)
+          if(GopHandles[k]==e->ControllerHandle)handle_matches++;
+        if(handle_matches && path_matches)matched++;
+        if((!EFI_ERROR(gs) && gop) && !path_matches)complete=0;
+        Say("NVIDIA_PCI_CHILD[%zu,%zu] GOP=%u PATH_ON_CONTROLLER=%u IN_CAPTURED_GOPS=%u GOP_STATUS=%#llx PATH_STATUS=%#llx\r\n",
+            i,(size_t)j,(unsigned)(!EFI_ERROR(gs)&&!!gop),
+            path_matches,handle_matches,(unsigned long long)gs,(unsigned long long)ps);
+      }
+    }
+    release=edges?bs->FreePool(edges):EFI_SUCCESS;
+    if(EFI_ERROR(release))complete=0;
+    if(by_driver!=p->by_driver)complete=0;
+    Say("NVIDIA_GOP_GRAPH[%zu] PCI_DRIVER_OPENS=%zu EXPECTED=%u CHILD_EDGES=%zu GOP_CHILDREN=%zu MATCHED_GOP_CHILDREN=%zu FREE_STATUS=%#llx GRAPH_STATUS=%s\r\n",
+        i,by_driver,p->by_driver,by_child,gop_children,matched,
+        (unsigned long long)release,complete?"OBSERVED_ONLY":"PARTIAL_OR_DRIFT");
+    /* Enumerate each mapped GOP handle's own protocol openers; empty lists
+     * are valid observations, not evidence that NVIDIA Stop is reversible. */
+    for(j=0;j<Snapshot.gop_count;j++) {
+      EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
+      EFI_STATUS os,freed;
+      UINTN n=0,k;
+      if(!GopHandles[j] ||
+         !GuTopoPathOnController(&p->path,&Snapshot.gop[j].path))continue;
+      os=bs->OpenProtocolInformation(GopHandles[j],&GopGuid,&opens,&n);
+      if(EFI_ERROR(os) || n>256U || (n && !opens)) {
+        Say("NVIDIA_GOP_OPENERS[%zu,%zu] STATUS=%#llx COUNT=%zu UNKNOWN_OR_OVERFLOW=1\r\n",
+            i,(size_t)j,(unsigned long long)os,(size_t)n);
+      } else {
+        Say("NVIDIA_GOP_OPENERS[%zu,%zu] STATUS=0 COUNT=%zu\r\n",
+            i,(size_t)j,(size_t)n);
+        for(k=0;k<n;k++) {
+          const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[k];
+          Say("NVIDIA_GOP_EDGE[%zu,%zu,%zu] ATTR=%#x COUNT=%u AGENT=%p CHILD=%p SAME_PCI_DRIVER=%u\r\n",
+              i,(size_t)j,(size_t)k,(unsigned)e->Attributes,
+              (unsigned)e->OpenCount,e->AgentHandle,e->ControllerHandle,
+              (unsigned)(e->AgentHandle==p->first_owner_agent));
+        }
+      }
+      freed=opens?bs->FreePool(opens):EFI_SUCCESS;
+      if(EFI_ERROR(freed))
+        Say("NVIDIA_GOP_OPENERS[%zu,%zu] FREE_STATUS=%#llx INCOMPLETE=1\r\n",
+            i,(size_t)j,(unsigned long long)freed);
+    }
+  }
+}
+
 static int CaptureGop(EFI_BOOT_SERVICES *bs) {
   EFI_HANDLE *handles=NULL;
   UINTN count=0,i;
@@ -620,6 +745,7 @@ static int CaptureGop(EFI_BOOT_SERVICES *bs) {
     EFI_DEVICE_PATH_PROTOCOL *path=NULL;
     if(EFI_ERROR(bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)) ||
        !PathCopy(path,&Snapshot.gop[i].path)){okay=0;break;}
+    GopHandles[Snapshot.gop_count]=handles[i];
     Snapshot.gop_count++;
   }
   if(handles && (!bs->FreePool || EFI_ERROR(bs->FreePool(handles))))okay=0;
@@ -773,8 +899,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result==GU_TOPO_INCOMPLETE?"INCOMPLETE":
       result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID",
       (unsigned)(Report.nvidia_console_count!=0));
-  if(pci_ok)ReportNvidiaDriverOwners(bs);
-  else Say("NVIDIA_DRIVER_OWNER_INVENTORY=UNAVAILABLE PCI_CAPTURE_FAILED=1\r\n");
+  if(pci_ok) {
+    ReportNvidiaDriverOwners(bs);
+    if(gop_ok)ReportNvidiaGopGraph(bs);
+    else Say("NVIDIA_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1\r\n");
+  } else Say("NVIDIA_DRIVER_OWNER_INVENTORY=UNAVAILABLE PCI_CAPTURE_FAILED=1\r\n");
 #ifdef GU_TOPO_SELECTION_ENABLED
   SelectionOk=ReportPassiveSelections(pci_ok,result);
 #endif

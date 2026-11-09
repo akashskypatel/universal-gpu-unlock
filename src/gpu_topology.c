@@ -50,6 +50,14 @@ static int Prefix(const GU_TOPO_PATH *prefix, const GU_TOPO_PATH *path) {
   return length <= Body(path) && !memcmp(prefix->bytes,path->bytes,length);
 }
 
+int GuTopoPathOnController(const GU_TOPO_PATH *controller,
+                           const GU_TOPO_PATH *candidate) {
+  return controller && candidate && GuTopoPathValid(controller) &&
+    GuTopoPathValid(candidate) && Body(controller)>=6U &&
+    Body(controller)<=Body(candidate) &&
+    !memcmp(controller->bytes,candidate->bytes,Body(controller));
+}
+
 static int SameBdf(const GU_GPU_RECORD *a, const GU_GPU_RECORD *b) {
   return a->segment == b->segment && a->bus == b->bus &&
     a->device == b->device && a->function == b->function;

@@ -73,6 +73,24 @@ int main(void) {
   CHECK(GuTopoClassRelevant(0x0300U));
   CHECK(GuTopoClassRelevant(0x0302U));
   CHECK(GuTopoClassRelevant(0x0380U));
+  /* A GOP is associated only by a valid complete controller path prefix. */
+  {
+    GU_TOPO_PATH controller=Path(1,0,0,0),child=controller;
+    const uint8_t adr[]={2,3,8,0,0x40,3,1,0x80};
+    const uint8_t end[]={0x7f,0xff,4,0};
+    CHECK(GuTopoPathOnController(&controller,&controller));
+    memcpy(child.bytes+controller.length-4,adr,sizeof(adr));
+    memcpy(child.bytes+controller.length-4+sizeof(adr),end,sizeof(end));
+    child.length+=sizeof(adr);
+    CHECK(GuTopoPathOnController(&controller,&child));
+    CHECK(!GuTopoPathOnController(&controller,&(GU_TOPO_PATH){0}));
+    CHECK(!GuTopoPathOnController(&controller,NULL));
+    CHECK(!GuTopoPathOnController(NULL,&child));
+    {GU_TOPO_PATH sibling=Path(1,0,1,0);
+     CHECK(!GuTopoPathOnController(&controller,&sibling));}
+    child.bytes[child.length-3]=1;
+    CHECK(!GuTopoPathOnController(&controller,&child));
+  }
   CHECK(GuTopoClassifierStable(cls1,cls2));
   cls2[1]^=0x10000U;CHECK(GuTopoClassifierStable(cls1,cls2));
   cls2[0]^=0x10000U;CHECK(!GuTopoClassifierStable(cls1,cls2));

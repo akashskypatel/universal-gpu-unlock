@@ -75,6 +75,9 @@ int GuTopoClassRelevant(uint16_t class_code);
  * 256-byte reads and a strict bytewise comparison. */
 int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]);
 int GuTopoPathValid(const GU_TOPO_PATH *p);
+/* Complete PCI device-path prefix only; no root-port-only ownership inference. */
+int GuTopoPathOnController(const GU_TOPO_PATH *controller,
+                           const GU_TOPO_PATH *candidate);
 int GuTopoAssess(const GU_TOPO_CAPTURE *capture, GU_TOPO_REPORT *report);
 /* Classify ConOut/ErrOut paths independently using already-captured PCI
  * topology. Returns 0 on invalid inputs, not an actuation verdict. */
