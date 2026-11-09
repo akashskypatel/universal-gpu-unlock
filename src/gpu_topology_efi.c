@@ -17,6 +17,7 @@
 #endif
 #include "gpu_topology.h"
 #include "sha256.h"
+#include "gpu_loaded_pe_text.h"
 #ifdef GU_TOPO_SELECTION_ENABLED
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #error Selection-only diagnostic cannot automatically hand off to Windows
@@ -614,6 +615,22 @@ static void ReportNvidiaDriverOwners(EFI_BOOT_SERVICES *bs) {
     } else {
       Say("NVIDIA_DRIVER_OWNER[%zu] MAPPED_IMAGE_SHA256=UNAVAILABLE IMAGE_SIZE_OUT_OF_BOUNDS_OR_BASE_MISSING=1 SIGNATURE_NOT_VERIFIED=1\r\n",i);
     }
+    if(loaded->ImageBase && loaded->ImageSize &&
+       loaded->ImageSize<=8U*1024U*1024U) {
+      size_t rva=0,bytes=0,k;
+      if(GuLoadedPeTextRange(loaded->ImageBase,(size_t)loaded->ImageSize,&rva,&bytes)) {
+        UINT8 digest[32];char hex[65];
+        static const char digits[]="0123456789abcdef";
+        GuSha256((const UINT8 *)loaded->ImageBase+rva,bytes,digest);
+        for(k=0;k<32;k++) {
+          hex[2*k]=digits[digest[k]>>4];
+          hex[2*k+1]=digits[digest[k]&15U];
+        }
+        hex[64]=0;
+        Say("NVIDIA_DRIVER_OWNER[%zu] MAPPED_TEXT_SHA256=%s TEXT_RVA=%zu TEXT_BYTES=%zu TEXT_RELOCATIONS_NOT_CHECKED=1 SIGNATURE_NOT_VERIFIED=1\r\n",
+            i,hex,rva,bytes);
+      } else Say("NVIDIA_DRIVER_OWNER[%zu] MAPPED_TEXT_SHA256=UNAVAILABLE PE32_PLUS_TEXT_UNRESOLVED=1 SIGNATURE_NOT_VERIFIED=1\r\n",i);
+    } else Say("NVIDIA_DRIVER_OWNER[%zu] MAPPED_TEXT_SHA256=UNAVAILABLE IMAGE_MAPPING_UNAVAILABLE=1 SIGNATURE_NOT_VERIFIED=1\r\n",i);
     if(loaded->FilePath && PathCopy(loaded->FilePath,&path)) {
       Say("NVIDIA_DRIVER_OWNER[%zu] FILE_PATH_LEN=%zu\r\n",i,path.length);
       SayPath("NVIDIA_OWNER_FILE",i,&path);
@@ -630,6 +647,58 @@ static void ReportNvidiaDriverOwners(EFI_BOOT_SERVICES *bs) {
       SayPath("NVIDIA_OWNER_SOURCE",i,&path);
     } else Say("NVIDIA_DRIVER_OWNER[%zu] SOURCE_PATH=ABSENT_OR_UNVERIFIED\r\n",i);
   }
+}
+
+/* Resolve the GOP protocol's BY_DRIVER agent as a separate owner.
+ * It need not be the NVIDIA PCI BY_DRIVER agent; absence of a binding is
+ * UNKNOWN, not proof of no consumer. No callback or disconnect is invoked. */
+static int ReportGopOpenerAgent(EFI_BOOT_SERVICES *bs,
+                                size_t pci, size_t gop, size_t edge,
+                                EFI_HANDLE agent) {
+  EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
+  EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
+  EFI_DEVICE_PATH_PROTOCOL *source=NULL;
+  GU_TOPO_PATH path;
+  EFI_STATUS status;
+  if(!agent) {
+    Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] STATUS=UNKNOWN NULL_AGENT=1\r\n",pci,gop,edge);
+    return 0;
+  }
+  status=bs->HandleProtocol(agent,&DriverBindingGuid,(VOID **)&binding);
+  Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] AGENT=%p BINDING_STATUS=%#llx BINDING_PRESENT=%u\r\n",
+      pci,gop,edge,agent,(unsigned long long)status,
+      (unsigned)(!EFI_ERROR(status)&&!!binding));
+  if(EFI_ERROR(status)||!binding||!binding->ImageHandle) {
+    Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] STATUS=UNRESOLVED_DRIVER_BINDING\r\n",pci,gop,edge);
+    return 0;
+  }
+  Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] IMAGE_HANDLE=%p DRIVER_BINDING_HANDLE=%p VERSION=%u\r\n",
+      pci,gop,edge,binding->ImageHandle,binding->DriverBindingHandle,
+      (unsigned)binding->Version);
+  status=bs->HandleProtocol(binding->ImageHandle,&LoadedGuid,(VOID **)&loaded);
+  Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] LOADED_IMAGE_STATUS=%#llx LOADED_IMAGE_PRESENT=%u\r\n",
+      pci,gop,edge,(unsigned long long)status,
+      (unsigned)(!EFI_ERROR(status)&&!!loaded));
+  if(EFI_ERROR(status)||!loaded) {
+    Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] STATUS=UNRESOLVED_LOADED_IMAGE\r\n",pci,gop,edge);
+    return 0;
+  }
+  Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] IMAGE_BYTES=%llu SOURCE_DEVICE=%p SIGNATURE_NOT_VERIFIED=1\r\n",
+      pci,gop,edge,(unsigned long long)loaded->ImageSize,loaded->DeviceHandle);
+  if(loaded->FilePath&&PathCopy(loaded->FilePath,&path)) {
+    Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] FILE_PATH_LEN=%zu\r\n",pci,gop,edge,path.length);
+    SayPath("GOP_AGENT_FILE",gop,&path);
+  } else Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] FILE_PATH=UNAVAILABLE\r\n",pci,gop,edge);
+  if(loaded->DeviceHandle) {
+    status=bs->HandleProtocol(loaded->DeviceHandle,&PathGuid,(VOID **)&source);
+    if(!EFI_ERROR(status)&&source&&PathCopy(source,&path)) {
+      Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] SOURCE_PATH_LEN=%zu\r\n",pci,gop,edge,path.length);
+      SayPath("GOP_AGENT_SOURCE",gop,&path);
+    } else Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] SOURCE_PATH=UNAVAILABLE STATUS=%#llx\r\n",
+               pci,gop,edge,(unsigned long long)status);
+  } else Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] SOURCE_PATH=UNAVAILABLE\r\n",pci,gop,edge);
+  Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] STATUS=OBSERVED_IMAGE_ONLY NOT_STOP_EVIDENCE=1\r\n",pci,gop,edge);
+  return 1;
 }
 
 /* Read the current PCI controller opener graph. A BY_CHILD_CONTROLLER
@@ -710,6 +779,7 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
       EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
       EFI_STATUS os,freed;
       UINTN n=0,k;
+      size_t by_driver_opens=0,unresolved_agents=0;
       if(!GopHandles[j] ||
          !GuTopoPathOnController(&p->path,&Snapshot.gop[j].path))continue;
       os=bs->OpenProtocolInformation(GopHandles[j],&GopGuid,&opens,&n);
@@ -721,13 +791,23 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
             i,(size_t)j,(size_t)n);
         for(k=0;k<n;k++) {
           const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[k];
-          Say("NVIDIA_GOP_EDGE[%zu,%zu,%zu] ATTR=%#x COUNT=%u AGENT=%p CHILD=%p SAME_PCI_DRIVER=%u\r\n",
+          Say("NVIDIA_GOP_EDGE[%zu,%zu,%zu] ATTR=%#x COUNT=%u AGENT=%p CHILD=%p SAME_PCI_DRIVER=%u CONTROLLER_IS_CHILD_ONLY_IF_BY_CHILD=1\r\n",
               i,(size_t)j,(size_t)k,(unsigned)e->Attributes,
               (unsigned)e->OpenCount,e->AgentHandle,e->ControllerHandle,
               (unsigned)(e->AgentHandle==p->first_owner_agent));
+          if(e->Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER) {
+            by_driver_opens++;
+            if(!ReportGopOpenerAgent(bs,i,j,k,e->AgentHandle))
+              unresolved_agents++;
+          }
         }
       }
       freed=opens?bs->FreePool(opens):EFI_SUCCESS;
+      Say("NVIDIA_GOP_OPENERS_SUMMARY[%zu,%zu] BY_DRIVER=%zu UNRESOLVED_AGENT_IMAGES=%zu OPEN_STATUS=%#llx FREE_STATUS=%#llx STATUS=%s\r\n",
+          i,(size_t)j,by_driver_opens,unresolved_agents,
+          (unsigned long long)os,(unsigned long long)freed,
+          !EFI_ERROR(os)&&n<=256U&&(!n||opens)&&
+          !EFI_ERROR(freed)&&!unresolved_agents?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
       if(EFI_ERROR(freed))
         Say("NVIDIA_GOP_OPENERS[%zu,%zu] FREE_STATUS=%#llx INCOMPLETE=1\r\n",
             i,(size_t)j,(unsigned long long)freed);

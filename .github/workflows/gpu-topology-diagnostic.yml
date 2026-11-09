@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths:
       - 'src/gpu_topology*'
+      - 'src/gpu_loaded_pe_text*'
+      - 'tests/test_gpu_loaded_pe_text.c'
       - 'src/gpu_inventory*'
       - 'src/gpu_discovery*'
       - 'src/Gpu-Selection-Build.ps1'
@@ -47,6 +49,12 @@ jobs:
           set -euo pipefail
           (
             trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .; exit "$rc"' EXIT
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_loaded_pe_text.c src/gpu_loaded_pe_text.c -o "$RUNNER_TEMP/test_gpu_loaded_pe_text_$compiler"
+              "$RUNNER_TEMP/test_gpu_loaded_pe_text_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_loaded_pe_text.c src/gpu_loaded_pe_text.c -o "$RUNNER_TEMP/test_gpu_loaded_pe_text_ubsan"
+            "$RUNNER_TEMP/test_gpu_loaded_pe_text_ubsan"
             gcc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology"
             "$RUNNER_TEMP/test_gpu_topology"
             clang -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology_clang"
