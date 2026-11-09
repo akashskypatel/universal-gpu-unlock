@@ -10,8 +10,9 @@
 #include <Protocol/DevicePath.h>
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/SimpleTextOut.h>
-#ifdef GU_TOPO_SAVE_LOG
 #include <Protocol/LoadedImage.h>
+#include <Protocol/DriverBinding.h>
+#ifdef GU_TOPO_SAVE_LOG
 #include <Protocol/SimpleFileSystem.h>
 #endif
 #include "gpu_topology.h"
@@ -38,6 +39,8 @@ static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID;
 static EFI_GUID PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID TextOutGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
+static EFI_GUID DriverBindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID;
+static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
@@ -60,7 +63,6 @@ static EFI_SYSTEM_TABLE *System;
 static char LogBytes[131072];
 static size_t LogUsed;
 static int LogOverflow;
-static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
 static EFI_GUID FsGuid=EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 #endif
 
@@ -549,6 +551,65 @@ static void ReportPciEvidence(EFI_BOOT_SERVICES *bs) {
   Say("PCI_OBSERVATION_NOT_ACCEPTANCE=1\r\n");
 }
 
+/* Query current-boot NVIDIA PCI BY_DRIVER agents without invoking any
+ * driver callback or changing ownership. This is NOT Stop/recovery evidence. */
+static void ReportNvidiaDriverOwners(EFI_BOOT_SERVICES *bs) {
+  size_t i;
+  Say("NVIDIA_DRIVER_OWNER_INVENTORY=READ_ONLY IMAGE_PROVENANCE_UNVERIFIED=1 NOT_STOP_EVIDENCE=1\r\n");
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *node=&Snapshot.pci[i];
+    const GU_GPU_RECORD *id=&node->identity;
+    EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
+    EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
+    EFI_DEVICE_PATH_PROTOCOL *device_path=NULL;
+    EFI_STATUS status;
+    GU_TOPO_PATH path;
+    if((id->pci_id&0xffffU)!=0x10deU ||
+       (id->class_code&0xff00U)!=0x0300U)continue;
+    Say("NVIDIA_DRIVER_OWNER[%zu] BDF=%04x:%02x:%02x.%u BY_DRIVER=%u OPENERS_KNOWN=%u AGENT=%p\r\n",
+        i,(unsigned)id->segment,(unsigned)id->bus,(unsigned)id->device,
+        (unsigned)id->function,node->by_driver,
+        (unsigned)node->openers_known,node->first_owner_agent);
+    if(!node->openers_known || node->by_driver!=1 || !node->first_owner_agent) {
+      Say("NVIDIA_DRIVER_OWNER[%zu] IMAGE_LINK=UNRESOLVED OWNER_NOT_UNIQUE_OR_UNKNOWN=1\r\n",i);
+      continue;
+    }
+    status=bs->HandleProtocol(node->first_owner_agent,&DriverBindingGuid,(VOID **)&binding);
+    Say("NVIDIA_DRIVER_OWNER[%zu] BINDING_STATUS=%#llx BINDING_PRESENT=%u\r\n",
+        i,(unsigned long long)status,(unsigned)(!EFI_ERROR(status)&&!!binding));
+    if(EFI_ERROR(status) || !binding || !binding->ImageHandle) {
+      Say("NVIDIA_DRIVER_OWNER[%zu] IMAGE_LINK=UNRESOLVED\r\n",i);
+      continue;
+    }
+    Say("NVIDIA_DRIVER_OWNER[%zu] IMAGE_HANDLE=%p DRIVER_BINDING_HANDLE=%p VERSION=%u\r\n",
+        i,binding->ImageHandle,binding->DriverBindingHandle,(unsigned)binding->Version);
+    status=bs->HandleProtocol(binding->ImageHandle,&LoadedGuid,(VOID **)&loaded);
+    Say("NVIDIA_DRIVER_OWNER[%zu] LOADED_IMAGE_STATUS=%#llx LOADED_IMAGE_PRESENT=%u\r\n",
+        i,(unsigned long long)status,(unsigned)(!EFI_ERROR(status)&&!!loaded));
+    if(EFI_ERROR(status) || !loaded) {
+      Say("NVIDIA_DRIVER_OWNER[%zu] IMAGE_LINK=UNRESOLVED\r\n",i);
+      continue;
+    }
+    Say("NVIDIA_DRIVER_OWNER[%zu] IMAGE_LINK=OBSERVED_ONLY IMAGE_BYTES=%llu SOURCE_DEVICE=%p\r\n",
+        i,(unsigned long long)loaded->ImageSize,loaded->DeviceHandle);
+    if(loaded->FilePath && PathCopy(loaded->FilePath,&path)) {
+      Say("NVIDIA_DRIVER_OWNER[%zu] FILE_PATH_LEN=%zu\r\n",i,path.length);
+      SayPath("NVIDIA_OWNER_FILE",i,&path);
+    } else Say("NVIDIA_DRIVER_OWNER[%zu] FILE_PATH=ABSENT_OR_UNVERIFIED\r\n",i);
+    if(!loaded->DeviceHandle) {
+      Say("NVIDIA_DRIVER_OWNER[%zu] SOURCE_PATH=ABSENT\r\n",i);
+      continue;
+    }
+    status=bs->HandleProtocol(loaded->DeviceHandle,&PathGuid,(VOID **)&device_path);
+    Say("NVIDIA_DRIVER_OWNER[%zu] SOURCE_PATH_STATUS=%#llx\r\n",
+        i,(unsigned long long)status);
+    if(!EFI_ERROR(status) && device_path && PathCopy(device_path,&path)) {
+      Say("NVIDIA_DRIVER_OWNER[%zu] SOURCE_PATH_LEN=%zu\r\n",i,path.length);
+      SayPath("NVIDIA_OWNER_SOURCE",i,&path);
+    } else Say("NVIDIA_DRIVER_OWNER[%zu] SOURCE_PATH=ABSENT_OR_UNVERIFIED\r\n",i);
+  }
+}
+
 static int CaptureGop(EFI_BOOT_SERVICES *bs) {
   EFI_HANDLE *handles=NULL;
   UINTN count=0,i;
@@ -712,6 +773,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result==GU_TOPO_INCOMPLETE?"INCOMPLETE":
       result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID",
       (unsigned)(Report.nvidia_console_count!=0));
+  if(pci_ok)ReportNvidiaDriverOwners(bs);
+  else Say("NVIDIA_DRIVER_OWNER_INVENTORY=UNAVAILABLE PCI_CAPTURE_FAILED=1\r\n");
 #ifdef GU_TOPO_SELECTION_ENABLED
   SelectionOk=ReportPassiveSelections(pci_ok,result);
 #endif
