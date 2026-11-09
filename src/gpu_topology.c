@@ -124,6 +124,29 @@ static int DisplayOwner(const GU_TOPO_CAPTURE *s, const GU_TOPO_PATH *path) {
   return result;
 }
 
+/* Match a separately read firmware console variable against the captured
+ * display endpoints. Unknown or ambiguous ownership remains explicit. */
+int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *paths,
+                        size_t count, GU_TOPO_CONSOLE_OWNERS *owners) {
+  size_t i;
+  GU_TOPO_CONSOLE_OWNERS result = {0};
+  if(!capture || !paths || !owners || !capture->pci_count ||
+     capture->pci_count>GU_TOPO_MAX_PCI || count>GU_TOPO_MAX_CONSOLES)
+    return 0;
+  for(i=0;i<count;i++) {
+    int owner;
+    if(!GuTopoPathValid(&paths[i])) return 0;
+    owner=DisplayOwner(capture,&paths[i]);
+    if(owner==-2) result.ambiguous++;
+    else if(owner<0) result.unmatched++;
+    else if((capture->pci[owner].identity.pci_id&0xffffU)==0x10deU)
+      result.nvidia++;
+    else result.independent++;
+  }
+  *owners=result;
+  return 1;
+}
+
 /* Topology is derived from the captured device paths, not a selected board,
  * GPU model, PCI slot ordering or assumption that root ports are distinct. */
 int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {

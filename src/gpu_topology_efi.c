@@ -193,30 +193,37 @@ static int PathCopy(const EFI_DEVICE_PATH_PROTOCOL *source, GU_TOPO_PATH *out) {
   return 0;
 }
 
-static int ConsoleRead(EFI_SYSTEM_TABLE *table) {
+/* Configured ConOut and ErrOut are separate UEFI variables. Neither is
+ * interchangeable with their *Dev inventories of possible output devices. */
+static int ReadConfiguredConsole(EFI_SYSTEM_TABLE *table, const CHAR16 *name,
+                                 const char *label, GU_TOPO_PATH *paths,
+                                 size_t *count) {
   static UINT8 data[GU_TOPO_PATH_BYTES*GU_TOPO_MAX_CONSOLES];
   UINTN bytes=sizeof(data),at=0,start=0;
   UINT32 attrs=0;EFI_STATUS status;
-  if(!table->RuntimeServices || !table->RuntimeServices->GetVariable)return 0;
-  status=table->RuntimeServices->GetVariable(L"ConOut",&GlobalGuid,&attrs,&bytes,data);
+  *count=0;
+  if(!table->RuntimeServices || !table->RuntimeServices->GetVariable) {
+    Say("%s_VARIABLE STATUS=UNAVAILABLE CONFIGURED_ONLY=1\r\n",label);
+    return 0;
+  }
+  status=table->RuntimeServices->GetVariable((CHAR16 *)name,&GlobalGuid,&attrs,&bytes,data);
+  Say("%s_VARIABLE STATUS=%#llx BYTES=%zu ATTRS=%#x CONFIGURED_ONLY=1\r\n",
+      label,(unsigned long long)status,(size_t)bytes,(unsigned)attrs);
   if(EFI_ERROR(status) || !bytes || bytes>sizeof(data))return 0;
   while(at+4<=bytes) {
     size_t n=(size_t)data[at+2] | ((size_t)data[at+3]<<8);
     if(n<4 || n>bytes-at)return 0;
     if(data[at]==0x7f) {
       GU_TOPO_PATH *path;
-      if(data[at+1]!=1 && data[at+1]!=0xff)return 0;
-      if(Snapshot.console_count>=GU_TOPO_MAX_CONSOLES ||
-         at+n-start>GU_TOPO_PATH_BYTES)return 0;
-      path=&Snapshot.console[Snapshot.console_count++];
+      if(n!=4 || (data[at+1]!=1 && data[at+1]!=0xff))return 0;
+      if(*count>=GU_TOPO_MAX_CONSOLES || at+n-start>GU_TOPO_PATH_BYTES)return 0;
+      path=&paths[(*count)++];
+      memset(path,0,sizeof(*path));
       memcpy(path->bytes,data+start,at+n-start);
       path->length=at+n-start;
       path->bytes[path->length-3]=0xff; /* normalize END_INSTANCE */
       if(!GuTopoPathValid(path))return 0;
-      if(data[at+1]==0xff) {
-        Snapshot.console_available=(at+n==bytes);
-        return Snapshot.console_available;
-      }
+      if(data[at+1]==0xff)return at+n==bytes;
       start=at+n;
     }
     at+=n;
@@ -618,8 +625,10 @@ static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   EFI_BOOT_SERVICES *bs;
-  int pci_ok,gop_ok,console_ok,result;
-  size_t i;
+  int pci_ok,gop_ok,console_ok,error_ok,error_classified,result;
+  GU_TOPO_CONSOLE_OWNERS error_owners={0};
+  static GU_TOPO_PATH error_paths[GU_TOPO_MAX_CONSOLES];
+  size_t error_count=0,i;
 #ifndef GU_TOPO_SAVE_LOG
   (void)image;
 #endif
@@ -633,8 +642,25 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   pci_ok=CapturePci(bs);
   if(!pci_ok)ReportPciEvidence(bs);
   gop_ok=CaptureGop(bs);
-  console_ok=ConsoleRead(table);
+  console_ok=ReadConfiguredConsole(table,L"ConOut","CONOUT",
+                                   Snapshot.console,&Snapshot.console_count);
+  Snapshot.console_available=(uint8_t)console_ok;
+  error_ok=ReadConfiguredConsole(table,L"ErrOut","ERROUT",error_paths,&error_count);
   ReportConsoleBinding(table);
+  error_classified=pci_ok && error_ok &&
+      GuTopoConsoleOwners(&Snapshot,error_paths,error_count,&error_owners);
+  Say("ERROR_CONSOLE_CAPTURE=%u CLASSIFIED=%u NVIDIA=%u INDEPENDENT=%u UNMATCHED=%u AMBIGUOUS=%u NOT_DETACH_EVIDENCE=1\r\n",
+      (unsigned)error_ok,(unsigned)error_classified,
+      error_owners.nvidia,error_owners.independent,
+      error_owners.unmatched,error_owners.ambiguous);
+  Say("ERROR_CONSOLE_ISOLATION=%s\r\n",
+      !error_classified?"UNKNOWN":
+      error_owners.nvidia || error_owners.ambiguous?"CONFLICT":
+      error_owners.unmatched || !error_owners.independent?"INCOMPLETE":"INDEPENDENT_OBSERVED");
+  for(i=0;i<error_count;i++) {
+    Say("ERROUT[%zu] PATH_LEN=%zu\r\n",i,error_paths[i].length);
+    SayPath("ERROUT",i,&error_paths[i]);
+  }
   result=(pci_ok && gop_ok)?GuTopoAssess(&Snapshot,&Report):GU_TOPO_INVALID;
   Say("PCI_CAPTURE=%u GOP_CAPTURE=%u CONOUT_CAPTURE=%u PCI_NODES=%zu GOP_NODES=%zu CONOUT_PATHS=%zu\r\n",
       (unsigned)pci_ok,(unsigned)gop_ok,(unsigned)console_ok,

@@ -164,6 +164,32 @@ int main(void) {
   Baseline();snapshot.pci[0].path=Path(-1,0,5,0);
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
 
+  /* Separate ErrOut ownership must not silently follow a clean ConOut.
+   * This is observational and never authorizes active driver release. */
+  {
+    GU_TOPO_CONSOLE_OWNERS owners={0};
+    GU_TOPO_PATH paths[2];
+    Baseline();paths[0]=snapshot.pci[4].path;
+    CHECK(GuTopoConsoleOwners(&snapshot,paths,1,&owners));
+    CHECK(owners.independent==1 && owners.nvidia==0 &&
+          owners.unmatched==0 && owners.ambiguous==0);
+    paths[1]=snapshot.pci[1].path;
+    CHECK(GuTopoConsoleOwners(&snapshot,paths,2,&owners));
+    CHECK(owners.independent==1 && owners.nvidia==1);
+    paths[0]=snapshot.pci[3].path;
+    CHECK(GuTopoConsoleOwners(&snapshot,paths,2,&owners));
+    CHECK(owners.independent==0 && owners.nvidia==2);
+    paths[0]=Path(-1,0,15,0);
+    CHECK(GuTopoConsoleOwners(&snapshot,paths,2,&owners));
+    CHECK(owners.unmatched==1 && owners.nvidia==1);
+    paths[0].length=0;
+    CHECK(!GuTopoConsoleOwners(&snapshot,paths,2,&owners));
+    CHECK(!GuTopoConsoleOwners(&snapshot,paths,GU_TOPO_MAX_CONSOLES+1,&owners));
+    CHECK(!GuTopoConsoleOwners(NULL,paths,1,&owners));
+    CHECK(!GuTopoConsoleOwners(&snapshot,NULL,1,&owners));
+    CHECK(!GuTopoConsoleOwners(&snapshot,paths,1,NULL));
+  }
+
   Baseline();snapshot.console[0]=snapshot.pci[1].path;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
   CHECK(report.nvidia_console_count==1 && !report.independent_console_observed);

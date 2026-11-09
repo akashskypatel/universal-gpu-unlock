@@ -57,6 +57,11 @@ typedef struct {
 
 enum { GU_TOPO_COMPLETE=0, GU_TOPO_INCOMPLETE=1, GU_TOPO_CONFLICT=2, GU_TOPO_INVALID=3 };
 
+/* Observational device-path ownership only; never qualifies vendor Stop. */
+typedef struct {
+  unsigned nvidia, independent, unmatched, ambiguous;
+} GU_TOPO_CONSOLE_OWNERS;
+
 /* Reject malformed/overlong or multi-instance paths. PCI paths must be
  * unique; any unknown/ambiguous fact is explicitly incomplete. */
 /* A topology graph needs display endpoints and PCI-to-PCI bridges, not
@@ -71,3 +76,7 @@ int GuTopoClassRelevant(uint16_t class_code);
 int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]);
 int GuTopoPathValid(const GU_TOPO_PATH *p);
 int GuTopoAssess(const GU_TOPO_CAPTURE *capture, GU_TOPO_REPORT *report);
+/* Classify ConOut/ErrOut paths independently using already-captured PCI
+ * topology. Returns 0 on invalid inputs, not an actuation verdict. */
+int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *paths,
+                        size_t count, GU_TOPO_CONSOLE_OWNERS *owners);
