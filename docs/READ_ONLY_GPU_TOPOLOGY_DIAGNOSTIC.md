@@ -10,6 +10,27 @@ root port. The scan examines up to 4096 PCI handles and retains at most 128
 display/bridge nodes; exceeding either limit fails closed. The generic
 diagnostic requires no target-specific build setting.
 
+## Resolve a configured NVIDIA firmware console (MSI B850)
+
+**Observed, not yet resolved with all displays connected:** Generic passive `0009`, with monitors connected to AMD iGPU, RTX 4090 and RTX 3080, captured *configured* UEFI `ConOut` paths for both AMD iGPU and RTX 4090. `NVIDIA_CONOUT_MATCH=1 NVIDIA_CONOUT_BLOCKER=1 TOPOLOGY_VERDICT=CONFLICT`. `ConOutDev` separately lists *possible* AMD and RTX 4090 console outputs, but is **not** the source of the topology verdict. `0008`, with only the AMD display connected, had AMD-only `ConOut`, zero NVIDIA console matches and `NVIDIA_CONOUT_BLOCKER=0`; its separate `INCOMPLETE` verdict reflects zero observed NVIDIA GOP handles, not a console-path conflict. The current `ConOut` variable does not demonstrate actual physical monitor ownership, and neither configuration has undergone vendor `DriverBinding.Stop`.
+
+**Non-mutating resolution experiment (operator-controlled):**
+
+1. Record the current BIOS graphics settings and retain a recovery method/BitLocker recovery key before changing firmware settings. Connect the firmware-setup monitor to the motherboard AMD iGPU output.
+2. Enter MSI UEFI with **Del** at power-on. Under **Settings → Advanced → Integrated Graphics Configuration**, set **Initiate Graphic Adapter** to **IGD** if that choice exists on this BIOS revision; keep integrated graphics enabled. **Do not change Secure Boot keys, VBIOS, PCIe slot enumeration, NVRAM console variables or DriverOrder**. MSI's general guidance documents this setting; confirm the exact option on this board/BIOS. Save with F10, shut down fully, and cold-boot with **all three monitors still connected**. A primary-adapter setting may leave NVIDIA outputs in `ConOut`, so the result must be measured.
+3. Rebuild the **separate passive selection diagnostic**, not the legacy mutating app/DXE, using actual current BDFs (verify identity when booting). Run from the repository root on a Windows machine with MSVC C++ build tools:
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:01:00.0,0000:04:00.0'
+   ```
+
+   Use your existing trusted USB deployment/signing process if Secure Boot requires it. This build does not link GPU unlock, DMA/FLR, persistence, or Windows-handoff code. Do not use `-WindowsEspGuid` with selection-only diagnostics.
+4. Capture a new numbered `GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT` before Windows boot. Check **configured** `CONOUT[n]` path owners, `NVIDIA_CONOUT_MATCH`, `INDEPENDENT_CONOUT_MATCH`, `NVIDIA_CONOUT_BLOCKER`, and the new **`ERROUT[n]`/`ERROR_CONSOLE_ISOLATION`** fields. The latter are independent error-output observations; an absent/unreadable `ErrOut` is `UNKNOWN`, not proof of separation.
+5. **Stage-3 configuration success** requires an AMD/non-NVIDIA mapped `ConOut` path, `NVIDIA_CONOUT_MATCH=0`, `NVIDIA_CONOUT_BLOCKER=0`, an independent GOP and **`ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED`** without unmatched/ambiguous error-output ownership. `ConOutDev` can still list NVIDIA as a *possible* output; do not treat that alone as a configured-console conflict. If `ErrOut` is unavailable or the aggregate active console cannot be mapped, mark the remaining evidence as unknown. A strict `TOPOLOGY_VERDICT=INCOMPLETE` caused by headless NVIDIA GOP counts is **not** resolved by this stage-3 observation.
+6. If the RTX 4090 is **still** in configured `ConOut`, classify the all-display firmware-console policy as **BLOCKED**. The already observed AMD-only cold-boot cable arrangement (`0008`) is the non-mutating workaround for this specific console-path conflict; reconnect NVIDIA displays **after stock Windows boots** if needed. Do not programmatically delete `ConOut`, disconnect GOP handles, suppress the NVIDIA conflict predicate or mark active detach safe.
+
+The diagnostic does **not** establish that AMD console output survives proprietary NVIDIA Stop, nor prove reversible driver release, 617.42 signed firmware execution, DMA/FLR cleanup or actual post-unlock recovery. **`CAN_DETACH=false CAN_UNLOCK=false CAN_FLASH=false RECOVERY_VERIFIED=false`** remain unchanged. The `ErrOut` diagnostic change is source/host/MSVC-build verified in [CI 42545089397](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42545089397); **physical `ErrOut` evidence has not been collected**.
+
 ## Optional read-only selection by PCI location
 
 After observing the actual segment:BDF on a machine, an operator may build
@@ -99,8 +120,8 @@ source/verification boundary from the previous passive diagnostic captures.
   for an NVIDIA GPU is not accepted as a complete owner observation. Logs
   `OpenProtocolInformation` BY_DRIVER counts and first agent handle token; an owner count is not proof of
   a particular NVIDIA driver's private GOP context or of a safe Stop operation.
-- Reads `ConOut` device path(s) from the UEFI global variable **without
-  writing it**; demands a non-NVIDIA GOP association and no NVIDIA ConOut
+- Reads **configured** `ConOut` paths from the UEFI global variable without
+  writing it, independently reads configured `ErrOut` paths and reports NVIDIA/independent/unknown ownership, while `ConOutDev` lists *possible* outputs. The core strict verdict still evaluates `ConOut`; an unknown or NVIDIA `ErrOut` is an additional unresolved console-survival reason, not permission to act. Demands a non-NVIDIA GOP association and no NVIDIA ConOut
   path before declaring *observed console-path separation*. That still does
   **not** prove which physical cable/monitor is lit, GOP destructor safety,
   firmware ownership teardown, or NVIDIA hardware recovery.
