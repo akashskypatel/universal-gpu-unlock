@@ -701,6 +701,91 @@ static int ReportGopOpenerAgent(EFI_BOOT_SERVICES *bs,
   return 1;
 }
 
+
+/* A GOP consumer (e.g. GraphicsConsole) may expose SimpleTextOut either on
+ * the GOP handle or on a boot-local ControllerHandle seen in a GOP open record.
+ * Inspect both separately; this is not a BY_CHILD_CONTROLLER assertion.
+ * Observational only: no DriverBinding callback and no protocol ownership
+ * changes. Never use boot-local handle addresses in an admission policy. */
+static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,size_t pci,size_t gop,
+                                    size_t source_edge,EFI_HANDLE handle,
+                                    const char *source) {
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text=NULL;
+  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
+  EFI_STATUS status,release;
+  UINTN count=0,k;
+  size_t driver_edges=0,unresolved=0;
+  if(!handle) {
+    Say("NVIDIA_TEXTOUT[%zu,%zu,%zu] SOURCE=%s HANDLE=0 STATUS=ABSENT\r\n",
+        pci,gop,source_edge,source);
+    return;
+  }
+  status=bs->HandleProtocol(handle,&TextOutGuid,(VOID **)&text);
+  Say("NVIDIA_TEXTOUT[%zu,%zu,%zu] SOURCE=%s HANDLE=%p TEXTOUT_STATUS=%#llx PRESENT=%u NOT_CHILD_EVIDENCE=1\r\n",
+      pci,gop,source_edge,source,handle,(unsigned long long)status,
+      (unsigned)(!EFI_ERROR(status)&&!!text));
+  if(EFI_ERROR(status)||!text)return;
+  if(!bs->OpenProtocolInformation||!bs->FreePool) {
+    Say("NVIDIA_TEXTOUT[%zu,%zu,%zu] OPENERS_STATUS=UNKNOWN SERVICES_UNAVAILABLE=1\r\n",
+        pci,gop,source_edge);
+    return;
+  }
+  status=bs->OpenProtocolInformation(handle,&TextOutGuid,&entries,&count);
+  if(EFI_ERROR(status)||count>256U||(count&&!entries)) {
+    Say("NVIDIA_TEXTOUT[%zu,%zu,%zu] OPENERS_STATUS=UNKNOWN_OR_OVERFLOW EFI_STATUS=%#llx COUNT=%zu\r\n",
+        pci,gop,source_edge,(unsigned long long)status,(size_t)count);
+    if(entries) {
+      release=bs->FreePool(entries);
+      Say("NVIDIA_TEXTOUT[%zu,%zu,%zu] FREE_STATUS=%#llx\r\n",
+          pci,gop,source_edge,(unsigned long long)release);
+    }
+    return;
+  }
+  Say("NVIDIA_TEXTOUT[%zu,%zu,%zu] OPENERS_STATUS=OBSERVED COUNT=%zu\r\n",
+      pci,gop,source_edge,(size_t)count);
+  for(k=0;k<count;k++) {
+    const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&entries[k];
+    EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
+    EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
+    GU_TOPO_PATH path;
+    EFI_STATUS bstat,lstat;
+    Say("NVIDIA_TEXTOUT_EDGE[%zu,%zu,%zu,%zu] ATTR=%#x COUNT=%u AGENT=%p CONTROLLER=%p BY_DRIVER=%u BY_CHILD=%u\r\n",
+        pci,gop,source_edge,(size_t)k,(unsigned)e->Attributes,
+        (unsigned)e->OpenCount,e->AgentHandle,e->ControllerHandle,
+        (unsigned)!!(e->Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER),
+        (unsigned)!!(e->Attributes&EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER));
+    if(!(e->Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER))continue;
+    driver_edges++;
+    if(!e->AgentHandle) {unresolved++;continue;}
+    bstat=bs->HandleProtocol(e->AgentHandle,&DriverBindingGuid,(VOID **)&binding);
+    if(EFI_ERROR(bstat)||!binding||!binding->ImageHandle) {
+      unresolved++;
+      Say("NVIDIA_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] BINDING_STATUS=%#llx RESOLUTION=UNKNOWN\r\n",
+          pci,gop,source_edge,(size_t)k,(unsigned long long)bstat);
+      continue;
+    }
+    lstat=bs->HandleProtocol(binding->ImageHandle,&LoadedGuid,(VOID **)&loaded);
+    Say("NVIDIA_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] BINDING_STATUS=%#llx LOADED_STATUS=%#llx IMAGE_HANDLE=%p\r\n",
+        pci,gop,source_edge,(size_t)k,(unsigned long long)bstat,
+        (unsigned long long)lstat,binding->ImageHandle);
+    if(EFI_ERROR(lstat)||!loaded) {unresolved++;continue;}
+    Say("NVIDIA_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] IMAGE_BYTES=%llu SIGNATURE_NOT_VERIFIED=1\r\n",
+        pci,gop,source_edge,(size_t)k,(unsigned long long)loaded->ImageSize);
+    if(loaded->FilePath&&PathCopy(loaded->FilePath,&path)) {
+      Say("NVIDIA_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] FILE_PATH_LEN=%zu\r\n",
+          pci,gop,source_edge,(size_t)k,path.length);
+      SayPath("TEXTOUT_OWNER_FILE",k,&path);
+    } else {
+      Say("NVIDIA_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] FILE_PATH=UNKNOWN\r\n",
+          pci,gop,source_edge,(size_t)k);
+    }
+  }
+  release=entries?bs->FreePool(entries):EFI_SUCCESS;
+  Say("NVIDIA_TEXTOUT_SUMMARY[%zu,%zu,%zu] DRIVER_EDGES=%zu UNRESOLVED=%zu FREE_STATUS=%#llx STATUS=%s NO_STOP_EVIDENCE=1\r\n",
+      pci,gop,source_edge,driver_edges,unresolved,(unsigned long long)release,
+      (!unresolved&&!EFI_ERROR(release))?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
+}
+
 /* Read the current PCI controller opener graph. A BY_CHILD_CONTROLLER
  * record points at its child handle; matching an observed GOP is evidence,
  * not proof of private driver state, Stop semantics, or detach eligibility.
@@ -800,8 +885,13 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
             if(!ReportGopOpenerAgent(bs,i,j,k,e->AgentHandle))
               unresolved_agents++;
           }
+          if(e->Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER && e->ControllerHandle)
+            ReportTextOutputOpeners(bs,i,j,k,e->ControllerHandle,"GOP_OPEN_CONTROLLER");
         }
       }
+      /* The actual GOP handle and its open-record ControllerHandle are
+       * independent candidates; neither is inferred to be a child. */
+      ReportTextOutputOpeners(bs,i,j,256U,GopHandles[j],"GOP_HANDLE");
       freed=opens?bs->FreePool(opens):EFI_SUCCESS;
       Say("NVIDIA_GOP_OPENERS_SUMMARY[%zu,%zu] BY_DRIVER=%zu UNRESOLVED_AGENT_IMAGES=%zu OPEN_STATUS=%#llx FREE_STATUS=%#llx STATUS=%s\r\n",
           i,(size_t)j,by_driver_opens,unresolved_agents,
