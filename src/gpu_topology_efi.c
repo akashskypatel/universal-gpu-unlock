@@ -649,6 +649,53 @@ static void ReportNvidiaDriverOwners(EFI_BOOT_SERVICES *bs) {
   }
 }
 
+
+/* Observe at most eight unique loaded GOP/TextOut consumer PE .text mappings.
+ * No driver callbacks, controller ownership changes, or GPU operations.
+ * A mapped code SHA is evidence, not signature/running-firmware attestation. */
+static EFI_HANDLE SharedConsoleImageSeen[8];
+static size_t SharedConsoleImageSeenCount;
+
+static void ReportSharedConsoleMappedText(EFI_HANDLE image_handle,
+                                          const EFI_LOADED_IMAGE_PROTOCOL *loaded,
+                                          const char *source) {
+  size_t i,rva=0,bytes=0,j;
+  UINT8 digest[32];
+  char hex[65];
+  static const char digits[]="0123456789abcdef";
+  if(!image_handle || !loaded) {
+    Say("SHARED_CONSOLE_TEXT SOURCE=%s STATUS=UNKNOWN MISSING_IMAGE=1 NO_STOP_EVIDENCE=1\r\n",
+        source);
+    return;
+  }
+  for(i=0;i<SharedConsoleImageSeenCount;i++)
+    if(SharedConsoleImageSeen[i]==image_handle)return;
+  if(SharedConsoleImageSeenCount>=8U) {
+    Say("SHARED_CONSOLE_TEXT SOURCE=%s STATUS=UNKNOWN IMAGE_LIMIT=8 NO_STOP_EVIDENCE=1\r\n",
+        source);
+    return;
+  }
+  i=SharedConsoleImageSeenCount++;
+  SharedConsoleImageSeen[i]=image_handle;
+  if(!loaded->ImageBase || !loaded->ImageSize ||
+     loaded->ImageSize>8U*1024U*1024U ||
+     !GuLoadedPeTextRange(loaded->ImageBase,(size_t)loaded->ImageSize,
+                          &rva,&bytes)) {
+    Say("SHARED_CONSOLE_TEXT[%zu] SOURCE=%s IMAGE_HANDLE=%p IMAGE_BYTES=%llu STATUS=UNKNOWN MAPPED_PE_TEXT_UNRESOLVED=1 NO_STOP_EVIDENCE=1\r\n",
+        i,source,image_handle,(unsigned long long)loaded->ImageSize);
+    return;
+  }
+  GuSha256((const UINT8 *)loaded->ImageBase+rva,bytes,digest);
+  for(j=0;j<32;j++) {
+    hex[2*j]=digits[digest[j]>>4];
+    hex[2*j+1]=digits[digest[j]&15U];
+  }
+  hex[64]=0;
+  Say("SHARED_CONSOLE_TEXT[%zu] SOURCE=%s IMAGE_HANDLE=%p IMAGE_BYTES=%llu TEXT_RVA=%zu TEXT_BYTES=%zu MAPPED_TEXT_SHA256=%s RELOCATIONS_NOT_CHECKED=1 SIGNATURE_NOT_VERIFIED=1 STOP_NOT_CALLED=1\r\n",
+      i,source,image_handle,(unsigned long long)loaded->ImageSize,
+      rva,bytes,hex);
+}
+
 /* Resolve the GOP protocol's BY_DRIVER agent as a separate owner.
  * It need not be the NVIDIA PCI BY_DRIVER agent; absence of a binding is
  * UNKNOWN, not proof of no consumer. No callback or disconnect is invoked. */
@@ -685,6 +732,7 @@ static int ReportGopOpenerAgent(EFI_BOOT_SERVICES *bs,
   }
   Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] IMAGE_BYTES=%llu SOURCE_DEVICE=%p SIGNATURE_NOT_VERIFIED=1\r\n",
       pci,gop,edge,(unsigned long long)loaded->ImageSize,loaded->DeviceHandle);
+  ReportSharedConsoleMappedText(binding->ImageHandle,loaded,"GOP_CONSUMER");
   if(loaded->FilePath&&PathCopy(loaded->FilePath,&path)) {
     Say("NVIDIA_GOP_AGENT[%zu,%zu,%zu] FILE_PATH_LEN=%zu\r\n",pci,gop,edge,path.length);
     SayPath("GOP_AGENT_FILE",gop,&path);
@@ -771,6 +819,7 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
     if(EFI_ERROR(lstat)||!loaded) {unresolved++;continue;}
     Say("%s_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] IMAGE_BYTES=%llu SIGNATURE_NOT_VERIFIED=1\r\n",
          scope,pci,gop,source_edge,(size_t)k,(unsigned long long)loaded->ImageSize);
+    ReportSharedConsoleMappedText(binding->ImageHandle,loaded,"TEXTOUT_CONSUMER");
     if(loaded->FilePath&&PathCopy(loaded->FilePath,&path)) {
       Say("%s_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] FILE_PATH_LEN=%zu\r\n",
          scope,pci,gop,source_edge,(size_t)k,path.length);
