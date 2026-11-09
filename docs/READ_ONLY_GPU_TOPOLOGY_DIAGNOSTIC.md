@@ -187,6 +187,14 @@ malformed nodes, invalid child image binding, rejected load and pool-free
 failures. These tests do not validate actual firmware Windows handoff,
 vendor GOP teardown or Windows 617.42 operation.
 
+### Physical B850 result from generic ordered two-target diagnostic 0007 — selection succeeds, console conflict (2026-11-08)
+
+The uploaded `GPU-TOPOLOGY-DIAGNOSTIC-0007.TXT` is **8,407 bytes, 107 physical lines**, SHA-256 `67302542890272d2b45942b885e5ef054d9e3e8515551da79a8940c4a3770787`. This is the first supplied physical boot log **of the generalized ordered BDF selection implementation**; the earlier `0006` belongs to the fixed-pair implementation. The current generic diagnostic scanned 50 EFI PCI handles, retained 19 PCI display/bridge nodes, excluded 31, and captured 3 GOP paths and 3 `ConOut` paths. Both requested targets were observed **in order**: `SELECTION_STEP[0]=PASSIVE_IDENTIFIED` for `0000:01:00.0` (`10de:2684`, subsystem `1043:88e6`, root index 0, depth 1); `SELECTION_STEP[1]=PASSIVE_IDENTIFIED` for `0000:04:00.0` (`10de:220a`, subsystem `19da:b612`, root index 2, depth 3). Both have `GOP_COUNT=1 BY_DRIVER=1 OPENERS_KNOWN=1`. The aggregate reads `SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=2 NON_SELECTED_NVIDIA_COUNT=0`.
+
+The **separate topology/console verdict** remains `STATUS=PARTIAL TOPOLOGY=2` / `TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1`: one independent AMD GOP and independent `ConOut` path exist, **but two NVIDIA `ConOut` paths remain**. `INDEPENDENT_CONSOLE_ASSOCIATION=0` follows directly from those two configured NVIDIA paths, not absent independent hardware. The console handle exposes no DevicePath, and `ConOutDev` paths remain `POSSIBLE_ONLY=1`; actual cable owner remains `PHYSICAL_DISPLAY_OWNER=UNKNOWN`. `HARDWARE_TESTED=0` means **no GPU actuation or firmware/driver release was tried**; actual passive EFI boot and PCI/GOP/console observations are established. The 0007 log does not separately attest the Secure Boot signature, backup or boot-manager handoff.
+
+Historical Windows DIAG07 already observed AMD-only output with the NVIDIA boards installed and bound under a different monitor configuration. Repeating that passive cabling arrangement with the new generic EFI would be an optional same-version confirmation, **not a substitute for proving NVIDIA GOP Stop safety** or a newly required precursor to investigating the existing driver/firmware blockers.
+
 ### Physical B850 result from diagnostic 0006 — strict graph succeeds, console conflict (2026-11-07)
 
 The uploaded `GPU-TOPOLOGY-DIAGNOSTIC-0006.TXT` (7,525 bytes, 97
@@ -215,7 +223,7 @@ NVIDIA_CONOUT_MATCH=2 GOP_UNMATCHED=0 AMD_CONSOLE_ASSOCIATION=0`.
 Both NVIDIA device paths remain configured in UEFI `ConOut` despite
 the AMD path being present. The current source logs this as
 `STATUS=PARTIAL TOPOLOGY=2`; **2 means conflict**, not incomplete
-GPU inventory. Supplementary `TOPOLOGY_VERDICT=CONFLICT` reporting is committed without changing the legacy `STATUS` field. [GitHub Actions run `42433578045`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42433578045) PASS: 58 topology host checks under GCC/Clang/UBSan and Windows EFI builds with/without handoff. The new label has not been validated by a physical USB boot yet.
+GPU inventory. Supplementary `TOPOLOGY_VERDICT=CONFLICT` reporting is committed without changing the legacy `STATUS` field. [GitHub Actions run `42433578045`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42433578045) PASS: 58 topology host checks under GCC/Clang/UBSan and Windows EFI builds with/without handoff. The label and ordered selection are now present in the physically uploaded generic diagnostic `0007`.
 
 `ConsoleOutHandle` matches `SystemTable.ConOut` SimpleTextOut but
 does not expose a DevicePath, so the active console controller may be
@@ -278,8 +286,9 @@ proof that `DisconnectController()` is safe.
 ## Current status
 
 - Generic host checks and isolated MSVC EFI builds are verified; physical
-  execution of the new generic diagnostic has **not** been tested. The
-  historical B850 `0006` output came from the earlier fixed-pair image.
+  execution of the new generic **ordered two-target passive diagnostic** is
+  now documented by B850 `0007`; the historical B850 `0006` used an earlier
+  fixed-pair image. Neither physical capture executes the active mutation path.
 - [GitHub Actions run 42422191256](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42422191256) passed the 21-path and 17-handoff negative checks under GCC/Clang (handoff also GCC UBSan); Windows MSVC compiled the opt-in handoff variant using a deliberately **synthetic, non-deployable Windows ESP GUID**, then rebuilt the console-only variant for artifact upload. No signing, USB boot or real Windows handoff was exercised.
 - No changes are made to the legacy active entrypoint's strict multi-GPU
   refusal. No dual-GPU write-enabled path is introduced.
