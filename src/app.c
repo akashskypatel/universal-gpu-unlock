@@ -82,11 +82,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     if (s == EFI_SUCCESS) {
 
-      GuLog("DXE Driver successfully installed to Driver0001 / DriverOrder\n");
+      GuLog("DXE Driver registered in an available Driver#### slot / DriverOrder\n");
 
-      GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver installed to UEFI NVRAM (Driver0001)!\r\n"
+      GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver registered in UEFI NVRAM.\r\n"
 
-                L"Driver will execute automatically during early boot on every startup.\r\n"
+                L"Driver starts on subsequent boots while this USB device stays connected.\r\n"
 
                 L"Rebooting system in 3 seconds...\r\n");
 
@@ -122,11 +122,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     s = GuRemoveDriverOption(t);
 
-    GuLog("DXE Driver removed from Driver0001 / DriverOrder (status=%#llx)\n", (unsigned long long)s);
+    GuLog("DXE Driver removal from owned Driver#### entries (status=%#llx)\n", (unsigned long long)s);
 
-    GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver removed from UEFI NVRAM.\r\n"
+    GuBootSay(s == EFI_SUCCESS ? L"\r\n\r\n[OK] Owned AdaUnlock NVRAM entry removed.\r\n" :
+              s == EFI_NOT_FOUND ? L"\r\n\r\n[INFO] No owned AdaUnlock NVRAM entry exists.\r\n" :
+              L"\r\n\r\n[ERROR] NVRAM removal failed; review USB log.\r\n");
 
-              L"Rebooting system in 3 seconds...\r\n");
+    GuBootSay(L"Rebooting system in 3 seconds...\r\n");
 
     (VOID)GuBootClose();
 
@@ -163,11 +165,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     L" UNIVERSAL GPU UNLOCK v1.7.5 - Status Monitor\r\n"
     L"=======================================================\r\n"
     L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
-    L" [2/4] Firmware and Signature Attestation .. [ OK ]\r\n"
-    L" [3/4] Multi-GOP Display Handover ......... [ OK ]\r\n"
-    L" [4/4] Hardware SEC2 and MSR Unlock ........ [ IN PROGRESS ]\r\n\r\n"
-    L" --> Unlocked while Windows was still sleeping! \r\n"
-    L" --> Full silicon potential active. 100% UNLOCKED!\r\n\r\n"
+    L" [2/4] Pinned Assets and ROM Preflight ...... [ OK ]\r\n"
+    L" [3/4] GPU Driver/Display Handover ......... [ PENDING ]\r\n"
+    L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
   );
 
   GuLog("Operator U: one physical attempt; no retries; display callbacks disabled\n");
@@ -204,15 +204,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   stage="release-exclusive-claim";s=GuMsiFinish();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
-  GuBootUnsilence();
-  GuBootSay(
-    L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n"
-    L" Handing over control to Windows Boot Manager...\r\n\r\n"
-  );
-
-  /* The final pre-Windows check runs after the log closes: this line is not proof of a Windows start. */
-
-  GuLog("TRANSACTION OK: hardware readbacks passed, DMA released; final pre-Windows check follows unlogged; benchmark still required\n");
+  /* The final pre-Windows consistency check has not completed yet. Do not announce success. */
 
   /* Probe and register S3 Boot Script for standby persistence if operator chose [P] */
 
@@ -258,6 +250,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   stage="final-Windows-verification";if(!GuMsiReadyForWindows()){s=EFI_NOT_READY;goto failed;}
 
+  GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");
+  GuBootUnsilence();
+  GuBootSay(
+    L" [3/4] GPU Driver/Display Handover ......... [ OK ]\r\n"
+    L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n"
+    L" Launching Windows Boot Manager; post-boot benchmark required.\r\n\r\n"
+  );
+
   stage="close-USB-log";s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   stage="start-Windows";s=GuBootWindows();
@@ -268,6 +268,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
 failed:
 
+  GuBootUnsilence();
   if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
 
   GuLog("STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",stage,(unsigned long long)s,GuMsiMutated(),Gu.retained,Gu.fault);

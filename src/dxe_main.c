@@ -113,12 +113,24 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
   }
 
 finish:
+  if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;
   if (s != EFI_SUCCESS) {
-    GuLog("DXE-DRIVER: STOP at stage=%s status=%#llx fault=%u\n",
-          stage, (unsigned long long)s, Gu.fault);
+    GuLog("DXE-DRIVER: STOP stage=%s status=%#llx mutated=%u retained=%u started=%u fault=%u\n",
+          stage, (unsigned long long)s, GuMsiMutated(), Gu.retained, Gu.started, Gu.fault);
     if (Gu.started || Gu.master_attributes_pending) (VOID)GuClearMaster();
+    if (GuMsiMutated() || Gu.started || Gu.retained || Gu.master_attributes_pending) {
+      /* A partially released or live-DMA GPU cannot be handed to the OS. */
+      (VOID)GuBootClose();
+      GuBootUnsilence();
+      GuBootSay(L"\r\n[ERROR] GPU state may be unsafe; powering off.\r\n"
+                L"Remove the unlock USB device before the next boot.\r\n");
+      if (t->RuntimeServices && t->RuntimeServices->ResetSystem)
+        t->RuntimeServices->ResetSystem(EfiResetShutdown, EFI_ABORTED, 0, NULL);
+      GuBootHalt();
+      return EFI_ABORTED;
+    }
   } else {
-    GuLog("DXE-DRIVER: Succeeded! Returning EFI_SUCCESS to DXE Dispatcher.\n");
+    GuLog("DXE-DRIVER: Pre-OS transaction completed; post-boot benchmark is still required.\n");
   }
   (VOID)GuBootClose();
   return s;

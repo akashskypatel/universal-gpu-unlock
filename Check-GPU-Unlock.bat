@@ -39,19 +39,20 @@ echo ====================================================================
 echo   [ERROR] Python was not found on this system.
 echo   Please install Python (https://www.python.org) and PyTorch.
 echo ====================================================================
-pause
+if not "%~1"=="--no-pause" pause
 exit /b 1
 
 :RunCheck
 "%PYTHON_EXE%" -x "%~f0"
-if %ERRORLEVEL% equ 0 (
-    color 0A
+set "BENCH_ERR=%ERRORLEVEL%"
+if "%BENCH_ERR%"=="0" (
+    color 0A >nul 2>&1
 ) else (
-    color 0C
+    color 0C >nul 2>&1
 )
 echo.
-pause
-exit /b %ERRORLEVEL%
+if not "%~1"=="--no-pause" pause
+exit /b %BENCH_ERR%
 '''
 import sys
 import time

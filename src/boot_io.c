@@ -272,6 +272,12 @@ EFI_STATUS GuBootLoadAssets(VOID) {
 
   if(!Root||Gu.started)return EFI_NOT_READY;
 
+  /* No TU102-specific pinned assets are shipped. Refuse before reading any other architecture's assets. */
+  if(Gu.is_turing) {
+    GuLog("Asset load refused: TU102 signed assets are unavailable; no GPU transaction attempted\n");
+    return EFI_UNSUPPORTED;
+  }
+
   for(UINTN i=0;i<5;i++) {
 
     VOID *p=NULL;

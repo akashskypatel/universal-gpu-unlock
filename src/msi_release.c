@@ -646,11 +646,14 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
   UINT32 c[64];
   if(Alive()!=EFI_SUCCESS||Gops(FALSE)!=EFI_SUCCESS||ReadConfig(c)!=EFI_SUCCESS||!ConfigStable(c)||
      Snapshot(&Current)!=EFI_SUCCESS||!Expected(3,FALSE))return FALSE;
-  /* Fresh status after USB Close and before StartImage; no log callbacks. */
+  /* Fresh register state before Windows StartImage; do not infer post-boot correctness. */
   UINT32 chip=GuRead32(0),cpu=GuRead32(0x110100),hi=GuRead32(0x1fa828);
   UINT32 ss0=GuRead32(0x82381c),ss1=GuRead32(0x823820),readout=GuRead32(0x823818),plm=GuRead32(0x823804);
-  BOOLEAN chip_ok = (chip!=0xffffffff && (chip&0xffff0000)!=0xbadf0000 &&
-                     ((chip>>24)==0x19 || (chip>>24)==0x18 || (chip>>24)==0x16));
+  /* Mask the upper stepping nibble but require the architecture of this bound target.
+   * All existing selector, PLM, SEC2 and quiescence assertions remain mandatory. */
+  UINT32 architecture = (chip >> 24) & 0x0fU;
+  BOOLEAN chip_ok = chip != 0xffffffff && (chip & 0xffff0000) != 0xbadf0000 &&
+    (Gu.is_turing ? architecture == 0x06U : Gu.is_ampere ? architecture == 0x07U : architecture == 0x09U);
   return !Gu.fault&&chip_ok&&(cpu&0x10)&&cpu!=0xffffffff&&
     (cpu&0xffff0000)!=0xbadf0000&&!(hi>>4)&&ss0==0x88888888&&ss1==8&&
     !(readout&0x07ffffff)&&readout!=0xffffffff&&plm==0xffffffff;
