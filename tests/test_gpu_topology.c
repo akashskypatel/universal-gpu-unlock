@@ -250,14 +250,12 @@ int main(void) {
    * Previously only the leaf GPU bus was checked, causing a false COMPLETE. */
   {
     GU_GPU_IDENTITY mid={0x12341022U,0,0,2,2,0};
-    GU_GPU_IDENTITY child;
+    GU_GPU_IDENTITY child={0x20b010deU,0x98ab10deU,0,3,0,0};
     Baseline();
     snapshot.pci_count=6;
     snapshot.pci[0].secondary=2;
     snapshot.pci[0].subordinate=3;
     Pci(5,mid,Path(1,0,2,0),0x0604,0,3,3);
-    child=snapshot.pci[1].identity;
-    child.bus=3;
     Pci(1,child,NestedPath(1,0,2,0,0,0),0x0300,0,0,0);
     snapshot.gop[0].path=snapshot.pci[1].path;
     CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
