@@ -32,9 +32,11 @@ before any future authorized operation.
   every requested GPU's PCI identity before the existing refusal; it does
   not create independent per-card mutable transaction state or a
   simultaneous hardware snapshot. Commit `da4051c4` passed host and
-  MSVC EFI CI in [run 42736793146](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42736793146).
-  Existing tests verify selected-entrypoint refusal, but new aggregate
-  failure-contract branches lack dedicated negative assertions.
+  MSVC EFI CI in [run 42739479432](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42739479432).
+  Dedicated host negatives now exercise duplicate/aliased handles, BDFs,
+  PCI protocols, failed later-target reads, zeroed partial outputs and
+  first-target BAR drift while a later target is inspected. The source
+  remains read-only, and active firmware ownership/recovery is unverified.
 - The legacy ROM validation previously accepted any 1 MiB ROM. It now
   **rejects all unpinned ROMs** pending independently authenticated exact-card
   hashes; therefore it does not qualify an active firmware transaction.
