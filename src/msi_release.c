@@ -9,6 +9,7 @@
 #include "boot_io.h"
 #include "profile.h"
 #include "sha256.h"
+#include "gpu_device_path.h"
 #include "compat/compat.h"
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/DriverBinding.h>
@@ -18,6 +19,7 @@
 #include <IndustryStandard/Acpi10.h>
 
 #define MAX_EDGES 4096
+#define MAX_SURVIVOR_GOPS 16
 typedef struct {EFI_HANDLE handle,agent,controller;EFI_GUID protocol;UINT32 attributes,count;} EDGE;
 typedef struct {UINTN count;EDGE edges[MAX_EDGES];} GRAPH;
 typedef struct {
@@ -30,7 +32,11 @@ typedef struct {
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
   UINT32 config[64];UINT64 attributes;
-  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified;
+  EFI_HANDLE survivors[MAX_SURVIVOR_GOPS];
+  EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE survivor_modes[MAX_SURVIVOR_GOPS];
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION survivor_info[MAX_SURVIVOR_GOPS];
+  UINTN survivor_count;
+  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless;
 } PLAN;
 static PLAN Plan;
 static GRAPH Original,Current;
@@ -107,10 +113,10 @@ static BOOLEAN SameEdge(const EDGE *a,const EDGE *b) {
     a->attributes==b->attributes&&a->count==b->count&&Guid(&a->protocol,&b->protocol);
 }
 static BOOLEAN Removed(const EDGE *e,UINTN stage) {
-  if(stage>=1&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.out_agent||Guid(&e->protocol,&TextGuid)))return TRUE;
-  if(stage>=2&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.gfx_agent||Guid(&e->protocol,&GopGuid)))return TRUE;
-  if(stage>=3&&(e->handle==Plan.pci||e->handle==Plan.gop||e->controller==Plan.pci||e->controller==Plan.gop)&&e->agent==Plan.nv_agent)return TRUE;
-  if(stage>=3&&e->handle==Plan.gop)return TRUE;
+  if(stage>=1&&Plan.gop&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.out_agent||Guid(&e->protocol,&TextGuid)))return TRUE;
+  if(stage>=2&&Plan.gop&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.gfx_agent||Guid(&e->protocol,&GopGuid)))return TRUE;
+  if(stage>=3&&(e->handle==Plan.pci||(Plan.gop&&e->handle==Plan.gop)||e->controller==Plan.pci||(Plan.gop&&e->controller==Plan.gop))&&e->agent==Plan.nv_agent)return TRUE;
+  if(stage>=3&&Plan.gop&&e->handle==Plan.gop)return TRUE;
   for(UINTN k=0;k<8;k++) {
     if(stage>=3&&Plan.idle[k]&&e->handle==Plan.idle[k])return TRUE;
   }
@@ -124,6 +130,8 @@ static BOOLEAN ProtectedHandle(EFI_HANDLE h) {
   if(h==Plan.pci||h==Plan.gop||h==Plan.self||
      h==Plan.console||h==Plan.input||h==Plan.error)return TRUE;
   for(UINTN k=0;k<8;k++){if(Plan.idle[k]&&h==Plan.idle[k])return TRUE;}
+  for(UINTN k=0;k<Plan.survivor_count;k++)
+    if(Plan.survivors[k]==h)return TRUE;
   return FALSE;
 }
 static BOOLEAN ProtectedEdge(const EDGE *e) {
@@ -330,23 +338,95 @@ static EFI_STATUS Alive(VOID) {
   if(s==EFI_SUCCESS)s=Interface(Plan.error,&TextGuid,&err);
   return s==EFI_SUCCESS&&(in!=Plan.keys||out!=Plan.text||err!=Plan.err)?EFI_NOT_READY:s;
 }
+/* An AMD or second NVIDIA GOP may enumerate before the target GPU's GOP.
+ * The target is identified by the PCI device-path prefix, never GOP order. */
+static EFI_STATUS GopOnTarget(EFI_HANDLE gop,BOOLEAN *target) {
+  EFI_DEVICE_PATH_PROTOCOL *gpu_path=NULL,*gop_path=NULL;
+  if(!target)return EFI_INVALID_PARAMETER;
+  *target=FALSE;
+  if(gop==Plan.pci){*target=TRUE;return EFI_SUCCESS;}
+  EFI_STATUS s=Interface(Plan.pci,&PathGuid,(VOID **)&gpu_path);
+  if(s!=EFI_SUCCESS)return s;
+  s=Interface(gop,&PathGuid,(VOID **)&gop_path);
+  if(s!=EFI_SUCCESS)return s;
+  int result=GuDevicePathHasPrefix((const unsigned char *)gpu_path,
+                                   (const unsigned char *)gop_path,4096u);
+  if(result<0)return EFI_COMPROMISED_DATA;
+  *target=result==1;
+  return EFI_SUCCESS;
+}
 static EFI_STATUS Gops(BOOLEAN first) {
-  EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_HANDLE *h=NULL;UINTN count=0,physical=0;
-  EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&h);
-  if(Plan.stage>=3&&s==EFI_NOT_FOUND)return EFI_SUCCESS;
-  if(s==EFI_SUCCESS&&count&&!h)s=EFI_UNSUPPORTED;
-  for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;s=Interface(h[i],&GopGuid,(VOID **)&g);if(s!=EFI_SUCCESS)break;
-    if(h[i]==Plan.console&&g->Mode&&!g->Mode->FrameBufferBase&&!g->Mode->FrameBufferSize)continue;
-    if(!g->Mode||!g->Mode->Info||g->Mode->SizeOfInfo<sizeof(*g->Mode->Info)||!g->Mode->FrameBufferBase||!g->Mode->FrameBufferSize)continue;
-    if(Plan.stage>=3){continue;}
-    physical++;
-    if(first&&!Plan.gop) {Plan.gop=h[i];Plan.gop_interface=g;Plan.mode=*g->Mode;Plan.info=*g->Mode->Info;}
-    else if(h[i]==Plan.gop&&(!Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||!Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))))s=EFI_NOT_READY;
+  EFI_BOOT_SERVICES *b=Plan.table->BootServices;
+  EFI_HANDLE *handles=NULL;
+  UINTN count=0,physical=0,target_count=0;
+  BOOLEAN seen[MAX_SURVIVOR_GOPS]={FALSE};
+  EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
+  if(s==EFI_NOT_FOUND && !first && Plan.stage>=3 && !Plan.survivor_count)
+    return EFI_SUCCESS;
+  if(s!=EFI_SUCCESS)return s;
+  if((count&&!handles)||count>4096u)s=EFI_BAD_BUFFER_SIZE;
+  if(first) {
+    Plan.gop=NULL;
+    Plan.survivor_count=0;
+    Plan.headless=FALSE;
   }
-  if(h&&b->FreePool(h)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
-  if(s==EFI_SUCCESS&&physical<(Plan.stage>=3?0u:1u))s=EFI_NOT_READY;
-  return s;
+  for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;
+    BOOLEAN on_target=FALSE;
+    s=Interface(handles[i],&GopGuid,(VOID **)&g);
+    if(s!=EFI_SUCCESS)break;
+    if(!g->Mode||!g->Mode->Info||
+       g->Mode->SizeOfInfo<sizeof(*g->Mode->Info)||
+       !g->Mode->FrameBufferBase||!g->Mode->FrameBufferSize)
+      continue;
+    physical++;
+    s=GopOnTarget(handles[i],&on_target);
+    if(s!=EFI_SUCCESS)break;
+    if(on_target) {
+      target_count++;
+      if(first) {
+        if(Plan.gop){s=EFI_UNSUPPORTED;break;}
+        Plan.gop=handles[i];
+        Plan.gop_interface=g;
+        Plan.mode=*g->Mode;
+        Plan.info=*g->Mode->Info;
+      } else if(Plan.stage>=3 || Plan.headless || handles[i]!=Plan.gop ||
+                !Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||
+                !Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))) {
+        s=EFI_NOT_READY;break;
+      }
+    } else if(first) {
+      if(Plan.survivor_count==MAX_SURVIVOR_GOPS){s=EFI_BAD_BUFFER_SIZE;break;}
+      UINTN k=Plan.survivor_count++;
+      Plan.survivors[k]=handles[i];
+      Plan.survivor_modes[k]=*g->Mode;
+      Plan.survivor_info[k]=*g->Mode->Info;
+    } else {
+      UINTN k=0;
+      while(k<Plan.survivor_count && Plan.survivors[k]!=handles[i])k++;
+      if(k==Plan.survivor_count||seen[k]||
+         !Equal(g->Mode,&Plan.survivor_modes[k],sizeof(*g->Mode))||
+         !Equal(g->Mode->Info,&Plan.survivor_info[k],sizeof(*g->Mode->Info))){
+        s=EFI_NOT_READY;break;
+      }
+      seen[k]=TRUE;
+    }
+  }
+  if(handles && b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  if(s!=EFI_SUCCESS)return s;
+  if(first){
+    Plan.headless=target_count==0;
+    if(Plan.headless && !Plan.survivor_count)return EFI_NOT_READY;
+    GuLog("TARGET_GOP=%zu SURVIVOR_GOPS=%zu HEADLESS=%u PHYSICAL=%zu\n",
+          (size_t)target_count,(size_t)Plan.survivor_count,
+          (unsigned)Plan.headless,(size_t)physical);
+  } else {
+    for(UINTN k=0;k<Plan.survivor_count;k++)
+      if(!seen[k])return EFI_NOT_READY;
+    if(Plan.headless && target_count)return EFI_NOT_READY;
+    if(!Plan.headless && Plan.stage<3 && target_count!=1)return EFI_NOT_READY;
+  }
+  return EFI_SUCCESS;
 }
 static EFI_STATUS ReadConfig(UINT32 c[64]) {
   EFI_PCI_IO_PROTOCOL *io=NULL;UINTN seg,bus,dev,fun;
@@ -437,6 +517,26 @@ static EFI_STATUS Consumers(VOID) {
       }
     }
   }
+  if(Plan.headless) {
+    /* Exactly one original NVIDIA driver owns this exact target PCI handle.
+     * No NVIDIA target GOP, display output, or child controller may remain.
+     * Other NVIDIA and AMD endpoints are tracked as protected survivors. */
+    if(pci!=1||!Plan.nv_agent||Plan.nv_agent==Plan.self||
+       Plan.nv_agent==Plan.console||Plan.nv_agent==Plan.error||
+       Plan.gop||child||idle||text||gfx||virtual)return EFI_ACCESS_DENIED;
+    for(UINTN i=0;i<Original.count;i++){
+      const EDGE *e=&Original.edges[i];
+      if(e->handle==Plan.pci&&
+         (e->attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER||
+          (Guid(&e->protocol,&PathGuid)&&e->attributes==8)))
+        return EFI_ACCESS_DENIED;
+    }
+    GuLog("HEADLESS_STAGE3=ELIGIBLE TARGET_DRIVER=%#llx "
+          "NON_TARGET_GOPS=%zu BEFORE_STOP=1
+",
+          (unsigned long long)(UINTN)Plan.nv_agent,(size_t)Plan.survivor_count);
+    return Driver(2);
+  }
   if(pci<1||(child<1&&idle<1)||text<1||gfx<1||!Plan.nv_agent||!Plan.out_agent||!Plan.gfx_agent||
      Plan.nv_agent==Plan.out_agent||Plan.out_agent==Plan.gfx_agent||Plan.gfx_agent==Plan.nv_agent) {
     GuLog("Consumers check: pci=%zu child=%zu idle=%zu text=%zu virtual=%zu gfx=%zu\n",
@@ -462,7 +562,7 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
      !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol)return EFI_UNSUPPORTED;
   Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
   Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
-  if(!Plan.console||Plan.console!=Plan.input||Plan.console!=Plan.error||!Plan.text||!Plan.err||!Plan.keys||
+  if(!Plan.console||!Plan.input||!Plan.error||!Plan.text||!Plan.err||!Plan.keys||
      !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)return EFI_UNSUPPORTED;
   Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;Plan.key_wait=Plan.keys->WaitForKey;
   if(!pci||!GuAd104ColdEntry())return EFI_NOT_READY;
@@ -579,7 +679,7 @@ static EFI_STATUS ClaimRestore(VOID) {
 EFI_STATUS GuMsiRelease(VOID) {
   if(!Plan.ready||Plan.mutated||Gu.started||Gu.owned)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
-  for(UINTN stage=1;stage<=3;stage++) {
+  for(UINTN stage=Plan.headless?3u:1u;stage<=3;stage++) {
     GuLog("MSI driver detach intent: stage=%zu\n",(size_t)stage);
     EFI_STATUS s=Alive();UINT32 c[64];
     if(s==EFI_SUCCESS)s=ReadConfig(c);
