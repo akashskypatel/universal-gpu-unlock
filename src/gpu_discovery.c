@@ -186,56 +186,79 @@ EFI_STATUS GuRefreshPreparedGpu(EFI_SYSTEM_TABLE *table,
   return EFI_SUCCESS;
 }
 
-/* All-or-none publication of separately revalidated read-only targets.
- * Observations are sequential; callers must revalidate before later use.
- * In particular this does NOT prove cross-GPU transaction isolation. */
+/* Publish only requested targets in order, after revalidating EVERY
+ * NVIDIA device in the prepared inventory (including every non-target).
+ * Refuse aliased records and any two-pass PCI snapshot drift. No UEFI handle
+ * re-enumeration, atomic hardware snapshot, ownership release or GPU mutation
+ * is implied by a successful observation. */
 EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
                                      const GU_GPU_PREPARED_SEQUENCE *prepared,
                                      GU_GPU_REFRESHED_SEQUENCE *refreshed) {
-  GU_GPU_REFRESHED_SEQUENCE current;
+  GU_GPU_PREPARED_SEQUENCE all;
+  GU_GPU_REFRESHED_TARGET scanned[GU_INVENTORY_MAX_NVIDIA];
+  GU_GPU_REFRESHED_SEQUENCE published;
   size_t i, j;
   EFI_STATUS status;
   if (!refreshed) return EFI_INVALID_PARAMETER;
   memset(refreshed, 0, sizeof(*refreshed));
-  if (!prepared || !prepared->selected_count ||
-      prepared->selected_count > GU_INVENTORY_MAX_NVIDIA ||
+  if (!prepared || !prepared->inventory.count ||
+      prepared->inventory.count > GU_INVENTORY_MAX_NVIDIA ||
+      !prepared->selected_count ||
       prepared->selected_count > prepared->inventory.count)
     return EFI_INVALID_PARAMETER;
-  for (i = 0; i < prepared->selected_count; ++i) {
-    const GU_GPU_RECORD *record;
-    if (prepared->selected_indices[i] >= prepared->inventory.count)
+
+  /* Validate identity independence across the FULL saved inventory,
+   * not just selected records. A stale/corrupted non-target must fail closed. */
+  for (i = 0; i < prepared->inventory.count; ++i) {
+    const GU_GPU_RECORD *record = &prepared->inventory.nvidia[i];
+    if (!record->handle || !record->pci ||
+        (record->pci_id & 0xffffU) != 0x10deU ||
+        (record->class_code & 0xff00U) != 0x0300U ||
+        record->segment > 0xffffU || record->bus > 255U ||
+        record->device > 31U || record->function > 7U)
       return EFI_INVALID_PARAMETER;
-    record = &prepared->inventory.nvidia[prepared->selected_indices[i]];
     for (j = 0; j < i; ++j) {
-      const GU_GPU_RECORD *prior =
-          &prepared->inventory.nvidia[prepared->selected_indices[j]];
-      if (prepared->selected_indices[j] == prepared->selected_indices[i] ||
-          record->handle == prior->handle || record->pci == prior->pci ||
+      const GU_GPU_RECORD *prior = &prepared->inventory.nvidia[j];
+      if (record->handle == prior->handle || record->pci == prior->pci ||
           (record->segment == prior->segment && record->bus == prior->bus &&
            record->device == prior->device &&
            record->function == prior->function))
         return EFI_INVALID_PARAMETER;
     }
   }
-  memset(&current, 0, sizeof(current));
   for (i = 0; i < prepared->selected_count; ++i) {
-    status = GuRefreshPreparedGpu(table, prepared, i,
-                                  current.targets[i].config,
-                                  &current.targets[i].pci);
+    if (prepared->selected_indices[i] >= prepared->inventory.count)
+      return EFI_INVALID_PARAMETER;
+    for (j = 0; j < i; ++j)
+      if (prepared->selected_indices[i] == prepared->selected_indices[j])
+        return EFI_INVALID_PARAMETER;
+  }
+
+  /* Reuse the source-level single-record identity and PCI read contract. */
+  all = *prepared;
+  all.selected_count = all.inventory.count;
+  for (i = 0; i < all.selected_count; ++i) all.selected_indices[i] = i;
+  memset(scanned, 0, sizeof(scanned));
+  for (i = 0; i < all.selected_count; ++i) {
+    status = GuRefreshPreparedGpu(table, &all, i, scanned[i].config,
+                                  &scanned[i].pci);
     if (status != EFI_SUCCESS) return status;
   }
-  /* A second bounded read rejects drift in a previously visited device.
-   * Neither pass can make observations atomic with respect to hardware. */
-  for (i = 0; i < prepared->selected_count; ++i) {
+  /* The second read also guards against changes to a non-target GPU after
+   * its first snapshot. These observations remain non-atomic. */
+  for (i = 0; i < all.selected_count; ++i) {
     UINT32 confirm[64];
     EFI_PCI_IO_PROTOCOL *io = NULL;
-    status = GuRefreshPreparedGpu(table, prepared, i, confirm, &io);
-    if (status != EFI_SUCCESS || io != current.targets[i].pci ||
-        memcmp(confirm, current.targets[i].config, sizeof(confirm)) != 0)
+    status = GuRefreshPreparedGpu(table, &all, i, confirm, &io);
+    if (status != EFI_SUCCESS || io != scanned[i].pci ||
+        memcmp(confirm, scanned[i].config, sizeof(confirm)) != 0)
       return EFI_UNSUPPORTED;
   }
-  current.count = prepared->selected_count;
-  *refreshed = current;
+  memset(&published, 0, sizeof(published));
+  published.count = prepared->selected_count;
+  for (i = 0; i < published.count; ++i)
+    published.targets[i] = scanned[prepared->selected_indices[i]];
+  *refreshed = published;
   return EFI_SUCCESS;
 }
 

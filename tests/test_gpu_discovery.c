@@ -16,7 +16,7 @@ typedef struct {
   UINT32 dwords[64];
   UINTN segment, bus, device, function;
   int read_fail, location_fail, mutate_at_full_read;
-  int drift_earlier_on_full_read;
+  int drift_earlier_on_full_read, drift_nonselected_on_full_read;
   unsigned full_reads;
 } MOCK_DEVICE;
 static MOCK_DEVICE gpu[4];
@@ -56,6 +56,11 @@ static EFI_STATUS Read(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN 
        * (rather than the identity refresh alone) can detect this drift. */
       gpu[1].dwords[4] ^= 0x1000U;
       m->drift_earlier_on_full_read = 0;
+    }
+    if (m->drift_nonselected_on_full_read) {
+      /* Selected GPU[1] changes non-target GPU[0] after its first read. */
+      gpu[0].dwords[4] ^= 0x1000U;
+      m->drift_nonselected_on_full_read = 0;
     }
   }
   return EFI_SUCCESS;
@@ -106,13 +111,8 @@ int main(void) {
   ResetPair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==1);
-  /* Selected targets must receive two reads; unselected ones receive none.
-   * A missing requested target must refuse before all aggregate refreshes. */
-#if GU_GPU_SELECTION_COUNT == 2
+  /* Every inventoried device must be read twice, even if unselected. */
   CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 2);
-#else
-  CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 0);
-#endif
   ResetPair(); count=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
 #if GU_GPU_SELECTION_COUNT == 2
@@ -280,6 +280,52 @@ int main(void) {
     ResetPair();gpu[1].read_fail=1;
     CHECK(GuPrepareGpuSequence(&system_table,requested,2,&plan)==EFI_UNSUPPORTED);
     CHECK(plan.inventory.count==0 && plan.selected_count==0 && !init_calls);
+  }
+  /* A one-card request MUST revalidate its unselected NVIDIA peer as well.
+   * Every refusal leaves the caller's output blank and never calls GuInit. */
+  {
+    GU_GPU_PREPARED_SEQUENCE single;
+    GU_GPU_REFRESHED_SEQUENCE refreshed;
+    const GU_GPU_LOCATION target = {1,7,4,1};
+    GU_GPU_RECORD saved;
+    ResetPair();
+    CHECK(GuPrepareGpuSequence(&system_table,&target,1,&single)==EFI_SUCCESS);
+    CHECK(single.inventory.count==2 && single.selected_count==1 &&
+          single.selected_indices[0]==1 && !init_calls);
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_SUCCESS);
+    CHECK(refreshed.count==1 && refreshed.targets[0].pci==&gpu[1].protocol &&
+          refreshed.targets[0].config[0]==Secondary.pci_id);
+    CHECK(gpu[0].full_reads==2 && gpu[1].full_reads==2);
+    gpu[0].read_fail=1; /* Unselected target is unreadable. */
+    memset(&refreshed,0xa5,sizeof(refreshed));
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_UNSUPPORTED);
+    CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL &&
+          refreshed.targets[0].config[0]==0);
+    gpu[0].read_fail=0;
+    gpu[0].bus++; /* Unselected BDF drift after preparation. */
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_UNSUPPORTED);
+    CHECK(refreshed.count==0);
+    gpu[0].bus--;
+    saved=single.inventory.nvidia[0];
+    single.inventory.nvidia[0].pci=single.inventory.nvidia[1].pci;
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_INVALID_PARAMETER);
+    CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+    single.inventory.nvidia[0]=saved;
+    single.inventory.nvidia[0].segment=single.inventory.nvidia[1].segment;
+    single.inventory.nvidia[0].bus=single.inventory.nvidia[1].bus;
+    single.inventory.nvidia[0].device=single.inventory.nvidia[1].device;
+    single.inventory.nvidia[0].function=single.inventory.nvidia[1].function;
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_INVALID_PARAMETER);
+    CHECK(refreshed.count==0);
+    single.inventory.nvidia[0]=saved;
+    /* GPU[1] changes GPU[0]'s BAR after GPU[0] was sampled. */
+    gpu[1].drift_nonselected_on_full_read=1;
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_UNSUPPORTED);
+    CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+    gpu[0].dwords[4]^=0x1000U; /* Restore non-target BAR. */
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_SUCCESS);
+    CHECK(refreshed.count==1 && refreshed.targets[0].pci==&gpu[1].protocol);
+    CHECK(!init_calls);
   }
   ResetPair();
   status = GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table);

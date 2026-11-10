@@ -31,9 +31,10 @@ EFI_STATUS GuRefreshPreparedGpu(EFI_SYSTEM_TABLE *table,
                                 size_t step, UINT32 config[64],
                                 EFI_PCI_IO_PROTOCOL **pci);
 
-/* Publish per-target refreshed PCI observations only if every selected target
- * passes current-boot revalidation. Success is NOT an atomic hardware snapshot,
- * ownership release, or permission to mutate GPUs. */
+/* Publish selected targets only after two bounded revalidations of EVERY
+ * inventoried NVIDIA device, including non-targets. Reject saved-inventory
+ * aliasing and non-target PCI drift; no handle re-enumeration or atomic
+ * snapshot is implied. This never authorizes a GPU mutation. */
 typedef struct {
   EFI_PCI_IO_PROTOCOL *pci;
   UINT32 config[64];
