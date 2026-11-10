@@ -98,6 +98,45 @@ int main(void) {
   CHECK(!GuTopoClassifierStable(cls1,cls2));
   CHECK(!GuTopoClassifierStable(NULL,cls2));
   CHECK(!GuTopoClassifierStable(cls1,NULL));
+  /* Revalidation must bind each boot-local handle to the same GOP
+   * protocol and entire path, allowing harmless enumeration reorder. */
+  {
+    GU_TOPO_GOP saved[2]={0}, current[2]={0};
+    saved[0].path=Path(1,0,0,0);
+    saved[1].path=Path(3,1,0,0);
+    saved[0].handle=(void *)(uintptr_t)0x11;
+    saved[1].handle=(void *)(uintptr_t)0x12;
+    saved[0].protocol=(void *)(uintptr_t)0x21;
+    saved[1].protocol=(void *)(uintptr_t)0x22;
+    current[0]=saved[0];current[1]=saved[1];
+    CHECK(GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[0]=saved[1];current[1]=saved[0];
+    CHECK(GuTopoGopSnapshotsEqual(saved,2,current,2));
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,1));
+    current[1].handle=current[0].handle;
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[1]=saved[0];current[1].handle=(void *)(uintptr_t)0x13;
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[1]=saved[0];current[1].protocol=(void *)(uintptr_t)0x23;
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[1]=saved[0];current[1].path=Path(-1,0,8,0);
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[1]=saved[0];current[1].path.length=0;
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[1]=saved[0];current[1].handle=NULL;
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[1]=saved[0];current[1].protocol=NULL;
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    current[1]=saved[0];saved[0].handle=saved[1].handle;
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    saved[0].handle=(void *)(uintptr_t)0x11;
+    CHECK(!GuTopoGopSnapshotsEqual(NULL,2,current,2));
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,NULL,2));
+    CHECK(!GuTopoGopSnapshotsEqual(saved,GU_TOPO_MAX_GOPS+1,
+                                   current,GU_TOPO_MAX_GOPS+1));
+    CHECK(GuTopoGopSnapshotsEqual(NULL,0,NULL,0));
+  }
+
   /* A console variable must retain the same entire ordered path set.
    * Valid path count alone cannot rule out a switched console owner. */
   {

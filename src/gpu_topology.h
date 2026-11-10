@@ -27,6 +27,9 @@ typedef struct {
 
 typedef struct {
   GU_TOPO_PATH path;
+  /* Boot-local read-only association, never a vendor Stop capability. */
+  void *handle;
+  void *protocol;
 } GU_TOPO_GOP;
 
 typedef struct {
@@ -87,6 +90,9 @@ int GuTopoPathValid(const GU_TOPO_PATH *p);
 /* Compare bounded configured-console path captures; no atomicity claim. */
 int GuTopoConsolePathsEqual(const GU_TOPO_PATH *first, size_t first_count,
                              const GU_TOPO_PATH *second, size_t second_count);
+/* Compare complete GOP census by handle/protocol/path, order independent. */
+int GuTopoGopSnapshotsEqual(const GU_TOPO_GOP *before, size_t before_count,
+                            const GU_TOPO_GOP *after, size_t after_count);
 /* Complete PCI device-path prefix only; no root-port-only ownership inference. */
 int GuTopoPathOnController(const GU_TOPO_PATH *controller,
                            const GU_TOPO_PATH *candidate);

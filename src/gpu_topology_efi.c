@@ -1045,18 +1045,55 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
 
 static int CaptureGop(EFI_BOOT_SERVICES *bs) {
   EFI_HANDLE *handles=NULL;
-  UINTN count=0,i;
+  UINTN count=0,i,j;
   EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
   int okay=1;
   if(EFI_ERROR(status)||count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
   if(okay)for(i=0;i<count;i++) {
     EFI_DEVICE_PATH_PROTOCOL *path=NULL;
-    if(EFI_ERROR(bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)) ||
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+    if(!handles[i] ||
+       EFI_ERROR(bs->HandleProtocol(handles[i],&GopGuid,(VOID **)&gop)) || !gop ||
+       EFI_ERROR(bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)) ||
        !PathCopy(path,&Snapshot.gop[i].path)){okay=0;break;}
+    Snapshot.gop[i].handle=handles[i];
+    Snapshot.gop[i].protocol=gop;
     GopHandles[Snapshot.gop_count]=handles[i];
     Snapshot.gop_count++;
   }
+  if(okay)for(i=0;i<Snapshot.gop_count;i++)
+    for(j=0;j<i;j++)
+      if(GopHandles[i]==GopHandles[j])okay=0;
   if(handles && (!bs->FreePool || EFI_ERROR(bs->FreePool(handles))))okay=0;
+  return okay;
+}
+
+/* Re-enumerate all GOP handles after the console reads. The source image
+ * remains passive; even a stable GOP set cannot establish Stop safety. */
+static int RevalidateGop(EFI_BOOT_SERVICES *bs) {
+  EFI_HANDLE *handles=NULL;
+  UINTN count=0,i;
+  EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
+  static GU_TOPO_GOP current[GU_TOPO_MAX_GOPS];
+  int okay=1;
+  if(EFI_ERROR(status) || count!=Snapshot.gop_count ||
+     count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
+  if(okay)for(i=0;i<count;i++) {
+    EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+    memset(&current[i],0,sizeof(current[i]));
+    if(!handles[i] ||
+       EFI_ERROR(bs->HandleProtocol(handles[i],&GopGuid,(VOID **)&gop)) || !gop ||
+       EFI_ERROR(bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)) ||
+       !PathCopy(path,&current[i].path)){okay=0;break;}
+    current[i].handle=handles[i];
+    current[i].protocol=gop;
+  }
+  if(okay && !GuTopoGopSnapshotsEqual(Snapshot.gop,Snapshot.gop_count,
+                                      current,(size_t)count))okay=0;
+  if(handles && (!bs->FreePool || EFI_ERROR(bs->FreePool(handles))))okay=0;
+  Say("GOP_CAPTURE_RECHECK STABLE=%u ORIGINAL=%zu CURRENT=%zu NON_ATOMIC=1 NO_STOP_EVIDENCE=1\r\n",
+      (unsigned)okay,Snapshot.gop_count,(size_t)count);
   return okay;
 }
 
@@ -1160,6 +1197,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
                               final_error,final_error_count);
   Say("CONSOLE_PATHS_RECHECK CONOUT_STABLE=%u ERROUT_STABLE=%u NON_ATOMIC=1\r\n",
       (unsigned)console_stable,(unsigned)error_stable);
+  /* A stale GOP census cannot support a final read-only COMPLETE verdict. */
+  if(gop_ok)gop_ok=RevalidateGop(bs);
+  else Say("GOP_CAPTURE_RECHECK STABLE=0 SKIPPED_INITIAL_CAPTURE_FAILED=1 NON_ATOMIC=1\r\n");
   console_ok=console_stable;
   error_ok=error_stable;
   Snapshot.console_available=(uint8_t)console_ok;

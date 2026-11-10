@@ -149,6 +149,34 @@ int GuTopoConsolePathsEqual(const GU_TOPO_PATH *first, size_t first_count,
   return 1;
 }
 
+/* GOP association is a current-boot set, not an enumeration index.
+ * Rebinding a protocol or moving a path must invalidate previous evidence. */
+int GuTopoGopSnapshotsEqual(const GU_TOPO_GOP *before, size_t before_count,
+                            const GU_TOPO_GOP *after, size_t after_count) {
+  size_t i,j;
+  if (before_count != after_count || before_count > GU_TOPO_MAX_GOPS) return 0;
+  if (!before_count) return 1;
+  if (!before || !after) return 0;
+  for (i=0; i<after_count; ++i) {
+    size_t matches=0;
+    if (!after[i].handle || !after[i].protocol ||
+        !GuTopoPathValid(&after[i].path)) return 0;
+    for (j=0; j<i; ++j)
+      if (after[j].handle == after[i].handle) return 0;
+    for (j=0; j<before_count; ++j) {
+      if (before[j].handle != after[i].handle) continue;
+      ++matches;
+      if (!before[j].protocol || before[j].protocol != after[i].protocol ||
+          !GuTopoPathValid(&before[j].path) ||
+          before[j].path.length != after[i].path.length ||
+          memcmp(before[j].path.bytes,after[i].path.bytes,after[i].path.length))
+        return 0;
+    }
+    if (matches != 1) return 0;
+  }
+  return 1;
+}
+
 /* Only a GOP on the SAME PCI display endpoint backs the console path.
  * Another independent GPU's GOP cannot establish that relationship. */
 static int HasGopForDisplay(const GU_TOPO_CAPTURE *s, int owner) {
