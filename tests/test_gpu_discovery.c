@@ -16,7 +16,7 @@ typedef struct {
   UINT32 dwords[64];
   UINTN segment, bus, device, function;
   int read_fail, location_fail, mutate_at_full_read;
-  int drift_earlier_on_full_read, drift_nonselected_on_full_read;
+  int drift_nonselected_on_full_read;
   unsigned full_reads;
 } MOCK_DEVICE;
 static MOCK_DEVICE gpu[4];
@@ -50,13 +50,6 @@ static EFI_STATUS Read(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN 
     m->full_reads++;
     if (m->mutate_at_full_read)
       ((UINT32 *)out)[0x2c / 4] ^= 1U;
-    if (m->drift_earlier_on_full_read) {
-      /* First selected target is GPU[1]; later GPU[0] alters its state. */
-      /* Change a BAR word, not identity fields: only snapshot equality
-       * (rather than the identity refresh alone) can detect this drift. */
-      gpu[1].dwords[4] ^= 0x1000U;
-      m->drift_earlier_on_full_read = 0;
-    }
     if (m->drift_nonselected_on_full_read) {
       /* Selected GPU[1] changes non-target GPU[0] after its first read. */
       gpu[0].dwords[4] ^= 0x1000U;
@@ -205,12 +198,15 @@ int main(void) {
             refreshed.targets[0].config[0]==0 && refreshed.targets[1].pci==NULL);
       gpu[0].read_fail=0;
 
-      gpu[0].drift_earlier_on_full_read=1;
+      /* GPU[1] changes already-sampled GPU[0] during the first pass.
+       * This preserves the mid-snapshot drift failure invariant after the
+       * aggregate refresh switches from selection to inventory order. */
+      gpu[1].drift_nonselected_on_full_read=1;
       memset(&refreshed,0xa5,sizeof(refreshed));
       CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_UNSUPPORTED);
       CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL &&
             refreshed.targets[1].pci==NULL && !init_calls);
-      gpu[1].dwords[4]^=0x1000U; /* Restore first target's BAR snapshot. */
+      gpu[0].dwords[4]^=0x1000U; /* Restore first-sampled BAR. */
       CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_SUCCESS);
       CHECK(refreshed.count==2 && refreshed.targets[0].pci==&gpu[1].protocol);
     }
