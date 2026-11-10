@@ -374,6 +374,7 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   node->identity.class_code=(UINT16)(cfg[2]>>16);
   node->bridge=node->identity.class_code==0x0604;
   if(node->bridge) {
+    node->primary=(UINT8)cfg[0x18/4];
     node->secondary=(UINT8)(cfg[0x18/4]>>8);
     node->subordinate=(UINT8)(cfg[0x18/4]>>16);
     node->root_port=(UINT8)PcieRootPort(cfg);
@@ -1232,13 +1233,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       Snapshot.pci_count,Snapshot.gop_count,Snapshot.console_count);
   for(i=0;i<Snapshot.pci_count;i++) {
     const GU_TOPO_PCI *p=&Snapshot.pci[i];
-    Say("PCI[%zu] %04x:%02x:%02x.%u %04x:%04x SUB=%04x:%04x CLASS=%04x ROOTPORT=%u BUSWINDOW=%02x-%02x BY_DRIVER=%u KNOWN=%u AGENT=%p PATH=%zu\r\n",
+    Say("PCI[%zu] %04x:%02x:%02x.%u %04x:%04x SUB=%04x:%04x CLASS=%04x ROOTPORT=%u PRIMARY=%02x BUSWINDOW=%02x-%02x BY_DRIVER=%u KNOWN=%u AGENT=%p PATH=%zu\r\n",
       i,(unsigned)p->identity.segment,(unsigned)p->identity.bus,
       (unsigned)p->identity.device,(unsigned)p->identity.function,
       (unsigned)(p->identity.pci_id&65535U),(unsigned)(p->identity.pci_id>>16),
       (unsigned)(p->identity.subsystem_id&65535U),(unsigned)(p->identity.subsystem_id>>16),
       (unsigned)p->identity.class_code,(unsigned)p->root_port,
-      (unsigned)p->secondary,(unsigned)p->subordinate,
+      (unsigned)p->primary,(unsigned)p->secondary,(unsigned)p->subordinate,
       p->by_driver,(unsigned)p->openers_known,p->first_owner_agent,p->path.length);
     SayPath("PCI",i,&p->path);
   }

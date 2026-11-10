@@ -101,10 +101,11 @@ static int Root(const GU_TOPO_CAPTURE *s, size_t gpu, size_t *parent,
     if (found<0) return -1;
     if (!found) break;
     if (!*depth) closest=index;
-    /* Verify each immediate PCI bridge-to-child bus edge. Testing only
-     * the leaf GPU bus would accept a bridge physically outside its parent's
-     * bus window whenever the leaf bus happened to fit both windows. */
+    /* Verify each bridge's primary bus against GetLocation and each
+     * immediate PCI bridge-to-child bus edge. A leaf-only range test can
+     * accept an incorrectly addressed intermediate bridge. */
     if (s->pci[index].identity.segment != s->pci[gpu].identity.segment ||
+        s->pci[index].primary != s->pci[index].identity.bus ||
         s->pci[index].secondary > s->pci[index].subordinate ||
         s->pci[current].identity.bus < s->pci[index].secondary ||
         s->pci[current].identity.bus > s->pci[index].subordinate ||

@@ -50,7 +50,7 @@ static void Pci(size_t i,GU_GPU_IDENTITY id,GU_TOPO_PATH path,
   p->identity.handle=(void *)(uintptr_t)(i*2+1);
   p->identity.pci=(void *)(uintptr_t)(i*2+2);
   p->path=path;p->bridge=(cls==0x0604);p->root_port=(uint8_t)root;
-  p->secondary=secondary;p->subordinate=subordinate;
+  p->primary=(uint8_t)id.bus;p->secondary=secondary;p->subordinate=subordinate;
   p->openers_known=1;p->by_driver=(cls==0x0300);
 }
 static void Baseline(void) {
@@ -274,8 +274,18 @@ int main(void) {
     CHECK(!report.ancestry_verified[0]);
     snapshot.pci[5].identity.bus=2;
     CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
+    /* An intermediate bridge can fit both bus windows while its own
+     * primary-bus register contradicts its reported PCI BDF. */
+    snapshot.pci[5].primary=3;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
+    CHECK(!report.ancestry_verified[0]);
+    snapshot.pci[5].primary=2;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
   }
 
+  Baseline();snapshot.pci[0].primary=1;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
+  CHECK(!report.ancestry_verified[0]);
   Baseline();snapshot.pci[0].root_port=0;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.pci[0].secondary=2;

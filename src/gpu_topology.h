@@ -19,7 +19,7 @@ typedef struct {
   GU_TOPO_PATH path;
   uint8_t root_port;  /* PCIe capability Port Type == 4; not inferred from name. */
   uint8_t bridge;     /* Class 06:04 */
-  uint8_t secondary, subordinate; /* PCI bridge bus-number window. */
+  uint8_t primary, secondary, subordinate; /* PCI bridge bus registers 0x18..0x1a. */
   unsigned by_driver; /* OpenProtocolInformation BY_DRIVER observers, if available. */
   void *first_owner_agent; /* Handle token only, NOT a verified driver identity. */
   uint8_t openers_known;
