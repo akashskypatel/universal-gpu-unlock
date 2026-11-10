@@ -213,6 +213,28 @@ int main(void) {
   CHECK(report.nvidia_console_count==1 && !report.independent_console_observed);
   Baseline();snapshot.console_count=0;snapshot.console_available=0;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  /* Physical passive 0018/0019 pattern: two bound NVIDIA PCI drivers,
+   * zero NVIDIA GOP paths, one independent AMD GOP and AMD-only console.
+   * Complete console isolation evidence is not complete NVIDIA teardown
+   * evidence, and cannot imply a successful DriverBinding.Stop. */
+  Baseline();
+  snapshot.gop_count=1;
+  snapshot.gop[0].path=snapshot.pci[4].path;
+  CHECK(snapshot.pci[1].by_driver==1 && snapshot.pci[3].by_driver==1);
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  CHECK(report.gpu_count==2 && report.gop_count[0]==0 && report.gop_count[1]==0);
+  CHECK(report.ancestry_verified[0] && report.ancestry_verified[1]);
+  CHECK(report.independent_gop_count==1 && report.independent_console_count==1);
+  CHECK(report.independent_console_observed && report.nvidia_console_count==0);
+  CHECK(!report.gop_relationships_observed);
+  /* Mixed-display 0017 is a different boot configuration. Configured
+   * NVIDIA output paths must still force CONFLICT. */
+  Baseline();
+  snapshot.console_count=2;
+  snapshot.console[0]=snapshot.pci[1].path;
+  snapshot.console[1]=snapshot.pci[3].path;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
+  CHECK(report.nvidia_console_count==2 && !report.independent_console_observed);
   Baseline();snapshot.gop_count=2;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.console[0]=Path(-1,0,15,0);
