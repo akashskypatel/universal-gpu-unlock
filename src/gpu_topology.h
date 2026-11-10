@@ -79,7 +79,9 @@ int GuTopoPathValid(const GU_TOPO_PATH *p);
 int GuTopoPathOnController(const GU_TOPO_PATH *controller,
                            const GU_TOPO_PATH *candidate);
 int GuTopoAssess(const GU_TOPO_CAPTURE *capture, GU_TOPO_REPORT *report);
-/* Classify ConOut/ErrOut paths independently using already-captured PCI
- * topology. Returns 0 on invalid inputs, not an actuation verdict. */
+/* Classify ConOut/ErrOut paths against a structurally valid, already
+ * captured PCI/GOP/console graph; refuse INVALID topology and clear output on
+ * every failure. INCOMPLETE/CONFLICT remain observational categories only.
+ * Returns 0 on invalid input, never an actuation verdict. */
 int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *paths,
                         size_t count, GU_TOPO_CONSOLE_OWNERS *owners);

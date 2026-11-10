@@ -206,6 +206,43 @@ int main(void) {
     CHECK(!GuTopoConsoleOwners(NULL,paths,1,&owners));
     CHECK(!GuTopoConsoleOwners(&snapshot,NULL,1,&owners));
     CHECK(!GuTopoConsoleOwners(&snapshot,paths,1,NULL));
+
+    /* A correctly formed AMD ErrOut cannot validate an invalid underlying
+     * PCI graph. Before the fix this silently produced independent=1. */
+    Baseline();paths[0]=snapshot.pci[4].path;
+    memset(&owners,0x5a,sizeof(owners));
+    snapshot.pci[3].identity.handle=snapshot.pci[1].identity.handle;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
+    CHECK(!GuTopoConsoleOwners(&snapshot,paths,1,&owners));
+    CHECK(owners.nvidia==0 && owners.independent==0 &&
+          owners.unmatched==0 && owners.ambiguous==0);
+
+    /* A BDF/path mismatch must be rejected before claiming independent. */
+    Baseline();paths[0]=snapshot.pci[4].path;
+    memset(&owners,0x5a,sizeof(owners));
+    snapshot.pci[4].path=Path(-1,0,9,0);
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
+    CHECK(!GuTopoConsoleOwners(&snapshot,paths,1,&owners));
+    CHECK(owners.nvidia==0 && owners.independent==0 &&
+          owners.unmatched==0 && owners.ambiguous==0);
+
+    /* Malformed requested path also clears a previously valid owner count. */
+    Baseline();paths[0]=snapshot.pci[4].path;
+    CHECK(GuTopoConsoleOwners(&snapshot,paths,1,&owners));
+    CHECK(owners.independent==1);
+    paths[0].length=0;
+    CHECK(!GuTopoConsoleOwners(&snapshot,paths,1,&owners));
+    CHECK(owners.nvidia==0 && owners.independent==0 &&
+          owners.unmatched==0 && owners.ambiguous==0);
+
+    /* Incomplete NVIDIA GOP (physical 0018/0019 shape) is not INVALID,
+     * and can still identify AMD-only ErrOut without inferring Stop. */
+    Baseline();paths[0]=snapshot.pci[4].path;
+    snapshot.gop_count=1; snapshot.gop[0].path=snapshot.pci[4].path;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+    CHECK(GuTopoConsoleOwners(&snapshot,paths,1,&owners));
+    CHECK(owners.independent==1 && owners.nvidia==0 &&
+          owners.unmatched==0 && owners.ambiguous==0);
   }
 
   Baseline();snapshot.console[0]=snapshot.pci[1].path;

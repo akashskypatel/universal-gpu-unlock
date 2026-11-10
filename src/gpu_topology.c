@@ -138,9 +138,17 @@ int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *path
                         size_t count, GU_TOPO_CONSOLE_OWNERS *owners) {
   size_t i;
   GU_TOPO_CONSOLE_OWNERS result = {0};
+  GU_TOPO_REPORT validated;
+  if (owners) *owners = result;
   if(!capture || !paths || !owners || !capture->pci_count ||
      capture->pci_count>GU_TOPO_MAX_PCI || count>GU_TOPO_MAX_CONSOLES)
     return 0;
+  /* A valid ErrOut path alone cannot authenticate the capture that supplies
+   * its presumed PCI owner. Reuse the same complete graph validator used by
+   * the strict topology verdict. Incomplete/CONFLICT are still observable;
+   * structurally INVALID PCI/console/GOP captures cannot claim independent
+   * ErrOut ownership. This never establishes safe GPU release. */
+  if (GuTopoAssess(capture, &validated) == GU_TOPO_INVALID) return 0;
   for(i=0;i<count;i++) {
     int owner;
     if(!GuTopoPathValid(&paths[i])) return 0;
