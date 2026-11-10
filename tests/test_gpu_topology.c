@@ -28,6 +28,18 @@ static GU_TOPO_PATH Path(int bridge_dev,int bridge_fun,int end_dev,int end_fun) 
    memcpy(p.bytes+at,end,sizeof(end));at+=sizeof(end);}
   p.length=at;return p;
 }
+/* Build a three-PCI-node path: root port -> bridge -> endpoint.
+ * This exercises intermediate bus windows, not just direct GPU ancestry. */
+static GU_TOPO_PATH NestedPath(int root_dev,int root_fun,
+                               int bridge_dev,int bridge_fun,
+                               int end_dev,int end_fun) {
+  GU_TOPO_PATH p=Path(root_dev,root_fun,bridge_dev,bridge_fun);
+  const uint8_t hop[]={1,1,6,0,(uint8_t)end_fun,(uint8_t)end_dev};
+  memmove(p.bytes+p.length-4+sizeof(hop),p.bytes+p.length-4,4);
+  memcpy(p.bytes+p.length-4,hop,sizeof(hop));
+  p.length+=sizeof(hop);
+  return p;
+}
 static void Pci(size_t i,GU_GPU_IDENTITY id,GU_TOPO_PATH path,
                 uint16_t cls,int root,uint8_t secondary,uint8_t subordinate) {
   GU_TOPO_PCI *p=&snapshot.pci[i];
@@ -232,6 +244,39 @@ int main(void) {
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
   Baseline();snapshot.pci[2].identity.pci=snapshot.pci[0].identity.pci;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INVALID);
+
+  /* The GPU must be inside *every* ancestor bridge's bus window, but
+   * so must an intermediate PCI bridge be inside its own immediate parent.
+   * Previously only the leaf GPU bus was checked, causing a false COMPLETE. */
+  {
+    GU_GPU_IDENTITY mid={0x12341022U,0,0,2,2,0};
+    GU_GPU_IDENTITY child;
+    Baseline();
+    snapshot.pci_count=6;
+    snapshot.pci[0].secondary=2;
+    snapshot.pci[0].subordinate=3;
+    Pci(5,mid,Path(1,0,2,0),0x0604,0,3,3);
+    child=snapshot.pci[1].identity;
+    child.bus=3;
+    Pci(1,child,NestedPath(1,0,2,0,0,0),0x0300,0,0,0);
+    snapshot.gop[0].path=snapshot.pci[1].path;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
+    CHECK(report.root_index[0]==0 && report.parent_index[0]==5 &&
+          report.depth[0]==2 && report.ancestry_verified[0]);
+    /* Parent window 3..3 contains the GPU bus 3 but NOT its child
+     * intermediary bridge at bus 2: this was previously COMPLETE. */
+    snapshot.pci[0].secondary=3;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
+    CHECK(!report.ancestry_verified[0]);
+    snapshot.pci[0].secondary=2;
+    /* Reassigning the nested bridge itself outside the parent window must
+     * also refuse, even if the leaf GPU still fits both bridge windows. */
+    snapshot.pci[5].identity.bus=4;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
+    CHECK(!report.ancestry_verified[0]);
+    snapshot.pci[5].identity.bus=2;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
+  }
 
   Baseline();snapshot.pci[0].root_port=0;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
