@@ -51,6 +51,7 @@ typedef struct {
   uint8_t root_port_verified[GU_INVENTORY_MAX_NVIDIA];
   unsigned nvidia_console_count;
   unsigned independent_gop_count, independent_console_count, unmatched_gops;
+  unsigned independent_console_without_gop;
   uint8_t independent_console_observed, gop_relationships_observed;
   int status;
 } GU_TOPO_REPORT;
@@ -60,11 +61,12 @@ enum { GU_TOPO_COMPLETE=0, GU_TOPO_INCOMPLETE=1, GU_TOPO_CONFLICT=2, GU_TOPO_INV
 /* Observational device-path ownership only; never qualifies vendor Stop. */
 typedef struct {
   unsigned nvidia, independent, unmatched, ambiguous;
+  unsigned independent_without_gop;
 } GU_TOPO_CONSOLE_OWNERS;
 
-/* Combine the structural graph/ConOut result with separately classified
- * ErrOut; a missing, NVIDIA-owned, ambiguous or unclassified ErrOut cannot
- * yield the final COMPLETE verdict. Still observational, not detachment. */
+/* Combine graph/ConOut with separately classified ErrOut.
+ * Unknown/NVIDIA-owned or independently owned without same-PCI GOP is never
+ * COMPLETE. This cannot prove proprietary vendor Stop or recovery. */
 int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
                                  const GU_TOPO_CONSOLE_OWNERS *errout);
 

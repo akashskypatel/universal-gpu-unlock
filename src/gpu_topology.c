@@ -132,6 +132,15 @@ static int DisplayOwner(const GU_TOPO_CAPTURE *s, const GU_TOPO_PATH *path) {
   return result;
 }
 
+/* Only a GOP on the SAME PCI display endpoint backs the console path.
+ * Another independent GPU's GOP cannot establish that relationship. */
+static int HasGopForDisplay(const GU_TOPO_CAPTURE *s, int owner) {
+  size_t i;
+  for (i=0; i<s->gop_count; ++i)
+    if (DisplayOwner(s, &s->gop[i].path) == owner) return 1;
+  return 0;
+}
+
 /* Match a separately read firmware console variable against the captured
  * display endpoints. Unknown or ambiguous ownership remains explicit. */
 int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *paths,
@@ -157,7 +166,11 @@ int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *path
     else if(owner<0) result.unmatched++;
     else if((capture->pci[owner].identity.pci_id&0xffffU)==0x10deU)
       result.nvidia++;
-    else result.independent++;
+    else {
+      result.independent++;
+      if (!HasGopForDisplay(capture, owner))
+        result.independent_without_gop++;
+    }
   }
   *owners=result;
   return 1;
@@ -176,7 +189,8 @@ int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
       (errout->nvidia || errout->ambiguous)) return GU_TOPO_CONFLICT;
   if (graph_status == GU_TOPO_CONFLICT) return GU_TOPO_CONFLICT;
   if (!errout_classified || !errout || errout->unmatched ||
-      !errout->independent) return GU_TOPO_INCOMPLETE;
+      errout->independent_without_gop || !errout->independent)
+    return GU_TOPO_INCOMPLETE;
   return graph_status;
 }
 
@@ -257,11 +271,16 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
     if(owner<0)continue;
     if((s->pci[owner].identity.pci_id&0xffffU)==0x10deU)
       r->nvidia_console_count++;
-    else r->independent_console_count++;
+    else {
+      r->independent_console_count++;
+      if (!HasGopForDisplay(s, owner))
+        r->independent_console_without_gop++;
+    }
   }
   if(r->nvidia_console_count)bad=1;
   r->independent_console_observed=(s->console_available &&
       r->independent_console_count && r->independent_gop_count &&
+      !r->independent_console_without_gop &&
       !r->nvidia_console_count);
   if(!r->independent_console_observed)incomplete=1;
   r->status=bad?GU_TOPO_CONFLICT:incomplete?GU_TOPO_INCOMPLETE:GU_TOPO_COMPLETE;

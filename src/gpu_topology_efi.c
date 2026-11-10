@@ -1144,14 +1144,16 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   ReportConsoleBinding(table);
   error_classified=pci_ok && error_ok &&
       GuTopoConsoleOwners(&Snapshot,error_paths,error_count,&error_owners);
-  Say("ERROR_CONSOLE_CAPTURE=%u CLASSIFIED=%u NVIDIA=%u INDEPENDENT=%u UNMATCHED=%u AMBIGUOUS=%u NOT_DETACH_EVIDENCE=1\r\n",
+  Say("ERROR_CONSOLE_CAPTURE=%u CLASSIFIED=%u NVIDIA=%u INDEPENDENT=%u UNMATCHED=%u AMBIGUOUS=%u INDEPENDENT_WITHOUT_GOP=%u NOT_DETACH_EVIDENCE=1\r\n",
       (unsigned)error_ok,(unsigned)error_classified,
       error_owners.nvidia,error_owners.independent,
-      error_owners.unmatched,error_owners.ambiguous);
+      error_owners.unmatched,error_owners.ambiguous,
+      error_owners.independent_without_gop);
   Say("ERROR_CONSOLE_ISOLATION=%s\r\n",
       !error_classified?"UNKNOWN":
       error_owners.nvidia || error_owners.ambiguous?"CONFLICT":
-      error_owners.unmatched || !error_owners.independent?"INCOMPLETE":"INDEPENDENT_OBSERVED");
+      error_owners.unmatched || error_owners.independent_without_gop ||
+      !error_owners.independent?"INCOMPLETE":"INDEPENDENT_OBSERVED");
   for(i=0;i<error_count;i++) {
     Say("ERROUT[%zu] PATH_LEN=%zu\r\n",i,error_paths[i].length);
     SayPath("ERROUT",i,&error_paths[i]);
@@ -1199,10 +1201,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
           Report.depth[i],(unsigned)Report.ancestry_verified[i],
           (unsigned)Report.root_port_verified[i],Report.gop_count[i]);
     }
-    Say("NVIDIA_GPU_COUNT=%zu INDEPENDENT_GOP_COUNT=%u INDEPENDENT_CONOUT_MATCH=%u NVIDIA_CONOUT_MATCH=%u GOP_UNMATCHED=%u INDEPENDENT_CONSOLE_ASSOCIATION=%u\r\n",
+    Say("NVIDIA_GPU_COUNT=%zu INDEPENDENT_GOP_COUNT=%u INDEPENDENT_CONOUT_MATCH=%u NVIDIA_CONOUT_MATCH=%u GOP_UNMATCHED=%u INDEPENDENT_CONSOLE_ASSOCIATION=%u CONOUT_WITHOUT_GOP=%u\r\n",
         Report.gpu_count,Report.independent_gop_count,
         Report.independent_console_count,Report.nvidia_console_count,
-        Report.unmatched_gops,(unsigned)Report.independent_console_observed);
+        Report.unmatched_gops,(unsigned)Report.independent_console_observed,
+        Report.independent_console_without_gop);
   }
   Say("STATUS=%s TOPOLOGY=%d DISCOVERED_NVIDIA_GPUS=%zu HARDWARE_TESTED=0 PHYSICAL_DISPLAY_OWNER=UNKNOWN\r\n",
       result==GU_TOPO_COMPLETE?"COMPLETE":result==GU_TOPO_INVALID?"ERROR":"PARTIAL",

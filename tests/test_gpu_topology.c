@@ -245,6 +245,39 @@ int main(void) {
           owners.unmatched==0 && owners.ambiguous==0);
   }
 
+  /* An independent GOP for AMD cannot back an independent Intel console.
+   * Old separate counts incorrectly permitted COMPLETE in this layout. */
+  {
+    GU_GPU_IDENTITY extra={0x9a498086U,0,0,0,9,0};
+    GU_TOPO_CONSOLE_OWNERS owners={0};
+    GU_TOPO_PATH errout;
+    int graph;
+    Baseline();
+    snapshot.pci_count=6;
+    Pci(5,extra,Path(-1,0,9,0),0x0300,0,0,0);
+    errout=snapshot.pci[5].path;
+    graph=GuTopoAssess(&snapshot,&report);
+    CHECK(graph==GU_TOPO_COMPLETE); /* The AMD ConOut has a matching GOP. */
+    CHECK(GuTopoConsoleOwners(&snapshot,&errout,1,&owners));
+    CHECK(owners.independent==1 && owners.independent_without_gop==1);
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,&owners)==GU_TOPO_INCOMPLETE);
+
+    snapshot.console[0]=snapshot.pci[5].path;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+    CHECK(report.independent_console_count==1 &&
+          report.independent_console_without_gop==1);
+    CHECK(!report.independent_console_observed);
+    /* A same-controller GOP provides the missing bounded association,
+     * still without proving that physical output survives driver Stop. */
+    snapshot.gop[3].path=snapshot.pci[5].path;
+    snapshot.gop_count=4;
+    CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
+    CHECK(report.independent_console_without_gop==0);
+    CHECK(GuTopoConsoleOwners(&snapshot,&errout,1,&owners));
+    CHECK(owners.independent==1 && owners.independent_without_gop==0);
+    CHECK(GuTopoCombinedConsoleVerdict(GU_TOPO_COMPLETE,1,&owners)==GU_TOPO_COMPLETE);
+  }
+
   /* Final passive verdict must include ErrOut, not only ConOut/GOP.
    * The previously separate ErrOut logging did not veto EFI_SUCCESS. */
   {
