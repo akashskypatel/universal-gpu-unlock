@@ -5,6 +5,7 @@
 #include "sha256.h"
 #include "compat/compat.h"
 #include "port.h"
+#include "prom_identity.h"
 
 static const struct {
   const char *name,*hash;
@@ -47,17 +48,24 @@ BOOLEAN GuAd104AssetsValid(VOID) {
   return TRUE;
 }
 BOOLEAN GuAd104PromMatches(const VOID *Data,UINTN Bytes) {
-  if(!Data || Bytes!=1048576)return FALSE;
+  /* The live NV_PROM_DATA window is 1 MiB, unlike the accepted 2 MiB
+   * archive. Compare live PCI identity and validate the PROM structure;
+   * the FWSEC descriptor and cold/PCI snapshots are checked separately.
+   * Neither structural validity nor a logged digest authenticates FWSEC. */
+  if(!GuPromImageMatchesDevice((const unsigned char *)Data,Bytes,Gu.device_id)) {
+    GuLog("PROM qualification refused: invalid ROM or mismatched live PCI device %04x\n",
+          (unsigned)Gu.device_id);
+    return FALSE;
+  }
   UINT8 hash[32];
   GuSha256(Data,Bytes,hash);
   CHAR8 s[65];
   static const char hex[]="0123456789abcdef";
   for(int i=0;i<32;i++){s[i*2]=hex[(hash[i]>>4)&0xf];s[i*2+1]=hex[hash[i]&0xf];}
   s[64]=0;
-  GuLog("PROM actual SHA256: %s\n", s);
-  /* An observed ROM digest is not an authenticated per-card allowlist. */
-  GuLog("PROM qualification refused: no authentic exact-card digest pinned for this build\n");
-  return FALSE;
+  GuLog("PROM readout SHA256: %s PCIR_device=%04x STRUCTURE_VALID=1 SIGNATURE_AUTHENTICATED=0\n",
+        s,(unsigned)Gu.device_id);
+  return TRUE;
 }
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
   if (!f) return FALSE;

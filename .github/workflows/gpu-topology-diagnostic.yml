@@ -20,6 +20,10 @@ on:
       - 'src/Build-Experimental-MSVC.ps1'
       - 'src/Build-Dxe-Driver.ps1'
       - 'src/port.h'
+      - 'src/prom_identity.h'
+      - 'tests/test_prom_identity.c'
+      - 'src/profile.c'
+      - 'src/vendor/prep_610.c'
       - 'src/msi_release.c'
       - 'src/vendor/unlock_610.c'
       - 'tests/test_falcon_halt_source.py'
@@ -95,6 +99,12 @@ jobs:
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v
             python3 -m unittest discover -s tests -p test_dxe_ready_to_boot.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_$compiler"
+              "$RUNNER_TEMP/test_prom_identity_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_ubsan"
+            "$RUNNER_TEMP/test_prom_identity_ubsan"
             python3 -m unittest discover -s tests -p test_reference_asset_integrity.py -v
             python3 tools/verify_reference_assets.py --root .
             python3 -m unittest discover -s tests -p test_firmware_evidence.py -v
