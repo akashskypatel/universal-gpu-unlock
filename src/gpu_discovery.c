@@ -186,6 +186,40 @@ EFI_STATUS GuRefreshPreparedGpu(EFI_SYSTEM_TABLE *table,
   return EFI_SUCCESS;
 }
 
+/* All-or-none publication of separately revalidated read-only targets.
+ * Observations are sequential; callers must revalidate before later use.
+ * In particular this does NOT prove cross-GPU transaction isolation. */
+EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
+                                     const GU_GPU_PREPARED_SEQUENCE *prepared,
+                                     GU_GPU_REFRESHED_SEQUENCE *refreshed) {
+  GU_GPU_REFRESHED_SEQUENCE current;
+  size_t i, j;
+  EFI_STATUS status;
+  if (!refreshed) return EFI_INVALID_PARAMETER;
+  memset(refreshed, 0, sizeof(*refreshed));
+  if (!prepared || !prepared->selected_count ||
+      prepared->selected_count > GU_INVENTORY_MAX_NVIDIA ||
+      prepared->selected_count > prepared->inventory.count)
+    return EFI_INVALID_PARAMETER;
+  for (i = 0; i < prepared->selected_count; ++i) {
+    if (prepared->selected_indices[i] >= prepared->inventory.count)
+      return EFI_INVALID_PARAMETER;
+    for (j = 0; j < i; ++j)
+      if (prepared->selected_indices[j] == prepared->selected_indices[i])
+        return EFI_INVALID_PARAMETER;
+  }
+  memset(&current, 0, sizeof(current));
+  for (i = 0; i < prepared->selected_count; ++i) {
+    status = GuRefreshPreparedGpu(table, prepared, i,
+                                  current.targets[i].config,
+                                  &current.targets[i].pci);
+    if (status != EFI_SUCCESS) return status;
+  }
+  current.count = prepared->selected_count;
+  *refreshed = current;
+  return EFI_SUCCESS;
+}
+
 EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   GU_GPU_PREPARED_SEQUENCE prepared;
   const GU_GPU_RECORD *selected;
@@ -201,6 +235,19 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   s = GuPrepareGpuSequence(table, NULL, 0, &prepared);
 #endif
   if (s != EFI_SUCCESS) return s;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  {
+    GU_GPU_REFRESHED_SEQUENCE refreshed;
+    s = GuRefreshPreparedSequence(table, &prepared, &refreshed);
+    if (s != EFI_SUCCESS) {
+      GuLog("ACTIVE_REFRESH=REFUSED STATUS=%#llx BEFORE_GU_INIT=1\n",
+            (unsigned long long)s);
+      return s;
+    }
+    GuLog("ACTIVE_REFRESH=PASSIVE_REVALIDATED TARGETS=%zu MUTATION_AUTHORIZED=0\n",
+          refreshed.count);
+  }
+#endif
   if (prepared.inventory.count > 1) {
     GuLog("ACTIVE_EXECUTION=REFUSED REASON=MULTI_NVIDIA_GLOBAL_STATE NVIDIA_COUNT=%zu SELECTED=%zu BEFORE_GU_INIT=1\n",
           prepared.inventory.count, prepared.selected_count);

@@ -31,6 +31,21 @@ EFI_STATUS GuRefreshPreparedGpu(EFI_SYSTEM_TABLE *table,
                                 size_t step, UINT32 config[64],
                                 EFI_PCI_IO_PROTOCOL **pci);
 
+/* Publish per-target refreshed PCI observations only if every selected target
+ * passes current-boot revalidation. Success is NOT an atomic hardware snapshot,
+ * ownership release, or permission to mutate GPUs. */
+typedef struct {
+  EFI_PCI_IO_PROTOCOL *pci;
+  UINT32 config[64];
+} GU_GPU_REFRESHED_TARGET;
+typedef struct {
+  size_t count;
+  GU_GPU_REFRESHED_TARGET targets[GU_INVENTORY_MAX_NVIDIA];
+} GU_GPU_REFRESHED_SEQUENCE;
+EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
+                                     const GU_GPU_PREPARED_SEQUENCE *prepared,
+                                     GU_GPU_REFRESHED_SEQUENCE *refreshed);
+
 /* Legacy active transaction supports only one NVIDIA display and never
  * treats a read-only selection as permission for multi-GPU actuation. */
 EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table);
