@@ -25,6 +25,8 @@ on:
       - 'tests/test_falcon_halt_source.py'
       - 'tests/test_release_handoff_contract.py'
       - 'tests/test_dxe_ready_to_boot.py'
+      - 'tools/quick_check.py'
+      - 'tests/test_quick_check.py'
       - 'src/app.c'
       - 'src/profile.c'
       - 'Setup-AdaUnlock.ps1'
@@ -92,6 +94,7 @@ jobs:
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v
             python3 -m unittest discover -s tests -p test_dxe_ready_to_boot.py -v
+            python3 -m unittest discover -s tests -p test_quick_check.py -v
             python3 -m unittest discover -s tests -p test_reference_asset_integrity.py -v
             python3 tools/verify_reference_assets.py --root .
             python3 -m unittest discover -s tests -p test_firmware_evidence.py -v
