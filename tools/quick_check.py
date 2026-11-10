@@ -1,107 +1,118 @@
-"""
-Universal GPU Rate-Limiter Hardware Status Checker (Ada Lovelace & Ampere)
+#!/usr/bin/env python3
+"""Read-only Tensor Core performance survey for each selected NVIDIA GPU.
+
+Reports measured throughput, not firmware acceptance or proof of an unlock.
+FP16 and BF16 use Tensor Core eligible matrix multiplies; FP32 with TF32
+disabled is a control. Results depend on clocks, workload and driver state.
 SPDX-License-Identifier: GPL-2.0-only
 """
+from __future__ import annotations
+
+import argparse
+import math
 import sys
-import time
 
-try:
-    import torch
-except ImportError:
-    print("=" * 68)
-    print("  [ERROR] PyTorch is not installed in this Python environment.")
-    print("  To run this benchmark, install PyTorch with CUDA:")
-    print("    pip install torch --index-url https://download.pytorch.org/whl/cu121")
-    print("=" * 68)
-    sys.exit(2)
 
-if not torch.cuda.is_available():
-    print("=" * 68)
-    print("  [ERROR] CUDA is not available. Please verify NVIDIA driver is installed.")
-    print("=" * 68)
-    sys.exit(2)
+def tflops(size: int, average_ms: float) -> float:
+    if size < 1 or not math.isfinite(average_ms) or average_ms <= 0:
+        raise ValueError("matrix dimension and timing must be positive")
+    return (2 * size**3) / (average_ms * 1e-3) / 1e12
 
-device = torch.device("cuda:0")
-gpu_name = torch.cuda.get_device_name(0)
-props = torch.cuda.get_device_properties(0)
-sm_count = props.multi_processor_count
-arch = f"sm_{props.major}{props.minor}"
 
-CARD_PROFILES = {
-    "4090": {"min_unlocked": 200.0, "threshold": 175.0, "stock_typical": 135.0},
-    "4080": {"min_unlocked": 115.0, "threshold": 98.0, "stock_typical": 80.0},
-    "4070 ti super": {"min_unlocked": 100.0, "threshold": 88.0, "stock_typical": 70.0},
-    "3090 ti": {"min_unlocked": 125.0, "threshold": 105.0, "stock_typical": 78.0},
-    "3090": {"min_unlocked": 115.0, "threshold": 95.0, "stock_typical": 72.0},
-    "3080 ti": {"min_unlocked": 110.0, "threshold": 92.0, "stock_typical": 70.0},
-    "3080": {"min_unlocked": 95.0, "threshold": 80.0, "stock_typical": 62.0},
-}
+def selected_devices(spec: str, count: int) -> list[int]:
+    if count < 1:
+        raise ValueError("no CUDA devices found")
+    if spec == "all":
+        return list(range(count))
+    try:
+        selected = int(spec)
+    except ValueError as exc:
+        raise ValueError("device must be a CUDA index or 'all'") from exc
+    if not 0 <= selected < count:
+        raise ValueError(f"device {selected} is outside CUDA indices 0..{count-1}")
+    return [selected]
 
-profile = None
-gpu_lower = gpu_name.lower()
-for key, prof in CARD_PROFILES.items():
-    if key in gpu_lower:
-        profile = prof
-        break
 
-if profile is None:
-    # Generic estimation based on SM architecture
-    if props.major == 8 and props.minor == 9:  # Ada Lovelace
-        threshold = sm_count * 1.35
-    elif props.major == 8 and props.minor == 6:  # Ampere
-        threshold = sm_count * 1.15
-    else:
-        threshold = sm_count * 1.0
-    profile = {"min_unlocked": threshold * 1.15, "threshold": threshold, "stock_typical": threshold * 0.75}
+def benchmark_gemm(torch, device, dtype, size: int, warmups: int, runs: int) -> tuple[float, float]:
+    a = torch.randn((size, size), device=device, dtype=dtype)
+    b = torch.randn((size, size), device=device, dtype=dtype)
+    try:
+        for _ in range(warmups):
+            c = torch.matmul(a, b)
+        torch.cuda.synchronize(device)
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        for _ in range(runs):
+            c = torch.matmul(a, b)
+        end.record()
+        torch.cuda.synchronize(device)
+        average_ms = start.elapsed_time(end) / runs
+        return average_ms, tflops(size, average_ms)
+    finally:
+        del a, b
 
-# 4096 x 4096 FP16 GEMM
-size = 4096
-flops_per_gemm = 2 * (size ** 3)
-a = torch.randn((size, size), dtype=torch.float16, device=device)
-b = torch.randn((size, size), dtype=torch.float16, device=device)
 
-# Warmup iterations
-for _ in range(15):
-    c = torch.matmul(a, b)
-torch.cuda.synchronize(device)
+def benchmark_device(torch, index: int, size: int, warmups: int, runs: int) -> None:
+    device = torch.device(f"cuda:{index}")
+    with torch.cuda.device(index):
+        name = torch.cuda.get_device_name(index)
+        props = torch.cuda.get_device_properties(index)
+        print(f"DEVICE={index} NAME={name} ARCH=sm_{props.major}{props.minor}")
+        results = []
+        previous_tf32 = torch.backends.cuda.matmul.allow_tf32
+        try:
+            # Do not alter the process-wide TF32 state beyond this device test.
+            torch.backends.cuda.matmul.allow_tf32 = False
+            results.append(("FP16", benchmark_gemm(torch, device, torch.float16, size, warmups, runs)))
+            bf16_ok = (
+                hasattr(torch.cuda, "is_bf16_supported")
+                and torch.cuda.is_bf16_supported()
+            )
+            if bf16_ok:
+                results.append(("BF16", benchmark_gemm(torch, device, torch.bfloat16, size, warmups, runs)))
+            torch.backends.cuda.matmul.allow_tf32 = True
+            results.append(("TF32_ENABLED", benchmark_gemm(torch, device, torch.float32, size, warmups, runs)))
+            torch.backends.cuda.matmul.allow_tf32 = False
+            results.append(("FP32_CONTROL", benchmark_gemm(torch, device, torch.float32, size, warmups, runs)))
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = previous_tf32
 
-# Timed runs
-runs = 30
-start_ev = torch.cuda.Event(enable_timing=True)
-end_ev = torch.cuda.Event(enable_timing=True)
+        for label, (latency_ms, throughput) in results:
+            print(f"DEVICE={index} MODE={label} LATENCY_MS={latency_ms:.5f} TFLOPS={throughput:.4f}")
+        if not bf16_ok:
+            print(f"DEVICE={index} MODE=BF16 STATUS=UNSUPPORTED")
+        print(f"DEVICE={index} STATUS=MEASURED_ONLY UNLOCK_VERIFIED=false")
 
-start_ev.record()
-for _ in range(runs):
-    c = torch.matmul(a, b)
-end_ev.record()
-torch.cuda.synchronize(device)
 
-total_ms = start_ev.elapsed_time(end_ev)
-avg_ms = total_ms / runs
-tflops = (flops_per_gemm / (avg_ms * 1e-3)) / 1e12
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--device", default="all", help="CUDA index, or 'all' (default)")
+    parser.add_argument("--size", type=int, default=4096)
+    parser.add_argument("--warmups", type=int, default=8)
+    parser.add_argument("--runs", type=int, default=25)
+    args = parser.parse_args(argv)
+    if args.size < 256 or args.size > 8192 or args.warmups < 1 or args.warmups > 100 or args.runs < 1 or args.runs > 200:
+        parser.error("require 256 <= size <= 8192, 1 <= warmups <= 100, 1 <= runs <= 200")
 
-print("=" * 68)
-print("     UNIVERSAL GPU RATE-LIMITER STATUS CHECK (ADA & AMPERE)")
-print("=" * 68)
-print(f"  GPU Hardware       : {gpu_name}")
-print(f"  Architecture       : {arch} ({sm_count} Streaming Multiprocessors)")
-print(f"  Matrix Benchmark   : {size}x{size} FP16 Tensor Cores")
-print(f"  Measured Latency   : {avg_ms:.3f} ms")
-print(f"  Compute Throughput : {tflops:.2f} TFLOPS")
-print("-" * 68)
+    try:
+        import torch
+    except ImportError:
+        print("STATUS=ERROR REASON=PyTorch_not_installed", file=sys.stderr)
+        return 2
+    if not torch.cuda.is_available():
+        print("STATUS=ERROR REASON=CUDA_not_available", file=sys.stderr)
+        return 2
+    try:
+        indices = selected_devices(args.device, torch.cuda.device_count())
+        for index in indices:
+            benchmark_device(torch, index, args.size, args.warmups, args.runs)
+    except (ValueError, RuntimeError, AssertionError) as exc:
+        print(f"STATUS=ERROR REASON={type(exc).__name__}: {exc}", file=sys.stderr)
+        return 1
+    print("STATUS=COMPLETE RESULT=MEASURED_NOT_VERIFIED")
+    return 0
 
-is_unlocked = tflops >= profile["threshold"]
 
-if is_unlocked:
-    print(f"  STATUS: [OK] FULLY UNLOCKED! ({tflops:.1f} TFLOPS)")
-    print("  Hardware rate-limiter is INACTIVE.")
-    print("  GPU is running at 100% full unrestricted tensor compute capacity.")
-    ret_code = 0
-else:
-    print(f"  STATUS: [WARNING] STOCK RATE-LIMITER ACTIVE! ({tflops:.1f} TFLOPS)")
-    print(f"  Expected unlocked performance: > {profile['threshold']:.0f} TFLOPS (typical ~{profile['min_unlocked']:.0f} TFLOPS).")
-    print("  Recommendation: Boot via USB [U]/[I] or resume from Hibernation (shutdown /h).")
-    ret_code = 1
-
-print("=" * 68)
-sys.exit(ret_code)
+if __name__ == "__main__":
+    raise SystemExit(main())
