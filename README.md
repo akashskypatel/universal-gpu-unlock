@@ -40,6 +40,24 @@ before any future authorized operation.
 - The legacy ROM validation previously accepted any 1 MiB ROM. It now
   **rejects all unpinned ROMs** pending independently authenticated exact-card
   hashes; therefore it does not qualify an active firmware transaction.
+- The original Windows-GPU-UNLOCK `internal-boot/boot/probe.c` already
+  implements `ProbeBar`/`DumpProm`: a bounded 1 MiB BAR0
+  `0x300000` read followed by `PROM.BIN` export. This is **not** a 2 MiB
+  full-card NVGI v3 ROM capture. Its reader, target-bound EFI adapter and
+  non-overwrite-intent file save have been ported to
+  `src/gpu_prom_capture*`. GCC/Clang host tests and MSVC compile-only
+  integration pass in [CI 42743917070](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42743917070).
+  **The adapter is not linked or invoked** in the passive topology EFI,
+  selected active prep app or DXE: the two-card BAR0 read semantics are not
+  independently approved. It cannot be used as proof of firmware extraction,
+  GPU mutation safety or recovery. The create-if-absent precheck is not an
+  atomic exclusive-create guarantee.
+- The owner's existing `AD102.rom` and `GA102.rom` were already examined
+  in the Windows investigation v99; the uploaded archive matches the
+  recorded SHA-256 and both 2,048,000-byte NVGI v3 structures. The owner
+  reports they were captured using Windows-GPU-UNLOCK. Their **structural**
+  PCI/IFR gate is complete; the exact capture method, manufacturer
+  authenticity and full physical SPI coverage are not independently proven.
 - Genuine Windows 617.42 signed Booter IMAGE/HEADER/SIG/PATCH origins,
   Falcon loader invocation/descriptor, per-card secure acceptance, and
   controlled recovery are unverified. Older 610.43.03 assets and Linux
