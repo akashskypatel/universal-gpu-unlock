@@ -151,6 +151,13 @@ source/verification boundary from the previous passive diagnostic captures.
   GOP associated with **that exact PCI display controller**; a GOP on
   some other AMD/Intel card cannot satisfy the association. The diagnostic
   logs `CONOUT_WITHOUT_GOP` and `INDEPENDENT_WITHOUT_GOP` for `ErrOut`.
+  **Every configured `ConOut` and every captured GOP must also resolve to
+  an actual PCI display owner**: one valid AMD path cannot mask another
+  unknown `ConOut`, nor can valid NVIDIA GOPs mask an unmatched extra GOP.
+  `CONOUT_UNMATCHED` and `CONOUT_AMBIGUOUS` expose the former, while
+  `GOP_UNMATCHED` exposes the latter. Unresolved ownership makes the strict
+  graph `INCOMPLETE` (ambiguous ownership remains `CONFLICT`), never
+  `COMPLETE`. Partial matches cannot imply full console-path separation.
   Independent `ConOut` and `ErrOut` observations, NVIDIA GOP associations
   and owner evidence remain distinct prerequisites, **never an authorization
   for vendor Stop or GPU mutation**. This does not prove the lit physical
