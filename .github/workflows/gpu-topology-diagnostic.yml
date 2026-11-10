@@ -167,7 +167,7 @@ jobs:
             # The legacy auto-installer must refuse before elevation or
             # disk/NVRAM work, even in a noninteractive invocation.
             $setupResult = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Setup-AdaUnlock.ps1 -NonInteractive
-            if($LASTEXITCODE -ne 2 -or $setupResult -notmatch 'STATUS=REFUSED') {
+            if($LASTEXITCODE -ne 2 -or ($setupResult -join ' ') -notmatch 'STATUS=REFUSED') {
               throw 'Legacy setup must refuse before any mutation'
             }
             'LEGACY_AUTO_SETUP=REFUSED DISK_ACTION=NONE NVRAM_ACTION=NONE' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
