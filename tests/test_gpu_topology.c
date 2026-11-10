@@ -347,6 +347,28 @@ int main(void) {
   CHECK(report.nvidia_console_count==2 && !report.independent_console_observed);
   Baseline();snapshot.gop_count=2;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  /* Every configured console path matters: an independently owned AMD
+   * ConOut cannot mask an additional unknown, well-formed ConOut. Before
+   * this fix the second path was skipped and the verdict was COMPLETE. */
+  Baseline();
+  snapshot.console_count=2;
+  snapshot.console[1]=Path(-1,0,15,0);
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  CHECK(report.independent_console_count==1 && report.unmatched_console_count==1);
+  CHECK(report.ambiguous_console_count==0 && !report.independent_console_observed);
+  /* Every GOP also matters: a stray GOP with no display-owner match
+   * cannot be ignored merely because both NVIDIA GOPs are present. */
+  Baseline();
+  snapshot.gop[3].path=Path(-1,0,15,0);
+  snapshot.gop_count=4;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  CHECK(report.unmatched_gops==1 && report.gop_relationships_observed);
+  CHECK(report.independent_console_count==1 && report.independent_console_observed);
+  /* A genuinely complete graph still qualifies as a read-only observation. */
+  Baseline();
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);
+  CHECK(report.unmatched_gops==0 && report.unmatched_console_count==0 &&
+        report.ambiguous_console_count==0);
   Baseline();snapshot.console[0]=Path(-1,0,15,0);
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.gop[0].path=Path(-1,0,15,0);

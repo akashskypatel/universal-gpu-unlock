@@ -52,6 +52,7 @@ typedef struct {
   unsigned nvidia_console_count;
   unsigned independent_gop_count, independent_console_count, unmatched_gops;
   unsigned independent_console_without_gop;
+  unsigned unmatched_console_count, ambiguous_console_count;
   uint8_t independent_console_observed, gop_relationships_observed;
   int status;
 } GU_TOPO_REPORT;

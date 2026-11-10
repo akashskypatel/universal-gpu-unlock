@@ -1201,11 +1201,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
           Report.depth[i],(unsigned)Report.ancestry_verified[i],
           (unsigned)Report.root_port_verified[i],Report.gop_count[i]);
     }
-    Say("NVIDIA_GPU_COUNT=%zu INDEPENDENT_GOP_COUNT=%u INDEPENDENT_CONOUT_MATCH=%u NVIDIA_CONOUT_MATCH=%u GOP_UNMATCHED=%u INDEPENDENT_CONSOLE_ASSOCIATION=%u CONOUT_WITHOUT_GOP=%u\r\n",
+    Say("NVIDIA_GPU_COUNT=%zu INDEPENDENT_GOP_COUNT=%u INDEPENDENT_CONOUT_MATCH=%u NVIDIA_CONOUT_MATCH=%u GOP_UNMATCHED=%u INDEPENDENT_CONSOLE_ASSOCIATION=%u CONOUT_WITHOUT_GOP=%u CONOUT_UNMATCHED=%u CONOUT_AMBIGUOUS=%u\r\n",
         Report.gpu_count,Report.independent_gop_count,
         Report.independent_console_count,Report.nvidia_console_count,
         Report.unmatched_gops,(unsigned)Report.independent_console_observed,
-        Report.independent_console_without_gop);
+        Report.independent_console_without_gop,Report.unmatched_console_count,
+        Report.ambiguous_console_count);
   }
   Say("STATUS=%s TOPOLOGY=%d DISCOVERED_NVIDIA_GPUS=%zu HARDWARE_TESTED=0 PHYSICAL_DISPLAY_OWNER=UNKNOWN\r\n",
       result==GU_TOPO_COMPLETE?"COMPLETE":result==GU_TOPO_INVALID?"ERROR":"PARTIAL",

@@ -249,7 +249,11 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
   for(i=0;i<s->gop_count;i++) {
     int owner=DisplayOwner(s,&s->gop[i].path);
     if(owner==-2)bad=1;
-    if(owner<0) {r->unmatched_gops++;continue;}
+    if(owner<0) {
+      r->unmatched_gops++;
+      incomplete=1; /* Unresolved GOP owner cannot qualify full topology. */
+      continue;
+    }
     if((s->pci[owner].identity.pci_id&0xffffU)==0x10deU) {
       for(j=0;j<r->gpu_count;j++)
         if((size_t)owner==r->gpu_index[j])r->gop_count[j]++;
@@ -267,8 +271,16 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
   }
   for(i=0;i<s->console_count;i++) {
     int owner=DisplayOwner(s,&s->console[i]);
-    if(owner==-2)bad=1;
-    if(owner<0)continue;
+    if(owner==-2) {
+      r->ambiguous_console_count++;
+      bad=1;
+      continue;
+    }
+    if(owner<0) {
+      r->unmatched_console_count++;
+      incomplete=1; /* One AMD console cannot excuse an unknown ConOut. */
+      continue;
+    }
     if((s->pci[owner].identity.pci_id&0xffffU)==0x10deU)
       r->nvidia_console_count++;
     else {
@@ -281,6 +293,7 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
   r->independent_console_observed=(s->console_available &&
       r->independent_console_count && r->independent_gop_count &&
       !r->independent_console_without_gop &&
+      !r->unmatched_console_count && !r->ambiguous_console_count &&
       !r->nvidia_console_count);
   if(!r->independent_console_observed)incomplete=1;
   r->status=bad?GU_TOPO_CONFLICT:incomplete?GU_TOPO_INCOMPLETE:GU_TOPO_COMPLETE;
