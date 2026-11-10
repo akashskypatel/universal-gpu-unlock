@@ -133,7 +133,16 @@ source/verification boundary from the previous passive diagnostic captures.
   capability Port Type 4. Root ports may be shared. Missing handles cannot be
   invented from PCI bus numbers.
 - Enumerates `EFI_GRAPHICS_OUTPUT_PROTOCOL` handles and associates each GOP
-  device path with its longest matching display-controller PCI path. Each discovered NVIDIA GPU's GOP association and PCI owner observations
+  device path with its longest matching display-controller PCI path. The
+  capture now records boot-local GOP handle and protocol-interface identity
+  as well as its device path. After the configured console observations, the
+  EFI application **re-enumerates every GOP** and requires the same complete
+  handle/protocol/path set, independent of ordering. A missing/added/rebound
+  handle, altered path, duplicate handle, failed protocol read or FreePool
+  refuses `COMPLETE`; `GOP_CAPTURE_RECHECK` logs this evidence.
+  This is a bounded **non-atomic** observation, not a guarantee the GOP or
+  its backing NVIDIA driver will remain stable after the check.
+  Each discovered NVIDIA GPU's GOP association and PCI owner observations
   are required for a complete topology report. A missing or multiple BY_DRIVER owner record
   for an NVIDIA GPU is not accepted as a complete owner observation. Logs
   `OpenProtocolInformation` BY_DRIVER counts and first agent handle token; an owner count is not proof of
