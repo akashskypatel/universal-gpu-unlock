@@ -366,6 +366,11 @@ static BOOLEAN ConfigStable(const UINT32 c[64]) {
     if(!drift)continue;
     BOOLEAN allowed=Gu.flrs==1&&i==0x80/4&&
       !(c[i]&~Plan.config[i])&&!(drift&~0x00090000u);
+    /* Only a transition from Bus Master enabled to disabled is expected
+     * during pre-FLR quiescence. Never allow a new DMA enable or another
+     * PCI COMMAND change under this exception. */
+    if(i==1&&Gu.flrs==0&&drift==4u&&
+       (Plan.config[i]&4u)&&!(c[i]&4u))allowed=TRUE;
     if(!allowed) {
       NOTE("PCI config drift refused: offset=%#x captured=%#x now=%#x bits=%#x flrs=%u\n",
         (unsigned)(i*4),Plan.config[i],c[i],drift,Gu.flrs);
