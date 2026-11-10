@@ -10,7 +10,20 @@
 #include "vendor/unlock_610.h"
 #include "s3_save.h"
 
-EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
+/* UEFI ReadyToBoot event group: 7ce88fb3-4bd7-4679-87a8-a8d8dee50d2b.
+ * Run when console and PCI bindings are initialized, instead of assuming
+ * that Driver#### entry loads after console ownership is stable.
+ * Event registration does not grant active GPU mutation permission. */
+static const EFI_GUID ReadyToBootGroup =
+  {0x7ce88fb3,0x4bd7,0x4679,{0x87,0xa8,0xa8,0xd8,0xde,0xe5,0x0d,0x2b}};
+static EFI_HANDLE DxeImage;
+static EFI_SYSTEM_TABLE *DxeTable;
+static EFI_EVENT DxeEvent;
+static BOOLEAN DxeExecuted;
+
+
+
+static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   if (!image || !t || !t->BootServices) return EFI_INVALID_PARAMETER;
 
   EFI_STATUS s = GuBootOpen(image, t);
@@ -134,4 +147,34 @@ finish:
   }
   (VOID)GuBootClose();
   return s;
+}
+
+/* Signal once, close the event, then execute the existing checked path. */
+static VOID EFIAPI GuDxeOnReadyToBoot(EFI_EVENT event, VOID *context) {
+  (VOID)context;
+  if(DxeExecuted || !DxeImage || !DxeTable)return;
+  DxeExecuted=TRUE;
+  if(DxeEvent && DxeTable->BootServices && DxeTable->BootServices->CloseEvent) {
+    (VOID)DxeTable->BootServices->CloseEvent(DxeEvent);
+    DxeEvent=NULL;
+  }
+  (VOID)event;
+  (VOID)GuDxeRun(DxeImage,DxeTable);
+}
+
+EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
+  if(!image||!t||!t->BootServices||!t->RuntimeServices||
+     !t->BootServices->CreateEventEx||!t->BootServices->CloseEvent)
+    return EFI_UNSUPPORTED;
+  if(DxeEvent||DxeExecuted)return EFI_ALREADY_STARTED;
+  DxeImage=image;
+  DxeTable=t;
+  EFI_STATUS s=t->BootServices->CreateEventEx(
+    EVT_NOTIFY_SIGNAL,TPL_CALLBACK,GuDxeOnReadyToBoot,
+    NULL,&ReadyToBootGroup,&DxeEvent);
+  if(s!=EFI_SUCCESS||!DxeEvent) {
+    DxeImage=NULL;DxeTable=NULL;DxeEvent=NULL;
+    return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+  }
+  return EFI_SUCCESS;
 }
