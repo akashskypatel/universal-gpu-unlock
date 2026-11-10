@@ -16,6 +16,8 @@ typedef struct {
   UINT32 dwords[64];
   UINTN segment, bus, device, function;
   int read_fail, location_fail, mutate_at_full_read;
+  int drift_earlier_on_full_read;
+  unsigned full_reads;
 } MOCK_DEVICE;
 static MOCK_DEVICE gpu[4];
 static EFI_HANDLE handles[4];
@@ -44,8 +46,16 @@ static EFI_STATUS Read(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN 
   if (m->read_fail || width != EfiPciIoWidthUint32 || !out ||
       (offset & 3) || offset / 4 + n > 64) return 3;
   memcpy(out, m->dwords + offset / 4, n * sizeof(UINT32));
-  if (m->mutate_at_full_read && n == 64)
-    ((UINT32 *)out)[0x2c / 4] ^= 1U;
+  if (n == 64) {
+    m->full_reads++;
+    if (m->mutate_at_full_read)
+      ((UINT32 *)out)[0x2c / 4] ^= 1U;
+    if (m->drift_earlier_on_full_read) {
+      /* First selected target is GPU[1]; later GPU[0] alters its state. */
+      gpu[1].dwords[0x2c / 4] ^= 1U;
+      m->drift_earlier_on_full_read = 0;
+    }
+  }
   return EFI_SUCCESS;
 }
 static EFI_STATUS GetLocation(EFI_PCI_IO_PROTOCOL *io, UINTN *seg, UINTN *bus, UINTN *dev, UINTN *fun) {
@@ -94,8 +104,11 @@ int main(void) {
   ResetPair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==1);
+  /* A successful read-only multi-target revalidation must still refuse. */
+  CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 2);
   ResetPair(); count=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+  CHECK(gpu[0].full_reads == 2);
   ResetPair(); count=3;
   Populate(2,Primary);gpu[2].bus=6;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
@@ -119,6 +132,58 @@ int main(void) {
     CHECK(init_calls==0 && plan.inventory.count==2 && plan.selected_count==2);
     CHECK(plan.selected_indices[0]==1 && plan.selected_indices[1]==0);
     CHECK(plan.inventory.nvidia[plan.selected_indices[0]].pci_id==Secondary.pci_id);
+    /* Aggregate observations must never publish partial outputs or accept
+     * aliased device contexts; second-pass checks catch cross-target drift. */
+    {
+      GU_GPU_REFRESHED_SEQUENCE refreshed;
+      size_t saved_index;
+      EFI_HANDLE saved_handle;
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_SUCCESS);
+      CHECK(refreshed.count==2 &&
+            refreshed.targets[0].pci==&gpu[1].protocol &&
+            refreshed.targets[1].pci==&gpu[0].protocol);
+      CHECK(refreshed.targets[0].config[0]==Secondary.pci_id &&
+            refreshed.targets[1].config[0]==Primary.pci_id);
+      CHECK(gpu[0].full_reads==2 && gpu[1].full_reads==2 && !init_calls);
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,NULL)==EFI_INVALID_PARAMETER);
+
+      memset(&refreshed,0xa5,sizeof(refreshed));
+      CHECK(GuRefreshPreparedSequence(NULL,&plan,&refreshed)==EFI_INVALID_PARAMETER);
+      CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+      saved_index=plan.selected_indices[1];
+      plan.selected_indices[1]=plan.selected_indices[0];
+      memset(&refreshed,0xa5,sizeof(refreshed));
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
+      CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+      plan.selected_indices[1]=saved_index;
+
+      saved_handle=(EFI_HANDLE)plan.inventory.nvidia[0].handle;
+      plan.inventory.nvidia[0].handle=plan.inventory.nvidia[1].handle;
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
+      CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+      plan.inventory.nvidia[0].handle=saved_handle;
+
+      plan.selected_count=0;
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
+      CHECK(refreshed.count==0);
+      plan.selected_count=2;
+
+      gpu[0].read_fail=1; /* Second selected target fails after first succeeded. */
+      memset(&refreshed,0xa5,sizeof(refreshed));
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_UNSUPPORTED);
+      CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL &&
+            refreshed.targets[0].config[0]==0 && refreshed.targets[1].pci==NULL);
+      gpu[0].read_fail=0;
+
+      gpu[0].drift_earlier_on_full_read=1;
+      memset(&refreshed,0xa5,sizeof(refreshed));
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_UNSUPPORTED);
+      CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL &&
+            refreshed.targets[1].pci==NULL && !init_calls);
+      gpu[1].dwords[0x2c/4]^=1U; /* Restore first selected GPU identity. */
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_SUCCESS);
+      CHECK(refreshed.count==2 && refreshed.targets[0].pci==&gpu[1].protocol);
+    }
     /* A saved target must still be the exact same boot-local PCI_IO owner,
      * with unchanged BDF, subsystem, class and device ID. No GuInit occurs. */
     {

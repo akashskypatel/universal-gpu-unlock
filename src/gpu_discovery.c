@@ -202,11 +202,20 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
       prepared->selected_count > prepared->inventory.count)
     return EFI_INVALID_PARAMETER;
   for (i = 0; i < prepared->selected_count; ++i) {
+    const GU_GPU_RECORD *record;
     if (prepared->selected_indices[i] >= prepared->inventory.count)
       return EFI_INVALID_PARAMETER;
-    for (j = 0; j < i; ++j)
-      if (prepared->selected_indices[j] == prepared->selected_indices[i])
+    record = &prepared->inventory.nvidia[prepared->selected_indices[i]];
+    for (j = 0; j < i; ++j) {
+      const GU_GPU_RECORD *prior =
+          &prepared->inventory.nvidia[prepared->selected_indices[j]];
+      if (prepared->selected_indices[j] == prepared->selected_indices[i] ||
+          record->handle == prior->handle || record->pci == prior->pci ||
+          (record->segment == prior->segment && record->bus == prior->bus &&
+           record->device == prior->device &&
+           record->function == prior->function))
         return EFI_INVALID_PARAMETER;
+    }
   }
   memset(&current, 0, sizeof(current));
   for (i = 0; i < prepared->selected_count; ++i) {
@@ -214,6 +223,16 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
                                   current.targets[i].config,
                                   &current.targets[i].pci);
     if (status != EFI_SUCCESS) return status;
+  }
+  /* A second bounded read rejects drift in a previously visited device.
+   * Neither pass can make observations atomic with respect to hardware. */
+  for (i = 0; i < prepared->selected_count; ++i) {
+    UINT32 confirm[64];
+    EFI_PCI_IO_PROTOCOL *io = NULL;
+    status = GuRefreshPreparedGpu(table, prepared, i, confirm, &io);
+    if (status != EFI_SUCCESS || io != current.targets[i].pci ||
+        memcmp(confirm, current.targets[i].config, sizeof(confirm)) != 0)
+      return EFI_UNSUPPORTED;
   }
   current.count = prepared->selected_count;
   *refreshed = current;
