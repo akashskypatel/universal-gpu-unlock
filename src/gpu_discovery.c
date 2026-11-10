@@ -201,7 +201,11 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
   EFI_STATUS status;
   if (!refreshed) return EFI_INVALID_PARAMETER;
   memset(refreshed, 0, sizeof(*refreshed));
-  if (!prepared || !prepared->inventory.count ||
+  if (!table || !table->BootServices ||
+      !table->BootServices->LocateHandleBuffer ||
+      !table->BootServices->HandleProtocol ||
+      !table->BootServices->FreePool ||
+      !prepared || !prepared->inventory.count ||
       prepared->inventory.count > GU_INVENTORY_MAX_NVIDIA ||
       !prepared->selected_count ||
       prepared->selected_count > prepared->inventory.count)
