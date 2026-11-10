@@ -138,11 +138,19 @@ source/verification boundary from the previous passive diagnostic captures.
   for an NVIDIA GPU is not accepted as a complete owner observation. Logs
   `OpenProtocolInformation` BY_DRIVER counts and first agent handle token; an owner count is not proof of
   a particular NVIDIA driver's private GOP context or of a safe Stop operation.
-- Reads **configured** `ConOut` paths from the UEFI global variable without
-  writing it, independently reads configured `ErrOut` paths and reports NVIDIA/independent/unknown ownership, while `ConOutDev` lists *possible* outputs. The core strict verdict still evaluates `ConOut`; an unknown or NVIDIA `ErrOut` is an additional unresolved console-survival reason, not permission to act. Demands a non-NVIDIA GOP association and no NVIDIA ConOut
-  path before declaring *observed console-path separation*. That still does
-  **not** prove which physical cable/monitor is lit, GOP destructor safety,
-  firmware ownership teardown, or NVIDIA hardware recovery.
+- Reads **configured** `ConOut` and `ErrOut` paths independently from the
+  UEFI global variables without writing them; `ConOutDev` lists *possible*
+  output paths, not installed console ownership. `GuTopoAssess` still
+  evaluates the structurally validated PCI/GOP/`ConOut` graph, and the EFI
+  logs its result as `GRAPH_ONLY_TOPOLOGY_VERDICT`. The final
+  `TOPOLOGY_VERDICT` (and return status) now also applies
+  `GuTopoCombinedConsoleVerdict`: a NVIDIA-owned or ambiguous `ErrOut`
+  forces `CONFLICT`, while an unavailable/unclassified, unmatched, or
+  independent-GOP-unproven `ErrOut` prevents `COMPLETE`.
+  Independent `ConOut` and `ErrOut` observations, NVIDIA GOP associations
+  and owner evidence remain distinct prerequisites, **never an authorization
+  for vendor Stop or GPU mutation**. This does not prove the lit physical
+  monitor/cable, destructor safety, firmware ownership teardown, or recovery.
 - `TOPOLOGY=0` / `STATUS=COMPLETE` means only the limited **read-only
   observations** were consistent. It is **never actuation eligibility**.
   The EFI output always says `CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0`.
