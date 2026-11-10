@@ -30,7 +30,7 @@ typedef struct {
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
   UINT32 config[64];UINT64 attributes;
-  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed;
+  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified;
 } PLAN;
 static PLAN Plan;
 static GRAPH Original,Current;
@@ -631,30 +631,54 @@ BOOLEAN GuMsiReleased(VOID) {
   if(!failed)ReportAdditions();
   return !failed;
 }
+/* Keep the original architecture, SEC2, selector, PLM and chip readbacks.
+ * Only perform MMIO while this image owns the PCI protocol. */
+static BOOLEAN GuMsiHardwareVerifiedBeforeClose(VOID) {
+  if(!Plan.ready||!Plan.claimed||!Gu.owned||Gu.fault)return FALSE;
+  UINT32 chip=GuRead32(0),cpu=GuRead32(0x110100),hi=GuRead32(0x1fa828);
+  UINT32 ss0=GuRead32(0x82381c),ss1=GuRead32(0x823820),readout=GuRead32(0x823818),plm=GuRead32(0x823804);
+  UINT32 architecture=(chip>>24)&0x0fU;
+  BOOLEAN chip_ok=chip!=0xffffffff&&(chip&0xffff0000)!=0xbadf0000&&
+    (Gu.is_turing?architecture==0x06U:Gu.is_ampere?architecture==0x07U:architecture==0x09U);
+  BOOLEAN valid=!Gu.fault&&chip_ok&&(cpu&0x10)&&cpu!=0xffffffff&&
+    (cpu&0xffff0000)!=0xbadf0000&&!(hi>>4)&&ss0==0x88888888&&ss1==8&&
+    !(readout&0x07ffffff)&&readout!=0xffffffff&&plm==0xffffffff;
+  NOTE("MSI pre-close silicon verification: valid=%u chip=%#x cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
+       valid,chip,cpu,hi,ss0,ss1,readout,plm);
+  return valid;
+}
 EFI_STATUS GuMsiFinish(VOID) {
-  if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||!GuMsiReleased()){NOTE("MSI finish refused before close\n");return EFI_NOT_READY;}
+  Plan.hardware_verified=FALSE;
+  if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||!GuMsiReleased()){
+    NOTE("MSI finish refused before close\n");return EFI_NOT_READY;
+  }
+  if(!GuMsiHardwareVerifiedBeforeClose()){
+    NOTE("MSI finish refused: pre-close silicon check failed\n");return EFI_DEVICE_ERROR;
+  }
+  /* A failed CloseProtocol or post-close graph check invalidates the latch. */
+  Plan.hardware_verified=TRUE;
   EFI_STATUS s=Plan.table->BootServices->CloseProtocol(Plan.pci,&PciGuid,Plan.self,NULL);
-  if(s!=EFI_SUCCESS){NOTE("MSI finish close status=%#llx\n",(unsigned long long)s);return s;}
+  if(s!=EFI_SUCCESS){
+    Plan.hardware_verified=FALSE;
+    NOTE("MSI finish close status=%#llx\n",(unsigned long long)s);
+    return s;
+  }
   Plan.claimed=FALSE;Gu.owned=FALSE;
-  s=Snapshot(&Current);if(s==EFI_SUCCESS&&!Expected(3,FALSE)){s=EFI_NOT_READY;GraphDiff(3, FALSE);}
-  if(s!=EFI_SUCCESS)NOTE("MSI finish after close status=%#llx graph=%zu\n",(unsigned long long)s,(size_t)Current.count);
+  s=Snapshot(&Current);
+  if(s==EFI_SUCCESS&&!Expected(3,FALSE)){s=EFI_NOT_READY;GraphDiff(3,FALSE);}
+  if(s!=EFI_SUCCESS){
+    Plan.hardware_verified=FALSE;
+    NOTE("MSI finish after close status=%#llx graph=%zu\n",(unsigned long long)s,(size_t)Current.count);
+  }
   return s;
 }
 BOOLEAN GuMsiMutated(VOID){return Plan.mutated;}
 BOOLEAN GuMsiReadyForWindows(VOID) {
-  if(!Plan.ready||Plan.stage!=3||Plan.claimed||Gu.owned||Gu.fault||!Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn())return FALSE;
+  if(!Plan.ready||Plan.stage!=3||Plan.claimed||Gu.owned||Gu.fault||
+     !Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn()||!Plan.hardware_verified)return FALSE;
   UINT32 c[64];
-  if(Alive()!=EFI_SUCCESS||Gops(FALSE)!=EFI_SUCCESS||ReadConfig(c)!=EFI_SUCCESS||!ConfigStable(c)||
-     Snapshot(&Current)!=EFI_SUCCESS||!Expected(3,FALSE))return FALSE;
-  /* Fresh register state before Windows StartImage; do not infer post-boot correctness. */
-  UINT32 chip=GuRead32(0),cpu=GuRead32(0x110100),hi=GuRead32(0x1fa828);
-  UINT32 ss0=GuRead32(0x82381c),ss1=GuRead32(0x823820),readout=GuRead32(0x823818),plm=GuRead32(0x823804);
-  /* Mask the upper stepping nibble but require the architecture of this bound target.
-   * All existing selector, PLM, SEC2 and quiescence assertions remain mandatory. */
-  UINT32 architecture = (chip >> 24) & 0x0fU;
-  BOOLEAN chip_ok = chip != 0xffffffff && (chip & 0xffff0000) != 0xbadf0000 &&
-    (Gu.is_turing ? architecture == 0x06U : Gu.is_ampere ? architecture == 0x07U : architecture == 0x09U);
-  return !Gu.fault&&chip_ok&&(cpu&0x10)&&cpu!=0xffffffff&&
-    (cpu&0xffff0000)!=0xbadf0000&&!(hi>>4)&&ss0==0x88888888&&ss1==8&&
-    !(readout&0x07ffffff)&&readout!=0xffffffff&&plm==0xffffffff;
+  /* GuMsiFinish already verified the entire post-close protocol graph.
+   * Do not scan it a second time or read BAR0 after CloseProtocol. */
+  return Alive()==EFI_SUCCESS&&Gops(FALSE)==EFI_SUCCESS&&
+         ReadConfig(c)==EFI_SUCCESS&&ConfigStable(c);
 }
