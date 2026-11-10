@@ -128,10 +128,17 @@ source/verification boundary from the previous passive diagnostic captures.
 - Identifies exact GPUs through **the same** `GuCollectGpuInventory` and
   `GuFindGpuAtLocation` (on optional selection); GPU models and arbitrary
   array positions are not used as discovery criteria.
-- Validates nearest PCI bridge parents using complete path-prefix ancestry;
-  bridge bus windows must contain the GPU bus. Each terminal PCI path node must agree with its BDF device/function. A PCIe Root Port requires PCIe
-  capability Port Type 4. Root ports may be shared. Missing handles cannot be
-  invented from PCI bus numbers.
+- Validates nearest PCI bridge parents using complete path-prefix ancestry.
+  **Every immediate bridge-to-child bus edge**, including an intermediate
+  bridge's own BDF bus inside its parent window, must be valid. The leaf GPU's
+  bus must also fit all ancestor bridge windows; checking only that leaf bus
+  previously permitted a false COMPLETE for a malformed nested chain.
+  Every terminal PCI path node must agree with its BDF device/function.
+  A PCIe Root Port requires PCIe capability Port Type 4; root ports may
+  be shared. Missing handles cannot be invented from PCI bus numbers.
+  [Host + Windows EFI CI `42875828284`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42875828284)
+  verified the valid two-bridge chain and two invalid parent-bus cases.
+  This is passive PCI topology evidence, not verified GPU detachment.
 - Enumerates `EFI_GRAPHICS_OUTPUT_PROTOCOL` handles and associates each GOP
   device path with its longest matching display-controller PCI path. The
   capture now records boot-local GOP handle and protocol-interface identity
