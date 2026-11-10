@@ -6,6 +6,10 @@ on:
       - 'src/gpu_topology*'
       - 'src/gpu_prom_capture*'
       - 'tests/test_gpu_prom_capture.c'
+      - 'tools/verify_reference_assets.py'
+      - 'tests/test_reference_asset_integrity.py'
+      - 'AD102-ASSETS/**'
+      - 'GA102-ASSETS/**'
       - 'src/gpu_loaded_pe_text*'
       - 'tests/test_gpu_loaded_pe_text.c'
       - 'src/gpu_inventory*'
@@ -77,6 +81,8 @@ jobs:
             "$RUNNER_TEMP/test_gpu_topology_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_inventory.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_inventory_ubsan"
             "$RUNNER_TEMP/test_gpu_inventory_ubsan"
+            python3 -m unittest discover -s tests -p test_reference_asset_integrity.py -v
+            python3 tools/verify_reference_assets.py --root .
             # Parse the Python half of the hybrid batch script without CUDA.
             python3 -c 'from pathlib import Path; s=Path("Check-GPU-Unlock.bat").read_text(encoding="utf-8"); parts=s.split(chr(39)*3,2); assert len(parts)==3; compile(parts[2], "Check-GPU-Unlock.bat", "exec"); print("PASS benchmark Python syntax (no CUDA execution)")'
             # The real discovery entrypoint must reject selected active EFI
