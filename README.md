@@ -58,6 +58,30 @@ before any future authorized operation.
   reports they were captured using Windows-GPU-UNLOCK. Their **structural**
   PCI/IFR gate is complete; the exact capture method, manufacturer
   authenticity and full physical SPI coverage are not independently proven.
+- **Linux is a reference, not a Windows asset synonym.** NVIDIA's public
+  open-module README requires release-matched GSP firmware/userspace, and
+  NVIDIA's Nouveau extraction notes say the GSP-RM ABI is not stable across
+  versions. In the original Windows-GPU-UNLOCK comparison, Linux 610.43.03
+  and Linux 615.78.08 share four exact GSP boot image/descriptor files, but
+  the AD102 and GA102 production Booter bundles differ. Windows 617.42 was
+  previously observed with a separately paired `gsp_ga10x.bin` (27,043,992 B)
+  and `ucodes_ga10x.bin` (58,215,936 B), running GSP 615.78.05, **not
+  proven identical to either Linux release**. V67 files are generated
+  experimental payloads, not NVIDIA stock signed Windows firmware.
+  A direct independent Windows-versus-Linux version-pinned component comparison,
+  plus genuine Windows Booter producer/loader tracing, remains mandatory.
+- The exact nine committed `AD102-ASSETS`/`GA102-ASSETS` 610.43.03
+  reference binaries are now checked offline by
+  `python3 tools/verify_reference_assets.py --root .`. All nine
+  SHA-256/size pins matched in
+  [CI 42840199095](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42840199095);
+  three negative verifier tests and both host and MSVC EFI jobs passed.
+  These findings establish **610 reference file identity only**, not
+  NVIDIA signature authentication, Windows 617.42 ABI, or hardware readiness.
+  The original Windows-GPU-UNLOCK
+  `research/firmware/prepare_windows_firmware.py` already reconstructs
+  these assets from pinned source and distribution packages; no duplicate
+  extraction or GPU ROM capture is necessary.
 - Genuine Windows 617.42 signed Booter IMAGE/HEADER/SIG/PATCH origins,
   Falcon loader invocation/descriptor, per-card secure acceptance, and
   controlled recovery are unverified. Older 610.43.03 assets and Linux
