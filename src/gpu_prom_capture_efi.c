@@ -4,7 +4,7 @@
  * for the 2,048,000-byte IFR v3 ROM backups, and is not enabled on hardware. */
 #include "gpu_prom_capture_efi.h"
 #include "sha256.h"
-#include <IndustryStandard/Acpi.h>
+#include <IndustryStandard/Acpi10.h>
 #include <string.h>
 
 static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID;
