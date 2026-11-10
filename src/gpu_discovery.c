@@ -196,7 +196,6 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
                                      GU_GPU_REFRESHED_SEQUENCE *refreshed) {
   GU_GPU_PREPARED_SEQUENCE all, live;
   GU_GPU_REFRESHED_TARGET scanned[GU_INVENTORY_MAX_NVIDIA];
-  GU_GPU_REFRESHED_SEQUENCE published;
   size_t i, j;
   EFI_STATUS status;
   if (!refreshed) return EFI_INVALID_PARAMETER;
@@ -286,11 +285,11 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
         memcmp(confirm, scanned[i].config, sizeof(confirm)) != 0)
       return EFI_UNSUPPORTED;
   }
-  memset(&published, 0, sizeof(published));
-  published.count = prepared->selected_count;
-  for (i = 0; i < published.count; ++i)
-    published.targets[i] = scanned[prepared->selected_indices[i]];
-  *refreshed = published;
+  /* No fallible steps remain after both reads; publish only now, without
+   * a redundant 4-KiB EFI stack buffer. */
+  for (i = 0; i < prepared->selected_count; ++i)
+    refreshed->targets[i] = scanned[prepared->selected_indices[i]];
+  refreshed->count = prepared->selected_count;
   return EFI_SUCCESS;
 }
 
