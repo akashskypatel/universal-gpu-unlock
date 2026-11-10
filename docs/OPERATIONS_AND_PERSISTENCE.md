@@ -1,3 +1,13 @@
+> **Historical upstream document — NOT an operating procedure for this fork.**
+> The 44-cycle narrative, NVRAM persistence instructions, Secure Boot/
+> anti-cheat guarantees, and performance results below are unverified for the
+> dual RTX 4090 + RTX 3080, MSI B850, Windows 617.42 research configuration.
+> Current active eligibility is `CAN_DETACH=false CAN_UNLOCK=false
+> CAN_FLASH=false RECOVERY_VERIFIED=false`. The legacy setup entrypoint is
+> disabled. See [the current remediation plan](DUAL_GPU_61742_REMEDIATION_PLAN.md).
+>
+> Do not follow this document to deploy, install, or execute an active EFI.
+
 # Operational Architecture, Persistence & Secure Boot Telemetry
 
 This document details the real-world operational findings gathered across **44 supervised hardware execution cycles** (`RUN0001` through `RUN0044`) on our reference GeForce RTX 4090 test bench, alongside guidance for zero-touch NVRAM persistence and 100% Secure Boot / Anti-Cheat coexistence.

@@ -10,6 +10,13 @@ param(
     [switch]$NonInteractive
 )
 
+# This legacy installer may format a disk, modify the ESP and register DXE
+# NVRAM entries. The research fork has not established the prerequisites.
+# Refuse before administrator elevation, USB selection or any disk operation.
+Write-Output 'STATUS=REFUSED REASON=UNVERIFIED_LEGACY_INSTALLER HARDWARE_ACTION=NONE DISK_ACTION=NONE NVRAM_ACTION=NONE'
+Write-Output 'Use the separately reviewed, locally built read-only topology diagnostic only after validating its signature and boot procedure.'
+exit 2
+
 # 1. Elevate Administrator Privileges
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {

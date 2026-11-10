@@ -14,6 +14,9 @@ on:
       - 'src/port.h'
       - 'src/app.c'
       - 'src/profile.c'
+      - 'Setup-AdaUnlock.ps1'
+      - 'Check-GPU-Unlock.bat'
+      - 'README.md'
       - 'src/dxe_main.c'
       - 'tests/test_gpu_discovery.c'
       - 'src/gpu_pci_observation*'
@@ -64,6 +67,16 @@ jobs:
             "$RUNNER_TEMP/test_gpu_topology_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_inventory.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_inventory_ubsan"
             "$RUNNER_TEMP/test_gpu_inventory_ubsan"
+            # Parse the Python half of the hybrid batch script without CUDA.
+            python3 - <<'PY'
+            from pathlib import Path
+            source = Path('Check-GPU-Unlock.bat').read_text(encoding='utf-8')
+            code = source.split("'''", 2)
+            if len(code) != 3:
+                raise SystemExit('Hybrid benchmark Python boundary missing')
+            compile(code[2], 'Check-GPU-Unlock.bat', 'exec')
+            print('PASS benchmark Python syntax (no CUDA execution)')
+            PY
             # The real discovery entrypoint must reject selected active EFI
             # builds before GuInit even on one or three GPUs.
             mkdir -p "$RUNNER_TEMP/active-selected"
@@ -151,6 +164,13 @@ jobs:
             }
             if(-not $duplicateRejected) {throw 'Duplicate target build was not rejected'}
             'DUPLICATE_SELECTION_REJECTED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # The legacy auto-installer must refuse before elevation or
+            # disk/NVRAM work, even in a noninteractive invocation.
+            $setupResult = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Setup-AdaUnlock.ps1 -NonInteractive
+            if($LASTEXITCODE -ne 2 -or $setupResult -notmatch 'STATUS=REFUSED') {
+              throw 'Legacy setup must refuse before any mutation'
+            }
+            'LEGACY_AUTO_SETUP=REFUSED DISK_ACTION=NONE NVRAM_ACTION=NONE' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # The shipped builders must refuse an unselected legacy active
             # image before compilation, not quietly emit a mutating binary.
             $unsafeAppRejected = $false
