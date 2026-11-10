@@ -349,7 +349,7 @@ static EFI_STATUS GopOnTarget(EFI_HANDLE gop,BOOLEAN *target) {
   if(s!=EFI_SUCCESS)return s;
   s=Interface(gop,&PathGuid,(VOID **)&gop_path);
   if(s!=EFI_SUCCESS)return s;
-  int result=GuDevicePathHasPrefix((const unsigned char *)gpu_path,
+  int result=GuDevicePathHasPrefix((const unsigned char *)gpu_path,4096u,
                                    (const unsigned char *)gop_path,4096u);
   if(result<0)return EFI_COMPROMISED_DATA;
   *target=result==1;
@@ -532,8 +532,7 @@ static EFI_STATUS Consumers(VOID) {
         return EFI_ACCESS_DENIED;
     }
     GuLog("HEADLESS_STAGE3=ELIGIBLE TARGET_DRIVER=%#llx "
-          "NON_TARGET_GOPS=%zu BEFORE_STOP=1
-",
+          "NON_TARGET_GOPS=%zu BEFORE_STOP=1\n",
           (unsigned long long)(UINTN)Plan.nv_agent,(size_t)Plan.survivor_count);
     return Driver(2);
   }
