@@ -5,6 +5,7 @@
 #include "../tests/gpu_discovery_mock.h"
 #else
 #include <Uefi.h>
+#include <Protocol/PciIo.h>
 #endif
 #include "gpu_inventory.h"
 
