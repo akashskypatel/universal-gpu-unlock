@@ -119,6 +119,48 @@ int main(void) {
     CHECK(init_calls==0 && plan.inventory.count==2 && plan.selected_count==2);
     CHECK(plan.selected_indices[0]==1 && plan.selected_indices[1]==0);
     CHECK(plan.inventory.nvidia[plan.selected_indices[0]].pci_id==Secondary.pci_id);
+    /* A saved target must still be the exact same boot-local PCI_IO owner,
+     * with unchanged BDF, subsystem, class and device ID. No GuInit occurs. */
+    {
+      UINT32 config[64];
+      EFI_PCI_IO_PROTOCOL *io;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_SUCCESS);
+      CHECK(io==&gpu[1].protocol && config[0]==Secondary.pci_id && !init_calls);
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,1,config,&io)==EFI_SUCCESS);
+      CHECK(io==&gpu[0].protocol && config[0]==Primary.pci_id && !init_calls);
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,2,config,&io)==EFI_INVALID_PARAMETER);
+      CHECK(io==NULL && config[0]==0);
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,NULL,&io)==EFI_INVALID_PARAMETER);
+      CHECK(io==NULL);
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,NULL)==EFI_INVALID_PARAMETER);
+      CHECK(GuRefreshPreparedGpu(NULL,&plan,0,config,&io)==EFI_INVALID_PARAMETER);
+      CHECK(io==NULL && config[0]==0);
+      gpu[1].dwords[0x2c/4]^=1U;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_UNSUPPORTED);
+      CHECK(io==NULL && config[0]==0);
+      gpu[1].dwords[0x2c/4]^=1U;
+      gpu[1].dwords[2]^=0x10000U;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_UNSUPPORTED);
+      gpu[1].dwords[2]^=0x10000U;
+      gpu[1].bus++;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_UNSUPPORTED);
+      gpu[1].bus--;
+      gpu[1].mutate_at_full_read=1;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_UNSUPPORTED);
+      gpu[1].mutate_at_full_read=0;
+      gpu[1].read_fail=1;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_UNSUPPORTED);
+      gpu[1].read_fail=0;
+      redirect_on_refresh=1;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,1,config,&io)==EFI_UNSUPPORTED);
+      redirect_on_refresh=0;
+      plan.selected_indices[0]=plan.inventory.count;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_INVALID_PARAMETER);
+      CHECK(io==NULL && config[0]==0 && !init_calls);
+      plan.selected_indices[0]=1;
+      CHECK(GuRefreshPreparedGpu(&system_table,&plan,0,config,&io)==EFI_SUCCESS);
+      CHECK(!init_calls);
+    }
     CHECK(GuPrepareGpuSequence(&system_table,NULL,0,&plan)==EFI_SUCCESS);
     CHECK(plan.inventory.count==2 && plan.selected_count==0 && init_calls==0);
     CHECK(GuPrepareGpuSequence(&system_table,missing,2,&plan)==EFI_UNSUPPORTED);

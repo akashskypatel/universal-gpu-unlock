@@ -30,8 +30,15 @@ never implicitly selected**.
 
 Each prepared record is **observational only**. Handles and PCI ownership
 are boot-local and cannot be assumed to survive driver Stop, FLR, firmware
-execution, reconnect, or handoff. A future active transaction must refresh
-all identity, ownership and topology evidence before each target.
+execution, reconnect, or handoff. The shared `GuRefreshPreparedGpu` now
+revalidates one selected target's **current-boot handle, PCI_IO protocol
+instance, segment/BDF, vendor/device, class and subsystem**, returning a full
+256-byte config snapshot only if all fields match; failure returns no usable
+snapshot or protocol pointer. It is reused by the existing single-card
+discovery route without relaxing the two-NVIDIA refusal. **This does not
+re-enumerate all GPUs or verify GOP/ConOut/ErrOut/driver ownership or safe
+release**. A future active transaction must refresh the complete topology
+and ownership evidence before each target; no mutation is authorized.
 
 ## Compile a preparation-only active EFI
 

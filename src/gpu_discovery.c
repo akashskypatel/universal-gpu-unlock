@@ -137,8 +137,56 @@ EFI_STATUS GuPrepareGpuSequence(EFI_SYSTEM_TABLE *table,
   return EFI_SUCCESS;
 }
 
+/* Refresh a prepared target's complete PCI identity without touching Gu or
+ * authorizing mutation. A saved EFI handle is only an observation from the
+ * current boot: it must still resolve to the same PCI_IO instance and BDF.
+ * The complete 256-byte config snapshot is returned only on success. */
+EFI_STATUS GuRefreshPreparedGpu(EFI_SYSTEM_TABLE *table,
+                                const GU_GPU_PREPARED_SEQUENCE *prepared,
+                                size_t step, UINT32 config[64],
+                                EFI_PCI_IO_PROTOCOL **pci) {
+  EFI_PCI_IO_PROTOCOL *current = NULL;
+  const GU_GPU_RECORD *expected;
+  UINT32 snapshot[64];
+  UINTN segment, bus, device, function;
+  EFI_STATUS status;
+  if (pci) *pci = NULL;
+  if (config) memset(config, 0, sizeof(snapshot));
+  if (!table || !table->BootServices ||
+      !table->BootServices->HandleProtocol || !prepared || !config || !pci ||
+      prepared->inventory.count == 0 ||
+      prepared->inventory.count > GU_INVENTORY_MAX_NVIDIA ||
+      prepared->selected_count > prepared->inventory.count ||
+      step >= prepared->selected_count ||
+      prepared->selected_indices[step] >= prepared->inventory.count)
+    return EFI_INVALID_PARAMETER;
+
+  expected = &prepared->inventory.nvidia[prepared->selected_indices[step]];
+  if (!expected->handle || !expected->pci ||
+      expected->segment > 0xffffU || expected->bus > 255U ||
+      expected->device > 31U || expected->function > 7U)
+    return EFI_UNSUPPORTED;
+  status = table->BootServices->HandleProtocol((EFI_HANDLE)expected->handle,
+                                                &PciGuid, (VOID **)&current);
+  if (EFI_ERROR(status) || !current || current != expected->pci ||
+      !current->GetLocation || !current->Pci.Read)
+    return EFI_UNSUPPORTED;
+  status = current->GetLocation(current, &segment, &bus, &device, &function);
+  if (EFI_ERROR(status) || segment != expected->segment ||
+      bus != expected->bus || device != expected->device ||
+      function != expected->function)
+    return EFI_UNSUPPORTED;
+  status = current->Pci.Read(current, EfiPciIoWidthUint32, 0, 64, snapshot);
+  if (EFI_ERROR(status) || snapshot[0] != expected->pci_id ||
+      (UINT16)(snapshot[2] >> 16) != expected->class_code ||
+      snapshot[0x2c / 4] != expected->subsystem_id)
+    return EFI_UNSUPPORTED;
+  memcpy(config, snapshot, sizeof(snapshot));
+  *pci = current;
+  return EFI_SUCCESS;
+}
+
 EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
-  UINTN seg, bus, dev, fun;
   GU_GPU_PREPARED_SEQUENCE prepared;
   const GU_GPU_RECORD *selected;
   EFI_PCI_IO_PROTOCOL *io;
@@ -167,18 +215,11 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #endif
   selected = &prepared.inventory.nvidia[0];
   if (!GuIsSupportedPciId(selected->pci_id)) return EFI_UNSUPPORTED;
-  s = table->BootServices->HandleProtocol((EFI_HANDLE)selected->handle,
-                                            &PciGuid, (VOID **)&io);
-  if (EFI_ERROR(s) || io != selected->pci || !io ||
-      !io->GetLocation || !io->Pci.Read) return EFI_UNSUPPORTED;
-  s = io->GetLocation(io, &seg, &bus, &dev, &fun);
-  if (EFI_ERROR(s) || seg != selected->segment || bus != selected->bus ||
-      dev != selected->device || fun != selected->function) return EFI_UNSUPPORTED;
-  s = io->Pci.Read(io, EfiPciIoWidthUint32, 0, 64, config);
-  if (EFI_ERROR(s) || config[0] != selected->pci_id ||
-      config[0x2c / 4] != selected->subsystem_id ||
-      (config[2] >> 16) != selected->class_code ||
-      !GuCheckConfig(config, seg, bus, dev, fun, &caps)) return EFI_UNSUPPORTED;
+  s = GuRefreshPreparedGpu(table, &prepared, 0, config, &io);
+  if (s != EFI_SUCCESS ||
+      !GuCheckConfig(config, selected->segment, selected->bus,
+                     selected->device, selected->function, &caps))
+    return EFI_UNSUPPORTED;
 
   GuInit(table->BootServices, io);
   Gu.image = image;
