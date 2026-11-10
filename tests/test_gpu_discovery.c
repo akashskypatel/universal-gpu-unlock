@@ -104,11 +104,20 @@ int main(void) {
   ResetPair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==1);
-  /* A successful read-only multi-target revalidation must still refuse. */
+  /* Selected targets must receive two reads; unselected ones receive none.
+   * A missing requested target must refuse before all aggregate refreshes. */
+#if GU_GPU_SELECTION_COUNT == 2
   CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 2);
+#else
+  CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 0);
+#endif
   ResetPair(); count=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+#if GU_GPU_SELECTION_COUNT == 2
+  CHECK(gpu[0].full_reads == 0);
+#else
   CHECK(gpu[0].full_reads == 2);
+#endif
   ResetPair(); count=3;
   Populate(2,Primary);gpu[2].bus=6;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
