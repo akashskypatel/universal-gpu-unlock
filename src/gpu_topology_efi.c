@@ -1121,9 +1121,12 @@ static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   EFI_BOOT_SERVICES *bs;
   int pci_ok,gop_ok,console_ok,error_ok,error_classified,result;
+  int console_stable=0,error_stable=0;
   GU_TOPO_CONSOLE_OWNERS error_owners={0};
   static GU_TOPO_PATH error_paths[GU_TOPO_MAX_CONSOLES];
-  size_t error_count=0,i;
+  static GU_TOPO_PATH final_console[GU_TOPO_MAX_CONSOLES];
+  static GU_TOPO_PATH final_error[GU_TOPO_MAX_CONSOLES];
+  size_t error_count=0,final_console_count=0,final_error_count=0,i;
 #ifndef GU_TOPO_SAVE_LOG
   (void)image;
 #endif
@@ -1142,7 +1145,25 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   Snapshot.console_available=(uint8_t)console_ok;
   error_ok=ReadConfiguredConsole(table,L"ErrOut","ERROUT",error_paths,&error_count);
   ReportConsoleBinding(table);
-  error_classified=pci_ok && error_ok &&
+  /* Re-read both configured variables after separate console queries. A
+   * changed or unreadable path inventory cannot justify the final verdict.
+   * These sequential observations cannot eliminate later hardware races. */
+  console_stable=console_ok &&
+      ReadConfiguredConsole(table,L"ConOut","CONOUT_RECHECK",
+                            final_console,&final_console_count) &&
+      GuTopoConsolePathsEqual(Snapshot.console,Snapshot.console_count,
+                              final_console,final_console_count);
+  error_stable=error_ok &&
+      ReadConfiguredConsole(table,L"ErrOut","ERROUT_RECHECK",
+                            final_error,&final_error_count) &&
+      GuTopoConsolePathsEqual(error_paths,error_count,
+                              final_error,final_error_count);
+  Say("CONSOLE_PATHS_RECHECK CONOUT_STABLE=%u ERROUT_STABLE=%u NON_ATOMIC=1\r\n",
+      (unsigned)console_stable,(unsigned)error_stable);
+  console_ok=console_stable;
+  error_ok=error_stable;
+  Snapshot.console_available=(uint8_t)console_ok;
+  error_classified=pci_ok && gop_ok && console_ok && error_ok &&
       GuTopoConsoleOwners(&Snapshot,error_paths,error_count,&error_owners);
   Say("ERROR_CONSOLE_CAPTURE=%u CLASSIFIED=%u NVIDIA=%u INDEPENDENT=%u UNMATCHED=%u AMBIGUOUS=%u INDEPENDENT_WITHOUT_GOP=%u NOT_DETACH_EVIDENCE=1\r\n",
       (unsigned)error_ok,(unsigned)error_classified,

@@ -84,6 +84,9 @@ int GuTopoClassRelevant(uint16_t class_code);
  * 256-byte reads and a strict bytewise comparison. */
 int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]);
 int GuTopoPathValid(const GU_TOPO_PATH *p);
+/* Compare bounded configured-console path captures; no atomicity claim. */
+int GuTopoConsolePathsEqual(const GU_TOPO_PATH *first, size_t first_count,
+                             const GU_TOPO_PATH *second, size_t second_count);
 /* Complete PCI device-path prefix only; no root-port-only ownership inference. */
 int GuTopoPathOnController(const GU_TOPO_PATH *controller,
                            const GU_TOPO_PATH *candidate);

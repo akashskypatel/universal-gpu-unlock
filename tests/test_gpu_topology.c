@@ -98,6 +98,29 @@ int main(void) {
   CHECK(!GuTopoClassifierStable(cls1,cls2));
   CHECK(!GuTopoClassifierStable(NULL,cls2));
   CHECK(!GuTopoClassifierStable(cls1,NULL));
+  /* A console variable must retain the same entire ordered path set.
+   * Valid path count alone cannot rule out a switched console owner. */
+  {
+    GU_TOPO_PATH initial[2], again[2];
+    initial[0]=Path(-1,0,8,0);
+    initial[1]=Path(1,0,0,0);
+    again[0]=initial[0];again[1]=initial[1];
+    CHECK(GuTopoConsolePathsEqual(initial,2,again,2));
+    again[1]=Path(3,1,0,0);
+    CHECK(!GuTopoConsolePathsEqual(initial,2,again,2));
+    again[1]=initial[1];
+    CHECK(!GuTopoConsolePathsEqual(initial,2,again,1));
+    CHECK(!GuTopoConsolePathsEqual(initial,0,again,0));
+    CHECK(!GuTopoConsolePathsEqual(NULL,2,again,2));
+    CHECK(!GuTopoConsolePathsEqual(initial,2,NULL,2));
+    again[0].length=0;
+    CHECK(!GuTopoConsolePathsEqual(initial,2,again,2));
+    again[0]=initial[0];
+    again[0].bytes[again[0].length-3]=1;
+    CHECK(!GuTopoConsolePathsEqual(initial,2,again,2));
+    again[0]=initial[1];again[1]=initial[0];
+    CHECK(!GuTopoConsolePathsEqual(initial,2,again,2));
+  }
 
   Baseline();
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_COMPLETE);

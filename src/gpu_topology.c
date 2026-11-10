@@ -132,6 +132,23 @@ static int DisplayOwner(const GU_TOPO_CAPTURE *s, const GU_TOPO_PATH *path) {
   return result;
 }
 
+/* Compare full configured-console path inventories captured at separate
+ * read-only points. An order change is treated as drift, not normalized. */
+int GuTopoConsolePathsEqual(const GU_TOPO_PATH *first, size_t first_count,
+                             const GU_TOPO_PATH *second, size_t second_count) {
+  size_t i;
+  if (!first || !second || !first_count ||
+      first_count > GU_TOPO_MAX_CONSOLES || first_count != second_count)
+    return 0;
+  for (i=0; i<first_count; ++i) {
+    if (!GuTopoPathValid(&first[i]) || !GuTopoPathValid(&second[i]) ||
+        first[i].length != second[i].length ||
+        memcmp(first[i].bytes, second[i].bytes, first[i].length))
+      return 0;
+  }
+  return 1;
+}
+
 /* Only a GOP on the SAME PCI display endpoint backs the console path.
  * Another independent GPU's GOP cannot establish that relationship. */
 static int HasGopForDisplay(const GU_TOPO_CAPTURE *s, int owner) {
