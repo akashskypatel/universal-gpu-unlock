@@ -15,6 +15,12 @@ before any future authorized operation.
   ancestry, and an AMD iGPU. The physical three-GPU `0016` report established
   that all three GOP/TextOut branches share GraphicsConsole, ConSplitter and
   an aggregate console handle in the captured mixed-display configuration.
+  The separately captured AMD-iGPU-only `0018` report instead has zero
+  NVIDIA configured-console matches, one independent AMD GOP/ConOut/ErrOut
+  path, and both NVIDIA firmware drivers still bound. This establishes
+  passive console isolation for that boot **only**; the strict topology
+  verdict remains `INCOMPLETE` with zero NVIDIA GOPs, and no selected
+  vendor Stop, AMD continuity after Stop or cold recovery was tested.
 - Dynamic PCI discovery and ordered target selection work in passive
   diagnostics and host verification. Selecting a GPU does **not** authorize
   its controller to be stopped or its registers to be changed.
@@ -22,6 +28,13 @@ before any future authorized operation.
   they refuse before `GuInit` and guarded hardware-write, DMA and FLR stages.
   Both MSVC builders now **reject omitted target selections** instead of
   emitting legacy mutating EFI binaries.
+  Selected preparation also performs an all-or-none, read-only refresh of
+  every requested GPU's PCI identity before the existing refusal; it does
+  not create independent per-card mutable transaction state or a
+  simultaneous hardware snapshot. Commit `da4051c4` passed host and
+  MSVC EFI CI in [run 42736793146](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42736793146).
+  Existing tests verify selected-entrypoint refusal, but new aggregate
+  failure-contract branches lack dedicated negative assertions.
 - The legacy ROM validation previously accepted any 1 MiB ROM. It now
   **rejects all unpinned ROMs** pending independently authenticated exact-card
   hashes; therefore it does not qualify an active firmware transaction.
