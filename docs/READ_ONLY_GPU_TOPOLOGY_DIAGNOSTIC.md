@@ -146,7 +146,11 @@ source/verification boundary from the previous passive diagnostic captures.
   `TOPOLOGY_VERDICT` (and return status) now also applies
   `GuTopoCombinedConsoleVerdict`: a NVIDIA-owned or ambiguous `ErrOut`
   forces `CONFLICT`, while an unavailable/unclassified, unmatched, or
-  independent-GOP-unproven `ErrOut` prevents `COMPLETE`.
+  same-controller-GOP-unproven `ErrOut` prevents `COMPLETE`.
+  Each `ConOut` and `ErrOut` path classified as independent must have a
+  GOP associated with **that exact PCI display controller**; a GOP on
+  some other AMD/Intel card cannot satisfy the association. The diagnostic
+  logs `CONOUT_WITHOUT_GOP` and `INDEPENDENT_WITHOUT_GOP` for `ErrOut`.
   Independent `ConOut` and `ErrOut` observations, NVIDIA GOP associations
   and owner evidence remain distinct prerequisites, **never an authorization
   for vendor Stop or GPU mutation**. This does not prove the lit physical
