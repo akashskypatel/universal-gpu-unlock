@@ -20,6 +20,10 @@ on:
       - 'src/Build-Experimental-MSVC.ps1'
       - 'src/Build-Dxe-Driver.ps1'
       - 'src/port.h'
+      - 'src/msi_release.c'
+      - 'src/vendor/unlock_610.c'
+      - 'tests/test_falcon_halt_source.py'
+      - 'tests/test_release_handoff_contract.py'
       - 'src/app.c'
       - 'src/profile.c'
       - 'Setup-AdaUnlock.ps1'
@@ -83,6 +87,9 @@ jobs:
             "$RUNNER_TEMP/test_gpu_topology_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_inventory.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_inventory_ubsan"
             "$RUNNER_TEMP/test_gpu_inventory_ubsan"
+            CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
+            python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v
             python3 -m unittest discover -s tests -p test_reference_asset_integrity.py -v
             python3 tools/verify_reference_assets.py --root .
             python3 -m unittest discover -s tests -p test_firmware_evidence.py -v
