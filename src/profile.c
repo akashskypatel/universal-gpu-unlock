@@ -47,7 +47,7 @@ BOOLEAN GuAd104AssetsValid(VOID) {
   return TRUE;
 }
 BOOLEAN GuAd104PromMatches(const VOID *Data,UINTN Bytes) {
-  if(Bytes!=1048576)return FALSE;
+  if(!Data || Bytes!=1048576)return FALSE;
   UINT8 hash[32];
   GuSha256(Data,Bytes,hash);
   CHAR8 s[65];
@@ -55,7 +55,9 @@ BOOLEAN GuAd104PromMatches(const VOID *Data,UINTN Bytes) {
   for(int i=0;i<32;i++){s[i*2]=hex[(hash[i]>>4)&0xf];s[i*2+1]=hex[hash[i]&0xf];}
   s[64]=0;
   GuLog("PROM actual SHA256: %s\n", s);
-  return TRUE;
+  /* An observed ROM digest is not an authenticated per-card allowlist. */
+  GuLog("PROM qualification refused: no authentic exact-card digest pinned for this build\n");
+  return FALSE;
 }
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
   if (!f) return FALSE;

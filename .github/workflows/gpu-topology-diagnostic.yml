@@ -13,6 +13,7 @@ on:
       - 'src/Build-Dxe-Driver.ps1'
       - 'src/port.h'
       - 'src/app.c'
+      - 'src/profile.c'
       - 'src/dxe_main.c'
       - 'tests/test_gpu_discovery.c'
       - 'src/gpu_pci_observation*'
@@ -150,6 +151,19 @@ jobs:
             }
             if(-not $duplicateRejected) {throw 'Duplicate target build was not rejected'}
             'DUPLICATE_SELECTION_REJECTED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # The shipped builders must refuse an unselected legacy active
+            # image before compilation, not quietly emit a mutating binary.
+            $unsafeAppRejected = $false
+            try { & .\src\Build-Experimental-MSVC.ps1 } catch {
+              $unsafeAppRejected = $_.Exception.Message -match 'Active firmware build refused'
+            }
+            if(-not $unsafeAppRejected) { throw 'Unselected active app builder must fail closed' }
+            $unsafeDxeRejected = $false
+            try { & .\src\Build-Dxe-Driver.ps1 } catch {
+              $unsafeDxeRejected = $_.Exception.Message -match 'Active firmware build refused'
+            }
+            if(-not $unsafeDxeRejected) { throw 'Unselected DXE builder must fail closed' }
+            'UNSELECTED_ACTIVE_BUILDS=REFUSED BEFORE_COMPILATION=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # Real active app/DXE sources compile with preparation-only guard.
             & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "Active app prep compilation failed: $LASTEXITCODE"}

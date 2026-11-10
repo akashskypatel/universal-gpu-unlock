@@ -70,10 +70,14 @@ boot/log initialization, including opening or writing a log file. This is
 PCI/GOP/ConOut capture use
 [the isolated topology diagnostic](READ_ONLY_GPU_TOPOLOGY_DIAGNOSTIC.md).
 
-**Important:** Running the older build scripts **without** a selection
-argument still builds the legacy active single-GPU image, including its
-existing mutating code. Its behavior is *not* covered by the selected-build
-guard or by this source-level multi-GPU preparation result.
+**Important:** Both repository MSVC builders now **refuse an omitted selection**
+before attempting to compile. Providing a BDF produces preparation-only
+artifacts; they refuse before `GuInit` and all hardware mutation stages.
+The legacy single-GPU transaction code still exists in the repository and
+may be compiled separately, but **`GuAd104PromMatches` now refuses any ROM
+without an independently authenticated per-card digest allowlist** (none is
+pinned), preventing ROM-length-only approval. This is a fail-closed source
+guard, **not** physical recovery proof or production firmware compatibility.
 
 ## Known legacy blockers (not generalized or waived)
 

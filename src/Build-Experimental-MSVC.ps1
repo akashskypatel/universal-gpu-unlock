@@ -4,6 +4,9 @@ param(
     [string]$SelectionBdfs
 )
 $ErrorActionPreference = 'Stop'
+if (-not $SelectionBdf -and -not $SelectionBdfs) {
+    throw 'Active firmware build refused: supply -SelectionBdf or -SelectionBdfs. Only preparation-only artifacts are supported.'
+}
 if (-not $VcVars) {
     $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path -LiteralPath $vswhere) {
