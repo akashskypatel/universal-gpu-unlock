@@ -1,6 +1,11 @@
 # Dynamic GPU targeting for active-source EFI preparation
 
 **State: SOURCE/HOST/EFI-COMPILE VERIFIED; GPU ACTUATION BLOCKED.**
+The read-only prepared-sequence refresh is current through
+[CI `42855085195`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42855085195);
+the independent ErrOut classifier's invalid-graph refusal is current through
+[CI `42857858767`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42857858767).
+Neither is a new hardware approval.
 
 This document applies to the *non-diagnostic* interactive EFI application
 (`src/app.c`) and DXE entrypoint (`src/dxe_main.c`). Both still invoke the
@@ -30,15 +35,27 @@ never implicitly selected**.
 
 Each prepared record is **observational only**. Handles and PCI ownership
 are boot-local and cannot be assumed to survive driver Stop, FLR, firmware
-execution, reconnect, or handoff. The shared `GuRefreshPreparedGpu` now
-revalidates one selected target's **current-boot handle, PCI_IO protocol
-instance, segment/BDF, vendor/device, class and subsystem**, returning a full
-256-byte config snapshot only if all fields match; failure returns no usable
-snapshot or protocol pointer. It is reused by the existing single-card
-discovery route without relaxing the two-NVIDIA refusal. **This does not
-re-enumerate all GPUs or verify GOP/ConOut/ErrOut/driver ownership or safe
-release**. A future active transaction must refresh the complete topology
-and ownership evidence before each target; no mutation is authorized.
+execution, reconnect, or handoff. `GuRefreshPreparedGpu` validates only
+one target's saved **current-boot handle, PCI_IO instance, BDF,
+vendor/device, class and subsystem**, returning a 256-byte PCI snapshot
+only after full identity match. That single-target helper does **not**
+validate the rest of the NVIDIA inventory.
+
+**For a selected active-preparation image**, the existing
+`GuRefreshPreparedSequence` now also performs a fresh UEFI census of the
+complete NVIDIA display inventory. It rejects missing, added or rebound
+devices, aliased saved BDFs/handles/PCI_IO instances, read failures of
+unselected NVIDIA cards, and any mismatch in two sequential full
+256-byte PCI snapshots on **all** inventoried NVIDIA devices. Only the
+requested targets are returned in operator order after successful
+validation. A failed preflight returns no partial selected results.
+[Universal host and Windows EFI verification
+`42855085195`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42855085195)
+**PASS**. The scans are **not atomic with hardware** and do not verify
+GOP/ConOut/ErrOut/driver ownership or safe release. A future active
+transaction still requires fresh ownership evidence and independent
+source-specific post-mutation and recovery checks; no GPU mutation
+is authorized.
 
 ## Compile a preparation-only active EFI
 
