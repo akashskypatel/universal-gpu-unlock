@@ -186,15 +186,15 @@ EFI_STATUS GuRefreshPreparedGpu(EFI_SYSTEM_TABLE *table,
   return EFI_SUCCESS;
 }
 
-/* Publish only requested targets in order, after revalidating EVERY
- * NVIDIA device in the prepared inventory (including every non-target).
- * Refuse aliased records and any two-pass PCI snapshot drift. No UEFI handle
- * re-enumeration, atomic hardware snapshot, ownership release or GPU mutation
- * is implied by a successful observation. */
+/* Publish only requested targets in order after read-only full-set
+ * NVIDIA re-enumeration and two PCI snapshot passes on every present target
+ * and non-target. Refuse added/missing/rebound cards and saved aliases.
+ * No atomic hardware snapshot, ownership release or GPU mutation is implied
+ * by a successful observation. */
 EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
                                      const GU_GPU_PREPARED_SEQUENCE *prepared,
                                      GU_GPU_REFRESHED_SEQUENCE *refreshed) {
-  GU_GPU_PREPARED_SEQUENCE all;
+  GU_GPU_PREPARED_SEQUENCE all, live;
   GU_GPU_REFRESHED_TARGET scanned[GU_INVENTORY_MAX_NVIDIA];
   GU_GPU_REFRESHED_SEQUENCE published;
   size_t i, j;
@@ -234,6 +234,34 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
         return EFI_INVALID_PARAMETER;
   }
 
+  /* A previously saved inventory must still enumerate the same complete
+   * NVIDIA set. Matching by BDF permits UEFI handle enumeration reorder but
+   * not an added, missing, replaced or re-bound NVIDIA controller.
+   * This is a new read-only enumeration; it cannot eliminate later races. */
+  status = GuPrepareGpuSequence(table, NULL, 0, &live);
+  if (status != EFI_SUCCESS ||
+      live.inventory.count != prepared->inventory.count)
+    return EFI_UNSUPPORTED;
+  for (i = 0; i < prepared->inventory.count; ++i) {
+    const GU_GPU_RECORD *expected = &prepared->inventory.nvidia[i];
+    size_t matches = 0;
+    for (j = 0; j < live.inventory.count; ++j) {
+      const GU_GPU_RECORD *observed = &live.inventory.nvidia[j];
+      if (observed->segment != expected->segment ||
+          observed->bus != expected->bus ||
+          observed->device != expected->device ||
+          observed->function != expected->function)
+        continue;
+      if (observed->handle != expected->handle ||
+          observed->pci != expected->pci ||
+          observed->pci_id != expected->pci_id ||
+          observed->class_code != expected->class_code ||
+          observed->subsystem_id != expected->subsystem_id)
+        return EFI_UNSUPPORTED;
+      ++matches;
+    }
+    if (matches != 1) return EFI_UNSUPPORTED;
+  }
   /* Reuse the source-level single-record identity and PCI read contract. */
   all = *prepared;
   all.selected_count = all.inventory.count;

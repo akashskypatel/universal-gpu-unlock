@@ -103,15 +103,15 @@ int main(void) {
   EFI_STATUS status;
   ResetPair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
-  CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==1);
-  /* Every inventoried device must be read twice, even if unselected. */
+  CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==2);
+  /* Full-set re-enumeration precedes two PCI reads of all NVIDIA devices. */
   CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 2);
   ResetPair(); count=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
 #if GU_GPU_SELECTION_COUNT == 2
-  CHECK(gpu[0].full_reads == 0);
+  CHECK(gpu[0].full_reads == 0 && free_calls==1);
 #else
-  CHECK(gpu[0].full_reads == 2);
+  CHECK(gpu[0].full_reads == 2 && free_calls==2);
 #endif
   ResetPair(); count=3;
   Populate(2,Primary);gpu[2].bus=6;
@@ -292,6 +292,19 @@ int main(void) {
     CHECK(refreshed.count==1 && refreshed.targets[0].pci==&gpu[1].protocol &&
           refreshed.targets[0].config[0]==Secondary.pci_id);
     CHECK(gpu[0].full_reads==2 && gpu[1].full_reads==2);
+    /* The source inventory must be current: adding or removing an
+     * NVIDIA handle between preparation and refresh is a refusal, even
+     * though the saved handles could still be read successfully. */
+    count=1;
+    memset(&refreshed,0xa5,sizeof(refreshed));
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_UNSUPPORTED);
+    CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+    count=3;
+    Populate(2,Primary);
+    gpu[2].bus=6;
+    CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_UNSUPPORTED);
+    CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+    count=2;
     gpu[0].read_fail=1; /* Unselected target is unreadable. */
     memset(&refreshed,0xa5,sizeof(refreshed));
     CHECK(GuRefreshPreparedSequence(&system_table,&single,&refreshed)==EFI_UNSUPPORTED);
