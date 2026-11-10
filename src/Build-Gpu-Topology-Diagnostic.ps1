@@ -57,6 +57,14 @@ try {
         $commands += "cl $flags /Fo`"$object`" `"$source`""
         $commands += 'if errorlevel 1 exit /b 1'
     }
+    # Compile the imported PROM reader and EFI adapter for Windows ABI
+    # coverage, but NEVER link them into a passive topology EFI. The original
+    # BAR0 capture has not been approved for this dual-GPU hardware.
+    foreach ($captureSource in @('gpu_prom_capture.c','gpu_prom_capture_efi.c')) {
+        $captureObj = 'build_diagnostic\\' + [System.IO.Path]::GetFileNameWithoutExtension($captureSource) + '.obj'
+        $commands += "cl $flags /Fo`"$captureObj`" `"$captureSource`""
+        $commands += 'if errorlevel 1 exit /b 1'
+    }
     $joined = ($objects | ForEach-Object { '"' + $_ + '"' }) -join ' '
     $commands += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_diagnostic\$binaryName $joined"
     $commands += 'if errorlevel 1 exit /b 1'

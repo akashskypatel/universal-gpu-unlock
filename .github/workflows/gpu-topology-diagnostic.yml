@@ -4,6 +4,8 @@ on:
     branches: [main]
     paths:
       - 'src/gpu_topology*'
+      - 'src/gpu_prom_capture*'
+      - 'tests/test_gpu_prom_capture.c'
       - 'src/gpu_loaded_pe_text*'
       - 'tests/test_gpu_loaded_pe_text.c'
       - 'src/gpu_inventory*'
@@ -59,6 +61,14 @@ jobs:
             done
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_loaded_pe_text.c src/gpu_loaded_pe_text.c -o "$RUNNER_TEMP/test_gpu_loaded_pe_text_ubsan"
             "$RUNNER_TEMP/test_gpu_loaded_pe_text_ubsan"
+            # Original 1-MiB PROM reader: host callbacks only. The EFI adapter
+            # is compile-only and never linked into the topology diagnostic.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_prom_capture.c src/gpu_prom_capture.c -o "$RUNNER_TEMP/test_gpu_prom_capture_$compiler"
+              "$RUNNER_TEMP/test_gpu_prom_capture_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_prom_capture.c src/gpu_prom_capture.c -o "$RUNNER_TEMP/test_gpu_prom_capture_ubsan"
+            "$RUNNER_TEMP/test_gpu_prom_capture_ubsan"
             gcc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology"
             "$RUNNER_TEMP/test_gpu_topology"
             clang -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_topology.c src/gpu_topology.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_topology_clang"
