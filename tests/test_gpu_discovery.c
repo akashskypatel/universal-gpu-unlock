@@ -52,7 +52,9 @@ static EFI_STATUS Read(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN 
       ((UINT32 *)out)[0x2c / 4] ^= 1U;
     if (m->drift_earlier_on_full_read) {
       /* First selected target is GPU[1]; later GPU[0] alters its state. */
-      gpu[1].dwords[0x2c / 4] ^= 1U;
+      /* Change a BAR word, not identity fields: only snapshot equality
+       * (rather than the identity refresh alone) can detect this drift. */
+      gpu[1].dwords[4] ^= 0x1000U;
       m->drift_earlier_on_full_read = 0;
     }
   }
@@ -171,6 +173,25 @@ int main(void) {
       CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
       CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
       plan.inventory.nvidia[0].handle=saved_handle;
+      {
+        GU_GPU_RECORD saved=plan.inventory.nvidia[0];
+        plan.inventory.nvidia[0].pci=plan.inventory.nvidia[1].pci;
+        CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
+        CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL);
+        plan.inventory.nvidia[0]=saved;
+        plan.inventory.nvidia[0].segment=plan.inventory.nvidia[1].segment;
+        plan.inventory.nvidia[0].bus=plan.inventory.nvidia[1].bus;
+        plan.inventory.nvidia[0].device=plan.inventory.nvidia[1].device;
+        plan.inventory.nvidia[0].function=plan.inventory.nvidia[1].function;
+        CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
+        CHECK(refreshed.count==0 && refreshed.targets[1].pci==NULL);
+        plan.inventory.nvidia[0]=saved;
+      }
+      saved_index=plan.selected_indices[1];
+      plan.selected_indices[1]=plan.inventory.count;
+      CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
+      CHECK(refreshed.count==0);
+      plan.selected_indices[1]=saved_index;
 
       plan.selected_count=0;
       CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_INVALID_PARAMETER);
@@ -189,7 +210,7 @@ int main(void) {
       CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_UNSUPPORTED);
       CHECK(refreshed.count==0 && refreshed.targets[0].pci==NULL &&
             refreshed.targets[1].pci==NULL && !init_calls);
-      gpu[1].dwords[0x2c/4]^=1U; /* Restore first selected GPU identity. */
+      gpu[1].dwords[4]^=0x1000U; /* Restore first target's BAR snapshot. */
       CHECK(GuRefreshPreparedSequence(&system_table,&plan,&refreshed)==EFI_SUCCESS);
       CHECK(refreshed.count==2 && refreshed.targets[0].pci==&gpu[1].protocol);
     }
