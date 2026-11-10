@@ -100,6 +100,11 @@ def assess(reference: dict, windows: dict) -> dict:
             and ucodes.get("declared_bindata_entries") == 1293
             and ucodes.get("records_parsed") is False,
             "NVUCODES is not a verified parsed index")
+    # NVIDIA R615 bin_data_pvt.h: numEntries is possible file-index capacity,
+    # not evidence that that many serialized records have been decoded.
+    require(ucodes.get("bindata_entry_count_semantics") in
+            (None, "possible_file_indices_not_parsed_records"),
+            "NVUCODES index capacity falsely presented as parsed records")
     require(gsp.get("section_header_count") == len(gsp.get("sections", []))
             and gsp.get("section_name_table_index") < len(gsp["sections"]),
             "GSP section count/table inconsistency")
@@ -164,8 +169,10 @@ def assess(reference: dict, windows: dict) -> dict:
         "windows_package_gsp_ucodes_byte_identical": True,
         "windows_gsp_signature_sections_present": sorted(expected),
         "windows_nvucodes_index_fingerprint_unique_in_fwimage": True,
+        "windows_nvucodes_possible_bindata_indices": ucodes["declared_bindata_entries"],
+        "windows_nvucodes_records_parsed": False,
         "open": [
-            "NVUCODES records unparsed",
+            "NVUCODES per-index mapping/record boundaries unverified (1293 possible indices)",
             "GSP firmware signatures unauthenticated",
             "GSP/ucodes runtime pairing unverified",
             "Windows original signed Booter producer/loader ABI unverified",

@@ -68,6 +68,7 @@ def fixture():
         "ucodes": {
             "bytes": 58000000, "sha256": B, "format": "NVUCODES",
             "header_bytes": 24, "format_version": 1, "declared_bindata_entries": 1293,
+            "bindata_entry_count_semantics": "possible_file_indices_not_parsed_records",
             "records_parsed": False, "filename_index_fingerprint": "0x2d38befecdb703a6"},
         "static_fingerprint_comparison": {
             "search_performed": True, "occurrences": 1, "unique_occurrence": True,
@@ -91,6 +92,8 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(evidence["status"], "STRUCTURAL_EVIDENCE_CONSISTENT")
         self.assertEqual(len(evidence["linux_identical_boot_assets"]), 4)
         self.assertFalse(evidence["windows_61742_secure_load_verified"])
+        self.assertEqual(evidence["windows_nvucodes_possible_bindata_indices"], 1293)
+        self.assertFalse(evidence["windows_nvucodes_records_parsed"])
         for flag in ("can_detach", "can_unlock", "can_flash", "recovery_verified"):
             self.assertFalse(evidence[flag])
 
@@ -129,6 +132,17 @@ class EvidenceTests(unittest.TestCase):
         b["ucodes"]["records_parsed"] = True
         with self.assertRaises(ValueError):
             m.assess(a, b)
+
+    def test_possible_index_capacity_cannot_be_misrepresented_as_records(self):
+        a, b = fixture()
+        b["ucodes"]["bindata_entry_count_semantics"] = "parsed_records"
+        with self.assertRaises(ValueError):
+            m.assess(a, b)
+
+    def test_original_v3_report_without_new_semantics_field_stays_supported(self):
+        a, b = fixture()
+        del b["ucodes"]["bindata_entry_count_semantics"]
+        self.assertEqual(m.assess(a, b)["windows_nvucodes_possible_bindata_indices"], 1293)
 
     def test_static_fingerprint_not_runtime_pairing(self):
         a, b = fixture()
