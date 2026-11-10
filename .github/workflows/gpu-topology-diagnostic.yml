@@ -68,15 +68,7 @@ jobs:
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_inventory.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_inventory_ubsan"
             "$RUNNER_TEMP/test_gpu_inventory_ubsan"
             # Parse the Python half of the hybrid batch script without CUDA.
-            python3 - <<'PY'
-            from pathlib import Path
-            source = Path('Check-GPU-Unlock.bat').read_text(encoding='utf-8')
-            code = source.split("'''", 2)
-            if len(code) != 3:
-                raise SystemExit('Hybrid benchmark Python boundary missing')
-            compile(code[2], 'Check-GPU-Unlock.bat', 'exec')
-            print('PASS benchmark Python syntax (no CUDA execution)')
-            PY
+            python3 -c 'from pathlib import Path; s=Path("Check-GPU-Unlock.bat").read_text(encoding="utf-8"); parts=s.split(chr(39)*3,2); assert len(parts)==3; compile(parts[2], "Check-GPU-Unlock.bat", "exec"); print("PASS benchmark Python syntax (no CUDA execution)")'
             # The real discovery entrypoint must reject selected active EFI
             # builds before GuInit even on one or three GPUs.
             mkdir -p "$RUNNER_TEMP/active-selected"
