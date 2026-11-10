@@ -139,8 +139,16 @@ source/verification boundary from the previous passive diagnostic captures.
   `OpenProtocolInformation` BY_DRIVER counts and first agent handle token; an owner count is not proof of
   a particular NVIDIA driver's private GOP context or of a safe Stop operation.
 - Reads **configured** `ConOut` and `ErrOut` paths independently from the
-  UEFI global variables without writing them; `ConOutDev` lists *possible*
-  output paths, not installed console ownership. `GuTopoAssess` still
+  UEFI global variables without writing them, then **re-reads both variables**
+  after the other console queries. The complete ordered path sets must match,
+  including all path bytes and the number and order of instances; unreadable,
+  malformed, or changed rechecks fail closed. New diagnostic fields
+  `CONOUT_RECHECK_VARIABLE`, `ERROUT_RECHECK_VARIABLE`, and
+  `CONSOLE_PATHS_RECHECK CONOUT_STABLE=... ERROUT_STABLE=...` record the
+  bounded check. An incomplete PCI/GOP/ConOut capture also precludes
+  independent `ErrOut` classification. These are sequential **non-atomic**
+  observations; configuration can still change after the last read.
+  `ConOutDev` lists *possible* output paths, not installed console ownership. `GuTopoAssess` still
   evaluates the structurally validated PCI/GOP/`ConOut` graph, and the EFI
   logs its result as `GRAPH_ONLY_TOPOLOGY_VERDICT`. The final
   `TOPOLOGY_VERDICT` (and return status) now also applies
