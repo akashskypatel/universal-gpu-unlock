@@ -62,6 +62,12 @@ typedef struct {
   unsigned nvidia, independent, unmatched, ambiguous;
 } GU_TOPO_CONSOLE_OWNERS;
 
+/* Combine the structural graph/ConOut result with separately classified
+ * ErrOut; a missing, NVIDIA-owned, ambiguous or unclassified ErrOut cannot
+ * yield the final COMPLETE verdict. Still observational, not detachment. */
+int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
+                                 const GU_TOPO_CONSOLE_OWNERS *errout);
+
 /* Reject malformed/overlong or multi-instance paths. PCI paths must be
  * unique; any unknown/ambiguous fact is explicitly incomplete. */
 /* A topology graph needs display endpoints and PCI-to-PCI bridges, not

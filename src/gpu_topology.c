@@ -163,6 +163,23 @@ int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *path
   return 1;
 }
 
+/* Reconcile the graph/ConOut verdict with separately captured ErrOut.
+ * EFI success for a clean ConOut is not valid when ErrOut still depends on
+ * NVIDIA, is ambiguous, or was not captured. No actuation is authorized. */
+int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
+                                 const GU_TOPO_CONSOLE_OWNERS *errout) {
+  if (graph_status == GU_TOPO_INVALID) return GU_TOPO_INVALID;
+  if (graph_status != GU_TOPO_COMPLETE &&
+      graph_status != GU_TOPO_INCOMPLETE &&
+      graph_status != GU_TOPO_CONFLICT) return GU_TOPO_INVALID;
+  if (errout_classified && errout &&
+      (errout->nvidia || errout->ambiguous)) return GU_TOPO_CONFLICT;
+  if (graph_status == GU_TOPO_CONFLICT) return GU_TOPO_CONFLICT;
+  if (!errout_classified || !errout || errout->unmatched ||
+      !errout->independent) return GU_TOPO_INCOMPLETE;
+  return graph_status;
+}
+
 /* Topology is derived from the captured device paths, not a selected board,
  * GPU model, PCI slot ordering or assumption that root ports are distinct. */
 int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {

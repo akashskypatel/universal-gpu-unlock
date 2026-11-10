@@ -245,6 +245,46 @@ int main(void) {
           owners.unmatched==0 && owners.ambiguous==0);
   }
 
+  /* Final passive verdict must include ErrOut, not only ConOut/GOP.
+   * The previously separate ErrOut logging did not veto EFI_SUCCESS. */
+  {
+    GU_TOPO_CONSOLE_OWNERS owners={0};
+    GU_TOPO_PATH errout[2];
+    int graph;
+    Baseline();
+    graph=GuTopoAssess(&snapshot,&report);
+    CHECK(graph==GU_TOPO_COMPLETE);
+    errout[0]=snapshot.pci[4].path; /* AMD error console. */
+    CHECK(GuTopoConsoleOwners(&snapshot,errout,1,&owners));
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,&owners)==GU_TOPO_COMPLETE);
+
+    errout[0]=snapshot.pci[1].path; /* NVIDIA-owned error console. */
+    CHECK(GuTopoConsoleOwners(&snapshot,errout,1,&owners));
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,&owners)==GU_TOPO_CONFLICT);
+    errout[0]=snapshot.pci[4].path;
+    errout[1]=snapshot.pci[3].path;
+    CHECK(GuTopoConsoleOwners(&snapshot,errout,2,&owners));
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,&owners)==GU_TOPO_CONFLICT);
+
+    errout[0]=Path(-1,0,15,0); /* Unknown endpoint. */
+    CHECK(GuTopoConsoleOwners(&snapshot,errout,1,&owners));
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,&owners)==GU_TOPO_INCOMPLETE);
+    CHECK(GuTopoCombinedConsoleVerdict(graph,0,&owners)==GU_TOPO_INCOMPLETE);
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,NULL)==GU_TOPO_INCOMPLETE);
+    owners=(GU_TOPO_CONSOLE_OWNERS){0};
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,&owners)==GU_TOPO_INCOMPLETE);
+    owners.ambiguous=1;
+    CHECK(GuTopoCombinedConsoleVerdict(graph,1,&owners)==GU_TOPO_CONFLICT);
+
+    owners=(GU_TOPO_CONSOLE_OWNERS){0};
+    owners.independent=1;
+    CHECK(GuTopoCombinedConsoleVerdict(GU_TOPO_INCOMPLETE,1,&owners)==GU_TOPO_INCOMPLETE);
+    CHECK(GuTopoCombinedConsoleVerdict(GU_TOPO_CONFLICT,1,&owners)==GU_TOPO_CONFLICT);
+    CHECK(GuTopoCombinedConsoleVerdict(GU_TOPO_INVALID,1,&owners)==GU_TOPO_INVALID);
+    CHECK(GuTopoCombinedConsoleVerdict(-1,1,&owners)==GU_TOPO_INVALID);
+    CHECK(GuTopoCombinedConsoleVerdict(GU_TOPO_COMPLETE,1,&owners)==GU_TOPO_COMPLETE);
+  }
+
   Baseline();snapshot.console[0]=snapshot.pci[1].path;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);
   CHECK(report.nvidia_console_count==1 && !report.independent_console_observed);

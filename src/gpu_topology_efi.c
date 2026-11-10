@@ -1157,6 +1157,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     SayPath("ERROUT",i,&error_paths[i]);
   }
   result=(pci_ok && gop_ok)?GuTopoAssess(&Snapshot,&Report):GU_TOPO_INVALID;
+  /* Preserve the graph-only result as separately inspectable evidence.
+   * The final verdict must also be vetoed by unsafe/unknown ErrOut. */
+  Say("GRAPH_ONLY_TOPOLOGY_VERDICT=%s ERROUT_INCLUDED_IN_FINAL=1\r\n",
+      result==GU_TOPO_COMPLETE?"COMPLETE":
+      result==GU_TOPO_INCOMPLETE?"INCOMPLETE":
+      result==GU_TOPO_CONFLICT?"CONFLICT":"INVALID");
+  result=GuTopoCombinedConsoleVerdict(result,error_classified,&error_owners);
   Say("PCI_CAPTURE=%u GOP_CAPTURE=%u CONOUT_CAPTURE=%u PCI_NODES=%zu GOP_NODES=%zu CONOUT_PATHS=%zu\r\n",
       (unsigned)pci_ok,(unsigned)gop_ok,(unsigned)console_ok,
       Snapshot.pci_count,Snapshot.gop_count,Snapshot.console_count);
