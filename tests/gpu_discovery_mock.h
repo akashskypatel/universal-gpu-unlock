@@ -17,6 +17,7 @@ typedef struct { uint32_t a; uint16_t b,c; uint8_t d[8]; } EFI_GUID;
 #define EFI_UNSUPPORTED 3
 #define EFI_INVALID_PARAMETER 2
 #define EFI_ALREADY_STARTED 4
+#define EFI_NOT_READY 5
 #define EFI_ERROR(s) ((s) != EFI_SUCCESS)
 #define ByProtocol 2
 #define EfiPciIoWidthUint32 1
