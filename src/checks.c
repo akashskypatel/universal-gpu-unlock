@@ -27,7 +27,7 @@ static BOOLEAN GuCheckConfigPolicy(const UINT32 Config[64], UINTN Segment, UINTN
 
   if (Out == NULL) return FALSE;
   *Out = Caps;
-  if (Config == NULL || Segment != 0 || Bus > 255 || Device > 31 || Function > 7)
+  if (Config == NULL || Segment > 0xffffU || Bus > 255 || Device > 31 || Function > 7)
     return FALSE;
   if (!GuIsSupportedPciId(Config[0]) ||
       ConfigByte(Config, 0x0b) != PCI_CLASS_DISPLAY ||

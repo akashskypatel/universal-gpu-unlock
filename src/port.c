@@ -65,7 +65,8 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
   return EFI_SUCCESS;
 }
 BOOLEAN GuTargetConfig(const UINT32 *C, UINTN S, UINTN B, UINTN D, UINTN F) {
-  return C && !S && B < 256 && !D && !F && GuIsSupportedPciId(C[0]) &&
+  return C && S <= 0xffffU && B < 256 && D < 32 && F < 8 &&
+    GuIsSupportedPciId(C[0]) &&
     ((C[2]>>16)==0x0300U || (C[2]>>16)==0x0302U) && !((C[3]>>16)&0x7f);
 }
 BOOLEAN GuSafeToReturn(VOID) {

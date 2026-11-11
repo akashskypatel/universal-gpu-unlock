@@ -38,6 +38,7 @@
 #define V67_FILE_GA102 "gpu-unlock/610.43.03/v67-ga102-610.43.03.bin"
 #define V67_FILE_AD102 "gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin"
 #define GSP_FILE "gpu-unlock/610.43.03/gsp_ga10x.bin"
+#define GSP_FILE_TU10X "gpu-unlock/610.43.03/gsp_tu10x.bin"
 #define BOOT_FILE_GA102 "gpu-unlock/610.43.03/gsp_boot_ga102.bin"
 #define BOOT_FILE_AD102 "gpu-unlock/610.43.03/gsp_boot_ad102.bin"
 #define BOOT_DESC_FILE_GA102 "gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin"
@@ -79,11 +80,11 @@ static const struct gpu_unlock_assets *unlock_assets(const struct pci_dev *pdev)
 		.arch = GU_BOOTER_AD10X, .boot_image_size = 36864,
 	};
 	static const struct gpu_unlock_assets tu102 = {
-		.booter = BOOTER_FILE_TU102, .gsp = GSP_FILE,
+		.booter = BOOTER_FILE_TU102, .gsp = GSP_FILE_TU10X,
 		.boot = BOOT_FILE_TU102, .desc = BOOT_DESC_FILE_TU102,
 		.payload = V67_FILE_TU102,
 		.signature_section = ".fwsignature_tu10x",
-		.arch = GU_BOOTER_TU10X, .boot_image_size = 24576,
+		.arch = GU_BOOTER_TU10X, .boot_image_size = 4096,
 	};
 
 	if (gpu_is_ada_device(pdev->device))
@@ -1837,6 +1838,11 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 	return ret;
 }
 
+MODULE_FIRMWARE(GSP_FILE_TU10X);
+MODULE_FIRMWARE(BOOTER_FILE_TU102);
+MODULE_FIRMWARE(V67_FILE_TU102);
+MODULE_FIRMWARE(BOOT_FILE_TU102);
+MODULE_FIRMWARE(BOOT_DESC_FILE_TU102);
 MODULE_FIRMWARE(BOOTER_FILE_GA102);
 MODULE_FIRMWARE(BOOTER_FILE_AD102);
 MODULE_FIRMWARE(V67_FILE_GA102);
