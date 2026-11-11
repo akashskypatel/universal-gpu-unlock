@@ -164,7 +164,6 @@ typedef uint16_t UINT16;
 typedef unsigned long UINTN;
 typedef wchar_t CHAR16;
 typedef void VOID;
-#define NULL ((void *)0)
 #define GU_ASSET_COUNT 5U
 typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
 typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
