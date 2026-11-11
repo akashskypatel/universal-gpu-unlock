@@ -205,25 +205,90 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
 
 }
 
+/* Only the explicitly configured Windows GPT ESP may supply a missing
+ * firmware file. Never search arbitrary partitions or write to this ESP. */
+static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
+                                                    const CHAR16 *path,VOID **out) {
+  if(!asset||!path||!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
+  *out=NULL;
+  EFI_BOOT_SERVICES *b=Table->BootServices;
+  EFI_HANDLE *handles=NULL,matched=NULL;
+  UINTN count=0,matches=0;
+  EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&FsGuid,NULL,&count,&handles);
+  if(s!=EFI_SUCCESS)return s;
+  if(!handles||!count||count>128U) {
+    if(handles)b->FreePool(handles);
+    return EFI_UNSUPPORTED;
+  }
+  for(UINTN i=0;i<count;i++) {
+    if(handles[i]==OwnVolume)continue;
+    EFI_DEVICE_PATH_PROTOCOL *dp=NULL;
+    UINTN bytes=0;BOOLEAN usb=FALSE,media=FALSE;
+    if(b->HandleProtocol(handles[i],&PathGuid,(VOID **)&dp)==EFI_SUCCESS&&
+       Inspect(dp,&bytes,&usb,&media)&&!usb&&
+       GuWindowsEspPathMatches((const uint8_t *)dp,bytes,
+                              (const uint8_t *)&WindowsPartition)) {
+      matches++;
+      matched=handles[i];
+    }
+  }
+  EFI_STATUS freed=b->FreePool(handles);
+  if(freed!=EFI_SUCCESS)return freed;
+  if(matches!=1U)return matches?EFI_UNSUPPORTED:EFI_NOT_FOUND;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
+  s=b->HandleProtocol(matched,&FsGuid,(VOID **)&fs);
+  if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
+  EFI_FILE_PROTOCOL *root=NULL;
+  s=fs->OpenVolume(fs,&root);
+  if(s!=EFI_SUCCESS||!root)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+  s=ReadFile(root,path,asset->bytes,out);
+  EFI_STATUS closed=root->Close(root);
+  if(s==EFI_SUCCESS&&closed!=EFI_SUCCESS)s=closed;
+  if(s==EFI_SUCCESS&&!GuHashMatches(*out,asset->bytes,asset->sha256))
+    s=EFI_CRC_ERROR;
+  if(s!=EFI_SUCCESS&&*out){GuFree(*out);*out=NULL;}
+  return s;
+}
+
 EFI_STATUS GuBootLoadAssets(VOID) {
   if(!Root||Gu.started)return EFI_NOT_READY;
   const GU_ARCH_ASSETS *arch=GuGetArchAssets();
-  if(!arch)return EFI_UNSUPPORTED; /* no verified Turing asset set */
+  if(!arch)return EFI_UNSUPPORTED;
+  EFI_STATUS status=EFI_SUCCESS;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
     VOID *p=NULL;
-    EFI_STATUS s=ReadFile(Root,a->path,a->bytes,&p);
-    if(s!=EFI_SUCCESS&&i==2&&arch->alternate_gsp_path)
-      s=ReadFile(Root,arch->alternate_gsp_path,a->bytes,&p);
-    if(s!=EFI_SUCCESS) {
-      GuLog("Pinned asset load failed: %s status=%#llx\n",
-            a->name,(unsigned long long)s);
-      return s;
+    status=ReadFile(Root,a->path,a->bytes,&p);
+    if(status!=EFI_SUCCESS&&i==2&&arch->alternate_gsp_path)
+      status=ReadFile(Root,arch->alternate_gsp_path,a->bytes,&p);
+    if(status!=EFI_SUCCESS)
+      status=ReadPinnedAssetFromConfiguredEsp(a,a->path,&p);
+    if(status!=EFI_SUCCESS&&i==2&&arch->alternate_gsp_path)
+      status=ReadPinnedAssetFromConfiguredEsp(a,arch->alternate_gsp_path,&p);
+    if(status!=EFI_SUCCESS) {
+      GuLog("Pinned asset unavailable from USB/configured ESP: %s status=%#llx\n",
+            a->name,(unsigned long long)status);
+      break;
+    }
+    /* Verify every fallback immediately; do not accept matching filenames
+     * from the internal partition without the original signed-data digest. */
+    if(!GuHashMatches(p,a->bytes,a->sha256)) {
+      GuFree(p);
+      status=EFI_CRC_ERROR;
+      break;
     }
     GuAssets[i].name=a->name;
     GuAssets[i].firmware=(struct firmware){a->bytes,p};
   }
-  return GuAd104AssetsValid()?EFI_SUCCESS:EFI_CRC_ERROR;
+  if(status==EFI_SUCCESS&&!GuAd104AssetsValid())status=EFI_CRC_ERROR;
+  if(status!=EFI_SUCCESS) {
+    for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
+      if(GuAssets[i].firmware.data)GuFree((VOID *)GuAssets[i].firmware.data);
+      GuAssets[i].name=NULL;
+      GuAssets[i].firmware=(struct firmware){0,NULL};
+    }
+  }
+  return status;
 }
 
 static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN *file_size,VOID **data) {

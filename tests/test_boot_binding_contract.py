@@ -23,6 +23,19 @@ class BootBinding(unittest.TestCase):
         self.assertIn("EFI_HANDLE GuBootGetTargetEspVolume(VOID)",BOOT)
         self.assertIn("const CHAR16 *GuBootGetLogPath(VOID)",BOOT)
         self.assertIn("EFI_HANDLE GuBootGetTargetEspVolume(VOID);",HEADER)
+    def test_asset_fallback_is_only_pinned_read_only_esp(self):
+        c=BOOT.split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[1].split("EFI_STATUS GuBootLoadAssets(",1)[0]
+        self.assertIn("GuWindowsEspPathMatches(",c)
+        self.assertIn("(const uint8_t *)&WindowsPartition",c)
+        self.assertIn("matches!=1U",c)
+        self.assertIn("GuHashMatches(",c)
+        self.assertNotIn("SetVariable(",c)
+        self.assertNotIn("EFI_FILE_MODE_WRITE",c)
+        self.assertNotIn("EFI_FILE_MODE_CREATE",c)
+        loader=BOOT.split("EFI_STATUS GuBootLoadAssets(",1)[1].split("static EFI_STATUS ReadWindowsBinary(",1)[0]
+        self.assertIn("ReadPinnedAssetFromConfiguredEsp(",loader)
+        self.assertIn("GuFree((VOID *)GuAssets[i].firmware.data)",loader)
+
     def test_log_path_requires_open_log(self):
         self.assertIn("return Log?ActiveLogPath:NULL;",BOOT)
         self.assertIn("ActiveLogPath[14+k]=name[k]",BOOT)
