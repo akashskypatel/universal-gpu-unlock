@@ -259,11 +259,11 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
     VOID *p=NULL;
     status=ReadFile(Root,a->path,a->bytes,&p);
-    if(status!=EFI_SUCCESS&&i==2&&arch->alternate_gsp_path)
+    if(status==EFI_NOT_FOUND&&i==2&&arch->alternate_gsp_path)
       status=ReadFile(Root,arch->alternate_gsp_path,a->bytes,&p);
-    if(status!=EFI_SUCCESS)
+    if(status==EFI_NOT_FOUND)
       status=ReadPinnedAssetFromConfiguredEsp(a,a->path,&p);
-    if(status!=EFI_SUCCESS&&i==2&&arch->alternate_gsp_path)
+    if(status==EFI_NOT_FOUND&&i==2&&arch->alternate_gsp_path)
       status=ReadPinnedAssetFromConfiguredEsp(a,arch->alternate_gsp_path,&p);
     if(status!=EFI_SUCCESS) {
       GuLog("Pinned asset unavailable from USB/configured ESP: %s status=%#llx\n",
