@@ -8,6 +8,7 @@
 #include "profile.h"
 
 #include "msi_release.h"
+#include "unlock_execution.h"
 
 #include "boot_io.h"
 
@@ -162,94 +163,23 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   }
 
-  stage="MSI-preflight";s=GuMsiPreflight(t,image,Gu.handle);if(s!=EFI_SUCCESS||Gu.fault)goto failed;
-
   GuBootSay(
-    L"\r\n=======================================================\r\n"
-    L" UNIVERSAL GPU UNLOCK v1.7.5 - Status Monitor\r\n"
-    L"=======================================================\r\n"
-    L" [1/4] GPU and PCIe Topology Discovery ..... [ OK ]\r\n"
-    L" [2/4] Pinned Assets and ROM Preflight ...... [ OK ]\r\n"
-    L" [3/4] GPU Driver/Display Handover ......... [ PENDING ]\r\n"
-    L" [4/4] Hardware SEC2 and MSR Unlock ........ [ PENDING ]\r\n\r\n"
-  );
-
-  GuLog("Operator U: one physical attempt; no retries; display callbacks disabled\n");
-
-  if(Gu.fault){s=EFI_DEVICE_ERROR;goto failed;}
-
+    L"\r\nSelected GPU preparation passed. Driver release and firmware work will now begin.\r\n");
+  GuLog("Operator U/P: one selected physical attempt; no automatic retry\n");
   GuBootSilence();
-
-  stage="MSI-release";s=GuMsiRelease();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
-
-  if(!GuMsiReleased()||!GuAd104ColdEntry()){s=EFI_NOT_READY;goto failed;}
-
-  Gu.display_check=GuMsiReleased;Gu.display_ok=TRUE;Gu.armed=TRUE;
-
-  UINT64 mask=0xffffffffffffULL;
-
-  struct pci_dev dev={.vendor=0x10de,.device=Gu.device_id,.dev={.dma_mask=&mask,.coherent_dma_mask=0xfffffffffULL},
-
-    .current_state=PCI_D0,.pm_cap=Gu.pm_cap,.refs=1};
-
-  struct gpu_unlock_610_shared shared={0};
-
-  stage="shared-assets";int result=gpu_unlock_610_load_shared(&dev,&shared);
-
-  if(!result) {stage="firmware-transaction";result=gpu_unlock_610_unlock(&dev,&shared);}
-
-  gpu_unlock_610_release_shared(&shared);
-
-  GuLog("Transaction result=%d safe=%u retained=%u started=%u quiesced=%u flrs=%u DMA_live=%u\n",
-
-    result,GuSafeToReturn(),Gu.retained,Gu.started,Gu.quiesced,Gu.flrs,Gu.dma_count);
-
-  if(result||Gu.fault||!GuSafeToReturn()){s=EFI_DEVICE_ERROR;goto failed;}
-
-  stage="release-exclusive-claim";s=GuMsiFinish();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  stage="selected-gpu-execution";
+  s=GuExecuteUnlock(t,image,&stage);
+  if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   /* The final pre-Windows consistency check has not completed yet. Do not announce success. */
 
   /* Probe and register S3 Boot Script for standby persistence if operator chose [P] */
 
-  if (enable_s3) {
-
-    static EFI_GUID S3SaveStateGuid = EFI_S3_SAVE_STATE_PROTOCOL_GUID;
-
-    EFI_S3_SAVE_STATE_PROTOCOL *s3 = NULL;
-
-    EFI_STATUS s3_status = t->BootServices->LocateProtocol(&S3SaveStateGuid, NULL, (VOID **)&s3);
-
-    GuLog("S3-Persistence (requested): LocateProtocol status=%#llx proto=%p\n", (unsigned long long)s3_status, s3);
-
-    if (s3_status == EFI_SUCCESS && s3 && s3->Write) {
-
-      UINT32 val_ss0 = 0x88888888;
-
-      UINT32 val_ss1 = 0x00000008;
-
-      UINT64 addr_ss0 = (UINT64)Gu.bar_base + 0x0082381cULL;
-
-      UINT64 addr_ss1 = (UINT64)Gu.bar_base + 0x00823820ULL;
-
-      EFI_STATUS w0 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss0, (UINTN)1, &val_ss0);
-
-      EFI_STATUS w1 = s3->Write(s3, EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE, EfiBootScriptWidthUint32, addr_ss1, (UINTN)1, &val_ss1);
-
-      GuLog("S3-Persistence: registered SS0 write status=%#llx, SS1 write status=%#llx\n",
-
-            (unsigned long long)w0, (unsigned long long)w1);
-
-    } else {
-
-      GuLog("S3-Persistence: S3SaveState protocol not available in DXE phase\n");
-
-    }
-
+  if(enable_s3) {
+    EFI_STATUS s3=GuRegisterS3(t);
+    GuLog("S3 persistence requested: status=%#llx\n",(unsigned long long)s3);
   } else {
-
-    GuLog("S3-Persistence: skipped by operator (standard mode U)\n");
-
+    GuLog("S3 persistence skipped by operator\n");
   }
 
   stage="final-Windows-verification";if(!GuMsiReadyForWindows()){s=EFI_NOT_READY;goto failed;}

@@ -46,7 +46,7 @@ class ReadyToBootOrderTests(unittest.TestCase):
         body = function_body("GuDxeRun")
         self.assertIn("GU_ACTIVE_SEQUENCE_PREPARE_ONLY", body)
         self.assertIn("ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1", body)
-        self.assertLess(body.index("GuDiscoverSingleGpu("), body.index("GuMsiRelease("))
+        self.assertLess(body.index("GuDiscoverSingleGpu("), body.index("GuExecuteUnlock("))
 
 
 if __name__ == "__main__":

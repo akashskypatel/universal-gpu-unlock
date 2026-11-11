@@ -25,6 +25,9 @@ on:
       - 'src/profile.c'
       - 'src/vendor/prep_610.c'
       - 'src/msi_release.c'
+      - 'src/unlock_execution.c'
+      - 'src/unlock_execution.h'
+      - 'tests/test_unlock_execution_contract.py'
       - 'src/gpu_device_path.h'
       - 'src/pci_master_policy.h'
       - 'tests/test_pci_master_policy.c'
@@ -113,6 +116,7 @@ jobs:
               "$RUNNER_TEMP/test_gpu_device_path_$compiler"
             done
             python3 -m unittest discover -s tests -p test_dxe_ready_to_boot.py -v
+            python3 -m unittest discover -s tests -p test_unlock_execution_contract.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_$compiler"

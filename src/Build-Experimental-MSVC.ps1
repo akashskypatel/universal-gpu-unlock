@@ -52,6 +52,7 @@ try {
         'driver_nvram.c',
         'boot_io.c',
         'msi_release.c',
+        'unlock_execution.c',
         'port.c',
         'compat.c',
         'checks.c',
