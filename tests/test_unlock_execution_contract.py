@@ -206,6 +206,17 @@ int main(int argc,char **argv) {
             self.assertLess(code.index("GuExecuteUnlock("),code.index("GuRegisterS3("))
         s3=body(SHARED,"GuRegisterS3")
         self.assertIn("GuSafeToReturn()",s3)
+        self.assertIn("GuMsiReadyForWindows()",s3)
         self.assertIn("EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE",s3)
+        self.assertIn("Gu.retained=TRUE",s3)
+        self.assertLess(s3.index("attempted=TRUE"),s3.index("s3->Write("))
+        self.assertLess(s3.index("if(a!=EFI_SUCCESS)"),s3.index("EFI_STATUS b=s3->Write("))
+        for source in (APP,DXE):
+            self.assertIn("if(Gu.retained)",source)
+            self.assertIn("s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3",source)
+        dxe=body(DXE,"GuDxeRun")
+        after_s3=dxe[dxe.index("GuRegisterS3("):]
+        self.assertIn("!GuMsiReadyForWindows() || !GuSafeToReturn()",after_s3)
+        self.assertIn("s=EFI_NOT_READY;",after_s3)
 
 if __name__=="__main__":unittest.main()
