@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "unlock_execution.h"
 #include "msi_release.h"
+#include "gpu_discovery.h"
 #include "profile.h"
 #include "compat/compat.h"
 #include "vendor/unlock_610.h"
@@ -8,7 +9,7 @@
 
 /* The app and the DXE driver must not diverge on the release/firmware
  * order or skip the final selected-target Windows handover validation. */
-EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
+static EFI_STATUS GuExecuteUnlockCore(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
                            const char **stage)
 {
   EFI_STATUS s;
@@ -55,6 +56,33 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
   if(!GuMsiReadyForWindows()||Gu.fault)return EFI_NOT_READY;
   GuLog("Selected preboot transaction verified; stock Windows driver acceptance and throughput remain unverified\n");
   return EFI_SUCCESS;
+}
+
+/* The ordered-state transition is tied to the actual shared transaction.
+ * The existing MSI preflight/Stop and final handover remain authoritative:
+ * this CPU-only record must never be used as their replacement. */
+EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
+                           const char **stage) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(!table || !table->BootServices || !image || !stage)
+    return EFI_INVALID_PARAMETER;
+  *stage="selected-gpu-state-begin";
+  EFI_STATUS s=GuBeginSelectedGpuStep(table);
+  if(s!=EFI_SUCCESS)return s;
+  s=GuExecuteUnlockCore(table,image,stage);
+  if(s!=EFI_SUCCESS || Gu.fault) {
+    GuAbortSelectedGpuStep();
+    return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+  }
+  *stage="selected-gpu-state-finish";
+  /* Core already checked GuMsiFinish and the full Windows handover. */
+  s=GuFinishSelectedGpuStep(table,GuMsiReadyForWindows() &&
+                             !Gu.fault && GuSafeToReturn());
+  if(s!=EFI_SUCCESS)GuAbortSelectedGpuStep();
+  return s;
+#else
+  return GuExecuteUnlockCore(table,image,stage);
+#endif
 }
 
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table)

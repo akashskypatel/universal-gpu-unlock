@@ -22,7 +22,7 @@ def body(source,name):
 
 class SharedExecutionContract(unittest.TestCase):
     def test_complete_order(self):
-        core=body(SHARED,"GuExecuteUnlock")
+        core=body(SHARED,"GuExecuteUnlockCore")
         ops=["GuMsiPreflight(","GuMsiRelease(","GuMsiReleased(","GuAd104ColdEntry(",
              "gpu_unlock_610_load_shared(","gpu_unlock_610_unlock(",
              "gpu_unlock_610_release_shared(","GuSafeToReturn(","GuMsiFinish(",
@@ -31,6 +31,24 @@ class SharedExecutionContract(unittest.TestCase):
         self.assertEqual(indices,sorted(indices))
         self.assertIn("*stage=",core)
         self.assertIn("result||Gu.fault",core)
+    def test_selected_step_is_wrapped_around_real_handover(self):
+        wrapper=body(SHARED,"GuExecuteUnlock")
+        begin=wrapper.index("GuBeginSelectedGpuStep(")
+        core=wrapper.index("GuExecuteUnlockCore(")
+        finish=wrapper.index("GuFinishSelectedGpuStep(")
+        self.assertLess(begin,core)
+        self.assertLess(core,finish)
+        self.assertIn("GuMsiReadyForWindows()",wrapper)
+        self.assertIn("GuSafeToReturn()",wrapper)
+        self.assertEqual(wrapper.count("GuAbortSelectedGpuStep()"),2)
+        discovery=(ROOT/"gpu_discovery.c").read_text(encoding="utf-8")
+        self.assertIn("GuGpuExecInit(&candidate",discovery)
+        self.assertLess(discovery.index("GuGpuExecInit(&candidate"),
+                        discovery.index("s=GuInit(table->BootServices,io);"))
+        self.assertIn("GuGpuExecBegin(&ActiveSequence",discovery)
+        self.assertIn("GuGpuExecFinish(&ActiveSequence",discovery)
+        self.assertIn("GuGpuExecAbort(&ActiveSequence)",discovery)
+
     def test_both_entrypoints_share_transaction(self):
         for src,name in [(APP,"UefiMain"),(DXE,"GuDxeRun")]:
             with self.subTest(name=name):
