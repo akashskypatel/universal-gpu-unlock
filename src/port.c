@@ -9,31 +9,27 @@ GU_PLATFORM *GuPlatformActive=&LegacyPlatform;
 static BOOLEAN TargetBound;
 static const GU_PLATFORM EmptyPlatform;
 #ifdef GU_ENTRY_LATCHED
-static BOOLEAN EntryLatched;
-static UINT32 EntrySs0,EntrySs1;
 BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1) {
-  if(!EntryLatched || !Ss0 || !Ss1)return FALSE;
-  *Ss0=EntrySs0;*Ss1=EntrySs1;return TRUE;
+  if(!Gu.entry_latched || !Ss0 || !Ss1)return FALSE;
+  *Ss0=Gu.entry_ss0;*Ss1=Gu.entry_ss1;return TRUE;
 }
 BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1) {
-  return EntryLatched && Gu.prom_verified && !Gu.fault && Ss0==EntrySs0 && Ss1==EntrySs1;
+  return Gu.entry_latched && Gu.prom_verified && !Gu.fault && Ss0==Gu.entry_ss0 && Ss1==Gu.entry_ss1;
 }
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0, UINT32 Ss1) {
   if(Gu.fault || !Gu.prom_verified || Gu.started || Ss0==0xffffffffU ||
      (Ss0&0xffff0000U)==0xbadf0000U || Ss0==0x88888888U || Ss1>0xfU)return FALSE;
-  if(EntryLatched)return GuEntrySelectorsMatch(Ss0,Ss1);
-  EntrySs0=Ss0;EntrySs1=Ss1;EntryLatched=TRUE;return TRUE;
+  if(Gu.entry_latched)return GuEntrySelectorsMatch(Ss0,Ss1);
+  Gu.entry_ss0=Ss0;Gu.entry_ss1=Ss1;Gu.entry_latched=TRUE;return TRUE;
 }
 #endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
-static UINT32 SelectorPhase;
-static BOOLEAN Ss1WriteConsumed;
 BOOLEAN GuSelectorPhase(UINT32 Phase) {
   UINT32 entry0,entry1,ss0,ss1;
   /* ENTRY is established only by GuInit, never by this transition API. */
-  if(!((SelectorPhase==GU_SELECTOR_PHASE_ENTRY && Phase==GU_SELECTOR_PHASE_SS0_WRITTEN && !Ss1WriteConsumed) ||
-       (SelectorPhase==GU_SELECTOR_PHASE_SS0_WRITTEN && Phase==GU_SELECTOR_PHASE_SS1_WRITE && !Ss1WriteConsumed) ||
-       (SelectorPhase==GU_SELECTOR_PHASE_SS1_WRITE && Phase==GU_SELECTOR_PHASE_TARGET && Ss1WriteConsumed))) {
+  if(!((Gu.selector_phase==GU_SELECTOR_PHASE_ENTRY && Phase==GU_SELECTOR_PHASE_SS0_WRITTEN && !Gu.ss1_write_consumed) ||
+       (Gu.selector_phase==GU_SELECTOR_PHASE_SS0_WRITTEN && Phase==GU_SELECTOR_PHASE_SS1_WRITE && !Gu.ss1_write_consumed) ||
+       (Gu.selector_phase==GU_SELECTOR_PHASE_SS1_WRITE && Phase==GU_SELECTOR_PHASE_TARGET && Gu.ss1_write_consumed))) {
     Gu.fault=TRUE;return FALSE;
   }
   if(!Gu.profile_verified || !Gu.armed || !Gu.owned || Gu.fault || !Gu.prom_verified ||
@@ -46,7 +42,7 @@ BOOLEAN GuSelectorPhase(UINT32 Phase) {
     Gu.fault=TRUE;return FALSE;
   }
   (void)entry0;
-  SelectorPhase=Phase;return TRUE;
+  Gu.selector_phase=Phase;return TRUE;
 }
 #endif
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
@@ -70,10 +66,10 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
   TargetBound=TRUE; /* Spend before any state is changed. */
   memset(&Gu,0,sizeof(Gu)); Gu.bs=Bs; Gu.pci=Pci;
 #ifdef GU_ENTRY_LATCHED
-  EntryLatched=FALSE;EntrySs0=EntrySs1=0;
+  Gu.entry_latched=FALSE;Gu.entry_ss0=Gu.entry_ss1=0;
 #endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
-  SelectorPhase=GU_SELECTOR_PHASE_ENTRY;Ss1WriteConsumed=FALSE;
+  Gu.selector_phase=GU_SELECTOR_PHASE_ENTRY;Gu.ss1_write_consumed=FALSE;
 #endif
   return EFI_SUCCESS;
 }
@@ -161,11 +157,11 @@ VOID GuWrite32(UINT32 O, UINT32 V) {
   if(GU_PREFLIGHT_ONLY || !Gu.profile_verified || !Gu.pci || !Gu.armed || !Gu.owned || !Gu.display_ok || (O&3) ||
       (UINT64)O+4>Gu.bar_size) {Gu.fault=TRUE;return;}
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
-  if(O==0x823820 && (V!=0x8U || SelectorPhase!=GU_SELECTOR_PHASE_SS1_WRITE || Ss1WriteConsumed)) {
+  if(O==0x823820 && (V!=0x8U || Gu.selector_phase!=GU_SELECTOR_PHASE_SS1_WRITE || Gu.ss1_write_consumed)) {
     Gu.fault=TRUE;return;
   }
   /* Spend before the external callback: reentry and errors cannot retry. */
-  if(O==0x823820)Ss1WriteConsumed=TRUE;
+  if(O==0x823820)Gu.ss1_write_consumed=TRUE;
 #endif
   Gu.mmio_writes++;
   if(EFI_ERROR(Gu.pci->Mem.Write(Gu.pci,EfiPciIoWidthUint32,0,O,1,&V)))Gu.fault=TRUE;
@@ -319,7 +315,7 @@ EFI_STATUS GuFlr(VOID) {
 #ifdef GU_ENTRY_LATCHED_SS1_PRESERVE
      Ss1!=Entry1
 #else
-     Ss1!=0x8U || SelectorPhase!=GU_SELECTOR_PHASE_TARGET
+     Ss1!=0x8U || Gu.selector_phase!=GU_SELECTOR_PHASE_TARGET
 #endif
      )return EFI_NOT_READY;
 #endif

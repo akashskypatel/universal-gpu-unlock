@@ -120,6 +120,15 @@ typedef struct {
   UINT32 flrs, mmio_writes, dma_count;
   GU_DMA *allocations;
   BOOLEAN (*display_check)(VOID);
+#ifdef GU_ENTRY_LATCHED
+  /* Per-physical-GPU selector values, never shared with another adapter. */
+  BOOLEAN entry_latched;
+  UINT32 entry_ss0,entry_ss1;
+#endif
+#ifdef GU_ENTRY_LATCHED_SS1_FULL
+  UINT32 selector_phase;
+  BOOLEAN ss1_write_consumed;
+#endif
 } GU_PLATFORM;
 /* All source modules resolve the selected card's concrete platform object.
  * The legacy single-target image uses the original static slot. */

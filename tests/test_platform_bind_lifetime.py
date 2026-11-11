@@ -30,6 +30,80 @@ def function(name):
 
 
 class TargetBindTest(unittest.TestCase):
+    def test_selector_latches_and_write_phase_are_card_private(self):
+        first = SOURCE.index("BOOLEAN GuGetEntrySelectors(")
+        middle = SOURCE.index("#endif\n#ifdef GU_ENTRY_LATCHED_SS1_FULL", first)
+        last = SOURCE.index("#endif\nEFI_STATUS GuInit(", middle)
+        actual_latch = SOURCE[first:middle]
+        actual_phase = SOURCE[SOURCE.index("BOOLEAN GuSelectorPhase(", middle):last]
+        host = r"""
+#include <stdint.h>
+#include <stdio.h>
+typedef uint32_t UINT32;
+typedef int BOOLEAN;
+#define TRUE 1
+#define FALSE 0
+#define GU_SELECTOR_PHASE_ENTRY 0U
+#define GU_SELECTOR_PHASE_SS0_WRITTEN 1U
+#define GU_SELECTOR_PHASE_SS1_WRITE 2U
+#define GU_SELECTOR_PHASE_TARGET 3U
+typedef struct {
+  BOOLEAN entry_latched,ss1_write_consumed;
+  BOOLEAN prom_verified,profile_verified,started,fault,armed,owned;
+  UINT32 entry_ss0,entry_ss1,selector_phase,mmio_ss0,mmio_ss1;
+} GU_PLATFORM;
+static GU_PLATFORM a,b;
+static GU_PLATFORM *GuPlatformActive=&a;
+#define Gu (*GuPlatformActive)
+static UINT32 GuRead32(UINT32 offset) {
+  return offset==0x82381cU?Gu.mmio_ss0:Gu.mmio_ss1;
+}
+""" + actual_latch + actual_phase + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  UINT32 ss0=0,ss1=0;
+  a.prom_verified=b.prom_verified=1;
+  CHECK(GuLatchEntrySelectors(0x03100062U,2));
+  CHECK(GuGetEntrySelectors(&ss0,&ss1) && ss0==0x03100062U && ss1==2);
+  GuPlatformActive=&b;
+  CHECK(!GuGetEntrySelectors(&ss0,&ss1));
+  CHECK(GuLatchEntrySelectors(0x03000062U,4));
+  CHECK(GuGetEntrySelectors(&ss0,&ss1) && ss0==0x03000062U && ss1==4);
+  GuPlatformActive=&a;
+  CHECK(GuGetEntrySelectors(&ss0,&ss1) && ss0==0x03100062U && ss1==2);
+  CHECK(GuLatchEntrySelectors(0x03100062U,2));
+  CHECK(!GuLatchEntrySelectors(0x03000062U,2));
+  a.profile_verified=a.armed=a.owned=1;
+  a.mmio_ss0=0x88888888U;a.mmio_ss1=2U;
+  CHECK(GuSelectorPhase(GU_SELECTOR_PHASE_SS0_WRITTEN));
+  CHECK(a.selector_phase==GU_SELECTOR_PHASE_SS0_WRITTEN);
+  GuPlatformActive=&b;
+  CHECK(b.selector_phase==GU_SELECTOR_PHASE_ENTRY);
+  CHECK(!GuSelectorPhase(GU_SELECTOR_PHASE_TARGET) && b.fault);
+  GuPlatformActive=&a;
+  CHECK(!a.fault && a.selector_phase==GU_SELECTOR_PHASE_SS0_WRITTEN);
+  CHECK(GuSelectorPhase(GU_SELECTOR_PHASE_SS1_WRITE));
+  a.ss1_write_consumed=TRUE;a.mmio_ss1=8U;
+  CHECK(GuSelectorPhase(GU_SELECTOR_PHASE_TARGET));
+  CHECK(a.selector_phase==GU_SELECTOR_PHASE_TARGET);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "selector_isolation.c"
+            binary = Path(directory) / "selector_isolation"
+            source.write_text(host, encoding="utf-8")
+            compiled = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2",
+                 "-Wall", "-Wextra", "-Werror", "-pedantic",
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            executed = subprocess.run([str(binary)],
+                                      capture_output=True, text=True)
+            self.assertEqual(executed.returncode, 0,
+                             executed.stdout + executed.stderr)
+
     def test_selected_platform_uses_new_backing_and_retains_one_shot(self):
         original = function("GuInit")
         host = r"""
