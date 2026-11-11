@@ -68,6 +68,7 @@ on:
       - 'README.md'
       - 'src/dxe_main.c'
       - 'tests/test_gpu_discovery.c'
+      - 'tests/gpu_discovery_mock.h'
       - 'src/gpu_pci_observation*'
       - 'tests/gpu_pci_observation_mock.h'
       - 'tests/test_gpu_pci_observation.c'
