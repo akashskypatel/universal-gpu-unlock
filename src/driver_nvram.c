@@ -205,12 +205,49 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   return s;
 }
 
+/* Remove only verified own slots from DriverOrder; preserve all other entries. */
+static EFI_STATUS RemoveOwnedFromOrder(EFI_RUNTIME_SERVICES *rs,
+                                        const UINT16 order[GU_DRIVER_ORDER_MAX],
+                                        UINTN count,
+                                        const BOOLEAN own[GU_DRIVER_SCAN_SLOTS]) {
+  UINT16 kept[GU_DRIVER_ORDER_MAX];
+  UINTN kept_count = 0;
+  if (!rs || !rs->SetVariable || !order || !own || count > GU_DRIVER_ORDER_MAX)
+    return EFI_INVALID_PARAMETER;
+  for (UINTN i = 0; i < count; i++) {
+    if (order[i] >= GU_DRIVER_SCAN_SLOTS || !own[order[i]])
+      kept[kept_count++] = order[i];
+  }
+  if (kept_count == count) return EFI_SUCCESS;
+  return rs->SetVariable(L"DriverOrder", &GlobalGuid, GU_DRIVER_VAR_ATTRS,
+                         kept_count * sizeof(UINT16), kept_count ? kept : NULL);
+}
+
+/* Disable future automatic startup without deleting driver options or files.
+ * This is a separate, explicit operation; the DXE error path does not call it.
+ * An unreadable or malformed variable causes refusal before any NVRAM write. */
+EFI_STATUS GuDisableDriverOption(EFI_SYSTEM_TABLE *t) {
+  if (!t || !t->RuntimeServices || !t->RuntimeServices->GetVariable ||
+      !t->RuntimeServices->SetVariable) return EFI_INVALID_PARAMETER;
+  EFI_RUNTIME_SERVICES *rs = t->RuntimeServices;
+  UINT16 order[GU_DRIVER_ORDER_MAX];
+  UINTN count = 0, first_own = 0, first_free = 0;
+  BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
+
+  EFI_STATUS s = ReadDriverOrder(rs, order, &count);
+  if (s != EFI_SUCCESS) return s;
+  s = ScanDriverOptions(rs, own, &first_own, &first_free);
+  if (s != EFI_SUCCESS) return s;
+  if (first_own == GU_DRIVER_SCAN_SLOTS) return EFI_NOT_FOUND;
+  return RemoveOwnedFromOrder(rs, order, count, own);
+}
+
 EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {
   if (!t || !t->RuntimeServices) return EFI_INVALID_PARAMETER;
   EFI_RUNTIME_SERVICES *rs = t->RuntimeServices;
 
-  UINT16 order[GU_DRIVER_ORDER_MAX], kept[GU_DRIVER_ORDER_MAX];
-  UINTN count = 0, kept_count = 0, first_own = 0, first_free = 0;
+  UINT16 order[GU_DRIVER_ORDER_MAX];
+  UINTN count = 0, first_own = 0, first_free = 0;
   BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
   EFI_STATUS s = ReadDriverOrder(rs, order, &count);
   if (s != EFI_SUCCESS) return s;
@@ -218,14 +255,8 @@ EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {
   if (s != EFI_SUCCESS) return s;
   if (first_own == GU_DRIVER_SCAN_SLOTS) return EFI_NOT_FOUND;
 
-  for (UINTN i = 0; i < count; i++) {
-    if (order[i] >= GU_DRIVER_SCAN_SLOTS || !own[order[i]]) kept[kept_count++] = order[i];
-  }
-  if (kept_count != count) {
-    s = rs->SetVariable(L"DriverOrder", &GlobalGuid, GU_DRIVER_VAR_ATTRS,
-                        kept_count * sizeof(UINT16), kept_count ? kept : NULL);
-    if (s != EFI_SUCCESS) return s;
-  }
+  s = RemoveOwnedFromOrder(rs, order, count, own);
+  if (s != EFI_SUCCESS) return s;
 
   EFI_STATUS result = EFI_SUCCESS;
   for (UINTN slot = first_own; slot < GU_DRIVER_SCAN_SLOTS; slot++) {
