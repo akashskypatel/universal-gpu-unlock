@@ -30,6 +30,112 @@ def function(name):
 
 
 class TargetBindTest(unittest.TestCase):
+    def test_selected_platform_uses_new_backing_and_retains_one_shot(self):
+        original = function("GuInit")
+        host = r"""
+#define GU_ACTIVE_SINGLE_TARGET 1
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef void VOID;
+typedef int BOOLEAN;
+typedef uintptr_t EFI_STATUS;
+typedef struct {int a;} EFI_PCI_IO_PROTOCOL;
+typedef struct EFI_BOOT_SERVICES {
+  EFI_STATUS (*AllocatePool)(int, size_t, VOID **);
+} EFI_BOOT_SERVICES;
+typedef struct {
+  EFI_BOOT_SERVICES *bs;
+  EFI_PCI_IO_PROTOCOL *pci;
+  int fault,started,retained,owned;
+  VOID *allocations;
+} GU_PLATFORM;
+#define TRUE 1
+#define FALSE 0
+#define EfiLoaderData 2
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 2
+#define EFI_ACCESS_DENIED 3
+#define EFI_ALREADY_STARTED 4
+#define EFI_UNSUPPORTED 5
+#define EFI_OUT_OF_RESOURCES 6
+static GU_PLATFORM LegacyPlatform;
+GU_PLATFORM *GuPlatformActive=&LegacyPlatform;
+#define Gu (*GuPlatformActive)
+static BOOLEAN TargetBound;
+static const GU_PLATFORM EmptyPlatform;
+static unsigned allocations,fail_alloc,empty_alloc;
+static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
+  if(kind!=EfiLoaderData || !out)return EFI_INVALID_PARAMETER;
+  allocations++;
+  if(fail_alloc)return EFI_OUT_OF_RESOURCES;
+  *out=empty_alloc?NULL:calloc(1,bytes);
+  return EFI_SUCCESS;
+}
+""" + original + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(int argc,char **argv) {
+  int mode=argc>1?argv[1][0]-'0':-1;
+  EFI_BOOT_SERVICES bs={Allocate};
+  EFI_PCI_IO_PROTOCOL first={1},second={2};
+  if(mode==0) {
+    CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
+    CHECK(GuPlatformActive!=&LegacyPlatform && allocations==1);
+    CHECK(Gu.bs==&bs && Gu.pci==&first);
+    Gu.retained=1;Gu.allocations=(VOID *)(uintptr_t)0x1234U;
+    GU_PLATFORM *saved=GuPlatformActive;
+    CHECK(GuInit(&bs,&second)==EFI_ALREADY_STARTED);
+    CHECK(GuPlatformActive==saved && allocations==1 && Gu.retained);
+  } else if(mode==1) {
+    fail_alloc=1;
+    CHECK(GuInit(&bs,&first)==EFI_OUT_OF_RESOURCES);
+    CHECK(GuPlatformActive==&LegacyPlatform && !TargetBound);
+    fail_alloc=0;
+    CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
+    CHECK(GuPlatformActive!=&LegacyPlatform && allocations==2);
+  } else if(mode==2) {
+    Gu.fault=1;
+    CHECK(GuInit(&bs,&first)==EFI_ACCESS_DENIED);
+    CHECK(allocations==0 && GuPlatformActive==&LegacyPlatform);
+    Gu.fault=0;
+    CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
+  } else if(mode==3) {
+    empty_alloc=1;
+    CHECK(GuInit(&bs,&first)==EFI_OUT_OF_RESOURCES);
+    CHECK(!TargetBound && GuPlatformActive==&LegacyPlatform);
+    empty_alloc=0;
+    CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
+  } else if(mode==4) {
+    bs.AllocatePool=NULL;
+    CHECK(GuInit(&bs,&first)==EFI_UNSUPPORTED);
+    CHECK(!TargetBound && allocations==0);
+    bs.AllocatePool=Allocate;
+    CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
+    memset(&Gu,0,sizeof(Gu));
+    CHECK(GuInit(&bs,&second)==EFI_ALREADY_STARTED);
+  } else return 3;
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "selected_platform.c"
+            executable = Path(directory) / "selected_platform"
+            source.write_text(host, encoding="utf-8")
+            result = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2",
+                 "-Wall", "-Wextra", "-Werror", "-pedantic",
+                 str(source), "-o", str(executable)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for mode in range(5):
+                with self.subTest(mode=mode):
+                    result = subprocess.run([str(executable), str(mode)],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+
     def test_original_platform_rebind_guard(self):
         body = function("GuInit")
         declaration = "static BOOLEAN TargetBound;"

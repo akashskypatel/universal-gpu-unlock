@@ -121,7 +121,10 @@ typedef struct {
   GU_DMA *allocations;
   BOOLEAN (*display_check)(VOID);
 } GU_PLATFORM;
-extern GU_PLATFORM Gu;
+/* All source modules resolve the selected card's concrete platform object.
+ * The legacy single-target image uses the original static slot. */
+extern GU_PLATFORM *GuPlatformActive;
+#define Gu (*GuPlatformActive)
 
 /* One checked bind per image. Rebinding requires a future verified
  * per-card teardown protocol, not a raw zero of Gu's global state. */

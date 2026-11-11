@@ -2,7 +2,8 @@
 VOID *memset(VOID *, int, size_t);
 VOID *memcpy(VOID *, const VOID *, size_t);
 int memcmp(const VOID *, const VOID *, size_t);
-GU_PLATFORM Gu;
+static GU_PLATFORM LegacyPlatform;
+GU_PLATFORM *GuPlatformActive=&LegacyPlatform;
 /* A second bind must never erase DMA/selector/fault evidence from a prior
  * card. A verified per-card context release API does not exist yet. */
 static BOOLEAN TargetBound;
@@ -54,6 +55,18 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
   /* Inspect every byte of the old platform, not just the safety flags.
    * Rebind may not discard saved hardware state, mappings, or errors. */
   if(memcmp(&Gu,&EmptyPlatform,sizeof(Gu))!=0)return EFI_ACCESS_DENIED;
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  /* Each selected active image receives a distinct platform object. This
+   * happens once, before any DMA, PCI claim or firmware transaction. */
+  if(!Bs->AllocatePool)return EFI_UNSUPPORTED;
+  GU_PLATFORM *selected=NULL;
+  EFI_STATUS status=Bs->AllocatePool(EfiLoaderData,sizeof(*selected),
+                                      (VOID **)&selected);
+  if(status!=EFI_SUCCESS)return status;
+  if(!selected)return EFI_OUT_OF_RESOURCES;
+  memset(selected,0,sizeof(*selected));
+  GuPlatformActive=selected;
+#endif
   TargetBound=TRUE; /* Spend before any state is changed. */
   memset(&Gu,0,sizeof(Gu)); Gu.bs=Bs; Gu.pci=Pci;
 #ifdef GU_ENTRY_LATCHED
