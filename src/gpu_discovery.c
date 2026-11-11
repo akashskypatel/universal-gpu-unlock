@@ -31,7 +31,7 @@ static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
 static GU_GPU_PREPARED_SEQUENCE ActiveInventory;
 static UINT32 ActiveInitialConfig[GU_INVENTORY_MAX_NVIDIA][64];
 static size_t ActiveTargetIndex;
-static BOOLEAN ActiveInventoryValid;
+static int ActiveInventoryValid;
 #endif
 
 
@@ -322,7 +322,7 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
   size_t i,j;
   EFI_STATUS s;
   if(!ActiveInventoryValid || !table || !table->BootServices)
-    return EFI_NOT_READY;
+    return EFI_UNSUPPORTED;
   s=GuPrepareGpuSequence(table,NULL,0,&live);
   if(s!=EFI_SUCCESS || live.inventory.count!=ActiveInventory.inventory.count)
     return EFI_UNSUPPORTED;
@@ -431,12 +431,12 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
        full.targets[prepared.selected_indices[0]].pci!=io ||
        memcmp(full.targets[prepared.selected_indices[0]].config,
               config,sizeof(config))!=0)return EFI_UNSUPPORTED;
-    ActiveInventoryValid=FALSE;
+    ActiveInventoryValid=0;
     ActiveInventory=prepared;
     ActiveTargetIndex=prepared.selected_indices[0];
     for(size_t i=0;i<all.selected_count;i++)
       memcpy(ActiveInitialConfig[i],full.targets[i].config,sizeof(config));
-    ActiveInventoryValid=TRUE;
+    ActiveInventoryValid=1;
   }
 #endif
   GuInit(table->BootServices, io);
