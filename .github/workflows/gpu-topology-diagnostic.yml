@@ -28,6 +28,7 @@ on:
       - 'tests/test_gpu_device_ids.c'
       - 'tests/test_turing_formats.c'
       - 'tests/test_fwsec_v2.c'
+      - 'tests/test_turing_cold_state.py'
       - 'src/vendor/vbios_610.c'
       - 'src/vendor/vbios_610.h'
       - 'src/port.c'
@@ -143,6 +144,8 @@ jobs:
             python3 -m unittest discover -s tests -p test_boot_binding_contract.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             CC=clang python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
+            CC=gcc python3 -m unittest discover -s tests -p test_turing_cold_state.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_turing_cold_state.py -v
             python3 -m unittest discover -s tests -p test_profile_asset_contract.py -v
             python3 -m unittest discover -s tests -p test_firmware_diagnostic_contract.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v

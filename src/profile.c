@@ -121,6 +121,14 @@ static BOOLEAN Config(VOID) {
   GuLog("Config: OK\n");
   return TRUE;
 }
+/* The TU10x PMC architecture nibble identifies the Turing cold state.
+ * TU102 does not expose Ada/Ampere speed-select registers. This is a
+ * passive diagnostic predicate, not a selector or unlock authorization. */
+static BOOLEAN TuringColdState(UINT32 pmc, UINT32 wpr2_hi) {
+  return pmc!=0xffffffffU &&
+         (pmc&0xffff0000U)!=0xbadf0000U &&
+         ((pmc>>24)&0x0fU)==0x06U && (wpr2_hi>>4)==0;
+}
 static BOOLEAN Registers(UINT32 *Ss0,UINT32 *Ss1) {
   UINT32 pmc = GuRead32(0);
   if (Gu.fault || pmc == 0xffffffff || (pmc & 0xffff0000) == 0xbadf0000) {
@@ -131,6 +139,17 @@ static BOOLEAN Registers(UINT32 *Ss0,UINT32 *Ss1) {
   if (Gu.fault || (wpr2_hi >> 4) != 0) {
     GuLog("Registers: WPR2 already active (hi=0x%x), cold reboot required\n", wpr2_hi);
     return FALSE;
+  }
+  if(Gu.is_turing) {
+    if(!TuringColdState(pmc,wpr2_hi)) {
+      GuLog("TURING_COLD=REFUSED PMC=%#x WPR2_HI=%#x\n",pmc,wpr2_hi);
+      return FALSE;
+    }
+    /* No synthetic selector values may be interpreted as unlock state. */
+    *Ss0=*Ss1=0;
+    GuLog("TURING_COLD=PASSIVE PMC=%#x WPR2_HI=%#x SELECTORS_UNMAPPED=1 ACTIVE_ALLOWED=0\n",
+          pmc,wpr2_hi);
+    return !Gu.fault;
   }
   *Ss0=GuRead32(0x82381c);*Ss1=GuRead32(0x823820);
   GuLog("Selectors: SS0=0x%x, SS1=0x%x (fault=%u)\n", *Ss0, *Ss1, (unsigned)Gu.fault);
@@ -170,11 +189,19 @@ EFI_STATUS GuDiagnosticScan(VOID) {
   GuLog("DIAGNOSTIC PROM=%u FWSEC_PARSE=%d FWSEC_MATCH=%u STABLE=%u SIGNATURE_AUTHENTICATED=0\n",
         (unsigned)prom_ok,parsed,(unsigned)fw_ok,(unsigned)stable);
   GuFree(prom);
+  if(parsed==0 && fw.descriptor_version==2)
+    return EFI_UNSUPPORTED; /* V2 lacks active signature metadata. */
   return !Gu.fault&&prom_ok&&fw_ok&&stable?EFI_SUCCESS:EFI_COMPROMISED_DATA;
 }
 EFI_STATUS GuAd104Prepare(VOID) {
   UINT32 ss0,ss1,after0,after1;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
   GuLog("GuAd104Prepare: start\n");
+  /* V2 structural parsing is not signature acceptance. The dedicated
+   * Turing falcon loader/selector contract is not verified in this fork. */
+  if(Gu.is_turing) {
+    GuLog("TURING_PREPARE=REFUSED REASON=SIGNED_LOADER_NOT_VERIFIED\n");
+    return EFI_UNSUPPORTED;
+  }
   if(Gu.started || Gu.fault || Gu.retained || Gu.allocations || Gu.profile_verified || Gu.prom_verified) {
     GuLog("GuAd104Prepare: state invalid (started=%u fault=%u retained=%u alloc=%p prof=%u prom=%u)\n",
           Gu.started, Gu.fault, Gu.retained, (void *)Gu.allocations, Gu.profile_verified, Gu.prom_verified);
