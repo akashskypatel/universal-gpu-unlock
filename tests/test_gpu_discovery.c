@@ -26,6 +26,7 @@ static MOCK_DEVICE gpu[4];
 static EFI_HANDLE handles[4];
 static size_t count;
 static unsigned init_calls, free_calls, log_calls, resolve_calls;
+static unsigned prep_markers, prep_refusals, global_refusals;
 static int fail_pool_free, redirect_on_refresh, refuse_init;
 
 GU_PLATFORM Gu;
@@ -36,7 +37,13 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *pci) {
   memset(&Gu,0,sizeof(Gu));Gu.bs=bs;Gu.pci=pci;
   return EFI_SUCCESS;
 }
-void GuLog(const char *format, ...) { (void)format; log_calls++; }
+void GuLog(const char *format, ...) {
+  log_calls++;
+  if(!format)return;
+  if(strstr(format,"ACTIVE_SEQUENCE=PREPARED_NOT_STARTED"))prep_markers++;
+  if(strstr(format,"REASON=SELECTION_PREPARATION_ONLY"))prep_refusals++;
+  if(strstr(format,"REASON=MULTI_NVIDIA_GLOBAL_STATE"))global_refusals++;
+}
 int GuIsSupportedPciId(UINT32 pci) {
   return pci == Primary.pci_id || pci == Secondary.pci_id;
 }
@@ -109,6 +116,7 @@ static void Populate(size_t i, GU_GPU_IDENTITY id) {
 }
 static void ResetPair(void) {
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
+  prep_markers = prep_refusals = global_refusals = 0;
   fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
   Populate(0, Primary); Populate(1, Secondary);
 }
@@ -271,6 +279,7 @@ int main(void) {
   ResetPair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==2);
+  CHECK(prep_markers==1 && prep_refusals==1 && global_refusals==0);
   /* Full-set re-enumeration precedes two PCI reads of all NVIDIA devices. */
   CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 2);
   ResetPair(); count=1;
@@ -285,6 +294,10 @@ int main(void) {
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
   ResetPair(); fail_pool_free=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+  CHECK(prep_markers==0 && prep_refusals==0 && global_refusals==0);
+  ResetPair(); gpu[1].read_fail=1; /* Unselected peer fails a read. */
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+  CHECK(prep_markers==0 && prep_refusals==0 && global_refusals==0);
   printf("PASS active selected-entrypoint refusal: %u checks; GuInit never called\n",checks);
   return 0;
 }
