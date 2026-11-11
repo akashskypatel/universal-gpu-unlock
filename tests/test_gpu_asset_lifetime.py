@@ -99,7 +99,7 @@ static EFI_STATUS Free(VOID *ptr) {free_count++;free(ptr);return EFI_SUCCESS;}
 """ + asset_api + selected + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
-  EFI_BOOT_SERVICES bs={Allocate,Free};
+  static EFI_BOOT_SERVICES bs={Allocate,Free};
   Gu.bs=&bs;
   int mode=argc>1?argv[1][0]-'0':-1;
   if(mode==0) {
