@@ -16,6 +16,8 @@ on:
       - 'tests/test_gpu_loaded_pe_text.c'
       - 'src/gpu_inventory*'
       - 'src/gpu_discovery*'
+      - 'src/gpu_execution_state*'
+      - 'tests/test_gpu_execution_state.c'
       - 'src/Gpu-Selection-Build.ps1'
       - 'src/Build-Experimental-MSVC.ps1'
       - 'src/Build-Dxe-Driver.ps1'
@@ -145,26 +147,32 @@ jobs:
             mkdir -p "$RUNNER_TEMP/active-selected"
             printf '#define GU_GPU_SELECTION_COUNT 2U\n#define GU_GPU_SELECTION_LOCATIONS { { 1U,7U,4U,1U }, { 0U,3U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
             for compiler in gcc clang; do
-              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_active_preparation_$compiler"
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_active_preparation_$compiler"
               "$RUNNER_TEMP/test_active_preparation_$compiler"
             done
             # An explicitly selected single GPU must bind only that GPU, and
             # must preserve all other NVIDIA PCI state before/after mutation.
             printf '#define GU_GPU_SELECTION_COUNT 1U\n#define GU_GPU_SELECTION_LOCATIONS { { 0U,7U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
             for compiler in gcc clang; do
-              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_one_target_active_$compiler"
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_one_target_active_$compiler"
               "$RUNNER_TEMP/test_one_target_active_$compiler"
             done
             # Also exercise the selected-build guard when the machine has
             # exactly one GPU, not merely a missing second requested target.
             printf '#define GU_GPU_SELECTION_COUNT 1U\n#define GU_GPU_SELECTION_LOCATIONS { { 0U,3U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
             for compiler in gcc clang; do
-              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_active_preparation_single_$compiler"
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_active_preparation_single_$compiler"
               "$RUNNER_TEMP/test_active_preparation_single_$compiler"
             done
             for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_execution_state.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_gpu_execution_state_$compiler"
+              "$RUNNER_TEMP/test_gpu_execution_state_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_execution_state.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_gpu_execution_state_ubsan"
+            "$RUNNER_TEMP/test_gpu_execution_state_ubsan"
+            for compiler in gcc clang; do
               for test in gpu_inventory gpu_discovery; do
-                "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc "tests/test_${test}.c" src/gpu_inventory.c -o "$RUNNER_TEMP/test_${test}_${compiler}"
+                "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc "tests/test_${test}.c" src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_${test}_${compiler}"
                 "$RUNNER_TEMP/test_${test}_${compiler}"
               done
             done

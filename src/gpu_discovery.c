@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "gpu_discovery.h"
+#include "gpu_execution_state.h"
 #include <string.h>
 #ifndef GU_DISCOVERY_HOST_TEST
 #include "port.h"
@@ -393,13 +394,34 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   if (s != EFI_SUCCESS) return s;
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
   {
+    GU_GPU_PREPARED_SEQUENCE all=prepared;
     GU_GPU_REFRESHED_SEQUENCE refreshed;
-    s = GuRefreshPreparedSequence(table, &prepared, &refreshed);
-    if (s != EFI_SUCCESS) {
+    GU_GPU_EXEC_OBSERVATION observed[GU_INVENTORY_MAX_NVIDIA];
+    GU_GPU_EXEC_SEQUENCE sequence;
+    /* Track every NVIDIA peer, not only the requested targets.
+     * Preparation never calls Begin or authorizes hardware mutation. */
+    all.selected_count=all.inventory.count;
+    for(size_t i=0;i<all.selected_count;i++)all.selected_indices[i]=i;
+    s=GuRefreshPreparedSequence(table,&all,&refreshed);
+    if(s!=EFI_SUCCESS || refreshed.count!=all.selected_count) {
       GuLog("ACTIVE_REFRESH=REFUSED STATUS=%#llx BEFORE_GU_INIT=1\n",
             (unsigned long long)s);
-      return s;
+      return EFI_UNSUPPORTED;
     }
+    memset(observed,0,sizeof(observed));
+    for(size_t i=0;i<all.inventory.count;i++) {
+      observed[i].identity=all.inventory.nvidia[i];
+      memcpy(observed[i].config,refreshed.targets[i].config,
+             sizeof(observed[i].config));
+    }
+    if(GuGpuExecInit(&sequence,observed,all.inventory.count,
+                     prepared.selected_indices,prepared.selected_count)!=GU_GPU_EXEC_OK ||
+       GuGpuExecCheckNext(&sequence,observed,all.inventory.count)!=GU_GPU_EXEC_OK) {
+      GuLog("ACTIVE_SEQUENCE=REFUSED REASON=STATE_OR_PEER_DRIFT BEFORE_GU_INIT=1\n");
+      return EFI_UNSUPPORTED;
+    }
+    GuLog("ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=%zu TRACKED=%zu NEXT=0 MUTATION_AUTHORIZED=0\n",
+          sequence.selected_count,sequence.count);
     GuLog("ACTIVE_REFRESH=PASSIVE_REVALIDATED TARGETS=%zu MUTATION_AUTHORIZED=0\n",
           refreshed.count);
   }
