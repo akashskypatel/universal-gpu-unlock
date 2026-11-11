@@ -24,9 +24,12 @@ static const GU_ARCH_ASSETS AmpereAssets={{
 const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id) {
   /* Require the full NVIDIA PCI identity, not a device number alone. */
   if((pci_id & 0xffffU)!=0x10deU)return NULL;
-  UINT16 device=(UINT16)(pci_id>>16);
-  if(GuIsAdaDeviceId(device))return &AdaAssets;
-  if(GuIsAmpereDeviceId(device))return &AmpereAssets;
+  /* The current pinned Booter packages have only been prepared for
+   * the owner's AD102 4090 and GA102 3080 identity pair. Broad Ada/Ampere
+   * family predicates also match AD103/GA104/GA106, whose signed images
+   * and geometry cannot be inferred from these two manifests. */
+  if(pci_id==0x268410deU)return &AdaAssets;
+  if(pci_id==0x220a10deU)return &AmpereAssets;
   return NULL;
 }
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {

@@ -167,8 +167,6 @@ typedef void VOID;
 #define GU_ASSET_COUNT 5U
 typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
 typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
-static int GuIsAdaDeviceId(UINT16 dev) {return dev==0x2684U;}
-static int GuIsAmpereDeviceId(UINT16 dev) {return dev==0x220aU;}
 static struct {int is_turing,is_ampere;UINT16 device_id;} Gu;
 ''' + MANIFEST + r'''
 #define CHECK(x) do {if(!(x))return __LINE__;} while(0)
@@ -181,6 +179,9 @@ int main(void) {
   CHECK(!GuGetArchAssetsForPciId(0x26841002U));
   CHECK(!GuGetArchAssetsForPciId(0x220a10eeU));
   CHECK(!GuGetArchAssetsForPciId(0x1e0410deU));
+  CHECK(!GuGetArchAssetsForPciId(0x270210deU)); /* AD103 is not AD102. */
+  CHECK(!GuGetArchAssetsForPciId(0x250310deU)); /* GA106 is not GA102. */
+  CHECK(!GuGetArchAssetsForPciId(0x248410deU)); /* GA104 is not GA102. */
   Gu.device_id=0x2684U;
   CHECK(GuGetArchAssets()==ada);
   Gu.is_ampere=1;CHECK(!GuGetArchAssets());
