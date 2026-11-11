@@ -47,7 +47,7 @@ static GU_OWNED_ASSET_STORE *SelectedAssets;
  * any file read. The table is never reloaded, reused or freed on an
  * uncertain GPU return. The legacy single-card table stays unchanged. */
 static EFI_STATUS GuBootReserveSelectedAssets(EFI_BOOT_SERVICES *bs) {
-  if(!bs||!bs->AllocatePool||!Gu.bs||Gu.bs!=bs||
+  if(!bs||!bs->AllocatePool||!bs->FreePool||!Gu.bs||Gu.bs!=bs||
      Gu.started||Gu.owned||Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
   if(SelectedAssets||AssetsLoadAttempted)return EFI_ALREADY_STARTED;
   GU_OWNED_ASSET_STORE *owned=NULL;
