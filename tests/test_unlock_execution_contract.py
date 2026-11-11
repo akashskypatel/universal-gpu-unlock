@@ -200,6 +200,70 @@ int main(int argc,char **argv) {
                         self.assertEqual(result.returncode, 0,
                                          result.stdout + result.stderr)
 
+    def test_explicit_p_s3_result_blocks_windows_on_failure(self):
+        """Run the actual application P/S3 branch with independent outcomes."""
+        main=body(APP,"UefiMain")
+        start=main.index("  if(enable_s3) {")
+        end=main.index('  stage="final-Windows-verification";', start)
+        actual=main[start:end]
+        harness=r"""
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdarg.h>
+typedef int EFI_STATUS;
+typedef struct {int unused;} EFI_SYSTEM_TABLE;
+#define EFI_SUCCESS 0
+#define EFI_NOT_FOUND 2
+#define EFI_DEVICE_ERROR 3
+static struct {int retained;} Gu;
+static int register_calls,scenario;
+static EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table) {
+  (void)table;register_calls++;
+  return scenario==2||scenario==4?EFI_NOT_FOUND:EFI_SUCCESS;
+}
+static void GuLog(const char *fmt,...) {(void)fmt;}
+static EFI_STATUS Attempt(int selected_p) {
+  EFI_SYSTEM_TABLE table={0},*t=&table;
+  const char *stage="";
+  int enable_s3=selected_p, s=EFI_SUCCESS;
+""" + actual + r"""
+  (void)stage;
+  return EFI_SUCCESS; /* App's next successful handover stage. */
+failed:
+  (void)stage;
+  return s;
+}
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d scenario %d: %s\\n",__LINE__,scenario,#x);return 1;}} while(0)
+int main(int argc,char **argv) {
+  scenario=argc>1?atoi(argv[1]):-1;
+  if(scenario<0||scenario>4)return 2;
+  Gu.retained=(scenario==3||scenario==4);
+  EFI_STATUS s=Attempt(scenario!=0);
+  CHECK(register_calls==(scenario!=0));
+  if(scenario==0||scenario==1)CHECK(s==EFI_SUCCESS);
+  else if(scenario==2||scenario==4)CHECK(s==EFI_NOT_FOUND);
+  else CHECK(s==EFI_DEVICE_ERROR);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            src=Path(directory)/"app_s3_decision.c"
+            src.write_text(harness,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                binary=Path(directory)/("app_s3_"+compiler)
+                compiled=subprocess.run(
+                    [compiler,"-std=c11","-O2","-Wall","-Wextra",
+                     "-Werror","-pedantic",str(src),"-o",str(binary)],
+                    capture_output=True,text=True)
+                self.assertEqual(compiled.returncode,0,compiled.stderr)
+                for scenario in range(5):
+                    with self.subTest(compiler=compiler,scenario=scenario):
+                        result=subprocess.run([str(binary),str(scenario)],
+                                              capture_output=True,text=True)
+                        self.assertEqual(result.returncode,0,
+                                         result.stdout+result.stderr)
+
     def test_s3_is_optional_and_after_handover(self):
         for src,name in [(APP,"UefiMain"),(DXE,"GuDxeRun")]:
             code=body(src,name)
@@ -211,8 +275,9 @@ int main(int argc,char **argv) {
         self.assertIn("Gu.retained=TRUE",s3)
         self.assertLess(s3.index("Gu.s3_script_attempted=TRUE"),s3.index("s3->Write("))
         self.assertLess(s3.index("if(a!=EFI_SUCCESS)"),s3.index("EFI_STATUS b=s3->Write("))
+        self.assertIn("if(s3!=EFI_SUCCESS || Gu.retained)",APP)
+        self.assertIn("if(Gu.retained)",DXE)
         for source in (APP,DXE):
-            self.assertIn("if(Gu.retained)",source)
             self.assertIn("s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3",source)
         dxe=body(DXE,"GuDxeRun")
         after_s3=dxe[dxe.index("GuRegisterS3("):]

@@ -181,9 +181,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   if(enable_s3) {
     EFI_STATUS s3=GuRegisterS3(t);
     GuLog("S3 persistence requested: status=%#llx\n",(unsigned long long)s3);
-    if(Gu.retained) {
-      /* A failed boot-script write can leave an unsafe partial S3 script. */
-      stage="s3-partial-registration";s=s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3;
+    if(s3!=EFI_SUCCESS || Gu.retained) {
+      /* Explicit P requires a complete S3 script; a partial write also
+       * retains an unsafe state and must not proceed to Windows. */
+      stage="s3-registration";s=s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3;
       goto failed;
     }
   } else {
