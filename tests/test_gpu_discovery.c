@@ -9,6 +9,7 @@
 static const GU_GPU_IDENTITY Primary={0x20b010deU,0xa12310deU,0,3,0,0};
 static const GU_GPU_IDENTITY Secondary={0x250310deU,0xb45610deU,1,7,4,1};
 static unsigned checks;
+static int release_owner_token,firmware_owner_token;
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
 typedef struct {
@@ -171,35 +172,45 @@ int main(void) {
   CHECK(ActiveInventoryValid && ActiveSequenceValid &&
         ActiveSequence.selected_count==1 && ActiveSequence.next_step==0);
   CHECK(ActiveSequence.order[0]==ActiveTargetIndex);
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_NOT_READY);
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_NOT_READY);
   Gu.profile_verified=1;
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_NOT_READY);
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_NOT_READY);
   Gu.prom_verified=1;
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_SUCCESS);
   CHECK(ActiveSequence.active_step==0 &&
         ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_ACTIVE);
+  CHECK(ActiveSequence.targets[ActiveTargetIndex].owners.platform==&Gu &&
+        ActiveSequence.targets[ActiveTargetIndex].owners.release_plan==&release_owner_token &&
+        ActiveSequence.targets[ActiveTargetIndex].owners.firmware_assets==&firmware_owner_token);
   /* A failed cleanup verdict cannot publish a completed GPU. */
   CHECK(GuFinishSelectedGpuStep(&system_table,0)==EFI_NOT_READY);
   CHECK(ActiveSequence.halted &&
         ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_UNSUPPORTED);
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_UNSUPPORTED);
 
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   Gu.profile_verified=Gu.prom_verified=1;
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_SUCCESS);
   /* CPU model permits selected post-step PCI state, but not peer drift. */
   gpu[1].dwords[4]^=0x1000U;
   CHECK(GuFinishSelectedGpuStep(&system_table,1)==EFI_SUCCESS);
   CHECK(ActiveSequence.next_step==1 &&
         ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_COMPLETE &&
         ActiveSequence.targets[ActiveTargetIndex].expected_config[4]==gpu[1].dwords[4]);
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_UNSUPPORTED);
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_UNSUPPORTED);
 
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   Gu.profile_verified=Gu.prom_verified=1;
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_SUCCESS);
   gpu[0].dwords[4]^=0x1000U;
   CHECK(GuFinishSelectedGpuStep(&system_table,1)==EFI_UNSUPPORTED &&
         ActiveSequence.halted);
@@ -209,7 +220,8 @@ int main(void) {
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   Gu.profile_verified=Gu.prom_verified=1;
   gpu[0].dwords[4]^=0x1000U; /* drift before beginning selected work */
-  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_UNSUPPORTED &&
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                &release_owner_token,&firmware_owner_token)==EFI_UNSUPPORTED &&
         ActiveSequence.halted);
   CHECK(ActiveSequence.next_step==0 && ActiveSequence.active_step==GU_INVENTORY_MAX_NVIDIA);
 

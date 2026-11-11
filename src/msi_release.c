@@ -841,3 +841,5 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
          ReadConfig(c)==EFI_SUCCESS&&ConfigStable(c)&&
     GuVerifyActivePeers(Plan.table)==EFI_SUCCESS;
 }
+
+const VOID *GuMsiPlanOwnerToken(VOID) {return &Plan;}

@@ -67,7 +67,8 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
   if(!table || !table->BootServices || !image || !stage)
     return EFI_INVALID_PARAMETER;
   *stage="selected-gpu-state-begin";
-  EFI_STATUS s=GuBeginSelectedGpuStep(table);
+  EFI_STATUS s=GuBeginSelectedGpuStep(table,&Gu,
+                                         GuMsiPlanOwnerToken(),GuAssets);
   if(s!=EFI_SUCCESS)return s;
   s=GuExecuteUnlockCore(table,image,stage);
   if(s!=EFI_SUCCESS || Gu.fault) {

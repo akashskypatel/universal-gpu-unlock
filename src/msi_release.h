@@ -7,3 +7,5 @@ BOOLEAN GuMsiReleased(VOID);
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);
 BOOLEAN GuMsiMutated(VOID);
+/* Stable identity of this image's one-shot MSI release state. */
+const VOID *GuMsiPlanOwnerToken(VOID);

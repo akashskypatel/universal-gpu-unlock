@@ -125,6 +125,37 @@ int main(void) {
   s.order[0]=GU_INVENTORY_MAX_NVIDIA; /* Abort itself must be bounded. */
   CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_BLOCKED);
   CHECK(s.halted);
+  /* A separate backing set is accepted. A reused platform, release plan,
+   * or firmware asset store must fail and retain the sticky halt. */
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  CHECK(s.targets[1].owners.platform==&o[1]);
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,1,o,2,&o[0],&s.targets[0],&o[0].config)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,1,o,2,1)==GU_GPU_EXEC_OK);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,1,o,2,&o[1],&s.targets[0],&o[0].config)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted && s.next_step==1);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],&o[1],&o[1].config)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted && GuGpuExecBeginOwned(&s,0,o,2,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_BLOCKED);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],NULL,&o[1].config)==GU_GPU_EXEC_BLOCKED);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,1,o,2,&o[0],&s.targets[0],&o[0].config)==GU_GPU_EXEC_BLOCKED);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  s.targets[1].owners.firmware_assets=s.targets[1].owners.platform;
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted);
   printf("PASS independent ordered GPU execution state: %u checks\n",checks);
   return 0;
 }

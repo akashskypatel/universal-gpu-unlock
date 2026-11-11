@@ -60,7 +60,10 @@ int GuIsPreparedPeerHandle(EFI_HANDLE handle);
  * the existing shared GuExecuteUnlock sequence, without permitting a
  * second active card or authorizing firmware work. */
 #ifdef GU_ACTIVE_SINGLE_TARGET
-EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table);
+EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
+                                  const void *platform,
+                                  const void *release_plan,
+                                  const void *firmware_assets);
 EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                    int cleanup_and_handover_verified);
 void GuAbortSelectedGpuStep(void);

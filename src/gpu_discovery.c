@@ -410,7 +410,10 @@ void GuAbortSelectedGpuStep(void) {
   GuLog("SELECTED_GPU_STEP=HALTED NEXT=%zu MUTATION_AUTHORIZED=0\\n",
         ActiveSequence.next_step);
 }
-EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table) {
+EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
+                                  const void *platform,
+                                  const void *release_plan,
+                                  const void *firmware_assets) {
   if(!ActiveSequenceValid || !ActiveInventoryValid ||
      !table || !table->BootServices ||
      Gu.bs!=table->BootServices || !Gu.handle || !Gu.pci ||
@@ -423,7 +426,9 @@ EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table) {
   GU_GPU_EXEC_OBSERVATION observed[GU_INVENTORY_MAX_NVIDIA];
   EFI_STATUS s=ActiveStepObservations(table,observed);
   if(s!=EFI_SUCCESS ||
-     GuGpuExecBegin(&ActiveSequence,0,observed,ActiveInventory.inventory.count)
+     GuGpuExecBeginOwned(&ActiveSequence,0,observed,
+                         ActiveInventory.inventory.count,
+                         platform,release_plan,firmware_assets)
        !=GU_GPU_EXEC_OK) {
     GuAbortSelectedGpuStep();
     return EFI_UNSUPPORTED;

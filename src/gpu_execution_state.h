@@ -12,10 +12,18 @@ typedef enum {
   GU_GPU_EXEC_PENDING=0, GU_GPU_EXEC_ACTIVE,
   GU_GPU_EXEC_COMPLETE, GU_GPU_EXEC_FAILED
 } GU_GPU_EXEC_PHASE;
+/* Retain backing-object identities across completed and failed GPU steps.
+ * This is a reuse guard, not proof that a driver Stop is safe. */
+typedef struct {
+  const void *platform;
+  const void *release_plan;
+  const void *firmware_assets;
+} GU_GPU_EXEC_OWNERS;
 typedef struct {
   GU_GPU_RECORD identity;
   uint32_t expected_config[64];
   GU_GPU_EXEC_PHASE phase;
+  GU_GPU_EXEC_OWNERS owners;
 } GU_GPU_EXEC_TARGET;
 typedef struct {
   size_t count, selected_count, next_step, active_step;
@@ -34,6 +42,11 @@ int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *state,
                        const GU_GPU_EXEC_OBSERVATION *all, size_t count);
 int GuGpuExecBegin(GU_GPU_EXEC_SEQUENCE *state, size_t step,
                    const GU_GPU_EXEC_OBSERVATION *all, size_t count);
+/* Live active entrypoints must pass distinct genuine backing-object tokens. */
+int GuGpuExecBeginOwned(GU_GPU_EXEC_SEQUENCE *state, size_t step,
+                        const GU_GPU_EXEC_OBSERVATION *all, size_t count,
+                        const void *platform, const void *release_plan,
+                        const void *firmware_assets);
 /* A completion claim requires independent real cleanup/handover evidence. */
 int GuGpuExecFinish(GU_GPU_EXEC_SEQUENCE *state, size_t step,
                     const GU_GPU_EXEC_OBSERVATION *all, size_t count,
