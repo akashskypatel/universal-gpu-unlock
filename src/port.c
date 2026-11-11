@@ -102,11 +102,29 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   Entry->pages=(N+4095)/4096;Entry->bytes=Entry->pages*4096;
   Status=Gu.pci->AllocateBuffer(Gu.pci,AllocateAnyPages,EfiBootServicesData,
     Entry->pages,&Entry->cpu,0);
-  if(EFI_ERROR(Status) || !Entry->cpu) {GuFree(Entry);return EFI_ERROR(Status)?Status:EFI_OUT_OF_RESOURCES;}
+  if(EFI_ERROR(Status) || !Entry->cpu) {
+    /* The service may report an error after writing an output pointer.
+     * Never discard ownership of a possibly allocated DMA-capable buffer. */
+    if(Entry->cpu) {
+      Entry->next=Gu.allocations;Gu.allocations=Entry;Gu.retained=TRUE;
+    } else {
+      GuFree(Entry);
+      if(!EFI_ERROR(Status))Gu.retained=TRUE; /* Success without a buffer. */
+    }
+    return EFI_ERROR(Status)?Status:EFI_OUT_OF_RESOURCES;
+  }
   memset(Entry->cpu,0,Entry->bytes);Mapped=Entry->bytes;
   Status=Gu.pci->Map(Gu.pci,EfiPciIoOperationBusMasterCommonBuffer,Entry->cpu,
     &Mapped,&Entry->dma,&Entry->mapping);
   if(!EFI_ERROR(Status))Entry->mapped=TRUE;
+  /* An error with a mapping handle, DMA address or changed length is
+   * uncertain. Keep both the mapping and buffer until an independent
+   * recovery path can establish that device access has stopped. */
+  if(EFI_ERROR(Status) &&
+     (Entry->mapping || Entry->dma || Mapped!=Entry->bytes)) {
+    Entry->next=Gu.allocations;Gu.allocations=Entry;Gu.retained=TRUE;
+    return Status;
+  }
   if(EFI_ERROR(Status) || Mapped!=Entry->bytes || !Entry->dma ||
      (Entry->dma&4095) || Entry->dma>0xffffffffULL || Entry->bytes-1>0xffffffffULL-Entry->dma) {
     if(!EFI_ERROR(Status))Status=EFI_UNSUPPORTED;

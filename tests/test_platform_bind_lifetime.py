@@ -532,6 +532,144 @@ int main(int argc,char **argv) {
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
 
+    def test_dma_failure_retains_uncertain_firmware_outputs(self):
+        """Exercise actual GuDmaAllocate against independent EFI error mocks."""
+        actual = function("GuDmaAllocate")
+        host = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef void VOID;
+typedef size_t UINTN;
+typedef uint64_t UINT64;
+typedef int EFI_STATUS;
+typedef int BOOLEAN;
+#define TRUE 1
+#define FALSE 0
+#define GU_PREFLIGHT_ONLY 0
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 2
+#define EFI_OUT_OF_RESOURCES 3
+#define EFI_UNSUPPORTED 4
+#define EFI_DEVICE_ERROR 5
+#define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
+#define AllocateAnyPages 1
+#define EfiBootServicesData 2
+#define EfiPciIoOperationBusMasterCommonBuffer 3
+typedef struct GU_DMA GU_DMA;
+struct GU_DMA {
+  GU_DMA *next;
+  VOID *cpu, *mapping;
+  UINT64 dma;
+  UINTN bytes, pages;
+  BOOLEAN mapped;
+};
+typedef struct EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
+struct EFI_PCI_IO_PROTOCOL {
+  EFI_STATUS (*AllocateBuffer)(EFI_PCI_IO_PROTOCOL *,int,int,UINTN,VOID **,int);
+  EFI_STATUS (*Map)(EFI_PCI_IO_PROTOCOL *,int,VOID *,UINTN *,UINT64 *,VOID **);
+  EFI_STATUS (*Unmap)(EFI_PCI_IO_PROTOCOL *,VOID *);
+  EFI_STATUS (*FreeBuffer)(EFI_PCI_IO_PROTOCOL *,UINTN,VOID *);
+};
+static struct {
+  EFI_PCI_IO_PROTOCOL *pci;
+  GU_DMA *allocations;
+  int profile_verified,armed,display_ok,fault,retained,owned;
+  unsigned dma_count;
+} Gu;
+static unsigned char gpu_buffer[8192];
+static int mapping_token,mode;
+static unsigned pool_frees,buffer_frees,unmaps;
+static VOID *GuAlloc(size_t size) {return calloc(1,size);}
+static VOID GuFree(VOID *ptr) {
+  if(!Gu.retained) {pool_frees++;free(ptr);}
+}
+static VOID GuLog(const char *fmt,...) {(void)fmt;}
+static EFI_STATUS FakeAllocate(EFI_PCI_IO_PROTOCOL *io,int pages,int type,
+                               UINTN count,VOID **out,int attrs) {
+  (void)io;(void)pages;(void)type;(void)attrs;
+  if(count!=1)return EFI_INVALID_PARAMETER;
+  if(mode==0) return EFI_DEVICE_ERROR;
+  if(mode==1) {*out=gpu_buffer;return EFI_DEVICE_ERROR;}
+  if(mode==2) return EFI_SUCCESS;
+  *out=gpu_buffer;return EFI_SUCCESS;
+}
+static EFI_STATUS FakeMap(EFI_PCI_IO_PROTOCOL *io,int operation,VOID *cpu,
+                          UINTN *length,UINT64 *dma,VOID **mapping) {
+  (void)io;
+  if(operation!=EfiPciIoOperationBusMasterCommonBuffer ||
+     cpu!=gpu_buffer || *length!=4096)return EFI_INVALID_PARAMETER;
+  if(mode==3)return EFI_DEVICE_ERROR;
+  if(mode==4) {*mapping=&mapping_token;return EFI_DEVICE_ERROR;}
+  if(mode==5) {*dma=0x1000;return EFI_DEVICE_ERROR;}
+  if(mode==6) {*length-=256;return EFI_DEVICE_ERROR;}
+  *mapping=&mapping_token;
+  *dma=mode==10?0x1000ULL:0x100000000ULL;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS FakeUnmap(EFI_PCI_IO_PROTOCOL *io,VOID *mapping) {
+  (void)io;
+  unmaps++;
+  if(mapping!=&mapping_token || mode==8)return EFI_DEVICE_ERROR;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS FakeFreeBuffer(EFI_PCI_IO_PROTOCOL *io,UINTN pages,VOID *cpu) {
+  (void)io;
+  buffer_frees++;
+  if(pages!=1 || cpu!=gpu_buffer || mode==9)return EFI_DEVICE_ERROR;
+  return EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d mode %d: %s\n",__LINE__,mode,#x);return 1;}} while(0)
+int main(int argc,char **argv) {
+  static EFI_PCI_IO_PROTOCOL io={FakeAllocate,FakeMap,FakeUnmap,FakeFreeBuffer};
+  mode=argc>1?atoi(argv[1]):-1;
+  if(mode<0||mode>10)return 3;
+  Gu.pci=&io;
+  Gu.profile_verified=Gu.armed=Gu.display_ok=Gu.owned=TRUE;
+  VOID *cpu=(VOID *)(uintptr_t)1;
+  UINT64 dma=1;
+  EFI_STATUS result=GuDmaAllocate(4096,&cpu,&dma);
+  EFI_STATUS expected=mode==2?EFI_OUT_OF_RESOURCES:
+                      mode==7||mode==8||mode==9?EFI_UNSUPPORTED:
+                      mode==10?EFI_SUCCESS:EFI_DEVICE_ERROR;
+  CHECK(result==expected);
+  if(mode==10) {
+    CHECK(cpu==gpu_buffer && dma==0x1000 && Gu.dma_count==1);
+    CHECK(Gu.allocations!=NULL && !Gu.retained);
+    CHECK(!unmaps && !buffer_frees);
+  } else {
+    CHECK(cpu==NULL && dma==0 && Gu.dma_count==0);
+    int retain=(mode==1||mode==2||mode==4||mode==5||
+                mode==6||mode==8||mode==9);
+    CHECK((Gu.retained!=0)==retain);
+    CHECK((Gu.allocations!=NULL)==(retain && mode!=2));
+    CHECK(unmaps==(unsigned)(mode>=7&&mode<=9));
+    CHECK(buffer_frees==(unsigned)(mode==3||mode==7||mode==9));
+    CHECK(pool_frees==(unsigned)(mode==0||mode==2||mode==3||mode==7));
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "dma_failure.c"
+            binary = Path(directory) / "dma_failure"
+            source.write_text(host, encoding="utf-8")
+            compiled = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2",
+                 "-Wall", "-Wextra", "-Werror", "-pedantic",
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            for mode in range(11):
+                with self.subTest(mode=mode):
+                    executed = subprocess.run([str(binary), str(mode)],
+                                              capture_output=True, text=True)
+                    self.assertEqual(executed.returncode, 0,
+                                     executed.stdout + executed.stderr)
+
     def test_release_plan_is_not_reset_after_attempt(self):
         start = MSI_SOURCE.index("EFI_STATUS GuMsiPreflight(")
         stop = MSI_SOURCE.index("static BOOLEAN DecodeMask(", start)
