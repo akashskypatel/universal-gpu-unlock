@@ -7,8 +7,10 @@
 #define GU_ERROR(fmt, ...) pr_err("gpu_unlock: " fmt, ##__VA_ARGS__)
 #else
 #include <stdio.h>
-#define GU_NOTE(fmt, ...) fprintf(stderr, "gpu_unlock: " fmt, ##__VA_ARGS__)
-#define GU_ERROR(fmt, ...) fprintf(stderr, "gpu_unlock: " fmt, ##__VA_ARGS__)
+/* C11-compatible host diagnostics. The parent-style GNU comma-elision
+ * form fails with Clang -Werror -pedantic during source-grounded tests. */
+#define GU_NOTE(...) do { fputs("gpu_unlock: ", stderr); fprintf(stderr, __VA_ARGS__); } while (0)
+#define GU_ERROR(...) do { fputs("gpu_unlock: ", stderr); fprintf(stderr, __VA_ARGS__); } while (0)
 #endif
 
 /* No extra device reads. Preserve the errno and identify the exact guard in
