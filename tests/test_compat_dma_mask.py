@@ -14,7 +14,7 @@ HEADER = Path(__file__).resolve().parents[1] / "src/compat/compat.h"
 class DmaMaskTests(unittest.TestCase):
     def test_production_macro_at_64_bit_boundary(self):
         source = HEADER.read_text(encoding="utf-8")
-        matches = re.findall(r"^#define\\s+DMA_BIT_MASK\\(n\\)\\s+.*$", source, re.MULTILINE)
+        matches = re.findall(r"^#define\s+DMA_BIT_MASK\(n\)\s+.*$", source, re.MULTILINE)
         self.assertEqual(len(matches), 1, "Expected one production DMA_BIT_MASK macro")
         program = r"""
 #include <stdint.h>
