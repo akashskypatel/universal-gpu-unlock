@@ -31,6 +31,9 @@ struct gpu_unlock_fwsec {
 	u32 sig_versions;
 	u32 sig_off;
 	u32 sig_bytes;
+	/* V2 geometry is diagnostic-only: V2 does not provide the V3
+	 * signature, engine or ucode fields required by active loading. */
+	u32 descriptor_version;
 };
 
 int gpu_unlock_vbios_fwsec(const u8 *rom, size_t length, struct gpu_unlock_fwsec *out);

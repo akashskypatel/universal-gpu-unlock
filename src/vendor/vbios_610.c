@@ -111,16 +111,20 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 		      struct gpu_unlock_fwsec *out)
 {
 	struct gpu_unlock_fwsec fw = { 0 };
-	u32 hdr, size, stored, bits, count = 0;
+	u32 hdr, size, stored, version, bits, count = 0;
 
 	if (range(length, off, 44))
 		return GU_DIAG(-EINVAL);
 	hdr = r32(rom + off);
 	size = hdr >> 16;
-	GU_NOTE("FWSEC descriptor: offset=%#llx ROM_bytes=%zu header=%#x\n",
-		(unsigned long long)off, length, hdr);
-	/* vDesc: bit 0 set, version in bits 15:8, size in bits 31:16. */
-	if (!(hdr & 1) || ((hdr >> 8) & 0xff) != 3 || size < 44)
+	version = (hdr >> 8) & 0xff;
+	GU_NOTE("FWSEC descriptor: offset=%#llx ROM_bytes=%zu header=%#x version=%u\n",
+		(unsigned long long)off, length, hdr, version);
+	/* FalconUCodeDescV2 has fifteen 32-bit fields (60 bytes).
+	 * FalconUCodeDescV3 has 44 bytes before the variable signatures.
+	 * Do not access V2 fields at +48/+52/+56 without checking 60 bytes. */
+	if (!(hdr & 1) || (version != 2 && version != 3) ||
+	    size < (version == 2 ? 60U : 44U))
 		return GU_DIAG(-EOPNOTSUPP);
 	if (range(length, off, size))
 		return GU_DIAG(-EINVAL);
@@ -140,6 +144,42 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 	if (range(length, off + size, fw.image_size))
 		return GU_DIAG(-EINVAL);
 	fw.image_off = off + size;
+	fw.descriptor_version = version;
+	if (version == 2) {
+		/* 2026 Linux nova-core FalconUCodeDescV2 wire layout. There is
+		 * no ucode_id, engine mask, signature count or PKC offset here.
+		 * Report the data geometry but NEVER synthesize credentials. */
+		u32 uncompressed = r32(rom + off + 8);
+		u32 imem_secure_va = r32(rom + off + 32);
+		u32 imem_secure_bytes = r32(rom + off + 36);
+		u32 secure_start;
+		fw.interface_off = r32(rom + off + 16);
+		fw.imem_pa = r32(rom + off + 20);
+		fw.imem_size = r32(rom + off + 24);
+		fw.imem_va = r32(rom + off + 28);
+		fw.data_off = r32(rom + off + 40);
+		fw.dmem_pa = r32(rom + off + 44);
+		fw.dmem_size = r32(rom + off + 48);
+		if (!uncompressed || stored != uncompressed)
+			return GU_DIAG(-EOPNOTSUPP); /* No compression decoder. */
+		if (!fw.imem_size || !fw.dmem_size || !imem_secure_bytes ||
+		    imem_secure_va < fw.imem_va ||
+		    r32(rom + off + 52) || r32(rom + off + 56))
+			return GU_DIAG(-EOPNOTSUPP); /* Alternate code/data unsupported. */
+		secure_start = imem_secure_va - fw.imem_va;
+		if (fw.imem_size > uncompressed ||
+		    fw.data_off < fw.imem_size ||
+		    range(uncompressed, fw.data_off, fw.dmem_size) ||
+		    range(uncompressed, secure_start, imem_secure_bytes) ||
+		    secure_start + imem_secure_bytes > fw.imem_size ||
+		    range(fw.dmem_size, fw.interface_off, 4))
+			return GU_DIAG(-EINVAL);
+		/* All signature fields stay zero. Active qualification must
+		 * refuse V2 until the signed source is independently handled. */
+		GU_NOTE("FWSEC_V2=STRUCTURE_ONLY SIGNATURE_AUTHENTICATED=0 ACTIVE_ALLOWED=0\n");
+		*out = fw;
+		return 0;
+	}
 	fw.pkc_off = r32(rom + off + 8);
 	fw.interface_off = r32(rom + off + 12);
 	fw.imem_pa = r32(rom + off + 16);

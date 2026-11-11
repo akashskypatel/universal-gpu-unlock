@@ -81,7 +81,9 @@ BOOLEAN GuAd104PromMatches(const VOID *Data,UINTN Bytes) {
 }
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
   if (!f) return FALSE;
-  return f->ucode_id != 0 && f->sig_count >= 1 && f->sig_bytes == (UINT32)f->sig_count * 384;
+  return f->descriptor_version == 3 && f->ucode_id != 0 &&
+         f->sig_count >= 1 &&
+         f->sig_bytes == (UINT32)f->sig_count * 384;
 }
 
 static BOOLEAN Config(VOID) {
