@@ -66,6 +66,13 @@ struct pci_dev {u16 vendor,device;struct device dev;int current_state,pm_cap,ref
 struct firmware {size_t size;const u8 *data;};
 typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
 extern GU_ASSET GuAssets[5];
+/* The selected card uses a private table. The legacy export remains for
+ * the one-card profile, and consumers always resolve the active table. */
+GU_ASSET *GuAssetEntries(VOID);
+EFI_STATUS GuAssetSelectEntries(GU_ASSET *entries);
+#ifndef GU_ASSET_IMPLEMENTATION
+#define GuAssets (GuAssetEntries())
+#endif
 void *memcpy(void *,const void *,size_t);
 void *memset(void *,int,size_t);
 int memcmp(const void *,const void *,size_t);

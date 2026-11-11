@@ -1,5 +1,21 @@
+#define GU_ASSET_IMPLEMENTATION 1
 #include "compat/compat.h"
 GU_ASSET GuAssets[5];
+static GU_ASSET *ActiveAssets=GuAssets;
+GU_ASSET *GuAssetEntries(VOID) {return ActiveAssets;}
+EFI_STATUS GuAssetSelectEntries(GU_ASSET *entries) {
+  if(!entries)return EFI_INVALID_PARAMETER;
+  /* Never silently replace a previously published immutable image. */
+  if(ActiveAssets!=GuAssets)return EFI_ALREADY_STARTED;
+  for(UINTN i=0;i<5;i++)
+    if(ActiveAssets[i].name||ActiveAssets[i].firmware.data||
+       ActiveAssets[i].firmware.size)return EFI_ALREADY_STARTED;
+  for(UINTN i=0;i<5;i++)
+    if(entries[i].name||entries[i].firmware.data||
+       entries[i].firmware.size)return EFI_ACCESS_DENIED;
+  ActiveAssets=entries;
+  return EFI_SUCCESS;
+}
 void *devres_open_group(struct device *D,void *Id,int Flags) {
   (void)Flags;if(Id || D->scope)return NULL;D->scope=true;return &D->scope;
 }
@@ -57,9 +73,9 @@ void *kvcalloc(size_t N,size_t S,int Flags) {
 }
 int request_firmware(const struct firmware **Out,const char *Name,struct device *D) {
   UINTN I;(void)D;*Out=NULL;
-  for(I=0;I<5;I++)if(GuAssets[I].name && !strcmp(Name,GuAssets[I].name) &&
-      GuAssets[I].firmware.data && GuAssets[I].firmware.size) {
-    *Out=&GuAssets[I].firmware;return 0;
+  for(I=0;I<5;I++)if(GuAssetEntries()[I].name && !strcmp(Name,GuAssetEntries()[I].name) &&
+      GuAssetEntries()[I].firmware.data && GuAssetEntries()[I].firmware.size) {
+    *Out=&GuAssetEntries()[I].firmware;return 0;
   }
   return -ENOENT;
 }

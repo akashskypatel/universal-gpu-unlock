@@ -35,6 +35,35 @@ static BOOLEAN Silent;
 /* One complete asset admission attempt per EFI image. Neither successful
  * buffers nor a partial failure may be replaced by a second target. */
 static BOOLEAN AssetsLoadAttempted;
+static BOOLEAN *SelectedAssetAttempted=&AssetsLoadAttempted;
+#define AssetsLoadAttempted (*SelectedAssetAttempted)
+typedef struct {
+  GU_ASSET entries[GU_ASSET_COUNT];
+  BOOLEAN attempted;
+} GU_OWNED_ASSET_STORE;
+static GU_OWNED_ASSET_STORE *SelectedAssets;
+
+/* Allocate and publish a whole per-selected-card firmware table before
+ * any file read. The table is never reloaded, reused or freed on an
+ * uncertain GPU return. The legacy single-card table stays unchanged. */
+static EFI_STATUS GuBootReserveSelectedAssets(EFI_BOOT_SERVICES *bs) {
+  if(!bs||!bs->AllocatePool||!Gu.bs||Gu.bs!=bs||
+     Gu.started||Gu.owned||Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
+  if(SelectedAssets||AssetsLoadAttempted)return EFI_ALREADY_STARTED;
+  GU_OWNED_ASSET_STORE *owned=NULL;
+  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,sizeof(*owned),(VOID **)&owned);
+  if(s!=EFI_SUCCESS)return s;
+  if(!owned)return EFI_OUT_OF_RESOURCES;
+  memset(owned,0,sizeof(*owned));
+  s=GuAssetSelectEntries(owned->entries);
+  if(s!=EFI_SUCCESS) {
+    (VOID)bs->FreePool(owned);
+    return s;
+  }
+  SelectedAssets=owned;
+  SelectedAssetAttempted=&owned->attempted;
+  return EFI_SUCCESS;
+}
 
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID,FsGuid=EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 
@@ -262,6 +291,11 @@ EFI_STATUS GuBootLoadAssets(VOID) {
        GuAssets[i].firmware.size)return EFI_ALREADY_STARTED;
   const GU_ARCH_ASSETS *arch=GuGetArchAssets();
   if(!arch)return EFI_UNSUPPORTED;
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  /* Build an independently owned immutable firmware table first. */
+  EFI_STATUS reserved=GuBootReserveSelectedAssets(Gu.bs);
+  if(reserved!=EFI_SUCCESS)return reserved;
+#endif
   AssetsLoadAttempted=TRUE; /* Latch before the first file operation. */
   EFI_STATUS status=EFI_SUCCESS;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
