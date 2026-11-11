@@ -435,6 +435,7 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
   if(!ActiveSequenceValid || !ActiveInventoryValid ||
      !cleanup_and_handover_verified || !table ||
      !table->BootServices || Gu.bs!=table->BootServices ||
+     ActiveTargetIndex>=ActiveInventory.inventory.count ||
      Gu.handle!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].handle ||
      Gu.pci!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].pci) {
     GuAbortSelectedGpuStep();

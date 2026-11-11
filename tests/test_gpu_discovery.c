@@ -162,7 +162,51 @@ int main(void) {
   ResetPair(); /* wrong segment/device/function for explicitly selected PCI target */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED &&
         init_calls==0);
-  printf("PASS exact single-target active binding with protected peer: %u checks\n",checks);
+
+  /* Actual source integration of the selected RTX 4090/3080 step model.
+   * These are mocked PCI reads; cleanup_verified below is a supplied
+   * model input, NOT physical driver Stop or firmware authentication. */
+  ResetActivePair();
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  CHECK(ActiveInventoryValid && ActiveSequenceValid &&
+        ActiveSequence.selected_count==1 && ActiveSequence.next_step==0);
+  CHECK(ActiveSequence.order[0]==ActiveTargetIndex);
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
+  CHECK(ActiveSequence.active_step==0 &&
+        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_ACTIVE);
+  /* A failed cleanup verdict cannot publish a completed GPU. */
+  CHECK(GuFinishSelectedGpuStep(&system_table,0)==EFI_NOT_READY);
+  CHECK(ActiveSequence.halted &&
+        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_UNSUPPORTED);
+
+  ResetActivePair();
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
+  /* CPU model permits selected post-step PCI state, but not peer drift. */
+  gpu[1].dwords[4]^=0x1000U;
+  CHECK(GuFinishSelectedGpuStep(&system_table,1)==EFI_SUCCESS);
+  CHECK(ActiveSequence.next_step==1 &&
+        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_COMPLETE &&
+        ActiveSequence.targets[ActiveTargetIndex].expected_config[4]==gpu[1].dwords[4]);
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_UNSUPPORTED);
+
+  ResetActivePair();
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
+  gpu[0].dwords[4]^=0x1000U;
+  CHECK(GuFinishSelectedGpuStep(&system_table,1)==EFI_UNSUPPORTED &&
+        ActiveSequence.halted);
+  CHECK(ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
+
+  ResetActivePair();
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  gpu[0].dwords[4]^=0x1000U; /* drift before beginning selected work */
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_UNSUPPORTED &&
+        ActiveSequence.halted);
+  CHECK(ActiveSequence.next_step==0 && ActiveSequence.active_step==GU_INVENTORY_MAX_NVIDIA);
+
+  printf("PASS exact single-target active binding and CPU state handover: %u checks\n",checks);
   return 0;
 }
 #elif defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
