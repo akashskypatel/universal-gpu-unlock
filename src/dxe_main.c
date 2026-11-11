@@ -63,6 +63,11 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   GuLog("DXE selected GPU transaction checked; S3 registration optional\n");
   EFI_STATUS s3=GuRegisterS3(t);
   GuLog("DXE S3 registration status=%#llx\n",(unsigned long long)s3);
+  if(Gu.retained) {
+    stage="dxe-s3-partial-registration";
+    s=s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3;
+    goto finish;
+  }
 
 finish:
   if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;
