@@ -30,6 +30,91 @@ def function(name):
 
 
 class TargetBindTest(unittest.TestCase):
+    def test_selected_card_owns_the_one_use_selector_write(self):
+        first = SOURCE.index("VOID GuWrite32(")
+        last = SOURCE.index("\nstatic EFI_STATUS RawRead(", first)
+        actual = SOURCE[first:last]
+        host = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+typedef void VOID;
+typedef uint32_t UINT32;
+typedef uint64_t UINT64;
+typedef uint64_t EFI_STATUS;
+typedef int BOOLEAN;
+#define TRUE 1
+#define FALSE 0
+#define GU_PREFLIGHT_ONLY 0
+#define GU_ENTRY_LATCHED_SS1_FULL 1
+#define GU_SELECTOR_PHASE_SS1_WRITE 2U
+#define EfiPciIoWidthUint32 2
+#define EFI_SUCCESS 0
+#define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
+typedef struct MOCK_PCI EFI_PCI_IO_PROTOCOL;
+typedef struct {
+  EFI_STATUS (*Write)(EFI_PCI_IO_PROTOCOL *,int,int,UINT32,int,const VOID *);
+} MEMORY;
+struct MOCK_PCI { MEMORY Mem; int writes,fail; };
+typedef struct {
+  EFI_PCI_IO_PROTOCOL *pci;
+  UINT64 bar_size;
+  BOOLEAN profile_verified,armed,owned,display_ok,fault,ss1_write_consumed;
+  UINT32 selector_phase,mmio_writes;
+} GU_PLATFORM;
+static GU_PLATFORM a,b;
+static GU_PLATFORM *GuPlatformActive=&a;
+#define Gu (*GuPlatformActive)
+static EFI_STATUS Write(EFI_PCI_IO_PROTOCOL *pci,int width,int bar,
+                        UINT32 offset,int count,const VOID *value) {
+  if(width!=EfiPciIoWidthUint32 || bar!=0 || count!=1 ||
+     offset!=0x823820U || *(const UINT32 *)value!=8U)return 1;
+  pci->writes++;
+  return pci->fail?1:EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  EFI_PCI_IO_PROTOCOL io0={{Write},0,0},io1={{Write},0,0};
+  a.pci=&io0;b.pci=&io1;
+  a.bar_size=b.bar_size=0x1000000U;
+  a.profile_verified=b.profile_verified=TRUE;
+  a.armed=b.armed=a.owned=b.owned=TRUE;
+  a.display_ok=b.display_ok=TRUE;
+  a.selector_phase=GU_SELECTOR_PHASE_SS1_WRITE;
+  GuWrite32(0x823820U,8U);
+  CHECK(!a.fault && a.ss1_write_consumed && io0.writes==1);
+  GuWrite32(0x823820U,8U);
+  CHECK(a.fault && io0.writes==1);
+  GuPlatformActive=&b;
+  GuWrite32(0x823820U,8U);
+  CHECK(b.fault && !b.ss1_write_consumed && io1.writes==0);
+  b.fault=FALSE;b.selector_phase=GU_SELECTOR_PHASE_SS1_WRITE;
+  io1.fail=1;
+  GuWrite32(0x823820U,8U);
+  CHECK(b.fault && b.ss1_write_consumed && io1.writes==1);
+  GuWrite32(0x823820U,8U);
+  CHECK(io1.writes==1);
+  GuPlatformActive=&a;
+  CHECK(a.fault && a.ss1_write_consumed && io0.writes==1);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "selector_write_isolation.c"
+            binary = Path(directory) / "selector_write_isolation"
+            source.write_text(host, encoding="utf-8")
+            compiled = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2",
+                 "-Wall", "-Wextra", "-Werror", "-pedantic",
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            executed = subprocess.run([str(binary)],
+                                      capture_output=True, text=True)
+            self.assertEqual(executed.returncode, 0,
+                             executed.stdout + executed.stderr)
+
     def test_selector_latches_and_write_phase_are_card_private(self):
         first = SOURCE.index("BOOLEAN GuGetEntrySelectors(")
         middle = SOURCE.index("#endif\n#ifdef GU_ENTRY_LATCHED_SS1_FULL", first)
