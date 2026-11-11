@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Exact captured MSI RTX 4090 Suprim X (AD102, CAP0001 2026-10-25). A matched profile is not hardware qualification. */
+/* Parent-supported Ada, Ampere and Turing reference bundles.
+ * A matched manifest is not signed-firmware or hardware qualification. */
 #include "profile.h"
 #include "checks.h"
 #include "sha256.h"
@@ -21,22 +22,29 @@ static const GU_ARCH_ASSETS AmpereAssets={{
     {L"\\GA102-ASSETS\\gsp_boot_ga102.bin","gpu-unlock/610.43.03/gsp_boot_ga102.bin","3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768",24576U},
     {L"\\GA102-ASSETS\\gsp_boot_desc_ga102.bin","gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin","cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15",84U}
   },L"\\AD102-ASSETS\\gsp_ga10x.bin"};
+/* The parent supplies these 610.43.03 reference assets. The fork currently
+ * carries no TU102 payload bytes; EFI checks actual files and hashes. */
+static const GU_ARCH_ASSETS TuringAssets={{
+    {L"\\TU102-ASSETS\\booter_load_tu102.bin","gpu-unlock/610.43.03/booter_load_tu102.bin","3ae2cccc2666e5de1fee0db68a41ba37086124425eaed4d90718e194d5d48276",59976U},
+    {L"\\TU102-ASSETS\\v67-tu102-610.43.03.bin","gpu-unlock/610.43.03/v67-tu102-610.43.03.bin","2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197",64000U},
+    {L"\\TU102-ASSETS\\gsp_tu10x.bin","gpu-unlock/610.43.03/gsp_tu10x.bin","73065619db9ec921d19fc4e519dd04d91a9199b525eaca9b257b89fb8c5ec52c",29352832U},
+    {L"\\TU102-ASSETS\\gsp_boot_tu102.bin","gpu-unlock/610.43.03/gsp_boot_tu102.bin","8765694cd38beaa4e2b8b1b83a31fb7aee6cb9d8b7c6bc7a86e6d931a3a056c2",4096U},
+    {L"\\TU102-ASSETS\\gsp_boot_desc_tu102.bin","gpu-unlock/610.43.03/gsp_boot_desc_tu102.bin","9e7cca2cfdc5ce601b0adba39967850046108df6c2d23fff95578ca3f0ccbe01",76U}
+  },NULL};
 const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id) {
-  /* Require the full NVIDIA PCI identity, not a device number alone. */
   if((pci_id & 0xffffU)!=0x10deU)return NULL;
-  /* The current pinned Booter packages have only been prepared for
-   * the owner's AD102 4090 and GA102 3080 identity pair. Broad Ada/Ampere
-   * family predicates also match AD103/GA104/GA106, whose signed images
-   * and geometry cannot be inferred from these two manifests. */
-  if(pci_id==0x268410deU)return &AdaAssets;
-  if(pci_id==0x220a10deU)return &AmpereAssets;
+  UINT16 dev=(UINT16)(pci_id>>16);
+  if(GuIsAdaDeviceId(dev))return &AdaAssets;
+  if(GuIsAmpereDeviceId(dev))return &AmpereAssets;
+  if(GuIsTuringDeviceId(dev))return &TuringAssets;
   return NULL;
 }
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {
-  if(Gu.is_turing)return NULL;
   const GU_ARCH_ASSETS *assets=GuGetArchAssetsForPciId(
       ((UINT32)Gu.device_id<<16)|0x10deU);
-  if(!assets || (!!Gu.is_ampere)!=(assets==&AmpereAssets))return NULL;
+  if(!assets ||
+     (!!Gu.is_turing)!=(assets==&TuringAssets) ||
+     (!!Gu.is_ampere)!=(assets==&AmpereAssets))return NULL;
   return assets;
 }
 BOOLEAN GuAd104AssetsValid(VOID) {

@@ -5,9 +5,6 @@
 #ifndef GU_DISCOVERY_HOST_TEST
 #include "port.h"
 #include "checks.h"
-#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
-#include "profile.h" /* Read-only exact-card reference manifest lookup. */
-#endif
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) && GU_PREFLIGHT_ONLY != 1
 #error Preparation-only active EFI must also prohibit GPU writes, DMA and FLR
 #endif
@@ -28,17 +25,6 @@
 #endif
 static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
-#endif
-
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
-static int PreparedTargetHasReferenceAssets(UINT32 pci_id) {
-#ifdef GU_DISCOVERY_HOST_TEST
-  extern int GuMockReferenceManifest(UINT32);
-  return GuMockReferenceManifest(pci_id);
-#else
-  return GuGetArchAssetsForPciId(pci_id)!=NULL;
-#endif
-}
 #endif
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
@@ -433,17 +419,6 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
        GuGpuExecCheckNext(&sequence,observed,all.inventory.count)!=GU_GPU_EXEC_OK) {
       GuLog("ACTIVE_SEQUENCE=REFUSED REASON=STATE_OR_PEER_DRIFT BEFORE_GU_INIT=1\n");
       return EFI_UNSUPPORTED;
-    }
-    /* Manifest geometry is pinned to the requested PCI devices. A generic
-     * NVIDIA family match must not select the wrong Booter images. This
-     * does not load, execute, or authenticate any firmware bytes. */
-    for(size_t i=0;i<prepared.selected_count;i++) {
-      const GU_GPU_RECORD *rec=&prepared.inventory.nvidia[prepared.selected_indices[i]];
-      if(!PreparedTargetHasReferenceAssets(rec->pci_id)) {
-        GuLog("ACTIVE_SEQUENCE=REFUSED REASON=NO_EXACT_REFERENCE_MANIFEST STEP=%zu PCI_ID=%#x BEFORE_GU_INIT=1\n",
-              i,(unsigned)rec->pci_id);
-        return EFI_UNSUPPORTED;
-      }
     }
     GuLog("ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=%zu TRACKED=%zu NEXT=0 MUTATION_AUTHORIZED=0\n",
           sequence.selected_count,sequence.count);
