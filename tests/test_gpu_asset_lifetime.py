@@ -51,6 +51,99 @@ class AssetLifetimeTests(unittest.TestCase):
                     self.assertEqual(executed.returncode, 0,
                                      executed.stdout + executed.stderr)
 
+    def test_actual_selected_asset_storage_and_failure_rollback(self):
+        compat = (ROOT / "src/compat.c").read_text(encoding="utf-8")
+        asset_api = body(compat, "GU_ASSET GuAssets[5];",
+                         "\nvoid *devres_open_group(")
+        selected = body(BOOT, "static BOOLEAN AssetsLoadAttempted;",
+                        "\nstatic EFI_GUID LoadedGuid=")
+        host = r"""
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef void VOID;
+typedef int BOOLEAN;
+typedef uintptr_t EFI_STATUS;
+typedef size_t UINTN;
+struct firmware {size_t size;const unsigned char *data;};
+typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
+#define GU_ASSET_COUNT 5U
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 2
+#define EFI_ACCESS_DENIED 3
+#define EFI_ALREADY_STARTED 4
+#define EFI_NOT_READY 5
+#define EFI_OUT_OF_RESOURCES 6
+#define EfiLoaderData 7
+typedef struct EFI_BOOT_SERVICES {
+  EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+static struct {
+  EFI_BOOT_SERVICES *bs;
+  int started,owned,armed,fault,retained;
+} Gu;
+static int alloc_count,free_count,fail_alloc;
+static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
+  if(kind!=EfiLoaderData || !out)return EFI_INVALID_PARAMETER;
+  alloc_count++;
+  if(fail_alloc)return EFI_OUT_OF_RESOURCES;
+  *out=calloc(1,bytes);
+  return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
+static EFI_STATUS Free(VOID *ptr) {free_count++;free(ptr);return EFI_SUCCESS;}
+""" + asset_api + selected + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(int argc,char **argv) {
+  EFI_BOOT_SERVICES bs={Allocate,Free};
+  Gu.bs=&bs;
+  int mode=argc>1?argv[1][0]-'0':-1;
+  if(mode==0) {
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_SUCCESS);
+    CHECK(SelectedAssets && alloc_count==1 && GuAssetEntries()!=GuAssets);
+    CHECK(GuAssetEntries()==SelectedAssets->entries);
+    CHECK(SelectedAssetAttempted==&SelectedAssets->attempted);
+    AssetsLoadAttempted=TRUE;
+    CHECK(SelectedAssets->attempted && GuBootReserveSelectedAssets(&bs)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetSelectEntries(GuAssets)==EFI_ALREADY_STARTED);
+  } else if(mode==1) {
+    GuAssets[0].name="original";
+    GU_ASSET other[GU_ASSET_COUNT]={0};
+    CHECK(GuAssetSelectEntries(other)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetEntries()==GuAssets);
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_ALREADY_STARTED);
+    CHECK(!SelectedAssets && alloc_count==1 && free_count==1);
+  } else if(mode==2) {
+    fail_alloc=1;
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_OUT_OF_RESOURCES);
+    CHECK(!SelectedAssets && GuAssetEntries()==GuAssets);
+    fail_alloc=0;
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_SUCCESS && alloc_count==2);
+  } else if(mode==3) {
+    Gu.started=1;
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_NOT_READY && alloc_count==0);
+    Gu.started=0;Gu.retained=1;
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_NOT_READY && alloc_count==0);
+  } else if(mode==4) {
+    GU_ASSET other[GU_ASSET_COUNT]={0};
+    other[0].name="foreign";
+    CHECK(GuAssetSelectEntries(other)==EFI_ACCESS_DENIED);
+    CHECK(GuAssetEntries()==GuAssets);
+  } else if(mode==5) {
+    bs.FreePool=NULL;
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_NOT_READY && alloc_count==0);
+    bs.FreePool=Free;
+    CHECK(GuBootReserveSelectedAssets(&bs)==EFI_SUCCESS);
+  } else return 3;
+  return 0;
+}
+"""
+        self.compile_run(host, range(6))
+
     def test_loader_prevents_cross_target_asset_replacement(self):
         source = r'''
 #include <stdint.h>
