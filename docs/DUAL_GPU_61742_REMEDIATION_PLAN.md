@@ -2,7 +2,7 @@
 
 ## Current parent-compatibility review: four upstream commits through a3c6aba (2026-11-11)
 
-**Situation.** [BrightRaider changes](https://github.com/brightraider/universal-gpu-unlock/compare/7e0d176bfe3906adb7afba2a938c2b9c8916915f...a3c6aba1c7f3ef71f4009b33cbdf9508471a7e9b) span **four commits and 25 files**. This fork intentionally supports multiple NVIDIA generations, operator-selected PCI targets and a separately pinned Windows partition. Do **not** cherry-pick the full commit range. This is a current adoption decision, not a sequence of work notes.
+**Situation.** [BrightRaider changes](https://github.com/brightraider/universal-gpu-unlock/compare/7e0d176bfe3906adb7afba2a938c2b9c8916915f...a3c6aba1c7f3ef71f4009b33cbdf9508471a7e9b) span **four commits and 25 files**. The table covers all **15 specifically requested files** (some related headers are grouped with their implementations). This fork intentionally supports multiple NVIDIA generations, operator-selected PCI targets and a separately pinned Windows partition. Do **not** cherry-pick the full commit range. This is a current adoption decision, not a sequence of work notes.
 
 | Source file(s) | Disposition against current fork | Reason and next contract |
 |---|---|---|
