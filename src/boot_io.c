@@ -3,6 +3,7 @@
 /* USB log/assets only. Windows ESP is opened read-only. No boot variables. */
 
 #include "boot_io.h"
+#include "gpu_windows_path.h"
 
 #include "boot_profile.h"
 
@@ -24,9 +25,10 @@
 
 static EFI_SYSTEM_TABLE *Table;
 
-static EFI_HANDLE Self,Windows,OwnVolume;
+static EFI_HANDLE Self,Windows,OwnVolume,TargetEspVolume;
 
 static EFI_FILE_PROTOCOL *Root,*Log;
+static CHAR16 ActiveLogPath[]=L"\\AD102-UNLOCK\\RUN0000.TXT";
 
 static BOOLEAN Silent;
 
@@ -40,9 +42,7 @@ static const CHAR16 WindowsName[]=L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
 
 static const CHAR16 * const WindowsCandidates[] = {
   L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi",
-  L"EFI\\Microsoft\\Boot\\bootmgfw.efi",
-  L"\\EFI\\Boot\\bootx64.efi",
-  L"EFI\\Boot\\bootx64.efi"
+  L"EFI\\Microsoft\\Boot\\bootmgfw.efi"
 };
 
 static UINTN GuStrLen(const CHAR16 *s) {
@@ -103,6 +103,8 @@ VOID GuLog(const char *format,...) {
 VOID GuLogText(const char *text){GuLog("%s",text);}
 
 BOOLEAN GuBootLogOpen(VOID){return Log!=NULL;}
+EFI_HANDLE GuBootGetTargetEspVolume(VOID){return TargetEspVolume;}
+const CHAR16 *GuBootGetLogPath(VOID){return Log?ActiveLogPath:NULL;}
 
 EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
@@ -148,7 +150,11 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     if(s!=EFI_NOT_FOUND)break;
 
-    s=dir->Open(dir,&Log,name,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);break;
+    s=dir->Open(dir,&Log,name,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    if(s==EFI_SUCCESS&&Log) {
+      for(UINTN k=0;k<sizeof(name)/sizeof(CHAR16);k++) ActiveLogPath[14+k]=name[k];
+    }
+    break;
 
   }
 
@@ -349,7 +355,7 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
 }
 
 EFI_STATUS GuBootLoadWindows(VOID) {
-  if(Windows||!Table||Gu.started)return EFI_NOT_READY;
+  if(Windows||!Table||Gu.started||TargetEspVolume)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Table->BootServices;EFI_HANDLE *h=NULL,volume=NULL;UINTN count=0,matches=0,path_bytes=0;
   EFI_DEVICE_PATH_PROTOCOL *base=NULL;
   const CHAR16 *selected_name=NULL;
@@ -359,7 +365,9 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
     if(h[i]==OwnVolume) continue;
     EFI_DEVICE_PATH_PROTOCOL *p=NULL;UINTN bytes=0;BOOLEAN usb=FALSE,windows=FALSE;
-    if(b->HandleProtocol(h[i],&PathGuid,(VOID **)&p)==EFI_SUCCESS&&Inspect(p,&bytes,&usb,&windows)&&!usb) {
+    if(b->HandleProtocol(h[i],&PathGuid,(VOID **)&p)==EFI_SUCCESS&&
+       Inspect(p,&bytes,&usb,&windows)&&!usb&&
+       GuWindowsEspPathMatches((const uint8_t *)p,bytes,(const uint8_t *)&WindowsPartition)) {
       EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *tfs=NULL;EFI_FILE_PROTOCOL *troot=NULL;
       if(b->HandleProtocol(h[i],&FsGuid,(VOID **)&tfs)==EFI_SUCCESS&&tfs&&tfs->OpenVolume(tfs,&troot)==EFI_SUCCESS&&troot) {
         const CHAR16 *found_name=NULL;
@@ -389,8 +397,10 @@ EFI_STATUS GuBootLoadWindows(VOID) {
     GuLog("GuBootLoadWindows failed: matches=%zu volume=%p s=%#llx\n", (size_t)matches, (void *)volume, (unsigned long long)s);
     return EFI_NOT_FOUND;
   }
-  if(matches > 1) {
-    GuLog("GuBootLoadWindows: multiple targets found (%zu). Selected primary volume=%p path='%ls'\n", matches, (void *)volume, selected_name);
+  if(matches!=1) {
+    GuLog("GuBootLoadWindows refused: pinned partition maps to %zu distinct filesystem handles\n",(size_t)matches);
+    if(matched_root)matched_root->Close(matched_root);
+    return EFI_UNSUPPORTED;
   }
   EFI_FILE_PROTOCOL *root=matched_root;
   VOID *bytes=NULL;UINTN actual_size=0;
@@ -414,7 +424,8 @@ EFI_STATUS GuBootLoadWindows(VOID) {
       im->DeviceHandle=volume;
     }
   }
-  GuLog("Windows image staged: status=%#llx matches=%zu SHA256 pinned path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
+  if(s==EFI_SUCCESS)TargetEspVolume=volume;
+  GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=1 path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
   return s;
 }
 
