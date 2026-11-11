@@ -346,11 +346,16 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
 
   EFI_FILE_INFO *info=(VOID *)info_words;
 
-  if(s==EFI_SUCCESS&&(info_bytes<sizeof(EFI_FILE_INFO)||info->FileSize<65536||info->FileSize>33554432||(info->Attribute&EFI_FILE_DIRECTORY)))
-
-    s=EFI_COMPROMISED_DATA;
-
-  UINTN sz=(UINTN)info->FileSize;VOID *p=NULL;
+  UINTN sz=0;
+  if(s==EFI_SUCCESS) {
+    if(info_bytes<sizeof(EFI_FILE_INFO)||info_bytes>sizeof(info_words)||
+       info->FileSize<65536||info->FileSize>33554432||
+       (info->Attribute&EFI_FILE_DIRECTORY))
+      s=EFI_COMPROMISED_DATA;
+    else
+      sz=(UINTN)info->FileSize;
+  }
+  VOID *p=NULL;
 
   if(s==EFI_SUCCESS){p=GuAlloc(sz);if(!p)s=EFI_OUT_OF_RESOURCES;}
 
