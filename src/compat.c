@@ -5,6 +5,7 @@ static GU_ASSET *ActiveAssets=GuAssets;
 GU_ASSET *GuAssetEntries(VOID) {return ActiveAssets;}
 EFI_STATUS GuAssetSelectEntries(GU_ASSET *entries) {
   if(!entries)return EFI_INVALID_PARAMETER;
+  if(entries==GuAssets || entries==ActiveAssets)return EFI_ALREADY_STARTED;
   /* Never silently replace a previously published immutable image. */
   if(ActiveAssets!=GuAssets)return EFI_ALREADY_STARTED;
   for(UINTN i=0;i<5;i++)
