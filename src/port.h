@@ -108,6 +108,7 @@ typedef struct {
   BOOLEAN fault, retained, started, quiesced, armed, owned, display_ok, saved;
   BOOLEAN profile_verified, prom_verified;
   BOOLEAN transaction_attempted;
+  BOOLEAN s3_script_attempted;
   BOOLEAN master_attributes_pending;
   UINT64 master_original_attributes;
   UINT16 master_original_command;
