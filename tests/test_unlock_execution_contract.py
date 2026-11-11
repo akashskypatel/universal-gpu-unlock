@@ -108,7 +108,7 @@ typedef struct MOCK_BOOT_SERVICES {
   EFI_STATUS (*LocateProtocol)(EFI_GUID *,VOID *,VOID **);
 } EFI_BOOT_SERVICES;
 typedef struct {EFI_BOOT_SERVICES *BootServices;} EFI_SYSTEM_TABLE;
-static struct {UINT64 bar_base,bar_size;int fault,retained;} Gu;
+static struct {UINT64 bar_base,bar_size;int fault,retained,s3_script_attempted;} Gu;
 static int ready,safe=1,available=1,fail_at,write_calls,locate_calls;
 static UINT64 first_address,second_address;
 static UINT32 first_value,second_value;
@@ -209,7 +209,7 @@ int main(int argc,char **argv) {
         self.assertIn("GuMsiReadyForWindows()",s3)
         self.assertIn("EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE",s3)
         self.assertIn("Gu.retained=TRUE",s3)
-        self.assertLess(s3.index("attempted=TRUE"),s3.index("s3->Write("))
+        self.assertLess(s3.index("Gu.s3_script_attempted=TRUE"),s3.index("s3->Write("))
         self.assertLess(s3.index("if(a!=EFI_SUCCESS)"),s3.index("EFI_STATUS b=s3->Write("))
         for source in (APP,DXE):
             self.assertIn("if(Gu.retained)",source)
