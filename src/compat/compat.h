@@ -19,7 +19,8 @@ typedef UINT64 ktime_t;
 #define min_t(t,a,b) ((t)(a)<(t)(b)?(t)(a):(t)(b))
 #define lower_32_bits(v) ((u32)(v))
 #define upper_32_bits(v) ((u32)((u64)(v)>>32))
-#define DMA_BIT_MASK(n) ((1ull<<(n))-1)
+/* A 64-bit DMA mask must not shift a 64-bit word by 64 bits. */
+#define DMA_BIT_MASK(n) (((n) == 64) ? ~0ull : ((1ull<<(n))-1))
 #define MODULE_FIRMWARE(x)
 #define THIS_MODULE NULL
 #define dev_err(dev, ...) GuLog(__VA_ARGS__)
