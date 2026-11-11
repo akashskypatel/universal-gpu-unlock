@@ -65,6 +65,9 @@ EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                   const void *release_plan,
                                   const void *firmware_assets);
 EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
-                                   int cleanup_and_handover_verified);
+                                   int cleanup_and_handover_verified,
+                                   const void *platform,
+                                   const void *release_plan,
+                                   const void *firmware_assets);
 void GuAbortSelectedGpuStep(void);
 #endif

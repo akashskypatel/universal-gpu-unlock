@@ -47,6 +47,16 @@ class SharedExecutionContract(unittest.TestCase):
                         discovery.index("s=GuInit(table->BootServices,io);"))
         self.assertIn("GuGpuExecBeginOwned(&ActiveSequence",discovery)
         self.assertIn("GuMsiPlanOwnerToken()",wrapper)
+        self.assertIn("GuFinishSelectedGpuStep(table,",wrapper)
+        self.assertEqual(wrapper.count("GuMsiPlanOwnerToken()"),2)
+        self.assertEqual(wrapper.count("GuAssets"),2)
+        self.assertEqual(wrapper.count("&Gu"),2)
+        finish_adapter=body(discovery,"GuFinishSelectedGpuStep")
+        for check in ("!platform", "!release_plan", "!firmware_assets",
+                      ".owners.platform!=platform",
+                      ".owners.release_plan!=release_plan",
+                      ".owners.firmware_assets!=firmware_assets"):
+            self.assertIn(check,finish_adapter)
         self.assertIn("GuMsiReserveSelectedState(",wrapper)
         self.assertLess(wrapper.index("GuMsiReserveSelectedState("),begin)
         self.assertIn("GuAssets",wrapper)

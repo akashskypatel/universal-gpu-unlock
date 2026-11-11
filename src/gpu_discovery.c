@@ -438,13 +438,23 @@ EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
   return EFI_SUCCESS;
 }
 EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
-                                   int cleanup_and_handover_verified) {
+                                   int cleanup_and_handover_verified,
+                                   const void *platform,
+                                   const void *release_plan,
+                                   const void *firmware_assets) {
   if(!ActiveSequenceValid || !ActiveInventoryValid ||
      !cleanup_and_handover_verified || !table ||
      !table->BootServices || Gu.bs!=table->BootServices ||
      ActiveTargetIndex>=ActiveInventory.inventory.count ||
+     ActiveTargetIndex>=ActiveSequence.count ||
      Gu.handle!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].handle ||
-     Gu.pci!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].pci) {
+     Gu.pci!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].pci ||
+     !platform || !release_plan || !firmware_assets ||
+     ActiveSequence.targets[ActiveTargetIndex].owners.platform!=platform ||
+     ActiveSequence.targets[ActiveTargetIndex].owners.release_plan!=release_plan ||
+     ActiveSequence.targets[ActiveTargetIndex].owners.firmware_assets!=firmware_assets) {
+    /* A post-transaction check must not trust CPU owner tokens alone:
+     * compare them to the actual live resource objects again. */
     GuAbortSelectedGpuStep();
     return EFI_NOT_READY;
   }

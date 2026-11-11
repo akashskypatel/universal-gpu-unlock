@@ -81,7 +81,8 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
   *stage="selected-gpu-state-finish";
   /* Core already checked GuMsiFinish and the full Windows handover. */
   s=GuFinishSelectedGpuStep(table,GuMsiReadyForWindows() &&
-                             !Gu.fault && GuSafeToReturn());
+                             !Gu.fault && GuSafeToReturn(),&Gu,
+                             GuMsiPlanOwnerToken(),GuAssets);
   if(s!=EFI_SUCCESS)GuAbortSelectedGpuStep();
   return s;
 #else
