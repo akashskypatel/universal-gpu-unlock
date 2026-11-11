@@ -269,6 +269,110 @@ int main(void) {
         self.assertIn("Segment > 0xffffU", check)
         self.assertNotIn("Segment != 0", check)
 
+    def test_selected_release_plan_owns_independent_graphs(self):
+        start = MSI_SOURCE.index("EFI_STATUS GuMsiReserveSelectedState(")
+        end = MSI_SOURCE.index("\nstatic EFI_GUID PciGuid=", start)
+        production = MSI_SOURCE[start:end]
+        host = r"""
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef void VOID;
+typedef int BOOLEAN;
+typedef uintptr_t EFI_STATUS;
+typedef struct EFI_BOOT_SERVICES {
+  EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+} EFI_BOOT_SERVICES;
+typedef struct {EFI_BOOT_SERVICES *bs;VOID *handle;
+  int profile_verified,prom_verified,started,owned,armed,fault,retained;
+} GU_PLATFORM;
+static GU_PLATFORM Gu;
+typedef struct {VOID *table;int mutated,claimed,ready;} PLAN;
+typedef struct {int edges[4];} GRAPH;
+#define MAX_EDGES 4
+#define EfiLoaderData 1
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 2
+#define EFI_ALREADY_STARTED 3
+#define EFI_OUT_OF_RESOURCES 4
+static PLAN InitialPlan;
+static GRAPH InitialOriginal,InitialCurrent;
+static BOOLEAN InitialUsb[MAX_EDGES];
+typedef struct {PLAN plan;GRAPH original,current;BOOLEAN original_usb[MAX_EDGES];} GU_MSI_OWNED_STATE;
+static GU_MSI_OWNED_STATE *SelectedMsi;
+static PLAN *CurrentPlan=&InitialPlan;
+static GRAPH *CurrentOriginal=&InitialOriginal,*CurrentGraph=&InitialCurrent;
+static BOOLEAN (*CurrentOriginalUsb)[MAX_EDGES]=&InitialUsb;
+#define Plan (*CurrentPlan)
+#define Original (*CurrentOriginal)
+#define Current (*CurrentGraph)
+#define OriginalUsb (*CurrentOriginalUsb)
+static int fail_pool,allocations;
+static EFI_STATUS Allocate(int type,size_t n,VOID **out) {
+  if(type!=EfiLoaderData||!out)return EFI_NOT_READY;
+  allocations++;
+  if(fail_pool)return EFI_OUT_OF_RESOURCES;
+  *out=calloc(1,n);
+  return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
+""" + production + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(int argc,char **argv) {
+  EFI_BOOT_SERVICES bs={Allocate};
+  Gu.bs=&bs;Gu.handle=(VOID *)(uintptr_t)1;
+  Gu.profile_verified=Gu.prom_verified=1;
+  int mode=argc>1?argv[1][0]-'0':-1;
+  if(mode==0) {
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
+    CHECK(SelectedMsi && CurrentPlan!=&InitialPlan);
+    CHECK(CurrentOriginal!=&InitialOriginal && CurrentGraph!=&InitialCurrent);
+    CHECK(CurrentOriginalUsb!=&InitialUsb);
+    CHECK(CurrentPlan==&SelectedMsi->plan && CurrentOriginal==&SelectedMsi->original);
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED && allocations==1);
+  } else if(mode==1) {
+    Gu.profile_verified=0;
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
+    CHECK(!SelectedMsi && allocations==0 && CurrentPlan==&InitialPlan);
+  } else if(mode==2) {
+    fail_pool=1;
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_OUT_OF_RESOURCES);
+    CHECK(!SelectedMsi && CurrentPlan==&InitialPlan);
+    fail_pool=0;
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS && allocations==2);
+  } else if(mode==3) {
+    Plan.table=(VOID *)(uintptr_t)1;
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED);
+    CHECK(!SelectedMsi && allocations==0);
+  } else if(mode==4) {
+    bs.AllocatePool=NULL;
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
+    CHECK(!SelectedMsi);
+  } else if(mode==5) {
+    Gu.retained=1;
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY && allocations==0);
+  } else return 3;
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "msi_plan_lifetime.c"
+            binary = Path(directory) / "msi_plan_lifetime"
+            source.write_text(host, encoding="utf-8")
+            compiled = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2",
+                 "-Wall", "-Wextra", "-Werror", "-pedantic",
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            for mode in range(6):
+                with self.subTest(mode=mode):
+                    result = subprocess.run([str(binary), str(mode)],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+
     def test_release_plan_is_not_reset_after_attempt(self):
         start = MSI_SOURCE.index("EFI_STATUS GuMsiPreflight(")
         stop = MSI_SOURCE.index("static BOOLEAN DecodeMask(", start)
