@@ -532,6 +532,75 @@ int main(int argc,char **argv) {
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
 
+    def test_scratch_pool_rejects_null_service_and_null_success(self):
+        """Run production GuAlloc with invalid and valid firmware callbacks."""
+        start = SOURCE.index("VOID *GuAlloc(size_t N) {")
+        end = SOURCE.index("\nVOID GuFree(", start)
+        actual = SOURCE[start:end]
+        host = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef void VOID;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+#define EFI_OUT_OF_RESOURCES 2
+#define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
+#define EfiLoaderData 1
+typedef struct {
+  EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+} EFI_BOOT_SERVICES;
+static struct {EFI_BOOT_SERVICES *bs;} Gu;
+static int mode,calls;
+static EFI_STATUS Allocate(int kind,size_t n,VOID **out) {
+  if(kind!=EfiLoaderData || !n)return EFI_OUT_OF_RESOURCES;
+  calls++;
+  if(mode==3)return EFI_OUT_OF_RESOURCES;
+  if(mode==2)return EFI_SUCCESS; /* Misbehaving successful null output. */
+  *out=malloc(n);
+  return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d mode %d: %s\n",__LINE__,mode,#x);return 1;}} while(0)
+int main(int argc,char **argv) {
+  EFI_BOOT_SERVICES bs={Allocate};
+  mode=argc>1?atoi(argv[1]):-1;
+  if(mode<0 || mode>4)return 3;
+  if(mode!=0)Gu.bs=&bs;
+  if(mode==1)bs.AllocatePool=NULL;
+  VOID *ptr=GuAlloc(32);
+  if(mode<4) {
+    CHECK(ptr==NULL);
+    CHECK(calls==(mode==2||mode==3));
+  } else {
+    CHECK(ptr!=NULL && calls==1);
+    const unsigned char *bytes=(const unsigned char *)ptr;
+    for(size_t i=0;i<32;i++)CHECK(bytes[i]==0);
+    free(ptr);
+  }
+  CHECK(GuAlloc(0)==NULL);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "scratch_pool.c"
+            binary = Path(directory) / "scratch_pool"
+            source.write_text(host, encoding="utf-8")
+            compiled = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2",
+                 "-Wall", "-Wextra", "-Werror", "-pedantic",
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            for mode in range(5):
+                with self.subTest(mode=mode):
+                    result = subprocess.run([str(binary), str(mode)],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0,
+                                     result.stdout + result.stderr)
+
     def test_dma_failure_retains_uncertain_firmware_outputs(self):
         """Exercise actual GuDmaAllocate against independent EFI error mocks."""
         actual = function("GuDmaAllocate")
