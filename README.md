@@ -4,10 +4,21 @@ This fork investigates the safety and feasibility of a preboot Tensor Core
 FP32-accumulation issue-rate change on a dual-GPU Windows workstation.
 **It does not currently provide a verified working unlock for this machine.**
 
-**Current targets:** RTX 4090 (AD102, ASUS `1043:88e6`) and RTX 3080 12 GB
-(GA102, ZOTAC `19da:b612`), Windows NVIDIA KMD 617.42 and MSI B850 Gaming
-Plus WiFi with an AMD iGPU. All hardware identities must be revalidated
-before any future authorized operation.
+**Current physical research setup (not a support allowlist):** RTX 4090
+(AD102, ASUS `1043:88e6`) and RTX 3080 12 GB (GA102, ZOTAC
+`19da:b612`), Windows NVIDIA KMD 617.42, MSI B850 Gaming Plus WiFi
+and an AMD iGPU. This setup supplies physical evidence, not permanent PCI
+addresses or a restriction on other supported NVIDIA cards.
+
+**Parent device compatibility:** The fork uses the upstream device registry:
+11 Ada, 24 Ampere and 20 Turing NVIDIA device IDs. Passive discovery and
+selected preparation do not require either of the owner's GPUs. A detected
+GPU family selects the matching SHA-256-pinned **reference** firmware
+manifest. Availability and format of each image, driver ownership and
+verified recovery remain separate conditions before any active operation.
+The fork currently has a Turing FWSEC v2 parser gap; recognizing a Turing
+GPU does not prove it can be unlocked by this build. Hardware identities
+must be revalidated within the current boot.
 
 ## Current evidence and limitations
 
@@ -37,9 +48,10 @@ before any future authorized operation.
   PCI protocols, failed later-target reads, zeroed partial outputs and
   first-target BAR drift while a later target is inspected. The source
   remains read-only, and active firmware ownership/recovery is unverified.
-- The legacy ROM validation previously accepted any 1 MiB ROM. It now
-  **rejects all unpinned ROMs** pending independently authenticated exact-card
-  hashes; therefore it does not qualify an active firmware transaction.
+- The 1 MiB PROM structural identity parser checks the current GPU
+  device ID and ROM layout. A matching ROM structure is **not** a verified
+  manufacturer signature or proof that a specific firmware image is safe.
+  The checks do not pin the source to the two research GPUs.
 - The original Windows-GPU-UNLOCK `internal-boot/boot/probe.c` already
   implements `ProbeBar`/`DumpProm`: a bounded 1 MiB BAR0
   `0x300000` read followed by `PROM.BIN` export. This is **not** a 2 MiB
