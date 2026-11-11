@@ -46,6 +46,8 @@ on:
       - 'tests/test_profile_asset_contract.py'
       - 'tests/test_gpu_asset_lifetime.py'
       - 'src/boot_io.c'
+      - 'src/driver_nvram.c'
+      - 'tests/test_driver_nvram_capacity.py'
       - 'src/boot_io.h'
       - 'tests/test_boot_binding_contract.py'
       - 'src/unlock_execution.h'
@@ -143,6 +145,7 @@ jobs:
             CC=clang python3 -m unittest discover -s tests -p test_platform_bind_lifetime.py -v
             python3 -m unittest discover -s tests -p test_unlock_execution_contract.py -v
             python3 -m unittest discover -s tests -p test_boot_binding_contract.py -v
+            python3 -m unittest discover -s tests -p test_driver_nvram_capacity.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             CC=clang python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_turing_cold_state.py -v
