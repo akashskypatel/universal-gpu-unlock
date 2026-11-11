@@ -189,6 +189,11 @@ int main(void) {
   CHECK(!GuGetArchAssetsForPciId(0x26841002U));
   CHECK(!GuGetArchAssetsForPciId(0x220a10eeU));
   CHECK(!GuGetArchAssetsForPciId(0x999910deU));
+  CHECK(GuIsSupportedDeviceId(0x2684U));
+  CHECK(GuIsSupportedDeviceId(0x2782U));
+  CHECK(GuIsSupportedDeviceId(0x2414U));
+  CHECK(GuIsSupportedDeviceId(0x1e07U));
+  CHECK(!GuIsSupportedDeviceId(0x9999U));
   CHECK(GuGetArchAssetsForPciId(0x270210deU)==ada);
   CHECK(GuGetArchAssetsForPciId(0x278210deU)==ada);
   CHECK(GuGetArchAssetsForPciId(0x288210deU)==ada);
