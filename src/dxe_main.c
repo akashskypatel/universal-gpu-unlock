@@ -163,6 +163,10 @@ static VOID EFIAPI GuDxeOnReadyToBoot(EFI_EVENT event, VOID *context) {
 }
 
 EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
+#ifdef GU_SYNTHETIC_COMPILE_ONLY
+  (VOID)image; (VOID)t;
+  return EFI_UNSUPPORTED; /* CI image: never register an event. */
+#endif
   if(!image||!t||!t->BootServices||!t->RuntimeServices||
      !t->BootServices->CreateEventEx||!t->BootServices->CloseEvent)
     return EFI_UNSUPPORTED;

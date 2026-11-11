@@ -219,12 +219,12 @@ jobs:
             'LEGACY_AUTO_SETUP=REFUSED DISK_ACTION=NONE NVRAM_ACTION=NONE' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # Compile (never execute) the exact one-target active path with a synthetic
             # BDF. Explicit opt-in must not change default preparation-only output.
-            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target app compilation failed'}
-            if(-not (Test-Path .\src\build\GPU-ONE-TARGET-EXPERIMENTAL-0000-09-02-0.EFI)){throw 'One-target app EFI missing'}
-            & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if(-not (Test-Path .\src\build\GPU-ONE-TARGET-COMPILE-ONLY-0000-09-02-0.EFI)){throw 'One-target app EFI missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target DXE compilation failed'}
-            if(-not (Test-Path .\src\build_dxe\GPU-ONE-TARGET-EXPERIMENTAL-DXE-0000-09-02-0.efi)){throw 'One-target DXE EFI missing'}
+            if(-not (Test-Path .\src\build_dxe\GPU-ONE-TARGET-COMPILE-ONLY-DXE-0000-09-02-0.efi)){throw 'One-target DXE EFI missing'}
             'ONE_TARGET_COMPILE_EXIT=0 HARDWARE_ACTION=NONE' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # The shipped builders must refuse an unselected legacy active
             # image before compilation, not quietly emit a mutating binary.

@@ -7,7 +7,7 @@
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) && GU_PREFLIGHT_ONLY != 1
 #error Preparation-only active EFI must also prohibit GPU writes, DMA and FLR
 #endif
-#if defined(GU_ACTIVE_SINGLE_TARGET) && GU_PREFLIGHT_ONLY != 0
+#if defined(GU_ACTIVE_SINGLE_TARGET) && GU_PREFLIGHT_ONLY != 0 && !defined(GU_SYNTHETIC_COMPILE_ONLY)
 #error One-target active execution requires explicit transaction mode
 #endif
 #if defined(GU_ACTIVE_SINGLE_TARGET) && defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)

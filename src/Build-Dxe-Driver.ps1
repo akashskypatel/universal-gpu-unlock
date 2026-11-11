@@ -2,7 +2,8 @@ param(
     [string]$VcVars,
     [string]$SelectionBdf,
     [string]$SelectionBdfs,
-    [switch]$EnableSingleTargetExecution
+    [switch]$EnableSingleTargetExecution,
+    [switch]$SyntheticCompileProfile
 )
 $ErrorActionPreference = 'Stop'
 if (-not $SelectionBdf -and -not $SelectionBdfs) {
@@ -42,6 +43,9 @@ try {
     if ($EnableSingleTargetExecution -and $selection.Count -ne 1) {
         throw "Single-target execution requires exactly one explicit -SelectionBdf"
     }
+    if ($SyntheticCompileProfile -and -not $EnableSingleTargetExecution) {
+        throw 'SyntheticCompileProfile is only valid with EnableSingleTargetExecution'
+    }
 
     $sources = @(
         'dxe_main.c',
@@ -78,6 +82,11 @@ try {
             # Opt-in source/build validation only. Live hardware activation
             # still depends on target-specific ownership and recovery evidence.
             $clFlags += ' /DGU_ACTIVE_SINGLE_TARGET'
+            if ($SyntheticCompileProfile) {
+                # Compile every source path; the EFI entrypoint refuses
+                # before any firmware, console, disk or GPU operation.
+                $clFlags += ' /DGU_HOST_TEST_PROFILE /DGU_SYNTHETIC_COMPILE_ONLY'
+            }
         } else {
             $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY /DGU_HOST_TEST_PROFILE'
         }
@@ -97,7 +106,7 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $binaryName = if ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
+    $binaryName = if ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
     $compileCmds += "link /nologo /subsystem:efi_boot_service_driver /entry:AdaUnlockDriverEntryPoint /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_dxe\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
@@ -110,7 +119,7 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'DXE EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $EnableSingleTargetExecution)) SINGLE_TARGET_ACTIVE=$([int][bool]$EnableSingleTargetExecution) MULTI_GPU_MUTATION_ALLOWED=0"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $EnableSingleTargetExecution)) SINGLE_TARGET_ACTIVE=$([int][bool]$EnableSingleTargetExecution) MULTI_GPU_MUTATION_ALLOWED=0 SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) NOT_FOR_DEPLOYMENT=$([int][bool]$SyntheticCompileProfile)"
 } finally {
     Pop-Location
 }

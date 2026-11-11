@@ -24,6 +24,10 @@ static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(!image||!t||!t->BootServices||!t->RuntimeServices||!t->RuntimeServices->GetVariable)return EFI_INVALID_PARAMETER;
+#ifdef GU_SYNTHETIC_COMPILE_ONLY
+  /* A CI image must not access or mutate user hardware. */
+  return EFI_UNSUPPORTED;
+#endif
 
   UINT8 secure=1;UINTN n=1;UINT32 attrs=0;
 

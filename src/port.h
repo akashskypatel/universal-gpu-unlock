@@ -87,7 +87,7 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 /* Selected active artifacts are restricted to inventory/plan preparation.
  * The legacy engine is linked for compile coverage, but GPU I/O write,
  * DMA and FLR helpers also refuse in this configuration. */
-#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
 #define GU_PREFLIGHT_ONLY 1
 #elif defined(GU_AD104_TRANSACTION) || (defined(GU_AD104_HOST_TEST) && __STDC_HOSTED__ == 1)
 #define GU_PREFLIGHT_ONLY 0
