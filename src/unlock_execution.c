@@ -93,21 +93,20 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table)
 {
   static EFI_GUID save_guid=EFI_S3_SAVE_STATE_PROTOCOL_GUID;
-  static BOOLEAN attempted;
   EFI_S3_SAVE_STATE_PROTOCOL *s3=NULL;
   /* A CPU idle state is not proof of a completed GPU handover. Do not
    * install any future resume writes before the MSI/peer checks pass. */
   if(!table||!table->BootServices||!GuSafeToReturn()||Gu.fault||
      !GuMsiReadyForWindows()||!Gu.bar_base||Gu.bar_size!=0x1000000ULL||
      Gu.bar_base>~(UINT64)0-0x00823820ULL)return EFI_NOT_READY;
-  if(attempted)return EFI_ALREADY_STARTED;
+  if(Gu.s3_script_attempted)return EFI_ALREADY_STARTED;
   if(!table->BootServices->LocateProtocol)return EFI_UNSUPPORTED;
   EFI_STATUS status=table->BootServices->LocateProtocol(&save_guid,NULL,(VOID **)&s3);
   if(status!=EFI_SUCCESS||!s3||!s3->Write)return status==EFI_SUCCESS?EFI_UNSUPPORTED:status;
   UINT32 ss0=0x88888888U,ss1=8U;
   UINT64 addr0=(UINT64)Gu.bar_base+0x0082381cULL;
   UINT64 addr1=(UINT64)Gu.bar_base+0x00823820ULL;
-  attempted=TRUE; /* No retry after a script write may have been accepted. */
+  Gu.s3_script_attempted=TRUE; /* One attempt per physical card. */
   EFI_STATUS a=s3->Write(s3,EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE,
                   EfiBootScriptWidthUint32,addr0,(UINTN)1,&ss0);
   if(a!=EFI_SUCCESS) {
