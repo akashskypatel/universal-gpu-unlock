@@ -66,9 +66,12 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
 #ifdef GU_ACTIVE_SINGLE_TARGET
   if(!table || !table->BootServices || !image || !stage)
     return EFI_INVALID_PARAMETER;
+  *stage="selected-gpu-resource-reserve";
+  EFI_STATUS s=GuMsiReserveSelectedState(table->BootServices);
+  if(s!=EFI_SUCCESS)return s;
   *stage="selected-gpu-state-begin";
-  EFI_STATUS s=GuBeginSelectedGpuStep(table,&Gu,
-                                         GuMsiPlanOwnerToken(),GuAssets);
+  s=GuBeginSelectedGpuStep(table,&Gu,
+                           GuMsiPlanOwnerToken(),GuAssets);
   if(s!=EFI_SUCCESS)return s;
   s=GuExecuteUnlockCore(table,image,stage);
   if(s!=EFI_SUCCESS || Gu.fault) {

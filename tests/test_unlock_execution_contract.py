@@ -47,6 +47,8 @@ class SharedExecutionContract(unittest.TestCase):
                         discovery.index("s=GuInit(table->BootServices,io);"))
         self.assertIn("GuGpuExecBeginOwned(&ActiveSequence",discovery)
         self.assertIn("GuMsiPlanOwnerToken()",wrapper)
+        self.assertIn("GuMsiReserveSelectedState(",wrapper)
+        self.assertLess(wrapper.index("GuMsiReserveSelectedState("),begin)
         self.assertIn("GuAssets",wrapper)
         self.assertIn("GuGpuExecFinish(&ActiveSequence",discovery)
         self.assertIn("GuGpuExecAbort(&ActiveSequence)",discovery)
