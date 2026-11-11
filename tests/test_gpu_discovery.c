@@ -9,7 +9,9 @@
 static const GU_GPU_IDENTITY Primary={0x20b010deU,0xa12310deU,0,3,0,0};
 static const GU_GPU_IDENTITY Secondary={0x250310deU,0xb45610deU,1,7,4,1};
 static unsigned checks;
+#ifdef GU_ACTIVE_SINGLE_TARGET
 static int release_owner_token,firmware_owner_token;
+#endif
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
 typedef struct {
