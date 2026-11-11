@@ -313,6 +313,18 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
  * expected configuration changes during its own transaction. Every other
  * NVIDIA card must retain its complete initial 256-byte PCI configuration.
  * This function has no GPU writes, driver detach, DMA, or reset actions. */
+int GuIsPreparedPeerHandle(EFI_HANDLE handle) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(!ActiveInventoryValid||!handle)return 0;
+  for(size_t i=0;i<ActiveInventory.inventory.count;i++)
+    if(i!=ActiveTargetIndex&&ActiveInventory.inventory.nvidia[i].handle==handle)
+      return 1;
+#else
+  (VOID)handle;
+#endif
+  return 0;
+}
+
 EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
 #ifndef GU_ACTIVE_SINGLE_TARGET
   (VOID)table;

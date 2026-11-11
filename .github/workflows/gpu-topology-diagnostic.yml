@@ -26,6 +26,8 @@ on:
       - 'src/vendor/prep_610.c'
       - 'src/msi_release.c'
       - 'src/gpu_device_path.h'
+      - 'src/pci_master_policy.h'
+      - 'tests/test_pci_master_policy.c'
       - 'tests/test_gpu_device_path.c'
       - 'src/vendor/unlock_610.c'
       - 'tests/test_falcon_halt_source.py'
@@ -99,6 +101,10 @@ jobs:
             CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_pci_master_policy.c -o "$RUNNER_TEMP/test_pci_master_policy_$compiler"
+              "$RUNNER_TEMP/test_pci_master_policy_$compiler"
+            done
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_gpu_device_path.c -o "$RUNNER_TEMP/test_gpu_device_path_$compiler"
               "$RUNNER_TEMP/test_gpu_device_path_$compiler"

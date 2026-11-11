@@ -11,6 +11,7 @@
 #include "sha256.h"
 #include "gpu_device_path.h"
 #include "gpu_discovery.h"
+#include "pci_master_policy.h"
 #include "compat/compat.h"
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/DriverBinding.h>
@@ -37,7 +38,7 @@ typedef struct {
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE survivor_modes[MAX_SURVIVOR_GOPS];
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION survivor_info[MAX_SURVIVOR_GOPS];
   UINTN survivor_count;
-  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless;
+  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized;
 } PLAN;
 static PLAN Plan;
 static GRAPH Original,Current;
@@ -129,6 +130,7 @@ static BOOLEAN Removed(const EDGE *e,UINTN stage) {
 static BOOLEAN ProtectedHandle(EFI_HANDLE h) {
   if(!h)return FALSE;
   if(h==Plan.pci||h==Plan.gop||h==Plan.self||
+     GuIsPreparedPeerHandle(h)||
      h==Plan.console||h==Plan.input||h==Plan.error)return TRUE;
   for(UINTN k=0;k<8;k++){if(Plan.idle[k]&&h==Plan.idle[k])return TRUE;}
   for(UINTN k=0;k<Plan.survivor_count;k++)
@@ -429,16 +431,18 @@ static EFI_STATUS Gops(BOOLEAN first) {
   }
   return EFI_SUCCESS;
 }
-static EFI_STATUS ReadConfig(UINT32 c[64]) {
+static EFI_STATUS ReadConfigMode(UINT32 c[64],BOOLEAN permit_initial_master) {
   EFI_PCI_IO_PROTOCOL *io=NULL;UINTN seg,bus,dev,fun;
   EFI_STATUS s=Interface(Plan.pci,&PciGuid,(VOID **)&io);
   if(s!=EFI_SUCCESS||io!=Gu.pci||!io->Pci.Read||!io->GetLocation)return EFI_NOT_READY;
   s=io->GetLocation(io,&seg,&bus,&dev,&fun);
   if(s!=EFI_SUCCESS||seg||bus>255||dev||fun)return EFI_UNSUPPORTED;
   s=io->Pci.Read(io,EfiPciIoWidthUint32,0,64,c);
-  if(s==EFI_SUCCESS&&(!GuTargetConfig(c,seg,bus,dev,fun)||(c[1]&4)))s=EFI_UNSUPPORTED;
+  if(s==EFI_SUCCESS&&(!GuTargetConfig(c,seg,bus,dev,fun)||
+     (!permit_initial_master&&(c[1]&4))))s=EFI_UNSUPPORTED;
   return s;
 }
+static EFI_STATUS ReadConfig(UINT32 c[64]) {return ReadConfigMode(c,FALSE);}
 /* RUN0002 did not identify PCI drift: do not assume it caused the stop.
  * Retain v0.5.0's narrow rule: only preexisting CED/URD may clear after FLR. */
 static BOOLEAN ConfigStable(const UINT32 c[64]) {
@@ -450,8 +454,8 @@ static BOOLEAN ConfigStable(const UINT32 c[64]) {
     /* Only a transition from Bus Master enabled to disabled is expected
      * during pre-FLR quiescence. Never allow a new DMA enable or another
      * PCI COMMAND change under this exception. */
-    if(i==1&&Gu.flrs==0&&drift==4u&&
-       (Plan.config[i]&4u)&&!(c[i]&4u))allowed=TRUE;
+    if(i==1&&Gu.flrs<=1&&drift==4u&&
+       GuPciMasterClearOnly(Plan.config[i],c[i]))allowed=TRUE;
     if(!allowed) {
       NOTE("PCI config drift refused: offset=%#x captured=%#x now=%#x bits=%#x flrs=%u\n",
         (unsigned)(i*4),Plan.config[i],c[i],drift,Gu.flrs);
@@ -571,9 +575,11 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(s!=EFI_SUCCESS) GuLog("Preflight failed at Gops(): %#llx\n", (unsigned long long)s);
   if(s==EFI_SUCCESS) { s=Alive(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Alive(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=Bar(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Bar(): %#llx\n", (unsigned long long)s); }
-  if(s==EFI_SUCCESS) { s=ReadConfig(Plan.config); if(s!=EFI_SUCCESS) GuLog("Preflight failed at ReadConfig(): %#llx\n", (unsigned long long)s); }
+  if(s==EFI_SUCCESS) { s=ReadConfigMode(Plan.config,TRUE); if(s!=EFI_SUCCESS) GuLog("Preflight failed at ReadConfig(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=Gu.pci->Attributes?Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&Plan.attributes):EFI_UNSUPPORTED; if(s!=EFI_SUCCESS) GuLog("Preflight failed at Attributes: %#llx\n", (unsigned long long)s); }
-  UINT64 decode=(Plan.config[1]&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|(Plan.config[1]&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0);
+  UINT64 decode=(Plan.config[1]&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|
+                (Plan.config[1]&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0)|
+                (Plan.config[1]&4?EFI_PCI_IO_ATTRIBUTE_BUS_MASTER:0);
   UINT64 allowed_attrs=decode|EFI_PCI_IO_ATTRIBUTE_IO;
   UINT64 checked_attrs=Plan.attributes&(EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
   if(s==EFI_SUCCESS&&checked_attrs!=decode&&checked_attrs!=allowed_attrs) {
@@ -592,11 +598,46 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
 }
 static BOOLEAN DecodeMask(const UINT32 c[64],UINT64 *mask) {
   *mask=0;UINT32 missing=Plan.config[1]&~c[1]&3;
-  if((Plan.config[1]&6)!=2||(c[1]&4))return FALSE;
-  for(UINTN i=0;i<64;i++)if((c[i]|(i==1?missing:0))!=Plan.config[i])return FALSE;
+  if((Plan.config[1]&2)!=2||(c[1]&4)||
+     !GuPciMasterClearOnly(Plan.config[1],c[1]|missing))return FALSE;
+  for(UINTN i=0;i<64;i++)if(i!=1&&c[i]!=Plan.config[i])return FALSE;
   *mask=(missing&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|(missing&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0);return TRUE;
 }
+/* Change only the selected card's Bus Master bit after vendor Stop.
+ * No raw PCI writes, no new bus master enable, and no unverified peer drift. */
+static EFI_STATUS NormalizeMasterAfterStop(VOID) {
+  UINT32 config[64];UINT64 before=0,after=0;
+  const UINT64 master=EFI_PCI_IO_ATTRIBUTE_BUS_MASTER;
+  if(!Plan.ready||!Plan.mutated||Plan.stage!=3||Plan.claimed||
+     Gu.owned||Gu.fault||Plan.master_normalized)return EFI_NOT_READY;
+  if(GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS)return EFI_NOT_READY;
+  EFI_STATUS s=ReadConfigMode(config,TRUE);
+  if(s!=EFI_SUCCESS||!ConfigStable(config))return EFI_NOT_READY;
+  if(!Gu.pci->Attributes)return EFI_UNSUPPORTED;
+  s=Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&before);
+  if(s!=EFI_SUCCESS)return s;
+  if(!!(before&master)!=!!(config[1]&4u))return EFI_COMPROMISED_DATA;
+  if((config[1]&4u)&&!(Plan.config[1]&4u))return EFI_ACCESS_DENIED;
+  if(config[1]&4u) {
+    s=Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationDisable,master,NULL);
+    if(s!=EFI_SUCCESS){Gu.retained=TRUE;return s;}
+  }
+  s=ReadConfig(config);
+  if(s==EFI_SUCCESS&&!ConfigStable(config))s=EFI_COMPROMISED_DATA;
+  if(s==EFI_SUCCESS)s=Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&after);
+  if(s!=EFI_SUCCESS||(after&master)||
+     (after&~master)!=(before&~master)||
+     GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS) {
+    Gu.retained=TRUE;
+    return s==EFI_SUCCESS?EFI_COMPROMISED_DATA:s;
+  }
+  Plan.master_normalized=TRUE;
+  NOTE("POST_STOP_BUS_MASTER=DISABLED VERIFIED=1 PREVIOUS=%u\n",
+       (unsigned)!!(before&master));
+  return EFI_SUCCESS;
+}
 static EFI_STATUS ClaimRestore(VOID) {
+  if(!Plan.master_normalized)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_PCI_IO_PROTOCOL *io=NULL;
   UINT32 c[64];UINT64 mask=0,attrs=0,supported=0;
   EFI_STATUS s=ReadConfig(c);if(s==EFI_SUCCESS&&!DecodeMask(c,&mask))s=EFI_NOT_READY;
@@ -618,7 +659,7 @@ static EFI_STATUS ClaimRestore(VOID) {
   if(s==EFI_SUCCESS){Plan.claimed=TRUE;Gu.owned=TRUE;if(io!=Gu.pci){GuLog("ClaimRestore failed: io != Gu.pci\n");s=EFI_COMPROMISED_DATA;}}
   if(s==EFI_SUCCESS)s=io->Attributes(io,EfiPciIoAttributeOperationGet,0,&attrs);
   if(s==EFI_SUCCESS) {
-    UINT64 exp_pre = Plan.attributes & ~mask;
+    UINT64 exp_pre = Plan.attributes & ~(mask|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
     UINT64 chk_pre = attrs & (EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
     GuLog("ClaimRestore: pre-enable attrs=%#llx (plan=%#llx mask=%#llx exp=%#llx)\n",
       (unsigned long long)attrs, (unsigned long long)Plan.attributes, (unsigned long long)mask, (unsigned long long)exp_pre);
@@ -683,7 +724,7 @@ EFI_STATUS GuMsiRelease(VOID) {
   for(UINTN stage=Plan.headless?3u:1u;stage<=3;stage++) {
     GuLog("MSI driver detach intent: stage=%zu\n",(size_t)stage);
     EFI_STATUS s=Alive();UINT32 c[64];
-    if(s==EFI_SUCCESS)s=ReadConfig(c);
+    if(s==EFI_SUCCESS)s=ReadConfigMode(c,TRUE);
     if(s==EFI_SUCCESS&&!Equal(c,Plan.config,sizeof(c)))s=EFI_NOT_READY;
     if(s==EFI_SUCCESS&&!GuAd104ColdEntry())s=EFI_NOT_READY;
     if(s==EFI_SUCCESS)s=Gops(FALSE);
@@ -716,7 +757,9 @@ EFI_STATUS GuMsiRelease(VOID) {
     if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
     if(s!=EFI_SUCCESS)return s;
   }
-  EFI_STATUS s=GuVerifyActivePeers(Plan.table);
+  EFI_STATUS s=NormalizeMasterAfterStop();
+  if(s!=EFI_SUCCESS)return s;
+  s=GuVerifyActivePeers(Plan.table);
   if(s!=EFI_SUCCESS)return s;
   s=ClaimRestore();
   if(s==EFI_SUCCESS&&!GuMsiReleased())s=EFI_NOT_READY;
@@ -725,7 +768,8 @@ EFI_STATUS GuMsiRelease(VOID) {
 BOOLEAN GuMsiReleased(VOID) {
   UINT32 c[64];UINT64 attrs=0;const char *failed=NULL;
   UINT64 chk_attrs=0, exp_attrs=Plan.attributes & (EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
-  if(!Plan.ready||Plan.stage!=3||!Plan.claimed||!Gu.owned||Gu.fault)failed="state";
+  if(!Plan.ready||Plan.stage!=3||!Plan.claimed||!Gu.owned||Gu.fault||
+     !Plan.master_normalized)failed="state";
   else if(Alive()!=EFI_SUCCESS)failed="console";
   else if(Gops(FALSE)!=EFI_SUCCESS)failed="GOP";
   else if(ReadConfig(c)!=EFI_SUCCESS)failed="config-read";
@@ -759,7 +803,8 @@ static BOOLEAN GuMsiHardwareVerifiedBeforeClose(VOID) {
 }
 EFI_STATUS GuMsiFinish(VOID) {
   Plan.hardware_verified=FALSE;
-  if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||!GuMsiReleased()){
+  if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||
+     !Plan.master_normalized||!GuMsiReleased()){
     NOTE("MSI finish refused before close\n");return EFI_NOT_READY;
   }
   if(GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS)return EFI_NOT_READY;

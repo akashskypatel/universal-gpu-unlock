@@ -67,8 +67,8 @@ class HandoverOrderTests(unittest.TestCase):
     def test_bus_master_exception_rejects_set_or_unrelated_changes(self):
         stable = function_body("ConfigStable")
         for required in (
-            "Gu.flrs==0", "i==1", "drift==4u",
-            "(Plan.config[i]&4u)", "!(c[i]&4u)",
+            "Gu.flrs<=1", "i==1", "drift==4u",
+            "GuPciMasterClearOnly(Plan.config[i],c[i])",
             "if(!allowed)",
         ):
             with self.subTest(required=required):
@@ -76,6 +76,22 @@ class HandoverOrderTests(unittest.TestCase):
         self.assertIn("Gu.flrs==1", stable)
         self.assertIn("drift&~0x00090000u", stable)
 
+
+    def test_stop_then_bus_master_clear_then_exclusive_claim(self):
+        release = function_body("GuMsiRelease")
+        self.assertLess(release.index("DisconnectController("),
+                        release.index("NormalizeMasterAfterStop()"))
+        self.assertLess(release.index("NormalizeMasterAfterStop()"),
+                        release.index("ClaimRestore()"))
+        normalize = function_body("NormalizeMasterAfterStop")
+        self.assertIn("GuVerifyActivePeers",normalize)
+        self.assertIn("EfiPciIoAttributeOperationDisable",normalize)
+        self.assertIn("Gu.retained=TRUE",normalize)
+        self.assertNotIn("GuConfigWrite(",normalize)
+        self.assertIn("!Plan.master_normalized",function_body("GuMsiReleased"))
+
+    def test_full_non_target_protocol_ownership_is_preserved(self):
+        self.assertIn("GuIsPreparedPeerHandle(h)",function_body("ProtectedHandle"))
 
 if __name__ == "__main__":
     unittest.main()
