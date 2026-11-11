@@ -16,7 +16,7 @@ MSI_SOURCE = (ROOT / "src/msi_release.c").read_text(encoding="utf-8")
 
 def function(name):
     import re
-    found = re.search(r"\\bEFI_STATUS\\s+" + name + r"\\s*\\([^;]*?\\)\\s*\\{", SOURCE)
+    found = re.search(r"\bEFI_STATUS\s+" + name + r"\s*\([^;]*?\)\s*\{", SOURCE)
     if not found:
         raise AssertionError(f"missing {name}")
     start = found.start()
