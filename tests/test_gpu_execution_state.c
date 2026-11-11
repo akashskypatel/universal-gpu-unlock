@@ -119,6 +119,38 @@ int main(void) {
   s.active_step=GU_INVENTORY_MAX_NVIDIA;
   CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_OK);
 
+  /* An unselected NVIDIA peer must not silently gain an execution phase
+   * or any backing resource owner. Both defects previously passed. */
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,3,order,2)==GU_GPU_EXEC_OK);
+  s.targets[2].phase=GU_GPU_EXEC_ACTIVE;
+  CHECK(GuGpuExecCheckNext(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,3,order,2)==GU_GPU_EXEC_OK);
+  s.targets[2].owners.platform=&o[2];
+  CHECK(GuGpuExecCheckNext(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,3,order,2)==GU_GPU_EXEC_OK);
+  s.targets[2].owners=(GU_GPU_EXEC_OWNERS){&o[2],&s.targets[2],&o[2].config};
+  CHECK(GuGpuExecCheckNext(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+
+  /* A future selected step cannot reserve otherwise valid owner tokens
+   * before its BeginOwned transition. */
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,3,order,2)==GU_GPU_EXEC_OK);
+  s.targets[0].owners=(GU_GPU_EXEC_OWNERS){&o[0],&s.targets[0],&o[0].config};
+  CHECK(GuGpuExecCheckNext(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,3,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted);
+
+  /* An unexpected peer owner after step one also blocks step two. */
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,3,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,3,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,0,o,3,1)==GU_GPU_EXEC_OK);
+  s.targets[2].owners.platform=s.targets[1].owners.platform;
+  CHECK(GuGpuExecCheckNext(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+
   Reset();
   CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
   CHECK(GuGpuExecBegin(&s,0,o,2)==GU_GPU_EXEC_OK);

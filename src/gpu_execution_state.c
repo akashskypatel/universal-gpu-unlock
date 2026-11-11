@@ -97,10 +97,26 @@ static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
         GU_GPU_EXEC_ACTIVE:GU_GPU_EXEC_PENDING;
     if(s->targets[target].phase!=expected)return 0;
     const GU_GPU_EXEC_OWNERS *owner=&s->targets[target].owners;
+    if(expected==GU_GPU_EXEC_PENDING &&
+       (owner->platform||owner->release_plan||owner->firmware_assets))
+      return 0;
     if((owner->platform||owner->release_plan||owner->firmware_assets) &&
        !DistinctOwners(owner))return 0;
     for(size_t j=0;j<i;j++)
       if(SharedOwners(owner,&s->targets[s->order[j]].owners))return 0;
+  }
+  /* Every other NVIDIA card must remain unowned and untouched by this
+   * ordered execution. These peers are not in the selected-step loop. */
+  for(size_t i=0;i<s->count;i++) {
+    size_t j=0;
+    for(;j<s->selected_count;j++)
+      if(s->order[j]==i)break;
+    if(j==s->selected_count) {
+      const GU_GPU_EXEC_TARGET *peer=&s->targets[i];
+      if(peer->phase!=GU_GPU_EXEC_PENDING ||
+         peer->owners.platform || peer->owners.release_plan ||
+         peer->owners.firmware_assets)return 0;
+    }
   }
   return 1;
 }
