@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 
 #include "port.h"
+#include "version.h"
 
 #include "checks.h"
 #include "gpu_discovery.h"
@@ -55,19 +56,19 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     GuLog("Ampere GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
 
-    GuLog("GA102 AMPERE UNIVERSAL UNLOCK v1.7.5: Volatile RAM-only override; no VBIOS flash\n");
+    GuLog("%s: GA102, volatile RAM-only attempt, no VBIOS flash\n",GU_FORK_VERSION);
 
   } else if (Gu.is_turing) {
 
     GuLog("Turing GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
 
-    GuLog("TU10X TURING UNIVERSAL UNLOCK v1.7.5: Volatile RAM-only override; no VBIOS flash\n");
+    GuLog("%s: TU10X assets not authenticated for this owner\n",GU_FORK_VERSION);
 
   } else {
 
     GuLog("Ada Lovelace GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
 
-    GuLog("AD10X ADA UNIVERSAL UNLOCK v1.7.5: Volatile RAM-only override; no VBIOS flash\n");
+    GuLog("%s: AD10X, volatile RAM-only attempt, no VBIOS flash\n",GU_FORK_VERSION);
 
   }
 

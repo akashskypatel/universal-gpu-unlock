@@ -3,6 +3,7 @@
 /* USB log/assets only. Windows ESP is opened read-only. No boot variables. */
 
 #include "boot_io.h"
+#include "version.h"
 #include "gpu_windows_path.h"
 
 #include "boot_profile.h"
@@ -348,13 +349,13 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
 
     L"\r\n=======================================================\r\n"
 
-    L" UNIVERSAL GPU UNLOCK v1.7.5 (Multi-Gen Edition)\r\n"
+    L" " GU_FORK_VERSION_WIDE L" (Multi-Gen Edition)\r\n"
 
     L"=======================================================\r\n"
 
-    L"  [U] Standard Unlock (proven rock-solid, RAM-only)\r\n"
+    L"  [U] Experimental selected GPU transaction (RAM-only)\r\n"
 
-    L"  [P] Experimental S3 Persistence Unlock (Boot-Script)\r\n"
+    L"  [P] Experimental GPU transaction with S3 resume script\r\n"
 
     L"  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3)\r\n"
 
@@ -367,7 +368,14 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
   );
 
   for(UINTN i=0;i<300;i++) {
-
+    if(i%10==0) {
+      UINTN seconds=(300-i+9)/10;
+      CHAR16 digits[]=L"00s (S=stock Windows)  ";
+      digits[0]=(CHAR16)(L'0'+seconds/10);
+      digits[1]=(CHAR16)(L'0'+seconds%10);
+      GuBootSay(L"\rStock Windows in ");
+      GuBootSay(digits);
+    }
     EFI_INPUT_KEY key;EFI_STATUS s=Table->ConIn->ReadKeyStroke(Table->ConIn,&key);
 
     if(s==EFI_SUCCESS) {

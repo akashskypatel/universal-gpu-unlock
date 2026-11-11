@@ -124,6 +124,15 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 		return GU_DIAG(-EOPNOTSUPP);
 	if (range(length, off, size))
 		return GU_DIAG(-EINVAL);
+	/* Record bounded bytes from this accepted descriptor; raw bytes are
+	 * diagnostic evidence, not a cryptographic authentication result. */
+	GU_NOTE("FWSEC raw descriptor[0:16]=%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\\n",
+		(unsigned)rom[off+0],(unsigned)rom[off+1],(unsigned)rom[off+2],
+		(unsigned)rom[off+3],(unsigned)rom[off+4],(unsigned)rom[off+5],
+		(unsigned)rom[off+6],(unsigned)rom[off+7],(unsigned)rom[off+8],
+		(unsigned)rom[off+9],(unsigned)rom[off+10],(unsigned)rom[off+11],
+		(unsigned)rom[off+12],(unsigned)rom[off+13],(unsigned)rom[off+14],
+		(unsigned)rom[off+15]);
 	stored = r32(rom + off + 4);
 	if (!stored || stored > ~(u32)0 - 255)
 		return GU_DIAG(-EINVAL);
@@ -161,6 +170,8 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 	    range(fw.dmem_size, fw.pkc_off, 384) ||
 	    range(fw.dmem_size, fw.interface_off, 4))
 		return GU_DIAG(-EINVAL);
+	GU_NOTE("FWSEC signature records: count=%u bytes=%u sig_offset=%#x SIGNATURE_AUTHENTICATED=0\\n",
+		fw.sig_count,fw.sig_bytes,fw.sig_off);
 	*out = fw;
 	return 0;
 }
