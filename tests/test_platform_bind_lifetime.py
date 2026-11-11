@@ -111,6 +111,58 @@ int main(int argc,char **argv) {
                         [str(executable), scenario], capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_generic_pci_function_location(self):
+        """Compile the actual production predicate with nonzero BDF slots."""
+        left = SOURCE.index("BOOLEAN GuTargetConfig(")
+        right = SOURCE.index("BOOLEAN GuSafeToReturn(", left)
+        pred = SOURCE[left:right]
+        self.assertNotIn("&& !D && !F", pred)
+        header = r"""
+#include <stdio.h>
+#include <stdint.h>
+typedef unsigned long UINTN;
+typedef uint32_t UINT32;
+typedef int BOOLEAN;
+static int GuIsSupportedPciId(UINT32 id) {
+    return id==0x268410deU || id==0x1e0710deU;
+}
+"""
+        check = r"""
+#define CHECK(x) do {if(!(x))return __LINE__;}while(0)
+int main(void) {
+  UINT32 c[64]={0};
+  c[0]=0x268410deU;c[2]=0x03000000U;
+  CHECK(GuTargetConfig(c,0,0,0,0));
+  CHECK(GuTargetConfig(c,1,7,4,1));   /* An actual nonzero PCI segment/slot. */
+  CHECK(GuTargetConfig(c,65535,255,31,7));
+  CHECK(!GuTargetConfig(c,65536,7,4,1));
+  CHECK(!GuTargetConfig(c,1,256,4,1));
+  CHECK(!GuTargetConfig(c,1,7,32,1));
+  CHECK(!GuTargetConfig(c,1,7,4,8));
+  CHECK(!GuTargetConfig(NULL,1,7,4,1));
+  c[0]=0x999910deU;CHECK(!GuTargetConfig(c,1,7,4,1));
+  c[0]=0x1e0710deU;CHECK(GuTargetConfig(c,1,7,4,1));
+  c[2]=0x02000000U;CHECK(!GuTargetConfig(c,1,7,4,1));
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "location.c"
+            binary = Path(td) / "location"
+            source.write_text(header + pred + check, encoding="utf-8")
+            compiled = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2", "-Wall",
+                 "-Wextra", "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_config_validator_does_not_assume_segment_zero(self):
+        check = (ROOT / "src/checks.c").read_text(encoding="utf-8")
+        self.assertIn("Segment > 0xffffU", check)
+        self.assertNotIn("Segment != 0", check)
+
     def test_release_plan_is_not_reset_after_attempt(self):
         start = MSI_SOURCE.index("EFI_STATUS GuMsiPreflight(")
         stop = MSI_SOURCE.index("static BOOLEAN DecodeMask(", start)
