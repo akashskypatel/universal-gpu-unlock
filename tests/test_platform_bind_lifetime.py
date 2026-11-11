@@ -54,6 +54,7 @@ typedef struct {
   void *allocations;
   uint32_t flrs, dma_count;
 } GU_PLATFORM;
+#define TRUE 1
 #define EFI_SUCCESS 0
 #define EFI_INVALID_PARAMETER 2
 #define EFI_ACCESS_DENIED 3
