@@ -176,7 +176,7 @@ static int descriptor(const u8 *rom, size_t length, u64 off,
 			return GU_DIAG(-EINVAL);
 		/* All signature fields stay zero. Active qualification must
 		 * refuse V2 until the signed source is independently handled. */
-		GU_NOTE("FWSEC_V2=STRUCTURE_ONLY SIGNATURE_AUTHENTICATED=0 ACTIVE_ALLOWED=0\n");
+		GU_NOTE("%s", "FWSEC_V2=STRUCTURE_ONLY SIGNATURE_AUTHENTICATED=0 ACTIVE_ALLOWED=0\n");
 		*out = fw;
 		return 0;
 	}

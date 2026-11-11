@@ -25,14 +25,14 @@ static void make_v2(u8 *p) {
 static void make_v3(u8 *p) {
   memset(p,0,2048);
   wr32(p,(428U<<16)|(3U<<8)|1U);
-  wr32(p+4,512); /* Stored image. */
+  wr32(p+4,768); /* IMEM + sufficiently large DMEM image. */
   wr32(p+8,0); /* PKC destination in DMEM. */
   wr32(p+12,8); /* Interface offset. */
   wr32(p+16,0); /* IMEM physical. */
   wr32(p+20,256); /* IMEM size. */
   wr32(p+24,0); /* IMEM virtual. */
   wr32(p+28,0); /* DMEM physical. */
-  wr32(p+32,256); /* DMEM size. */
+  wr32(p+32,512); /* DMEM size (contains 384-byte signature). */
   wr16(p+36,0x400);p[38]=9;p[39]=1;wr16(p+40,1);
 }
 int main(void) {
