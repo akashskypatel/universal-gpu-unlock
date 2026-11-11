@@ -75,6 +75,46 @@ int main(void) {
             result=subprocess.run([str(binary)],text=True,capture_output=True)
             self.assertEqual(result.returncode,0,result.stderr)
 
+    def test_fwsec_v2_never_passes_v3_signature_qualification(self):
+        begin=SOURCE.index("BOOLEAN GuAd104FwsecMatches(")
+        end=SOURCE.index("static BOOLEAN Config(",begin)
+        validator=SOURCE[begin:end]
+        self.assertIn("descriptor_version == 3",validator)
+        src=r'''
+#include <stdint.h>
+#include <stdio.h>
+typedef uint32_t UINT32;
+typedef int BOOLEAN;
+#define TRUE 1
+#define FALSE 0
+struct gpu_unlock_fwsec {
+  UINT32 descriptor_version,ucode_id,sig_count,sig_bytes;
+};
+''' + validator + r'''
+#define CHECK(x) do {if(!(x))return __LINE__;}while(0)
+int main(void) {
+  struct gpu_unlock_fwsec f={2,9,1,384};
+  CHECK(!GuAd104FwsecMatches(&f)); /* Forged V3 signature fields in V2. */
+  f.descriptor_version=3;CHECK(GuAd104FwsecMatches(&f));
+  f.sig_count=0;CHECK(!GuAd104FwsecMatches(&f));
+  f.sig_count=1;f.sig_bytes=383;CHECK(!GuAd104FwsecMatches(&f));
+  f.sig_bytes=384;f.ucode_id=0;CHECK(!GuAd104FwsecMatches(&f));
+  CHECK(!GuAd104FwsecMatches(NULL));
+  return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as td:
+            source=Path(td)/"fwsec_qualification.c"
+            binary=Path(td)/"fwsec_qualification"
+            source.write_text(src,encoding="utf-8")
+            built=subprocess.run(
+                [os.environ.get("CC","gcc"),"-std=c11","-O2","-Wall",
+                 "-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],
+                 text=True,capture_output=True)
+            self.assertEqual(built.returncode,0,built.stderr)
+            result=subprocess.run([str(binary)],text=True,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+
     def test_active_turing_preparation_is_not_unlocked_by_passive_probe(self):
         body=SOURCE.split("EFI_STATUS GuAd104Prepare(VOID) {",1)[1].split(
             "  if(Gu.started ||",1)[0]
