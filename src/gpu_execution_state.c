@@ -64,17 +64,41 @@ static int Verify(const GU_GPU_EXEC_SEQUENCE *s,
   }
   return GU_GPU_EXEC_OK;
 }
+/* Treat the record as untrusted at every state transition. A malformed
+ * order or count must never become an out-of-bounds read or allow a
+ * completed target to be silently marked pending. */
+static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
+  if(!s || !s->count || s->count>GU_INVENTORY_MAX_NVIDIA ||
+     !s->selected_count || s->selected_count>s->count ||
+     s->next_step>s->selected_count ||
+     (s->active_step!=GU_INVENTORY_MAX_NVIDIA &&
+      (s->active_step!=s->next_step ||
+       s->active_step>=s->selected_count)))
+    return 0;
+  for(size_t i=0;i<s->selected_count;i++) {
+    size_t target=s->order[i];
+    if(target>=s->count)return 0;
+    for(size_t j=0;j<i;j++)if(target==s->order[j])return 0;
+    GU_GPU_EXEC_PHASE expected=i<s->next_step?GU_GPU_EXEC_COMPLETE:
+      (i==s->next_step && s->active_step==i)?
+        GU_GPU_EXEC_ACTIVE:GU_GPU_EXEC_PENDING;
+    if(s->targets[target].phase!=expected)return 0;
+  }
+  return 1;
+}
 int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *s,
                        const GU_GPU_EXEC_OBSERVATION *all,size_t count) {
-  if(!s || s->halted || s->next_step>=s->selected_count ||
-     s->active_step!=GU_INVENTORY_MAX_NVIDIA ||
-     s->targets[s->order[s->next_step]].phase!=GU_GPU_EXEC_PENDING)
+  if(!StateValid(s) || s->halted || s->next_step>=s->selected_count ||
+     s->active_step!=GU_INVENTORY_MAX_NVIDIA)
     return GU_GPU_EXEC_BLOCKED;
   return Verify(s,all,count,GU_INVENTORY_MAX_NVIDIA);
 }
 void GuGpuExecAbort(GU_GPU_EXEC_SEQUENCE *s) {
   if(!s)return;
-  if(s->active_step<s->selected_count)
+  if(s->active_step<s->selected_count &&
+     s->active_step<GU_INVENTORY_MAX_NVIDIA &&
+     s->order[s->active_step]<s->count &&
+     s->order[s->active_step]<GU_INVENTORY_MAX_NVIDIA)
     s->targets[s->order[s->active_step]].phase=GU_GPU_EXEC_FAILED;
   s->halted=1;
 }
@@ -92,7 +116,7 @@ int GuGpuExecBegin(GU_GPU_EXEC_SEQUENCE *s,size_t step,
 int GuGpuExecFinish(GU_GPU_EXEC_SEQUENCE *s,size_t step,
                     const GU_GPU_EXEC_OBSERVATION *all,size_t count,
                     int cleanup_and_handover_verified) {
-  if(!s || s->halted || step!=s->active_step ||
+  if(!StateValid(s) || s->halted || step!=s->active_step ||
      step!=s->next_step || step>=s->selected_count) {
     GuGpuExecAbort(s);return GU_GPU_EXEC_BLOCKED;
   }

@@ -97,6 +97,34 @@ int main(void) {
   CHECK(GuGpuExecBegin(&s,0,o,3)==GU_GPU_EXEC_OK);
   o[2].config[4]^=0x1000U;
   CHECK(GuGpuExecFinish(&s,0,o,3,1)==GU_GPU_EXEC_DRIFT);
+  /* State counts, selection order, and phase flags are checked again
+   * before every read or transition, even if memory was corrupted. */
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  s.count=GU_INVENTORY_MAX_NVIDIA+1;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
+  s.count=2;s.selected_count=GU_INVENTORY_MAX_NVIDIA+1;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
+  s.selected_count=2;s.next_step=GU_INVENTORY_MAX_NVIDIA+1;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
+  s.next_step=0;s.order[0]=GU_INVENTORY_MAX_NVIDIA;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
+  s.order[0]=1;s.order[1]=1;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
+  s.order[1]=0;s.targets[1].phase=GU_GPU_EXEC_COMPLETE;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
+  s.targets[1].phase=GU_GPU_EXEC_PENDING;
+  s.active_step=GU_INVENTORY_MAX_NVIDIA-1;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
+  s.active_step=GU_INVENTORY_MAX_NVIDIA;
+  CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_OK);
+
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBegin(&s,0,o,2)==GU_GPU_EXEC_OK);
+  s.order[0]=GU_INVENTORY_MAX_NVIDIA; /* Abort itself must be bounded. */
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted);
   printf("PASS independent ordered GPU execution state: %u checks\n",checks);
   return 0;
 }
