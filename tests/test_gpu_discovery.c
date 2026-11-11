@@ -24,6 +24,7 @@ static EFI_HANDLE handles[4];
 static size_t count;
 static unsigned init_calls, free_calls, log_calls, resolve_calls;
 static int fail_pool_free, redirect_on_refresh, refuse_init;
+static int reject_reference_profile;
 GU_PLATFORM Gu;
 
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *pci) {
@@ -31,6 +32,9 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *pci) {
   if(refuse_init)return EFI_ALREADY_STARTED;
   memset(&Gu,0,sizeof(Gu));Gu.bs=bs;Gu.pci=pci;
   return EFI_SUCCESS;
+}
+int GuMockReferenceManifest(UINT32 id) {
+  return !reject_reference_profile && (id==Primary.pci_id || id==Secondary.pci_id);
 }
 void GuLog(const char *format, ...) { (void)format; log_calls++; }
 int GuIsSupportedPciId(UINT32 pci) {
@@ -105,7 +109,7 @@ static void Populate(size_t i, GU_GPU_IDENTITY id) {
 }
 static void ResetPair(void) {
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
-  fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
+  fail_pool_free = redirect_on_refresh = refuse_init = reject_reference_profile = 0; resolve_calls = 0; count = 2;
   Populate(0, Primary); Populate(1, Secondary);
 }
 #include "../src/gpu_discovery.c"
@@ -182,6 +186,9 @@ int main(void) {
   ResetPair(); count=3;
   Populate(2,Primary);gpu[2].bus=6;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
+  ResetPair(); reject_reference_profile=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED &&
+        init_calls==0 && gpu[0].full_reads==2 && gpu[1].full_reads==2);
   ResetPair(); fail_pool_free=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
   printf("PASS active selected-entrypoint refusal: %u checks; GuInit never called\n",checks);
