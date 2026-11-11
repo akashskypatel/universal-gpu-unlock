@@ -22,6 +22,9 @@ on:
       - 'src/Build-Experimental-MSVC.ps1'
       - 'src/Build-Dxe-Driver.ps1'
       - 'src/port.h'
+      - 'src/gpu_device_ids.h'
+      - 'src/vendor/prep_610.h'
+      - 'tests/test_gpu_device_ids.c'
       - 'src/port.c'
       - 'tests/test_platform_bind_lifetime.py'
       - 'src/prom_identity.h'
@@ -170,6 +173,10 @@ jobs:
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_active_preparation_single_$compiler"
               "$RUNNER_TEMP/test_active_preparation_single_$compiler"
+            done
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_device_ids.c -o "$RUNNER_TEMP/test_gpu_device_ids_$compiler"
+              "$RUNNER_TEMP/test_gpu_device_ids_$compiler"
             done
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_execution_state.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_gpu_execution_state_$compiler"

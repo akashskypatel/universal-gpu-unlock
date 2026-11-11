@@ -9,9 +9,15 @@ A=(R/"app.c").read_text(encoding="utf-8")
 D=(R/"dxe_main.c").read_text(encoding="utf-8")
 class AssetContract(unittest.TestCase):
     def test_five_exact_assets_and_hashes_for_each_gpu(self):
-        for n in ("AdaAssets","AmpereAssets"):
+        for n in ("AdaAssets","AmpereAssets","TuringAssets"):
             part=P.split("static const GU_ARCH_ASSETS "+n+"=",1)[1].split("};",1)[0]
             self.assertEqual(len(re.findall(r'\{L"[^"]+","[^"]+","[0-9a-f]{64}",\d+U\}',part)),5)
+    def test_passive_preparation_does_not_require_owner_asset_manifest(self):
+        discovery=(R/"gpu_discovery.c").read_text(encoding="utf-8")
+        self.assertNotIn("PreparedTargetHasReferenceAssets",discovery)
+        self.assertNotIn("NO_EXACT_REFERENCE_MANIFEST",discovery)
+        self.assertIn("GuGpuExecCheckNext(",discovery)
+        self.assertIn("REASON=SELECTION_PREPARATION_ONLY",discovery)
     def test_load_and_validate_same_manifest(self):
         load=B.split("EFI_STATUS GuBootLoadAssets(VOID) {",1)[1].split("static EFI_STATUS ReadWindowsBinary(",1)[0]
         verify=P.split("BOOLEAN GuAd104AssetsValid(VOID) {",1)[1].split("BOOLEAN GuAd104PromMatches(",1)[0]

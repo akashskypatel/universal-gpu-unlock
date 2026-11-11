@@ -12,6 +12,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 BOOT = (ROOT / "src/boot_io.c").read_text(encoding="utf-8")
 PROFILE = (ROOT / "src/profile.c").read_text(encoding="utf-8")
+PORT = (ROOT / "src/port.h").read_text(encoding="utf-8")
 
 
 def body(source, start, end):
@@ -26,6 +27,8 @@ LOADER = body(BOOT, "EFI_STATUS GuBootLoadAssets(VOID) {",
               "\nstatic EFI_STATUS ReadWindowsBinary(")
 MANIFEST = body(PROFILE, "static const GU_ARCH_ASSETS AdaAssets=",
                 "BOOLEAN GuAd104AssetsValid(VOID) {")
+PREDICATES = body(PORT, "#define GU_PORT_MATCH(id)",
+                  "static inline BOOLEAN GuIsAdaPciId(")
 
 
 class AssetLifetimeTests(unittest.TestCase):
@@ -37,7 +40,8 @@ class AssetLifetimeTests(unittest.TestCase):
             compiler = os.environ.get("CC", "gcc")
             compiled = subprocess.run(
                 [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
-                 "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                 "-Werror", "-pedantic", "-I", str(ROOT / "src"),
+                 str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             for case in cases:
@@ -152,43 +156,55 @@ int main(int argc,char **argv) {
 '''
         self.compile_run(source, range(11))
 
-    def test_device_specific_reference_manifest(self):
+    def test_parent_supported_reference_manifests(self):
         source = r'''
 #include <stdint.h>
 #include <stddef.h>
 #include <wchar.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include "gpu_device_ids.h"
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef unsigned long UINTN;
 typedef wchar_t CHAR16;
 typedef void VOID;
+typedef int BOOLEAN;
+#define TRUE 1
+#define FALSE 0
 #define GU_ASSET_COUNT 5U
 typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
 typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
 static struct {int is_turing,is_ampere;UINT16 device_id;} Gu;
-''' + MANIFEST + r'''
+''' + PREDICATES + MANIFEST + r'''
 #define CHECK(x) do {if(!(x))return __LINE__;} while(0)
 int main(void) {
   const GU_ARCH_ASSETS *ada=GuGetArchAssetsForPciId(0x268410deU);
   const GU_ARCH_ASSETS *ampere=GuGetArchAssetsForPciId(0x220a10deU);
-  CHECK(ada && ampere && ada!=ampere);
+  const GU_ARCH_ASSETS *turing=GuGetArchAssetsForPciId(0x1e0710deU);
+  CHECK(ada && ampere && turing && ada!=ampere && ada!=turing && ampere!=turing);
   CHECK(ada->entries[0].bytes==57672U);
   CHECK(ampere->entries[0].bytes==61256U);
+  CHECK(turing->entries[0].bytes==59976U);
+  CHECK(turing->entries[2].bytes==29352832U);
+  CHECK(turing->entries[4].bytes==76U);
   CHECK(!GuGetArchAssetsForPciId(0x26841002U));
   CHECK(!GuGetArchAssetsForPciId(0x220a10eeU));
-  CHECK(!GuGetArchAssetsForPciId(0x1e0410deU));
-  CHECK(!GuGetArchAssetsForPciId(0x270210deU)); /* AD103 is not AD102. */
-  CHECK(!GuGetArchAssetsForPciId(0x250310deU)); /* GA106 is not GA102. */
-  CHECK(!GuGetArchAssetsForPciId(0x248410deU)); /* GA104 is not GA102. */
-  Gu.device_id=0x2684U;
-  CHECK(GuGetArchAssets()==ada);
+  CHECK(!GuGetArchAssetsForPciId(0x999910deU));
+  CHECK(GuGetArchAssetsForPciId(0x270210deU)==ada);
+  CHECK(GuGetArchAssetsForPciId(0x278210deU)==ada);
+  CHECK(GuGetArchAssetsForPciId(0x288210deU)==ada);
+  CHECK(GuGetArchAssetsForPciId(0x250310deU)==ampere);
+  CHECK(GuGetArchAssetsForPciId(0x248410deU)==ampere);
+  CHECK(GuGetArchAssetsForPciId(0x241410deU)==ampere);
+  CHECK(GuGetArchAssetsForPciId(0x1f4710deU)==turing);
+  CHECK(GuGetArchAssetsForPciId(0x1e8110deU)==turing);
+  Gu.device_id=0x2684U;CHECK(GuGetArchAssets()==ada);
   Gu.is_ampere=1;CHECK(!GuGetArchAssets());
   Gu.is_ampere=0;Gu.device_id=0x220aU;
   CHECK(!GuGetArchAssets());
   Gu.is_ampere=1;CHECK(GuGetArchAssets()==ampere);
   Gu.is_turing=1;CHECK(!GuGetArchAssets());
+  Gu.is_ampere=0;Gu.device_id=0x1e07U;CHECK(GuGetArchAssets()==turing);
+  Gu.is_turing=0;CHECK(!GuGetArchAssets());
   return 0;
 }
 '''
