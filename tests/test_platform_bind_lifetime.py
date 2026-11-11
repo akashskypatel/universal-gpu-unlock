@@ -624,6 +624,7 @@ typedef struct {EFI_STATUS (*Stall)(UINTN);} EFI_BOOT_SERVICES;
 #define EFI_DEVICE_ERROR 4
 #define EFI_TIMEOUT 5
 #define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
+#define TRUE 1
 #define GU_PREFLIGHT_ONLY 0
 #define EfiPciIoWidthUint32 3
 #define EfiPciIoWidthUint16 2
