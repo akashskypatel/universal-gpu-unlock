@@ -471,6 +471,10 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
        full.targets[prepared.selected_indices[0]].pci!=io ||
        memcmp(full.targets[prepared.selected_indices[0]].config,
               config,sizeof(config))!=0)return EFI_UNSUPPORTED;
+    /* Bind only after the full peer scan succeeds. A rejected bind must
+     * not overwrite the prior selected target and peer-baseline record. */
+    s=GuInit(table->BootServices,io);
+    if(s!=EFI_SUCCESS)return s;
     ActiveInventoryValid=0;
     ActiveInventory=prepared;
     ActiveTargetIndex=prepared.selected_indices[0];
@@ -478,8 +482,10 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       memcpy(ActiveInitialConfig[i],full.targets[i].config,sizeof(config));
     ActiveInventoryValid=1;
   }
+#else
+  s=GuInit(table->BootServices,io);
+  if(s!=EFI_SUCCESS)return s;
 #endif
-  GuInit(table->BootServices, io);
   Gu.image = image;
   Gu.handle = (EFI_HANDLE)selected->handle;
   Gu.device_id = (UINT16)(selected->pci_id >> 16);

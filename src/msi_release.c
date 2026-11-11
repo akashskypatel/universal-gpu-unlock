@@ -557,7 +557,9 @@ static EFI_STATUS Consumers(VOID) {
   return EFI_SUCCESS;
 }
 EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
-  if(Plan.mutated||Plan.ready)return EFI_ALREADY_STARTED;
+  /* A failed preflight may have observed or modified driver context.
+   * Do not erase its saved ownership graph on a later target attempt. */
+  if(Plan.table||Plan.mutated||Plan.ready||Plan.claimed)return EFI_ALREADY_STARTED;
   memset(&Plan,0,sizeof(Plan));Plan.table=t;Plan.self=self;Plan.pci=pci;
   if(!t||!t->BootServices||!self||!pci||Gu.handle!=pci||Gu.image!=self||Gu.bs!=t->BootServices||
      !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||Gu.armed)return EFI_INVALID_PARAMETER;

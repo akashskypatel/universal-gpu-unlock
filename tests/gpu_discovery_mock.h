@@ -16,6 +16,7 @@ typedef struct { uint32_t a; uint16_t b,c; uint8_t d[8]; } EFI_GUID;
 #define EFI_SUCCESS 0
 #define EFI_UNSUPPORTED 3
 #define EFI_INVALID_PARAMETER 2
+#define EFI_ALREADY_STARTED 4
 #define EFI_ERROR(s) ((s) != EFI_SUCCESS)
 #define ByProtocol 2
 #define EfiPciIoWidthUint32 1
@@ -48,7 +49,7 @@ typedef struct {
   UINT8 pcie_version;
 } GU_CAPS;
 extern GU_PLATFORM Gu;
-void GuInit(EFI_BOOT_SERVICES *, EFI_PCI_IO_PROTOCOL *);
+EFI_STATUS GuInit(EFI_BOOT_SERVICES *, EFI_PCI_IO_PROTOCOL *);
 void GuLog(const char *, ...);
 int GuIsSupportedPciId(UINT32);
 int GuIsAmpereDeviceId(UINT16);

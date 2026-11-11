@@ -139,7 +139,9 @@ typedef struct {
 } GU_PLATFORM;
 extern GU_PLATFORM Gu;
 
-VOID GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
+/* One checked bind per image. Rebinding requires a future verified
+ * per-card teardown protocol, not a raw zero of Gu's global state. */
+EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
 #ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These
    values are private to port.c; the vendor core can only read/compare them. */

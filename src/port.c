@@ -1,7 +1,12 @@
 /* Modified 2026-10-19/20 for Windows GPU UNLOCK; changes documented in CHANGES.md. */ #include "port.h"
 VOID *memset(VOID *, int, size_t);
 VOID *memcpy(VOID *, const VOID *, size_t);
+int memcmp(const VOID *, const VOID *, size_t);
 GU_PLATFORM Gu;
+/* A second bind must never erase DMA/selector/fault evidence from a prior
+ * card. A verified per-card context release API does not exist yet. */
+static BOOLEAN TargetBound;
+static const GU_PLATFORM EmptyPlatform;
 #ifdef GU_ENTRY_LATCHED
 static BOOLEAN EntryLatched;
 static UINT32 EntrySs0,EntrySs1;
@@ -43,7 +48,13 @@ BOOLEAN GuSelectorPhase(UINT32 Phase) {
   SelectorPhase=Phase;return TRUE;
 }
 #endif
-VOID GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
+EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
+  if(!Bs || !Pci)return EFI_INVALID_PARAMETER;
+  if(TargetBound)return EFI_ALREADY_STARTED;
+  /* Inspect every byte of the old platform, not just the safety flags.
+   * Rebind may not discard saved hardware state, mappings, or errors. */
+  if(memcmp(&Gu,&EmptyPlatform,sizeof(Gu))!=0)return EFI_ACCESS_DENIED;
+  TargetBound=TRUE; /* Spend before any state is changed. */
   memset(&Gu,0,sizeof(Gu)); Gu.bs=Bs; Gu.pci=Pci;
 #ifdef GU_ENTRY_LATCHED
   EntryLatched=FALSE;EntrySs0=EntrySs1=0;
@@ -51,6 +62,7 @@ VOID GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
   SelectorPhase=GU_SELECTOR_PHASE_ENTRY;Ss1WriteConsumed=FALSE;
 #endif
+  return EFI_SUCCESS;
 }
 BOOLEAN GuTargetConfig(const UINT32 *C, UINTN S, UINTN B, UINTN D, UINTN F) {
   return C && !S && B < 256 && !D && !F && GuIsSupportedPciId(C[0]) &&

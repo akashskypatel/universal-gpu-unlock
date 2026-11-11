@@ -22,6 +22,8 @@ on:
       - 'src/Build-Experimental-MSVC.ps1'
       - 'src/Build-Dxe-Driver.ps1'
       - 'src/port.h'
+      - 'src/port.c'
+      - 'tests/test_platform_bind_lifetime.py'
       - 'src/prom_identity.h'
       - 'tests/test_prom_identity.c'
       - 'src/profile.c'
@@ -126,6 +128,8 @@ jobs:
               "$RUNNER_TEMP/test_gpu_device_path_$compiler"
             done
             python3 -m unittest discover -s tests -p test_dxe_ready_to_boot.py -v
+            CC=gcc python3 -m unittest discover -s tests -p test_platform_bind_lifetime.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_platform_bind_lifetime.py -v
             python3 -m unittest discover -s tests -p test_unlock_execution_contract.py -v
             python3 -m unittest discover -s tests -p test_boot_binding_contract.py -v
             python3 -m unittest discover -s tests -p test_profile_asset_contract.py -v

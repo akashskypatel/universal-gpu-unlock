@@ -23,11 +23,14 @@ static MOCK_DEVICE gpu[4];
 static EFI_HANDLE handles[4];
 static size_t count;
 static unsigned init_calls, free_calls, log_calls, resolve_calls;
-static int fail_pool_free, redirect_on_refresh;
+static int fail_pool_free, redirect_on_refresh, refuse_init;
 GU_PLATFORM Gu;
 
-void GuInit(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *pci) {
-  init_calls++; memset(&Gu, 0, sizeof(Gu)); Gu.bs = bs; Gu.pci = pci;
+EFI_STATUS GuInit(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *pci) {
+  init_calls++;
+  if(refuse_init)return EFI_ALREADY_STARTED;
+  memset(&Gu,0,sizeof(Gu));Gu.bs=bs;Gu.pci=pci;
+  return EFI_SUCCESS;
 }
 void GuLog(const char *format, ...) { (void)format; log_calls++; }
 int GuIsSupportedPciId(UINT32 pci) {
@@ -102,7 +105,7 @@ static void Populate(size_t i, GU_GPU_IDENTITY id) {
 }
 static void ResetPair(void) {
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
-  fail_pool_free = redirect_on_refresh = 0; resolve_calls = 0; count = 2;
+  fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
   Populate(0, Primary); Populate(1, Secondary);
 }
 #include "../src/gpu_discovery.c"
@@ -120,6 +123,18 @@ int main(void) {
   CHECK(status==EFI_SUCCESS && init_calls==1);
   CHECK(Gu.handle==handles[1] && Gu.device_id==0x2503U);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+  /* A refused rebind must not replace the previous target or saved peer
+   * record, even after the new inventory has passed both PCI read passes. */
+  {
+    EFI_HANDLE old=Gu.handle;
+    UINT32 original_peer=ActiveInitialConfig[0][4];
+    refuse_init=1;
+    gpu[0].dwords[4]^=0x1000U;
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+    CHECK(Gu.handle==old && ActiveInventoryValid);
+    CHECK(ActiveInitialConfig[0][4]==original_peer);
+    refuse_init=0;
+  }
   ResetActivePair();
   gpu[1].dwords[1]=4u; /* initial selected UEFI driver Bus Master enabled */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
