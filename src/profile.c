@@ -21,11 +21,20 @@ static const GU_ARCH_ASSETS AmpereAssets={{
     {L"\\GA102-ASSETS\\gsp_boot_ga102.bin","gpu-unlock/610.43.03/gsp_boot_ga102.bin","3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768",24576U},
     {L"\\GA102-ASSETS\\gsp_boot_desc_ga102.bin","gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin","cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15",84U}
   },L"\\AD102-ASSETS\\gsp_ga10x.bin"};
+const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id) {
+  /* Require the full NVIDIA PCI identity, not a device number alone. */
+  if((pci_id & 0xffffU)!=0x10deU)return NULL;
+  UINT16 device=(UINT16)(pci_id>>16);
+  if(GuIsAdaDeviceId(device))return &AdaAssets;
+  if(GuIsAmpereDeviceId(device))return &AmpereAssets;
+  return NULL;
+}
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {
   if(Gu.is_turing)return NULL;
-  if(Gu.is_ampere&&GuIsAmpereDeviceId(Gu.device_id))return &AmpereAssets;
-  if(!Gu.is_ampere&&GuIsAdaDeviceId(Gu.device_id))return &AdaAssets;
-  return NULL;
+  const GU_ARCH_ASSETS *assets=GuGetArchAssetsForPciId(
+      ((UINT32)Gu.device_id<<16)|0x10deU);
+  if(!assets || (!!Gu.is_ampere)!=(assets==&AmpereAssets))return NULL;
+  return assets;
 }
 BOOLEAN GuAd104AssetsValid(VOID) {
   const GU_ARCH_ASSETS *arch=GuGetArchAssets();

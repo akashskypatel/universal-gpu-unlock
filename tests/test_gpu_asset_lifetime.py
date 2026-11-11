@@ -1,0 +1,199 @@
+"""Compile and exercise the actual asset loader and per-card manifest selector.
+
+Host tests replace only EFI services and file reads. No firmware data, GPU,
+PCI write, or EFI boot operation is executed.
+"""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+BOOT = (ROOT / "src/boot_io.c").read_text(encoding="utf-8")
+PROFILE = (ROOT / "src/profile.c").read_text(encoding="utf-8")
+
+
+def body(source, start, end):
+    left = source.find(start)
+    right = source.find(end, left)
+    if left < 0 or right <= left:
+        raise AssertionError("production function boundaries changed")
+    return source[left:right]
+
+
+LOADER = body(BOOT, "EFI_STATUS GuBootLoadAssets(VOID) {",
+              "\nstatic EFI_STATUS ReadWindowsBinary(")
+MANIFEST = body(PROFILE, "static const GU_ARCH_ASSETS AdaAssets=",
+                "BOOLEAN GuAd104AssetsValid(VOID) {")
+
+
+class AssetLifetimeTests(unittest.TestCase):
+    def compile_run(self, code, cases):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "asset_host.c"
+            binary = Path(tmp) / "asset_host"
+            source.write_text(code, encoding="utf-8")
+            compiler = os.environ.get("CC", "gcc")
+            compiled = subprocess.run(
+                [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                 "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            for case in cases:
+                with self.subTest(compiler=compiler, case=case):
+                    executed = subprocess.run(
+                        [str(binary), str(case)], capture_output=True, text=True)
+                    self.assertEqual(executed.returncode, 0,
+                                     executed.stdout + executed.stderr)
+
+    def test_loader_prevents_cross_target_asset_replacement(self):
+        source = r'''
+#include <stdint.h>
+#include <stddef.h>
+#include <wchar.h>
+#include <stdlib.h>
+#include <stdio.h>
+typedef void VOID;
+typedef int EFI_STATUS;
+typedef unsigned long UINTN;
+typedef int BOOLEAN;
+typedef wchar_t CHAR16;
+#define TRUE 1
+#define FALSE 0
+#define GU_ASSET_COUNT 5U
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 2
+#define EFI_ALREADY_STARTED 3
+#define EFI_UNSUPPORTED 4
+#define EFI_NOT_FOUND 5
+#define EFI_CRC_ERROR 6
+typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
+typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
+struct firmware {UINTN size;const VOID *data;};
+typedef struct {const char *name;struct firmware firmware;} LOADED;
+static LOADED GuAssets[GU_ASSET_COUNT];
+static struct {int started,fault,retained;} Gu;
+static VOID *Root=(VOID *)(uintptr_t)1;
+static BOOLEAN AssetsLoadAttempted;
+static int read_calls,freed,fail_at,corrupt_at,available=1;
+static const GU_ARCH_ASSETS bundle={{
+  {L"a","A","1",8},{L"b","B","2",8},{L"c","C","3",8},
+  {L"d","D","4",8},{L"e","E","5",8}},NULL};
+static const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {return available?&bundle:NULL;}
+static EFI_STATUS ReadFile(VOID *root,const CHAR16 *path,UINTN bytes,VOID **out) {
+  (void)root;(void)path;
+  read_calls++;
+  if(read_calls==fail_at)return EFI_NOT_FOUND;
+  *out=malloc(bytes);
+  return *out?EFI_SUCCESS:EFI_NOT_READY;
+}
+static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,const CHAR16 *path,VOID **out) {
+  (void)asset;(void)path;(void)out;return EFI_NOT_FOUND;
+}
+static BOOLEAN GuHashMatches(const VOID *data,UINTN bytes,const char *hash) {
+  (void)bytes;(void)hash;return data!=NULL && read_calls!=corrupt_at;
+}
+static BOOLEAN GuAd104AssetsValid(VOID) {
+  for(unsigned i=0;i<GU_ASSET_COUNT;i++)
+    if(!GuAssets[i].name||!GuAssets[i].firmware.data)return FALSE;
+  return TRUE;
+}
+static void GuFree(VOID *p) {if(p){freed++;free(p);}}
+static void GuLog(const char *fmt,...) {(void)fmt;}
+''' + LOADER + r'''
+#define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}} while(0)
+int main(int argc,char **argv) {
+  int mode=argc>1?atoi(argv[1]):-1;
+  if(mode==0) {
+    CHECK(GuBootLoadAssets()==EFI_SUCCESS);
+    CHECK(read_calls==5 && GuAssets[0].name!=NULL);
+    const VOID *saved=GuAssets[0].firmware.data;
+    CHECK(GuBootLoadAssets()==EFI_NOT_READY);
+    CHECK(read_calls==5 && GuAssets[0].firmware.data==saved);
+  } else if(mode==1) {
+    fail_at=3;
+    CHECK(GuBootLoadAssets()==EFI_NOT_FOUND);
+    CHECK(read_calls==3 && freed==2);
+    for(int i=0;i<5;i++)CHECK(!GuAssets[i].name&&!GuAssets[i].firmware.data);
+    fail_at=0;
+    CHECK(GuBootLoadAssets()==EFI_NOT_READY && read_calls==3);
+  } else if(mode==2) {
+    Gu.retained=1;CHECK(GuBootLoadAssets()==EFI_NOT_READY && read_calls==0);
+    Gu.retained=0;CHECK(GuBootLoadAssets()==EFI_SUCCESS && read_calls==5);
+  } else if(mode==3) {
+    GuAssets[1].name="existing";
+    CHECK(GuBootLoadAssets()==EFI_ALREADY_STARTED && read_calls==0);
+    CHECK(GuAssets[1].name!=NULL && !AssetsLoadAttempted);
+  } else if(mode==4) {
+    Gu.started=1;CHECK(GuBootLoadAssets()==EFI_NOT_READY && !AssetsLoadAttempted);
+    Gu.started=0;CHECK(GuBootLoadAssets()==EFI_SUCCESS);
+  } else if(mode==5) {
+    available=0;CHECK(GuBootLoadAssets()==EFI_UNSUPPORTED && !AssetsLoadAttempted);
+    available=1;CHECK(GuBootLoadAssets()==EFI_SUCCESS);
+  } else if(mode==6) {
+    Gu.fault=1;CHECK(GuBootLoadAssets()==EFI_NOT_READY && read_calls==0);
+    Gu.fault=0;CHECK(GuBootLoadAssets()==EFI_SUCCESS);
+  } else if(mode==7) {
+    corrupt_at=2;CHECK(GuBootLoadAssets()==EFI_CRC_ERROR);
+    CHECK(read_calls==2 && freed==2);
+    corrupt_at=0;CHECK(GuBootLoadAssets()==EFI_NOT_READY && read_calls==2);
+  } else if(mode==8) {
+    GuAssets[2].firmware.data=(VOID *)(uintptr_t)0x1234;
+    CHECK(GuBootLoadAssets()==EFI_ALREADY_STARTED && read_calls==0);
+  } else if(mode==9) {
+    GuAssets[2].firmware.size=7;
+    CHECK(GuBootLoadAssets()==EFI_ALREADY_STARTED && read_calls==0);
+  } else if(mode==10) {
+    Root=NULL;CHECK(GuBootLoadAssets()==EFI_NOT_READY && read_calls==0);
+  } else return 3;
+  return 0;
+}
+'''
+        self.compile_run(source, range(11))
+
+    def test_device_specific_reference_manifest(self):
+        source = r'''
+#include <stdint.h>
+#include <stddef.h>
+#include <wchar.h>
+#include <stdio.h>
+#include <stdlib.h>
+typedef uint32_t UINT32;
+typedef uint16_t UINT16;
+typedef unsigned long UINTN;
+typedef wchar_t CHAR16;
+typedef void VOID;
+#define NULL ((void *)0)
+#define GU_ASSET_COUNT 5U
+typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
+typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
+static int GuIsAdaDeviceId(UINT16 dev) {return dev==0x2684U;}
+static int GuIsAmpereDeviceId(UINT16 dev) {return dev==0x220aU;}
+static struct {int is_turing,is_ampere;UINT16 device_id;} Gu;
+''' + MANIFEST + r'''
+#define CHECK(x) do {if(!(x))return __LINE__;} while(0)
+int main(void) {
+  const GU_ARCH_ASSETS *ada=GuGetArchAssetsForPciId(0x268410deU);
+  const GU_ARCH_ASSETS *ampere=GuGetArchAssetsForPciId(0x220a10deU);
+  CHECK(ada && ampere && ada!=ampere);
+  CHECK(ada->entries[0].bytes==57672U);
+  CHECK(ampere->entries[0].bytes==61256U);
+  CHECK(!GuGetArchAssetsForPciId(0x26841002U));
+  CHECK(!GuGetArchAssetsForPciId(0x220a10eeU));
+  CHECK(!GuGetArchAssetsForPciId(0x1e0410deU));
+  Gu.device_id=0x2684U;
+  CHECK(GuGetArchAssets()==ada);
+  Gu.is_ampere=1;CHECK(!GuGetArchAssets());
+  Gu.is_ampere=0;Gu.device_id=0x220aU;
+  CHECK(!GuGetArchAssets());
+  Gu.is_ampere=1;CHECK(GuGetArchAssets()==ampere);
+  Gu.is_turing=1;CHECK(!GuGetArchAssets());
+  return 0;
+}
+'''
+        self.compile_run(source, (0,))
+
+
+if __name__ == "__main__":
+    unittest.main()

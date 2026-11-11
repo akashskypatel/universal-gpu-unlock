@@ -35,6 +35,7 @@ on:
       - 'tests/test_firmware_diagnostic_contract.py'
       - 'src/profile.h'
       - 'tests/test_profile_asset_contract.py'
+      - 'tests/test_gpu_asset_lifetime.py'
       - 'src/boot_io.c'
       - 'src/boot_io.h'
       - 'tests/test_boot_binding_contract.py'
@@ -132,6 +133,8 @@ jobs:
             CC=clang python3 -m unittest discover -s tests -p test_platform_bind_lifetime.py -v
             python3 -m unittest discover -s tests -p test_unlock_execution_contract.py -v
             python3 -m unittest discover -s tests -p test_boot_binding_contract.py -v
+            CC=gcc python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             python3 -m unittest discover -s tests -p test_profile_asset_contract.py -v
             python3 -m unittest discover -s tests -p test_firmware_diagnostic_contract.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v

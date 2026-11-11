@@ -13,6 +13,10 @@ typedef struct {
   GU_ARCH_ASSET entries[GU_ASSET_COUNT];
   const CHAR16 *alternate_gsp_path;
 } GU_ARCH_ASSETS;
+/* Resolve a manifest from the full vendor/device PCI identity, without
+ * consulting or changing the currently bound GPU. This selects reference
+ * assets only; it does not establish Windows 617.42 signature acceptance. */
+const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id);
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID);
 EFI_STATUS GuDiagnosticScan(VOID);
 BOOLEAN GuAd104AssetsValid(VOID);

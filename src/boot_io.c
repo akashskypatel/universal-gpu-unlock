@@ -32,6 +32,9 @@ static EFI_FILE_PROTOCOL *Root,*Log;
 static CHAR16 ActiveLogPath[]=L"\\AD102-UNLOCK\\RUN0000.TXT";
 
 static BOOLEAN Silent;
+/* One complete asset admission attempt per EFI image. Neither successful
+ * buffers nor a partial failure may be replaced by a second target. */
+static BOOLEAN AssetsLoadAttempted;
 
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID,FsGuid=EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 
@@ -251,9 +254,15 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
 }
 
 EFI_STATUS GuBootLoadAssets(VOID) {
-  if(!Root||Gu.started)return EFI_NOT_READY;
+  if(!Root||Gu.started||Gu.fault||Gu.retained||AssetsLoadAttempted)
+    return EFI_NOT_READY;
+  /* Do not overwrite or silently free data published by another owner. */
+  for(UINTN i=0;i<GU_ASSET_COUNT;i++)
+    if(GuAssets[i].name||GuAssets[i].firmware.data||
+       GuAssets[i].firmware.size)return EFI_ALREADY_STARTED;
   const GU_ARCH_ASSETS *arch=GuGetArchAssets();
   if(!arch)return EFI_UNSUPPORTED;
+  AssetsLoadAttempted=TRUE; /* Latch before the first file operation. */
   EFI_STATUS status=EFI_SUCCESS;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
