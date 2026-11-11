@@ -24,6 +24,7 @@ on:
       - 'src/port.h'
       - 'src/gpu_device_ids.h'
       - 'src/vendor/prep_610.h'
+      - 'src/vendor/diagnostic.h'
       - 'tests/test_gpu_device_ids.c'
       - 'tests/test_turing_formats.c'
       - 'src/port.c'
