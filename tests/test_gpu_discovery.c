@@ -171,6 +171,10 @@ int main(void) {
   CHECK(ActiveInventoryValid && ActiveSequenceValid &&
         ActiveSequence.selected_count==1 && ActiveSequence.next_step==0);
   CHECK(ActiveSequence.order[0]==ActiveTargetIndex);
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_NOT_READY);
+  Gu.profile_verified=1;
+  CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_NOT_READY);
+  Gu.prom_verified=1;
   CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
   CHECK(ActiveSequence.active_step==0 &&
         ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_ACTIVE);
@@ -182,6 +186,7 @@ int main(void) {
 
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  Gu.profile_verified=Gu.prom_verified=1;
   CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
   /* CPU model permits selected post-step PCI state, but not peer drift. */
   gpu[1].dwords[4]^=0x1000U;
@@ -193,6 +198,7 @@ int main(void) {
 
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  Gu.profile_verified=Gu.prom_verified=1;
   CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_SUCCESS);
   gpu[0].dwords[4]^=0x1000U;
   CHECK(GuFinishSelectedGpuStep(&system_table,1)==EFI_UNSUPPORTED &&
@@ -201,6 +207,7 @@ int main(void) {
 
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  Gu.profile_verified=Gu.prom_verified=1;
   gpu[0].dwords[4]^=0x1000U; /* drift before beginning selected work */
   CHECK(GuBeginSelectedGpuStep(&system_table)==EFI_UNSUPPORTED &&
         ActiveSequence.halted);

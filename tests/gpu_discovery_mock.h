@@ -44,6 +44,7 @@ typedef struct {
   UINT16 device_id, pm_cap, pcie_cap, msi_cap, msix_cap;
   UINT8 is_ampere, is_turing, pcie_version;
   uint64_t bar_base, bar_size;
+  unsigned profile_verified, prom_verified, started, fault, retained, owned, armed;
 } GU_PLATFORM;
 typedef struct {
   UINT16 pm, pcie, msi, msix;

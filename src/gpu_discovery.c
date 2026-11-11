@@ -414,6 +414,8 @@ EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table) {
   if(!ActiveSequenceValid || !ActiveInventoryValid ||
      !table || !table->BootServices ||
      Gu.bs!=table->BootServices || !Gu.handle || !Gu.pci ||
+     !Gu.profile_verified || !Gu.prom_verified ||
+     Gu.started || Gu.fault || Gu.retained || Gu.owned || Gu.armed ||
      ActiveTargetIndex>=ActiveInventory.inventory.count ||
      Gu.handle!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].handle ||
      Gu.pci!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].pci)
