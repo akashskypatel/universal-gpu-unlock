@@ -202,7 +202,15 @@ EFI_STATUS GuConfigWrite(EFI_PCI_IO_PROTOCOL_WIDTH W, UINT32 O, VOID *V) {
   if(EFI_ERROR(Status))Gu.fault=TRUE;return Status;
 }
 VOID GuStall(UINTN Microseconds) {
-  Gu.bs->Stall(Microseconds);Gu.ticks+=Microseconds;
+  /* This delay is a safety boundary after PCI function-level reset.
+   * A failed firmware stall is not proof that the required time elapsed. */
+  if(!Gu.bs || !Gu.bs->Stall ||
+     EFI_ERROR(Gu.bs->Stall(Microseconds))) {
+    Gu.fault=TRUE;
+    Gu.retained=TRUE;
+    return;
+  }
+  Gu.ticks+=Microseconds;
 }
 EFI_STATUS GuEnableMaster(VOID) {
   UINT32 Id=0;UINT16 Command=0xffff,Now=0xffff;
@@ -312,7 +320,8 @@ EFI_STATUS GuSavePci(VOID) {
 EFI_STATUS GuFlr(VOID) {
   UINT32 Identity=0,Capability=0;UINT16 Command=0xffff,Pending=0xffff,Ctl=0;
   UINTN Wait;EFI_STATUS ResetStatus;
-  if(GU_PREFLIGHT_ONLY || !Gu.profile_verified || !Gu.saved || Gu.flrs || Gu.fault || !Gu.owned || !Gu.armed || !Gu.display_ok)return EFI_NOT_READY;
+  if(GU_PREFLIGHT_ONLY || !Gu.profile_verified || !Gu.saved || Gu.flrs || Gu.fault || !Gu.owned || !Gu.armed || !Gu.display_ok ||
+     !Gu.bs || !Gu.bs->Stall)return EFI_NOT_READY;
   if(EFI_ERROR(GuConfigRead(EfiPciIoWidthUint32,0,&Identity)) || !GuIsSupportedPciId(Identity) ||
      EFI_ERROR(GuConfigRead(EfiPciIoWidthUint16,4,&Command)) || Command==0xffff ||
      (Command&4) || !(Command&2) ||
@@ -323,6 +332,7 @@ EFI_STATUS GuFlr(VOID) {
     if(!(Pending&0x20))break;
     if(Wait==1000000)return EFI_TIMEOUT;
     GuStall(1000);
+    if(Gu.fault)return EFI_DEVICE_ERROR;
   }
   if(EFI_ERROR(GuConfigRead(EfiPciIoWidthUint16,Gu.pcie_cap+8,&Ctl)))return EFI_DEVICE_ERROR;
   if(Ctl&0x8000)return EFI_NOT_READY;
@@ -341,12 +351,15 @@ EFI_STATUS GuFlr(VOID) {
   ResetStatus=GuConfigWrite(EfiPciIoWidthUint16,Gu.pcie_cap+8,&Ctl);
   /* No access of any kind to this function for at least 100 ms. */
   GuStall(100000);
-  if(EFI_ERROR(ResetStatus))return EFI_DEVICE_ERROR;
+  if(Gu.fault || EFI_ERROR(ResetStatus))return EFI_DEVICE_ERROR;
   for(Wait=0;Wait<=1000000;Wait+=1000) {
     EFI_STATUS Status=RawRead(EfiPciIoWidthUint32,0,&Identity);
     if(!EFI_ERROR(Status) && GuIsSupportedPciId(Identity))return EFI_SUCCESS;
     if(!EFI_ERROR(Status) && Identity!=0xffffffffU && Identity!=0)break;
-    if(Wait<1000000)GuStall(1000);
+    if(Wait<1000000) {
+      GuStall(1000);
+      if(Gu.fault)return EFI_DEVICE_ERROR;
+    }
   }
   Gu.fault=TRUE;return EFI_DEVICE_ERROR;
 }

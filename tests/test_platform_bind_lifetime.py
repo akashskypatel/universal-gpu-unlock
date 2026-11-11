@@ -601,6 +601,147 @@ int main(int argc,char **argv) {
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
 
+    def test_real_flr_never_skips_failed_firmware_delay(self):
+        """Test the production reset and stall functions with fake EFI calls."""
+        stall_start = SOURCE.index("VOID GuStall(UINTN Microseconds) {")
+        stall_end = SOURCE.index("\nEFI_STATUS GuEnableMaster(", stall_start)
+        actual = SOURCE[stall_start:stall_end] + "\n" + function("GuFlr")
+        host = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+typedef void VOID;
+typedef uint16_t UINT16;
+typedef uint32_t UINT32;
+typedef uint64_t UINT64;
+typedef size_t UINTN;
+typedef int EFI_STATUS;
+typedef struct {EFI_STATUS (*Stall)(UINTN);} EFI_BOOT_SERVICES;
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 2
+#define EFI_ACCESS_DENIED 3
+#define EFI_DEVICE_ERROR 4
+#define EFI_TIMEOUT 5
+#define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
+#define GU_PREFLIGHT_ONLY 0
+#define EfiPciIoWidthUint32 3
+#define EfiPciIoWidthUint16 2
+static struct {
+  EFI_BOOT_SERVICES *bs;
+  UINTN ticks;
+  UINT16 pcie_cap;
+  int profile_verified,saved,flrs,fault,owned,armed,display_ok;
+  int retained,started;
+} Gu;
+static int mode,stall_calls,wait_ms_calls,reset_calls,raw_reads,pending_reads;
+static EFI_STATUS FakeStall(UINTN us) {
+  stall_calls++;
+  if(us==1000)wait_ms_calls++;
+  if(mode==2 && us==1000 && !reset_calls)return EFI_DEVICE_ERROR;
+  if(mode==3 && us==100000)return EFI_DEVICE_ERROR;
+  if(mode==4 && us==1000 && reset_calls)return EFI_DEVICE_ERROR;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS GuConfigRead(int width,UINT32 offset,VOID *out) {
+  if(width==EfiPciIoWidthUint32 && offset==0) {
+    *(UINT32 *)out=0x268410deU;return EFI_SUCCESS;
+  }
+  if(width==EfiPciIoWidthUint16 && offset==4) {
+    *(UINT16 *)out=2U;return EFI_SUCCESS;
+  }
+  if(width==EfiPciIoWidthUint32 && offset==0x44) {
+    *(UINT32 *)out=1U<<28;return EFI_SUCCESS;
+  }
+  if(width==EfiPciIoWidthUint16 && offset==0x4a) {
+    *(UINT16 *)out=(mode==2 && pending_reads++==0)?0x20U:0U;
+    return EFI_SUCCESS;
+  }
+  if(width==EfiPciIoWidthUint16 && offset==0x48) {
+    *(UINT16 *)out=0U;return EFI_SUCCESS;
+  }
+  return EFI_DEVICE_ERROR;
+}
+static EFI_STATUS GuConfigWrite(int width,UINT32 offset,VOID *value) {
+  if(width!=EfiPciIoWidthUint16 || offset!=0x48 ||
+     !(*(UINT16 *)value & 0x8000U))return EFI_DEVICE_ERROR;
+  reset_calls++;
+  return mode==6?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static EFI_STATUS RawRead(int width,UINT32 offset,VOID *out) {
+  if(width!=EfiPciIoWidthUint32 || offset!=0)return EFI_DEVICE_ERROR;
+  raw_reads++;
+  *(UINT32 *)out=(mode==4 && raw_reads==1)?0xffffffffU:0x268410deU;
+  return EFI_SUCCESS;
+}
+static int GuIsSupportedPciId(UINT32 id) {return id==0x268410deU;}
+static void GuStarted(VOID) {Gu.started=1;}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d mode %d: %s\n",__LINE__,mode,#x);return 1;}} while(0)
+int main(int argc,char **argv) {
+  EFI_BOOT_SERVICES service={FakeStall};
+  mode=argc>1?atoi(argv[1]):-1;
+  if(mode<0 || mode>8)return 2;
+  Gu.bs=&service;
+  Gu.pcie_cap=0x40;
+  Gu.profile_verified=Gu.saved=Gu.owned=Gu.armed=Gu.display_ok=1;
+  if(mode==1 || mode==7)service.Stall=NULL;
+  if(mode==5)Gu.bs=NULL;
+  if(mode==7 || mode==8) {
+    GuStall(1000);
+    CHECK(Gu.fault==(mode==7));
+    CHECK(Gu.retained==(mode==7));
+    CHECK(stall_calls==(mode==8));
+    CHECK(Gu.ticks==(unsigned)(mode==8?1000:0));
+    return 0;
+  }
+  EFI_STATUS status=GuFlr();
+  if(mode==0) {
+    CHECK(status==EFI_SUCCESS);
+    CHECK(reset_calls==1 && raw_reads==1 && Gu.flrs==1);
+    CHECK(stall_calls==1 && Gu.ticks==100000 && !Gu.fault && !Gu.retained);
+  } else if(mode==1 || mode==5) {
+    CHECK(status==EFI_NOT_READY);
+    CHECK(!reset_calls && !raw_reads && !stall_calls && !Gu.flrs);
+  } else if(mode==2) {
+    CHECK(status==EFI_DEVICE_ERROR);
+    CHECK(!reset_calls && !raw_reads && !Gu.flrs);
+    CHECK(Gu.fault && Gu.retained && !Gu.ticks && wait_ms_calls==1);
+  } else if(mode==3) {
+    CHECK(status==EFI_DEVICE_ERROR);
+    CHECK(reset_calls==1 && !raw_reads && Gu.flrs==1 && Gu.started);
+    CHECK(Gu.fault && Gu.retained && !Gu.ticks && stall_calls==1);
+  } else if(mode==4) {
+    CHECK(status==EFI_DEVICE_ERROR);
+    CHECK(reset_calls==1 && raw_reads==1 && Gu.flrs==1 && Gu.started);
+    CHECK(Gu.fault && Gu.retained && Gu.ticks==100000);
+    CHECK(wait_ms_calls==1);
+  } else if(mode==6) {
+    CHECK(status==EFI_DEVICE_ERROR);
+    CHECK(reset_calls==1 && !raw_reads && Gu.flrs==1 && Gu.started);
+    CHECK(stall_calls==1 && Gu.ticks==100000);
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "flr_delay.c"
+            binary = Path(directory) / "flr_delay"
+            source.write_text(host, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                exe = Path(directory) / ("flr_delay_" + compiler)
+                compiled = subprocess.run(
+                    [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                     "-Werror", "-pedantic", str(source), "-o", str(exe)],
+                    capture_output=True, text=True)
+                self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                for mode in range(9):
+                    with self.subTest(compiler=compiler, mode=mode):
+                        executed = subprocess.run(
+                            [str(exe), str(mode)], capture_output=True, text=True)
+                        self.assertEqual(executed.returncode, 0,
+                                         executed.stdout + executed.stderr)
+
     def test_dma_failure_retains_uncertain_firmware_outputs(self):
         """Exercise actual GuDmaAllocate against independent EFI error mocks."""
         actual = function("GuDmaAllocate")
