@@ -522,6 +522,12 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
           refreshed.count);
   }
 #endif
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  /* Successful read-only preparation must not fall through to the legacy
+   * single-card global-state refusal or spend GuInit on a dual-card host. */
+  GuLog("ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\n");
+  return EFI_UNSUPPORTED;
+#endif
 #ifndef GU_ACTIVE_SINGLE_TARGET
   if (prepared.inventory.count > 1) {
     GuLog("ACTIVE_EXECUTION=REFUSED REASON=MULTI_NVIDIA_GLOBAL_STATE NVIDIA_COUNT=%zu SELECTED=%zu BEFORE_GU_INIT=1\n",
@@ -535,10 +541,6 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   if(prepared.selected_count!=1 || prepared.inventory.count<1 ||
      prepared.selected_indices[0]>=prepared.inventory.count)
     return EFI_UNSUPPORTED;
-#endif
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
-  GuLog("ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\n");
-  return EFI_UNSUPPORTED;
 #endif
   selected = &prepared.inventory.nvidia[prepared.selected_indices[0]];
   if (!GuIsSupportedPciId(selected->pci_id)) return EFI_UNSUPPORTED;
