@@ -39,6 +39,8 @@ HARNESS = r"""
 #include "pci_master_policy.h"
 typedef uint32_t UINT32;
 typedef uint64_t UINT64;
+typedef size_t UINTN;
+#define VOID void
 typedef int EFI_STATUS;
 typedef int BOOLEAN;
 #define TRUE 1
