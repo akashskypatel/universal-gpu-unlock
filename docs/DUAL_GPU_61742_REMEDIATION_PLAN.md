@@ -1,5 +1,13 @@
 # RTX 4090 + RTX 3080 / Windows 617.42 — Compatibility and Remediation Plan
 
+## Current original Windows 617.42 Falcon-candidate disposition (2026-11-11)
+
+**Situation.** The owner's MD5-pinned original-driver report `nvlddmkm-61742-booter-discovery-20261111-152141-767061.txt` completed all three selected decompilations. `FUN_1400e62e0` clears a 24-byte bitset for 0xB5 entries, and `FUN_1400e7440` checks and sets individual bits. `FUN_1406a2460` conditionally uses this bitset during guarded state transitions. It also reads an object pointer from `param_1+0x2138`.
+
+**Assessment.** The two previously observed `[R15+0x170]` guard calls are still machine evidence but are **not proven** to invoke the published Falcon loader object. The C decompilation does not establish `R15` provenance or whether `R8=[RSP+0x58]` passes the 24-byte bitset at both call sites. No authentic original Windows production Booter IMAGE/HEADER/SIG/PATCH source, descriptor, signature acceptance or per-card selection has been established. The Windows repository now contains a narrowly bounded, read-only machine-listing probe and five source-independent host evidence-boundary checks; the owner command and current disposition are in `research/nvidia_unlock_evidence_to_execution_map.md`. This research does **not** change any UEFI implementation, current single-card one-shot guard, second-card dispatch policy, peer protection or recovery assertion.
+
+**Recommendation.** Await one original-driver, exact-function Ghidra listing of `FUN_1406a2460` and the two known guard-call windows, and compare R15/R8 sources against the already published Falcon nested-object constructor. Do not repeat the completed bitset decompilations or broad scans. Keep all original signed-loader and physical Stop/recovery blockers OPEN; preserve `CAN_DETACH=false CAN_UNLOCK=false CAN_FLASH=false RECOVERY_VERIFIED=false`. No physical owner operation is requested for this software disposition.
+
 ## Current parent-compatibility review: four upstream commits through a3c6aba (2026-11-11)
 
 **Situation.** [BrightRaider changes](https://github.com/brightraider/universal-gpu-unlock/compare/7e0d176bfe3906adb7afba2a938c2b9c8916915f...a3c6aba1c7f3ef71f4009b33cbdf9508471a7e9b) span **four commits and 25 files**. The table covers all **15 specifically requested files** (some related headers are grouped with their implementations). This fork intentionally supports multiple NVIDIA generations, operator-selected PCI targets and a separately pinned Windows partition. Do **not** cherry-pick the full commit range. This is a current adoption decision, not a sequence of work notes.
