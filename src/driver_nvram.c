@@ -78,6 +78,7 @@ static EFI_STATUS ScanDriverOptions(EFI_RUNTIME_SERVICES *rs, BOOLEAN own[GU_DRI
     }
     if (s == EFI_BUFFER_TOO_SMALL) continue; /* Larger than any entry we write. */
     if (s != EFI_SUCCESS) return s;
+    if (size > sizeof(option)) return EFI_COMPROMISED_DATA;
     if (IsOwnOption(option, size)) {
       own[slot] = TRUE;
       if (*first_own == GU_DRIVER_SCAN_SLOTS) *first_own = slot;
@@ -94,7 +95,8 @@ static EFI_STATUS ReadDriverOrder(EFI_RUNTIME_SERVICES *rs, UINT16 order[GU_DRIV
   *count = 0;
   if (s == EFI_NOT_FOUND) return EFI_SUCCESS;
   if (s != EFI_SUCCESS) return s;
-  if (size % sizeof(UINT16)) return EFI_COMPROMISED_DATA;
+  if (size > GU_DRIVER_ORDER_MAX * sizeof(UINT16) ||
+      size % sizeof(UINT16)) return EFI_COMPROMISED_DATA;
   *count = size / sizeof(UINT16);
   return EFI_SUCCESS;
 }
@@ -144,6 +146,14 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   UINTN slot = reinstall ? first_own : first_free;
   if (slot == GU_DRIVER_SCAN_SLOTS) return EFI_OUT_OF_RESOURCES;
 
+  /* Check the bounded DriverOrder before any persistent SetVariable.
+   * A 129th entry would make the next read and removal fail. */
+  BOOLEAN listed = FALSE;
+  for (UINTN i = 0; i < count; i++) {
+    if (order[i] == slot) { listed = TRUE; break; }
+  }
+  if (!listed && count >= GU_DRIVER_ORDER_MAX) return EFI_OUT_OF_RESOURCES;
+
   UINTN path_bytes = sizeof(DriverFile);
   UINTN file_node_len = 4 + path_bytes;
   UINTN total_dp_len = vol_nodes_size + file_node_len + 4; // plus end node
@@ -184,11 +194,7 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   bs->FreePool(buf);
   if (s != EFI_SUCCESS) return s;
 
-  // Prepend our slot to DriverOrder unless it is already listed.
-  BOOLEAN listed = FALSE;
-  for (UINTN i = 0; i < count; i++) {
-    if (order[i] == slot) { listed = TRUE; break; }
-  }
+  // Prepend our slot to DriverOrder only if preflight confirmed space.
   if (!listed) {
     UINT16 new_order[GU_DRIVER_ORDER_MAX + 1];
     new_order[0] = (UINT16)slot;
