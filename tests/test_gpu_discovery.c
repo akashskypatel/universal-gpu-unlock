@@ -38,8 +38,17 @@ int GuIsTuringDeviceId(UINT16 dev) { (void)dev; return 0; }
 int GuCheckConfig(const UINT32 c[64], UINTN seg, UINTN bus, UINTN dev, UINTN fun, GU_CAPS *caps) {
   if (!c || !caps || seg != 0 || bus > 255 || dev > 31 || fun > 7 ||
       !GuIsSupportedPciId(c[0]) || (c[2] >> 16) != 0x0300) return 0;
+  if(c[1]&4u)return 0;
   memset(caps, 0, sizeof(*caps)); caps->pm = 0x40; caps->pcie = 0x60;
   return 1;
+}
+int GuCheckConfigInitialMaster(const UINT32 c[64], UINTN seg, UINTN bus,
+                                UINTN dev, UINTN fun, GU_CAPS *caps) {
+  UINT32 without_master[64];
+  if(!c)return 0;
+  memcpy(without_master,c,sizeof(without_master));
+  without_master[1]&=~4u;
+  return GuCheckConfig(without_master,seg,bus,dev,fun,caps);
 }
 static EFI_STATUS Read(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN n, VOID *out) {
   MOCK_DEVICE *m = (MOCK_DEVICE *)io->context;
@@ -110,6 +119,10 @@ int main(void) {
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_SUCCESS && init_calls==1);
   CHECK(Gu.handle==handles[1] && Gu.device_id==0x2503U);
+  CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+  ResetActivePair();
+  gpu[1].dwords[1]=4u; /* initial selected UEFI driver Bus Master enabled */
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
   /* The selected GPU may change its own BAR after the active transaction. */
   gpu[1].dwords[4]^=0x1000U;

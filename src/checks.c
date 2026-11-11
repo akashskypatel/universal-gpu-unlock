@@ -16,8 +16,9 @@ static UINT16 ConfigWord(const UINT32 Config[64], UINTN Offset) {
                   ((UINT16)ConfigByte(Config, Offset + 1U) << 8U));
 }
 
-BOOLEAN GuCheckConfig(const UINT32 Config[64], UINTN Segment, UINTN Bus,
-                      UINTN Device, UINTN Function, GU_CAPS *Out) {
+static BOOLEAN GuCheckConfigPolicy(const UINT32 Config[64], UINTN Segment, UINTN Bus,
+                                   UINTN Device, UINTN Function, GU_CAPS *Out,
+                                   BOOLEAN allow_initial_master) {
   GU_CAPS Caps = {0, 0, 0, 0, 0};
   UINT8 Occupied[GU_CONFIG_BYTES - GU_CAP_START] = {0};
   UINT64 Seen = 0;
@@ -35,7 +36,7 @@ BOOLEAN GuCheckConfig(const UINT32 Config[64], UINTN Segment, UINTN Bus,
 
   Command = ConfigWord(Config, PCI_COMMAND_OFFSET);
   if ((Command & EFI_PCI_COMMAND_MEMORY_SPACE) == 0 ||
-      (Command & EFI_PCI_COMMAND_BUS_MASTER) != 0 ||
+      (!allow_initial_master && (Command & EFI_PCI_COMMAND_BUS_MASTER) != 0) ||
       (Config[PCI_EXPANSION_ROM_BASE / 4] & 1U) != 0 ||
       (ConfigWord(Config, PCI_PRIMARY_STATUS_OFFSET) & EFI_PCI_STATUS_CAPABILITY) == 0)
     return FALSE;
@@ -121,4 +122,18 @@ BOOLEAN GuCheckConfig(const UINT32 Config[64], UINTN Segment, UINTN Bus,
   if (Caps.pm == 0 || Caps.pcie == 0) return FALSE;
   *Out = Caps;
   return TRUE;
+}
+
+/* Retain the original cold-state policy everywhere by default. */
+BOOLEAN GuCheckConfig(const UINT32 Config[64], UINTN Segment, UINTN Bus,
+                      UINTN Device, UINTN Function, GU_CAPS *Out) {
+  return GuCheckConfigPolicy(Config, Segment, Bus, Device, Function, Out, FALSE);
+}
+/* A selected card may have bus mastering enabled while its original UEFI
+ * driver owns the PCI controller. Only the pre-release, read-only inspection
+ * may accept that state. Releasing the driver must precede any normalization. */
+BOOLEAN GuCheckConfigInitialMaster(const UINT32 Config[64], UINTN Segment,
+                                    UINTN Bus, UINTN Device, UINTN Function,
+                                    GU_CAPS *Out) {
+  return GuCheckConfigPolicy(Config, Segment, Bus, Device, Function, Out, TRUE);
 }

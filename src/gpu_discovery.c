@@ -413,10 +413,16 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   selected = &prepared.inventory.nvidia[prepared.selected_indices[0]];
   if (!GuIsSupportedPciId(selected->pci_id)) return EFI_UNSUPPORTED;
   s = GuRefreshPreparedGpu(table, &prepared, 0, config, &io);
-  if (s != EFI_SUCCESS ||
-      !GuCheckConfig(config, selected->segment, selected->bus,
-                     selected->device, selected->function, &caps))
+  if (s != EFI_SUCCESS)return EFI_UNSUPPORTED;
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(!GuCheckConfigInitialMaster(config,selected->segment,selected->bus,
+                                  selected->device,selected->function,&caps))
     return EFI_UNSUPPORTED;
+#else
+  if(!GuCheckConfig(config,selected->segment,selected->bus,
+                    selected->device,selected->function,&caps))
+    return EFI_UNSUPPORTED;
+#endif
 
 #ifdef GU_ACTIVE_SINGLE_TARGET
   /* The full inventory is re-enumerated, then read twice before publication.

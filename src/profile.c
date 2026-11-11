@@ -86,8 +86,12 @@ static BOOLEAN Config(VOID) {
       return FALSE;
     }
   }
-  if(!GuCheckConfig(c,s,b,d,f,&caps)) {
-    GuLog("Config: GuCheckConfig failed (seg=%u bus=%u dev=%u fun=%u)\n", (unsigned)s, (unsigned)b, (unsigned)d, (unsigned)f);
+  BOOLEAN accepted=GuCheckConfig(c,s,b,d,f,&caps);
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(!accepted)accepted=GuCheckConfigInitialMaster(c,s,b,d,f,&caps);
+#endif
+  if(!accepted) {
+    GuLog("Config: cold PCI policy refused (seg=%u bus=%u dev=%u fun=%u)\n", (unsigned)s, (unsigned)b, (unsigned)d, (unsigned)f);
     return FALSE;
   }
   if(!GuIsSupportedPciId(c[0]) || ((c[2]>>16)!=0x0300U && (c[2]>>16)!=0x0302U) || (c[4]&~0xfU)!=Gu.bar_base) {
