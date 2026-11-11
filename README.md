@@ -4,6 +4,15 @@ This fork investigates the safety and feasibility of a preboot Tensor Core
 FP32-accumulation issue-rate change on a dual-GPU Windows workstation.
 **It does not currently provide a verified working unlock for this machine.**
 
+**Development scope:** Implement and test the unlock on the research setup
+(RTX 4090 AD102 + RTX 3080 12 GB GA102, Windows NVIDIA 617.42, MSI B850,
+AMD iGPU). Preserve the parent project's dynamic recognition of other GPUs,
+multi-target selection, and shared safety checks. Do not investigate or fix
+defects limited to other hardware if they are also present in the parent
+repository, unless a demonstrated shared-code dependency affects this setup.
+Turing-only signature and loader work is deferred. This scope does not reduce
+the parent's device support list or authorize an active GPU operation.
+
 **Current physical research setup (not a support allowlist):** RTX 4090
 (AD102, ASUS `1043:88e6`) and RTX 3080 12 GB (GA102, ZOTAC
 `19da:b612`), Windows NVIDIA KMD 617.42, MSI B850 Gaming Plus WiFi
@@ -16,8 +25,10 @@ selected preparation do not require either of the owner's GPUs. A detected
 GPU family selects the matching SHA-256-pinned **reference** firmware
 manifest. Availability and format of each image, driver ownership and
 verified recovery remain separate conditions before any active operation.
-The fork currently has a Turing FWSEC v2 parser gap; recognizing a Turing
-GPU does not prove it can be unlocked by this build. Hardware identities
+The Turing FWSEC v2 descriptor has a bounded, structural-only parser, but
+its signed-loader execution is not verified. Recognizing a Turing GPU does
+not prove it can be unlocked by this build. Further Turing work is out of
+scope unless it affects the research setup. Hardware identities
 must be revalidated within the current boot.
 
 ## Current evidence and limitations
