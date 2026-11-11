@@ -126,7 +126,7 @@ jobs:
             done
             # An explicitly selected single GPU must bind only that GPU, and
             # must preserve all other NVIDIA PCI state before/after mutation.
-            printf '#define GU_GPU_SELECTION_COUNT 1U\n#define GU_GPU_SELECTION_LOCATIONS { { 1U,7U,4U,1U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
+            printf '#define GU_GPU_SELECTION_COUNT 1U\n#define GU_GPU_SELECTION_LOCATIONS { { 0U,7U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_one_target_active_$compiler"
               "$RUNNER_TEMP/test_one_target_active_$compiler"

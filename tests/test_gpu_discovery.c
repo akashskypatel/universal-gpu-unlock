@@ -99,9 +99,14 @@ static void ResetPair(void) {
 #include "../src/gpu_discovery.c"
 
 #if defined(GU_ACTIVE_SINGLE_TARGET)
+/* The production single-target path supports the user's segment-0 PCI cards.
+ * Earlier mock Segment=1 is intentionally not accepted by GuCheckConfig. */
+static void ResetActivePair(void) {
+  ResetPair();gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;
+}
 int main(void) {
   EFI_STATUS status;
-  ResetPair();
+  ResetActivePair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_SUCCESS && init_calls==1);
   CHECK(Gu.handle==handles[1] && Gu.device_id==0x2503U);
@@ -112,17 +117,20 @@ int main(void) {
   /* Any change to the other card must fail without being repaired. */
   gpu[0].dwords[4]^=0x1000U;
   CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
-  ResetPair();
+  ResetActivePair();
   count=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED &&
         init_calls==0);
-  ResetPair();
+  ResetActivePair();
   gpu[0].bus=gpu[1].bus;gpu[0].device=gpu[1].device;
   gpu[0].function=gpu[1].function;gpu[0].segment=gpu[1].segment;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED &&
         init_calls==0);
-  ResetPair();
+  ResetActivePair();
   gpu[0].drift_nonselected_on_full_read=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED &&
+        init_calls==0);
+  ResetPair(); /* wrong segment/device/function for explicitly selected PCI target */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED &&
         init_calls==0);
   printf("PASS exact single-target active binding with protected peer: %u checks\n",checks);
