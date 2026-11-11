@@ -609,7 +609,7 @@ static EFI_STATUS NormalizeMasterAfterStop(VOID) {
   UINT32 config[64];UINT64 before=0,after=0;
   const UINT64 master=EFI_PCI_IO_ATTRIBUTE_BUS_MASTER;
   if(!Plan.ready||!Plan.mutated||Plan.stage!=3||Plan.claimed||
-     Gu.owned||Gu.fault||Plan.master_normalized)return EFI_NOT_READY;
+     Gu.owned||Gu.fault||Gu.flrs!=0||Plan.master_normalized)return EFI_NOT_READY;
   if(GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS)return EFI_NOT_READY;
   EFI_STATUS s=ReadConfigMode(config,TRUE);
   if(s!=EFI_SUCCESS||!ConfigStable(config))return EFI_NOT_READY;
