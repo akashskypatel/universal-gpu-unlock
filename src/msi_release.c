@@ -10,6 +10,7 @@
 #include "profile.h"
 #include "sha256.h"
 #include "gpu_device_path.h"
+#include "gpu_discovery.h"
 #include "compat/compat.h"
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/DriverBinding.h>
@@ -565,7 +566,8 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
      !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)return EFI_UNSUPPORTED;
   Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;Plan.key_wait=Plan.keys->WaitForKey;
   if(!pci||!GuAd104ColdEntry())return EFI_NOT_READY;
-  EFI_STATUS s=Gops(TRUE);
+  EFI_STATUS s=GuVerifyActivePeers(t);
+  if(s==EFI_SUCCESS)s=Gops(TRUE);
   if(s!=EFI_SUCCESS) GuLog("Preflight failed at Gops(): %#llx\n", (unsigned long long)s);
   if(s==EFI_SUCCESS) { s=Alive(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Alive(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=Bar(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Bar(): %#llx\n", (unsigned long long)s); }
@@ -685,6 +687,7 @@ EFI_STATUS GuMsiRelease(VOID) {
     if(s==EFI_SUCCESS&&!Equal(c,Plan.config,sizeof(c)))s=EFI_NOT_READY;
     if(s==EFI_SUCCESS&&!GuAd104ColdEntry())s=EFI_NOT_READY;
     if(s==EFI_SUCCESS)s=Gops(FALSE);
+    if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
     EFI_TPL old=b->RaiseTPL(TPL_NOTIFY);
     if(s==EFI_SUCCESS)s=Snapshot(&Current);
     if(s==EFI_SUCCESS&&!Expected(stage-1,FALSE)) {
@@ -710,9 +713,12 @@ EFI_STATUS GuMsiRelease(VOID) {
     }
     if(s==EFI_SUCCESS)s=Alive();
     if(s==EFI_SUCCESS)s=Gops(FALSE);
+    if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
     if(s!=EFI_SUCCESS)return s;
   }
-  EFI_STATUS s=ClaimRestore();
+  EFI_STATUS s=GuVerifyActivePeers(Plan.table);
+  if(s!=EFI_SUCCESS)return s;
+  s=ClaimRestore();
   if(s==EFI_SUCCESS&&!GuMsiReleased())s=EFI_NOT_READY;
   return s;
 }
@@ -756,6 +762,7 @@ EFI_STATUS GuMsiFinish(VOID) {
   if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||!GuMsiReleased()){
     NOTE("MSI finish refused before close\n");return EFI_NOT_READY;
   }
+  if(GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS)return EFI_NOT_READY;
   if(!GuMsiHardwareVerifiedBeforeClose()){
     NOTE("MSI finish refused: pre-close silicon check failed\n");return EFI_DEVICE_ERROR;
   }
@@ -784,5 +791,6 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
   /* GuMsiFinish already verified the entire post-close protocol graph.
    * Do not scan it a second time or read BAR0 after CloseProtocol. */
   return Alive()==EFI_SUCCESS&&Gops(FALSE)==EFI_SUCCESS&&
-         ReadConfig(c)==EFI_SUCCESS&&ConfigStable(c);
+         ReadConfig(c)==EFI_SUCCESS&&ConfigStable(c)&&
+    GuVerifyActivePeers(Plan.table)==EFI_SUCCESS;
 }

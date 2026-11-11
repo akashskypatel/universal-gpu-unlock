@@ -1,7 +1,8 @@
 param(
     [string]$VcVars,
     [string]$SelectionBdf,
-    [string]$SelectionBdfs
+    [string]$SelectionBdfs,
+    [switch]$EnableSingleTargetExecution
 )
 $ErrorActionPreference = 'Stop'
 if (-not $SelectionBdf -and -not $SelectionBdfs) {
@@ -38,6 +39,9 @@ try {
     New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
     . (Join-Path $PSScriptRoot 'Gpu-Selection-Build.ps1')
     $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $buildDir
+    if ($EnableSingleTargetExecution -and $selection.Count -ne 1) {
+        throw "Single-target execution requires exactly one explicit -SelectionBdf"
+    }
 
     $sources = @(
         'dxe_main.c',
@@ -70,8 +74,13 @@ try {
     $clFlags = '/nologo /O2 /Oi /GS- /Gs65536 /Zl /c /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild_dxe /Icompat /Ivendor /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
 
     if ($selection.Count) {
-        # Selected builds are intentionally non-mutating preparation artifacts.
-        $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY /DGU_HOST_TEST_PROFILE'
+        if ($EnableSingleTargetExecution) {
+            # Opt-in source/build validation only. Live hardware activation
+            # still depends on target-specific ownership and recovery evidence.
+            $clFlags += ' /DGU_ACTIVE_SINGLE_TARGET'
+        } else {
+            $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY /DGU_HOST_TEST_PROFILE'
+        }
     }
 
     foreach ($src in $sources) {
@@ -88,7 +97,7 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $binaryName = if ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
+    $binaryName = if ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
     $compileCmds += "link /nologo /subsystem:efi_boot_service_driver /entry:AdaUnlockDriverEntryPoint /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_dxe\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
@@ -101,7 +110,7 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'DXE EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int][bool]$selection.Count) MULTI_GPU_MUTATION_ALLOWED=0"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $EnableSingleTargetExecution)) SINGLE_TARGET_ACTIVE=$([int][bool]$EnableSingleTargetExecution) MULTI_GPU_MUTATION_ALLOWED=0"
 } finally {
     Pop-Location
 }
