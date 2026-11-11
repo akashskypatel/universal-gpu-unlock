@@ -711,13 +711,13 @@ int main(int argc,char **argv) {
     CHECK(!unmaps && !buffer_frees);
   } else {
     CHECK(cpu==NULL && dma==0 && Gu.dma_count==0);
-    int retain=(mode==1||mode==2||mode==4||mode==5||
+    int retain=(mode==1||mode==2||mode==3||mode==4||mode==5||
                 mode==6||mode==8||mode==9);
     CHECK((Gu.retained!=0)==retain);
     CHECK((Gu.allocations!=NULL)==(retain && mode!=2));
     CHECK(unmaps==(unsigned)(mode>=7&&mode<=9));
-    CHECK(buffer_frees==(unsigned)(mode==3||mode==7||mode==9));
-    CHECK(pool_frees==(unsigned)(mode==0||mode==2||mode==3||mode==7));
+    CHECK(buffer_frees==(unsigned)(mode==7||mode==9));
+    CHECK(pool_frees==(unsigned)(mode==0||mode==2||mode==7));
   }
   return 0;
 }

@@ -117,18 +117,17 @@ EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   memset(Entry->cpu,0,Entry->bytes);Mapped=Entry->bytes;
   Status=Gu.pci->Map(Gu.pci,EfiPciIoOperationBusMasterCommonBuffer,Entry->cpu,
     &Mapped,&Entry->dma,&Entry->mapping);
-  if(!EFI_ERROR(Status))Entry->mapped=TRUE;
-  /* An error with a mapping handle, DMA address or changed length is
-   * uncertain. Keep both the mapping and buffer until an independent
-   * recovery path can establish that device access has stopped. */
-  if(EFI_ERROR(Status) &&
-     (Entry->mapping || Entry->dma || Mapped!=Entry->bytes)) {
+  /* A failed Map call cannot prove that a device mapping was absent,
+   * even when the firmware left every output unchanged. Never free a
+   * buffer that the GPU may still be able to access. */
+  if(EFI_ERROR(Status)) {
     Entry->next=Gu.allocations;Gu.allocations=Entry;Gu.retained=TRUE;
     return Status;
   }
-  if(EFI_ERROR(Status) || Mapped!=Entry->bytes || !Entry->dma ||
+  Entry->mapped=TRUE;
+  if(Mapped!=Entry->bytes || !Entry->dma ||
      (Entry->dma&4095) || Entry->dma>0xffffffffULL || Entry->bytes-1>0xffffffffULL-Entry->dma) {
-    if(!EFI_ERROR(Status))Status=EFI_UNSUPPORTED;
+    Status=EFI_UNSUPPORTED;
     if(Entry->mapped && EFI_ERROR(Gu.pci->Unmap(Gu.pci,Entry->mapping))) {
       Entry->next=Gu.allocations;Gu.allocations=Entry;Gu.retained=TRUE;return Status;
     }
