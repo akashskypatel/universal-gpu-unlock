@@ -169,7 +169,12 @@ int GuGpuExecBeginOwned(GU_GPU_EXEC_SEQUENCE *s,size_t step,
       GuGpuExecAbort(s);return GU_GPU_EXEC_BLOCKED;
     }
   *owner=next;
-  return GuGpuExecBegin(s,step,all,count);
+  /* The claim is spent. Commit the already checked transition directly.
+   * Calling GuGpuExecBegin here repeats CheckNext while this owner is still
+   * pending, which correctly fails the new pending-owner invariant. */
+  s->active_step=step;
+  s->targets[s->order[step]].phase=GU_GPU_EXEC_ACTIVE;
+  return GU_GPU_EXEC_OK;
 }
 int GuGpuExecFinish(GU_GPU_EXEC_SEQUENCE *s,size_t step,
                     const GU_GPU_EXEC_OBSERVATION *all,size_t count,
