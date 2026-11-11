@@ -50,6 +50,9 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   s = GuBootLoadAssets();
   if (s != EFI_SUCCESS || Gu.fault) goto finish;
 
+  stage = "dxe-read-only-diagnostic";
+  (VOID)GuDiagnosticScan();
+  if(Gu.fault){s=EFI_DEVICE_ERROR;goto finish;}
   stage = "dxe-cold-profile";
   s = GuAd104Prepare();
   if (s != EFI_SUCCESS || Gu.fault) goto finish;

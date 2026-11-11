@@ -26,6 +26,8 @@ on:
       - 'src/vendor/prep_610.c'
       - 'src/msi_release.c'
       - 'src/unlock_execution.c'
+      - 'src/profile.h'
+      - 'tests/test_profile_asset_contract.py'
       - 'src/boot_io.c'
       - 'src/boot_io.h'
       - 'tests/test_boot_binding_contract.py'
@@ -121,6 +123,7 @@ jobs:
             python3 -m unittest discover -s tests -p test_dxe_ready_to_boot.py -v
             python3 -m unittest discover -s tests -p test_unlock_execution_contract.py -v
             python3 -m unittest discover -s tests -p test_boot_binding_contract.py -v
+            python3 -m unittest discover -s tests -p test_profile_asset_contract.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_$compiler"

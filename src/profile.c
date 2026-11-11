@@ -7,43 +7,35 @@
 #include "port.h"
 #include "prom_identity.h"
 
-static const struct {
-  const char *name,*hash;
-  UINTN bytes;
-} PinsAd102[5]={
- {"gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672},
- {"gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin","44c36b2d6b3424e53e18f3e55db85c833655de071ce66ce42749588a4a7dc8cb",64000},
- {"gpu-unlock/610.43.03/gsp_ga10x.bin","572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a",84277400},
- {"gpu-unlock/610.43.03/gsp_boot_ad102.bin","45d6335a8185d6ff13e8d1484cea73f68d3d13aa1c19dc080ed1c3482dd5bac0",36864},
- {"gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin","83f8f3f1f5f9496e0ea8fc7103c2beb64d0b6de2f5ffe725f13514de5a95fa42",84}
-};
-
-static const struct {
-  const char *name,*hash;
-  UINTN bytes;
-} PinsGa102[5]={
- {"gpu-unlock/610.43.03/booter_load_ga102.bin","056cbc064a888f80717726c54d7f64fcd68044d123870c95a74f37f4975dcaa4",61256},
- {"gpu-unlock/610.43.03/v67-ga102-610.43.03.bin","2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197",64000},
- {"gpu-unlock/610.43.03/gsp_ga10x.bin","572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a",84277400},
- {"gpu-unlock/610.43.03/gsp_boot_ga102.bin","3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768",24576},
- {"gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin","cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15",84}
-};
-
+static const GU_ARCH_ASSETS AdaAssets={{
+    {L"\\AD102-ASSETS\\booter_load_ad102.bin","gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672U},
+    {L"\\AD102-ASSETS\\v67-ad102-610.43.03-four-plm.bin","gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin","44c36b2d6b3424e53e18f3e55db85c833655de071ce66ce42749588a4a7dc8cb",64000U},
+    {L"\\AD102-ASSETS\\gsp_ga10x.bin","gpu-unlock/610.43.03/gsp_ga10x.bin","572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a",84277400U},
+    {L"\\AD102-ASSETS\\gsp_boot_ad102.bin","gpu-unlock/610.43.03/gsp_boot_ad102.bin","45d6335a8185d6ff13e8d1484cea73f68d3d13aa1c19dc080ed1c3482dd5bac0",36864U},
+    {L"\\AD102-ASSETS\\gsp_boot_desc_ad102.bin","gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin","83f8f3f1f5f9496e0ea8fc7103c2beb64d0b6de2f5ffe725f13514de5a95fa42",84U}
+  },L"\\GA102-ASSETS\\gsp_ga10x.bin"};
+static const GU_ARCH_ASSETS AmpereAssets={{
+    {L"\\GA102-ASSETS\\booter_load_ga102.bin","gpu-unlock/610.43.03/booter_load_ga102.bin","056cbc064a888f80717726c54d7f64fcd68044d123870c95a74f37f4975dcaa4",61256U},
+    {L"\\GA102-ASSETS\\v67-ga102-610.43.03.bin","gpu-unlock/610.43.03/v67-ga102-610.43.03.bin","2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197",64000U},
+    {L"\\GA102-ASSETS\\gsp_ga10x.bin","gpu-unlock/610.43.03/gsp_ga10x.bin","572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a",84277400U},
+    {L"\\GA102-ASSETS\\gsp_boot_ga102.bin","gpu-unlock/610.43.03/gsp_boot_ga102.bin","3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768",24576U},
+    {L"\\GA102-ASSETS\\gsp_boot_desc_ga102.bin","gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin","cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15",84U}
+  },L"\\AD102-ASSETS\\gsp_ga10x.bin"};
+const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {
+  if(Gu.is_turing)return NULL;
+  if(Gu.is_ampere&&GuIsAmpereDeviceId(Gu.device_id))return &AmpereAssets;
+  if(!Gu.is_ampere&&GuIsAdaDeviceId(Gu.device_id))return &AdaAssets;
+  return NULL;
+}
 BOOLEAN GuAd104AssetsValid(VOID) {
-  if (Gu.is_turing) {
-    /* Turing asset tolerance during staging */
-    for(UINTN i=0;i<5;i++) {
-      if(!GuAssets[i].name || GuAssets[i].firmware.size==0) return FALSE;
-    }
-    return TRUE;
-  }
-  for(UINTN i=0;i<5;i++) {
-    const char *name = Gu.is_ampere ? PinsGa102[i].name : PinsAd102[i].name;
-    const char *hash = Gu.is_ampere ? PinsGa102[i].hash : PinsAd102[i].hash;
-    UINTN bytes = Gu.is_ampere ? PinsGa102[i].bytes : PinsAd102[i].bytes;
-    if(!GuAssets[i].name || strcmp(GuAssets[i].name,name) ||
-       GuAssets[i].firmware.size!=bytes ||
-       !GuHashMatches(GuAssets[i].firmware.data,bytes,hash))return FALSE;
+  const GU_ARCH_ASSETS *arch=GuGetArchAssets();
+  if(!arch)return FALSE;
+  for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
+    const GU_ARCH_ASSET *a=&arch->entries[i];
+    if(!GuAssets[i].name||strcmp(GuAssets[i].name,a->name)||
+       GuAssets[i].firmware.size!=a->bytes||!GuAssets[i].firmware.data||
+       !GuHashMatches(GuAssets[i].firmware.data,a->bytes,a->sha256))
+      return FALSE;
   }
   return TRUE;
 }
@@ -131,6 +123,32 @@ BOOLEAN GuAd104ColdEntry(VOID) {
   UINT32 ss0,ss1;
   return !Gu.started && !Gu.fault && !Gu.retained && Config() &&
     Registers(&ss0,&ss1) && GuEntrySelectorsMatch(ss0,ss1);
+}
+/* A read-only firmware and selector report; never set qualification latches. */
+EFI_STATUS GuDiagnosticScan(VOID) {
+  UINT32 before0=0,before1=0,after0=0,after1=0;
+  struct gpu_unlock_fwsec fw;
+  if(Gu.started||Gu.owned||Gu.retained||Gu.profile_verified||Gu.fault)
+    return EFI_NOT_READY;
+  BOOLEAN config_ok=Config();
+  BOOLEAN regs_ok=config_ok&&Registers(&before0,&before1);
+  BOOLEAN assets_ok=GuAd104AssetsValid();
+  GuLog("DIAGNOSTIC CONFIG=%u REGISTERS=%u PINNED_ASSETS=%u\n",
+        (unsigned)config_ok,(unsigned)regs_ok,(unsigned)assets_ok);
+  if(!config_ok||!regs_ok||!assets_ok)return EFI_NOT_READY;
+  VOID *prom=GuAlloc(1048576U);
+  if(!prom)return EFI_OUT_OF_RESOURCES;
+  GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576U);
+  BOOLEAN prom_ok=!Gu.fault&&GuAd104PromMatches(prom,1048576U);
+  int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
+  BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
+  BOOLEAN cfg2=Config();
+  BOOLEAN reg2=cfg2&&Registers(&after0,&after1);
+  BOOLEAN stable=cfg2&&reg2&&before0==after0&&before1==after1;
+  GuLog("DIAGNOSTIC PROM=%u FWSEC_PARSE=%d FWSEC_MATCH=%u STABLE=%u SIGNATURE_AUTHENTICATED=0\n",
+        (unsigned)prom_ok,parsed,(unsigned)fw_ok,(unsigned)stable);
+  GuFree(prom);
+  return !Gu.fault&&prom_ok&&fw_ok&&stable?EFI_SUCCESS:EFI_COMPROMISED_DATA;
 }
 EFI_STATUS GuAd104Prepare(VOID) {
   UINT32 ss0,ss1,after0,after1;VOID *prom=NULL;struct gpu_unlock_fwsec fw;

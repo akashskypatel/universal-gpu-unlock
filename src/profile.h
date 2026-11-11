@@ -2,6 +2,19 @@
 #pragma once
 #include "port.h"
 #include "vendor/vbios_610.h"
+#define GU_ASSET_COUNT 5U
+typedef struct {
+  const CHAR16 *path;
+  const char *name;
+  const char *sha256;
+  UINTN bytes;
+} GU_ARCH_ASSET;
+typedef struct {
+  GU_ARCH_ASSET entries[GU_ASSET_COUNT];
+  const CHAR16 *alternate_gsp_path;
+} GU_ARCH_ASSETS;
+const GU_ARCH_ASSETS *GuGetArchAssets(VOID);
+EFI_STATUS GuDiagnosticScan(VOID);
 BOOLEAN GuAd104AssetsValid(VOID);
 BOOLEAN GuAd104PromMatches(const VOID *, UINTN);
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *);
