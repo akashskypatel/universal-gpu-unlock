@@ -2,11 +2,12 @@
 /* Compare two separately bounded UEFI device paths by complete nodes. */
 #pragma once
 #include <stddef.h>
+#include <string.h>
 /* Inspect the full bounded path before any prefix comparison. A mismatch
  * at the first node must not conceal a malformed later node. The caller's
  * byte bound may exceed the actual path size (UEFI protocol handle), so
  * the first valid END_ENTIRE terminates parsing. */
-static inline int GuDevicePathValid(const unsigned char *path,size_t bytes)
+static inline size_t GuDevicePathLength(const unsigned char *path,size_t bytes)
 {
   size_t pos=0;
   if(!path||bytes<4)return 0;
@@ -15,10 +16,25 @@ static inline int GuDevicePathValid(const unsigned char *path,size_t bytes)
     size_t length=(size_t)path[pos+2]+((size_t)path[pos+3]<<8);
     if(length<4||length>bytes-pos)return 0;
     if(path[pos]==0x7f)
-      return path[pos+1]==0xff&&length==4;
+      return path[pos+1]==0xff&&length==4?pos+length:0;
     pos+=length;
   }
   return 0;
+}
+static inline int GuDevicePathValid(const unsigned char *path,size_t bytes)
+{
+  return GuDevicePathLength(path,bytes)!=0;
+}
+/* A saved survivor must keep the exact complete path it had before Stop.
+ * Byte-identical paths, not pointer identity or a matching prefix, are
+ * required. The max input bound may exceed the true UEFI path length. */
+static inline int GuDevicePathUnchanged(const unsigned char *saved,
+    size_t saved_bytes,const unsigned char *current,size_t max_current_bytes)
+{
+  size_t actual=GuDevicePathLength(current,max_current_bytes);
+  if(!saved||!actual||actual!=saved_bytes||
+     !GuDevicePathValid(saved,saved_bytes))return 0;
+  return memcmp(saved,current,actual)==0;
 }
 static inline int GuDevicePathHasPrefix(const unsigned char *parent,
                                        size_t parent_bytes,

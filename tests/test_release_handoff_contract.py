@@ -112,6 +112,19 @@ class HandoverOrderTests(unittest.TestCase):
         self.assertNotIn("Snapshot(", handover)
         self.assertNotIn("GuRead32(", handover)
 
+    def test_gop_survivor_path_is_pinned_before_vendor_stop(self):
+        gops = function_body("Gops")
+        release = function_body("GuMsiRelease")
+        self.assertIn("GuDevicePathLength(", gops)
+        self.assertIn("Plan.survivor_path_bytes[k]=path_bytes;", gops)
+        self.assertIn("memcpy(Plan.survivor_paths[k],live_path,path_bytes);", gops)
+        self.assertIn("GuDevicePathUnchanged(", gops)
+        self.assertLess(gops.index("if(first) {", gops.index("EFI_DEVICE_PATH_PROTOCOL *live_path")),
+                        gops.index("GuDevicePathUnchanged("))
+        self.assertLess(release.index("Gops(FALSE)"),release.index("DisconnectController("))
+        self.assertIn("Gops(FALSE)",release[release.index("DisconnectController("):])
+        self.assertIn("Gops(FALSE)",function_body("GuMsiReadyForWindows"))
+
     def test_amd_owner_validation_is_read_only(self):
         owner = function_body("ReadOnlyAmdConsoleOwnership")
         paths = function_body("AmdConsoleVariable")

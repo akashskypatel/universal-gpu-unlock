@@ -145,6 +145,32 @@ int main(void) {
     };
     assert(GuDevicePathHasPrefix(target,sizeof(target),bad_end,sizeof(bad_end))==-1);
   }
+  /* Surviving GOP paths must remain identical across vendor Stop and
+   * Windows handover. The owner may not be silently retargeted. */
+  {
+    static const unsigned char original[]={
+      2,1,8,0,1,2,3,4,1,1,6,0,4,0,
+      2,3,8,0,0,3,1,0x80,0x7f,0xff,4,0
+    };
+    unsigned char changed[sizeof(original)];
+    memcpy(changed,original,sizeof(original));
+    assert(GuDevicePathLength(original,sizeof(original))==sizeof(original));
+    assert(GuDevicePathUnchanged(original,sizeof(original),
+            changed,sizeof(changed))==1);
+    changed[16]=9; /* Alter the ADR payload while preserving path length. */
+    assert(GuDevicePathValid(changed,sizeof(changed))==1);
+    assert(GuDevicePathUnchanged(original,sizeof(original),
+            changed,sizeof(changed))==0);
+    changed[16]=8;
+    changed[sizeof(changed)-3]=1; /* END_INSTANCE, not END_ENTIRE. */
+    assert(GuDevicePathUnchanged(original,sizeof(original),
+            changed,sizeof(changed))==0);
+    assert(GuDevicePathUnchanged(original,sizeof(original)-1,
+            original,sizeof(original))==0);
+    assert(GuDevicePathUnchanged(original,sizeof(original),
+            original,sizeof(original)-1)==0);
+    assert(GuDevicePathLength(NULL,sizeof(original))==0);
+  }
   puts("STATUS=COMPLETE DEVICE_PATH_AMD_OWNERSHIP_AND_BOUNDS");
   return 0;
 }

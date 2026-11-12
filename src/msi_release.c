@@ -23,6 +23,7 @@
 
 #define MAX_EDGES 4096
 #define MAX_SURVIVOR_GOPS 16
+#define MAX_SURVIVOR_PATH_BYTES 1024
 typedef struct {EFI_HANDLE handle,agent,controller;EFI_GUID protocol;UINT32 attributes,count;} EDGE;
 typedef struct {UINTN count;EDGE edges[MAX_EDGES];} GRAPH;
 typedef struct {
@@ -38,6 +39,10 @@ typedef struct {
   EFI_HANDLE survivors[MAX_SURVIVOR_GOPS];
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE survivor_modes[MAX_SURVIVOR_GOPS];
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION survivor_info[MAX_SURVIVOR_GOPS];
+  /* Immutable pre-Stop path bytes. Reject retargeted GOPs with stable
+   * handles and modes but changed underlying PCI device paths. */
+  UINT8 survivor_paths[MAX_SURVIVOR_GOPS][MAX_SURVIVOR_PATH_BYTES];
+  UINTN survivor_path_bytes[MAX_SURVIVOR_GOPS];
   UINTN survivor_count;
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized;
 } PLAN;
@@ -413,21 +418,36 @@ static EFI_STATUS Gops(BOOLEAN first) {
                 !Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))) {
         s=EFI_NOT_READY;break;
       }
-    } else if(first) {
-      if(Plan.survivor_count==MAX_SURVIVOR_GOPS){s=EFI_BAD_BUFFER_SIZE;break;}
-      UINTN k=Plan.survivor_count++;
-      Plan.survivors[k]=handles[i];
-      Plan.survivor_modes[k]=*g->Mode;
-      Plan.survivor_info[k]=*g->Mode->Info;
     } else {
-      UINTN k=0;
-      while(k<Plan.survivor_count && Plan.survivors[k]!=handles[i])k++;
-      if(k==Plan.survivor_count||seen[k]||
-         !Equal(g->Mode,&Plan.survivor_modes[k],sizeof(*g->Mode))||
-         !Equal(g->Mode->Info,&Plan.survivor_info[k],sizeof(*g->Mode->Info))){
-        s=EFI_NOT_READY;break;
+      EFI_DEVICE_PATH_PROTOCOL *live_path=NULL;
+      s=Interface(handles[i],&PathGuid,(VOID **)&live_path);
+      if(s!=EFI_SUCCESS||!live_path){s=EFI_NOT_READY;break;}
+      if(first) {
+        if(Plan.survivor_count==MAX_SURVIVOR_GOPS){s=EFI_BAD_BUFFER_SIZE;break;}
+        UINTN path_bytes=(UINTN)GuDevicePathLength(
+            (const unsigned char *)live_path,4096u);
+        if(!path_bytes||path_bytes>MAX_SURVIVOR_PATH_BYTES){
+          s=EFI_BAD_BUFFER_SIZE;break;
+        }
+        UINTN k=Plan.survivor_count++;
+        Plan.survivors[k]=handles[i];
+        Plan.survivor_modes[k]=*g->Mode;
+        Plan.survivor_info[k]=*g->Mode->Info;
+        Plan.survivor_path_bytes[k]=path_bytes;
+        memcpy(Plan.survivor_paths[k],live_path,path_bytes);
+      } else {
+        UINTN k=0;
+        while(k<Plan.survivor_count && Plan.survivors[k]!=handles[i])k++;
+        if(k==Plan.survivor_count||seen[k]||
+           !GuDevicePathUnchanged(Plan.survivor_paths[k],
+              (size_t)Plan.survivor_path_bytes[k],
+              (const unsigned char *)live_path,4096u)||
+           !Equal(g->Mode,&Plan.survivor_modes[k],sizeof(*g->Mode))||
+           !Equal(g->Mode->Info,&Plan.survivor_info[k],sizeof(*g->Mode->Info))){
+          s=EFI_NOT_READY;break;
+        }
+        seen[k]=TRUE;
       }
-      seen[k]=TRUE;
     }
   }
   if(handles && b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
