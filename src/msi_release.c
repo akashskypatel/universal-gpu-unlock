@@ -998,9 +998,13 @@ EFI_STATUS GuMsiFinish(VOID) {
   Plan.claimed=FALSE;Gu.owned=FALSE;
   s=Snapshot(&Current);
   if(s==EFI_SUCCESS&&!Expected(3,FALSE)){s=EFI_NOT_READY;GraphDiff(3,FALSE);}
-  /* The exclusive PCI claim is gone; verify that the AMD console is
-   * still linked to the same read-only PCI display owner before handover. */
+  /* A successful CloseProtocol does not prove that the surviving GOP
+   * handles still refer to their pre-Stop paths. Reject drift here rather
+   * than return success and defer the failure until Windows handover. */
+  if(s==EFI_SUCCESS)s=Alive();
+  if(s==EFI_SUCCESS)s=Gops(FALSE);
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
+  if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
   if(s!=EFI_SUCCESS){
     Plan.hardware_verified=FALSE;
     NOTE("MSI finish after close status=%#llx graph=%zu\n",(unsigned long long)s,(size_t)Current.count);

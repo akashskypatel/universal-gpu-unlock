@@ -52,6 +52,19 @@ class HandoverOrderTests(unittest.TestCase):
         self.assertIn("Plan.hardware_verified=FALSE;", finish[close:])
         self.assertIn("Snapshot(&Current)", finish[close:])
         self.assertIn("Expected(3,FALSE)", finish[close:])
+        # Post-close success must include a fresh survivor path comparison
+        # and independent AMD/peer ownership. A later handover check alone
+        # must not hide a successful finish with a changed GOP path.
+        after = finish[close:]
+        path_check = after.index("Gops(FALSE)")
+        amd_check = after.index("ReadOnlyAmdConsoleOwnership()")
+        peer_check = after.index("GuVerifyActivePeers(Plan.table)")
+        self.assertLess(after.index("Expected(3,FALSE)"), path_check)
+        self.assertLess(path_check, amd_check)
+        self.assertLess(amd_check, peer_check)
+        self.assertLess(peer_check, after.index("return s;"))
+        self.assertIn("Plan.hardware_verified=FALSE;", after)
+        self.assertNotIn("GuRead32(", after)
 
     def test_handover_retains_ownership_checks_without_postclose_mmio(self):
         handover = function_body("GuMsiReadyForWindows")
