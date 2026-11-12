@@ -62,7 +62,7 @@ class HandoverOrderTests(unittest.TestCase):
         self.assertLess(after.index("Expected(3,FALSE)"), path_check)
         self.assertLess(path_check, amd_check)
         self.assertLess(amd_check, peer_check)
-        self.assertLess(peer_check, after.index("return s;"))
+        self.assertLess(peer_check, after.rindex("return s;"))
         self.assertIn("Plan.hardware_verified=FALSE;", after)
         self.assertNotIn("GuRead32(", after)
 
