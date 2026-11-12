@@ -157,11 +157,11 @@ int main(void) {
     assert(GuDevicePathLength(original,sizeof(original))==sizeof(original));
     assert(GuDevicePathUnchanged(original,sizeof(original),
             changed,sizeof(changed))==1);
-    changed[16]=9; /* Alter the ADR payload while preserving path length. */
+    changed[18]=9; /* Alter the ADR payload, not the node-length field. */
     assert(GuDevicePathValid(changed,sizeof(changed))==1);
     assert(GuDevicePathUnchanged(original,sizeof(original),
             changed,sizeof(changed))==0);
-    changed[16]=8;
+    changed[18]=0;
     changed[sizeof(changed)-3]=1; /* END_INSTANCE, not END_ENTIRE. */
     assert(GuDevicePathUnchanged(original,sizeof(original),
             changed,sizeof(changed))==0);
