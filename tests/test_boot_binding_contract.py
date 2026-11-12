@@ -51,10 +51,10 @@ class BootBinding(unittest.TestCase):
         self.assertLess(guard, watchdog)
         self.assertEqual(
             opened[guard:watchdog].strip(),
-            "#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY\\n"
-            "  /* Preparation reads PCI identity and writes only its removable USB log.\\n"
-            "   * Do not change the firmware watchdog or any active boot state. */\\n"
-            "  return EFI_SUCCESS;\\n"
+            "#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY\n"
+            "  /* Preparation reads PCI identity and writes only its removable USB log.\n"
+            "   * Do not change the firmware watchdog or any active boot state. */\n"
+            "  return EFI_SUCCESS;\n"
             "#endif")
         self.assertIn("return b->SetWatchdogTimer(0,0,0,NULL);", opened[watchdog:])
         for source in (APP, DXE):
