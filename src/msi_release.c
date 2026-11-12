@@ -1014,7 +1014,12 @@ EFI_STATUS GuMsiFinish(VOID) {
 BOOLEAN GuMsiMutated(VOID){return Plan.mutated;}
 BOOLEAN GuMsiReadyForWindows(VOID) {
   if(!Plan.ready||Plan.stage!=3||Plan.claimed||Gu.owned||Gu.fault||
-     !Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn()||!Plan.hardware_verified)return FALSE;
+     !Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn()||!Plan.hardware_verified){
+    /* A failed state prerequisite is as final as a failed PCI/GOP check.
+     * Never permit a later call to revive an earlier successful finish. */
+    Plan.hardware_verified=FALSE;
+    return FALSE;
+  }
   UINT32 c[64];
   /* GuMsiFinish already verified the entire post-close protocol graph.
    * Do not scan it a second time or read BAR0 after CloseProtocol. */

@@ -82,7 +82,12 @@ class HandoverOrderTests(unittest.TestCase):
         # After the finish latch is set, any failed read-only post-close
         # revalidation must permanently refuse handover, not allow retry.
         verification_guard = handover.index("!Plan.hardware_verified")
+        early_failure = handover.index("Plan.hardware_verified=FALSE;", verification_guard)
+        early_return = handover.index("return FALSE;", early_failure)
         ready_check = handover.index("BOOLEAN ready=")
+        self.assertLess(verification_guard, early_failure)
+        self.assertLess(early_failure, early_return)
+        self.assertLess(early_return, ready_check)
         invalidate = handover.index("if(!ready)Plan.hardware_verified=FALSE;")
         success_return = handover.index("return ready;")
         self.assertLess(verification_guard, ready_check)
