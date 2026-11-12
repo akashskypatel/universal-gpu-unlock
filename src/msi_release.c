@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* MSI Z790 GODLIKE/AD102 ownership adapter (was MSI Z490/AD104). Snapshot/delta strategy adapted from
- * impacifist/Windows-GPU-UNLOCK 9352abd internal-boot/boot/prepare-console.c.
- * Driver identities/code were captured in CAP0001 (Z790, 2026-10-25). No driver code/data patch.
+/* Selected NVIDIA controller ownership adapter. The initial shared-driver
+ * graph came from MSI Z790/AD102 CAP0001 (2026-10-25); other boards still
+ * require independent Stop/console/peer/recovery evidence before live use.
+ * Snapshot/delta checks derive controller paths and driver agents at runtime.
  * No firmware variables, controller reconnects or reset fallback are used.
  */
 #include "msi_release.h"
@@ -88,37 +89,13 @@ static EFI_GUID PointerGuid={0x31878c87,0x0b75,0x11d5,{0x9a,0x4f,0,0x90,0x27,0x3
 /* CAP0001: the Z790 pointer splitter also consumes an absolute pointer on the same USB device. */
 static EFI_GUID AbsPointerGuid={0x8d59d32b,0xc655,0x4ae9,{0x9b,0x15,0xf2,0x59,0x04,0x99,0x2a,0x43}};
 static EFI_GUID UsbHcGuid={0x3e745226,0x9818,0x45b6,{0xa2,0xac,0xd7,0xcd,0x0e,0x8b,0xa2,0xbc}};
-static const UINT8 UsbHostPath[]={2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,2,1,1,1,6,0,0,0,1,1,6,0,0,8,1,1,6,0,1,0,127,255,4,0};
 static EFI_GUID BindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID,ImageGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
-static const UINT8 PciPath[]={2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,1,3,1,1,6,0,0,0,127,255,4,0};
-static const UINT8 GopPath[]={2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,1,3,1,1,6,0,0,0,2,3,8,0,0,3,1,0x80,127,255,4,0};
-static const UINT8 OutFile[]={4,6,20,0,0x7d,0x49,0x8a,0x62,0xf6,0x2b,0x64,0x42,0x87,0x41,6,0x9d,0xbd,0x33,0x99,0xd6,127,255,4,0};
-static const UINT8 GfxFile[]={4,6,20,0,0xdd,0xab,0xe7,0x43,0x52,0xe3,0xfb,0x4c,0xa2,0x30,0x4c,0xdc,0x1d,0x35,0x0e,0x5c,127,255,4,0};
-static const UINT8 NvFile[]={4,4,28,0,'n',0,'v',0,'g',0,'o',0,'p',0,'-',0,'a',0,'d',0,'1',0,'x',0,'x',0,0,0,127,255,4,0};
-/* CAP0001: NVIDIA GOP also creates two idle output children (_ADR 0x80010320/0x80010340)
- * with no consumers. They are pinned exactly and vanish with the stage-3 GOP stop. */
-static const UINT8 IdlePath[1][36]={
-  {2,1,12,0,0xd0,0x41,3,10,0,0,0,0,1,1,6,0,1,3,1,1,6,0,0,0,2,3,8,0,0x20,3,1,0x80,127,255,4,0}};
-
 static BOOLEAN Equal(const VOID *a,const VOID *b,UINTN n){return !memcmp(a,b,n);}
 static BOOLEAN Guid(const EFI_GUID *a,const EFI_GUID *b){return Equal(a,b,16);}
 static BOOLEAN PointerProto(const EFI_GUID *g){return Guid(g,&PointerGuid)||Guid(g,&AbsPointerGuid);}
 static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *g,VOID **p) {
   *p=NULL;EFI_STATUS s=Plan.table->BootServices->HandleProtocol(h,g,p);
   return s==EFI_SUCCESS&&!*p?EFI_COMPROMISED_DATA:s;
-}
-/* Match exact, bounded, single-instance paths; never accept a prefix alone. */
-static BOOLEAN Path(EFI_HANDLE h,const UINT8 *bytes,UINTN count) {
-  EFI_DEVICE_PATH_PROTOCOL *p=NULL;
-  if(Interface(h,&PathGuid,(VOID **)&p)!=EFI_SUCCESS)return FALSE;
-  UINTN at=0;
-  while(at+4<=count) {
-    UINTN n=p->Length[0]+((UINTN)p->Length[1]<<8);
-    if(n<4||n>count-at||!Equal(p,bytes+at,n))return FALSE;
-    if(p->Type==END_DEVICE_PATH_TYPE)return n==4&&p->SubType==END_ENTIRE_DEVICE_PATH_SUBTYPE&&at+4==count;
-    at+=n;p=(VOID *)((UINT8 *)p+n);
-  }
-  return FALSE;
 }
 static EFI_STATUS Snapshot(GRAPH *g) {
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_HANDLE *handles=NULL;UINTN count=0;g->count=0;
