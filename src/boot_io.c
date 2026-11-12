@@ -195,6 +195,11 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(closed!=EFI_SUCCESS)return closed;
 
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  /* Preparation reads PCI identity and writes only its removable USB log.
+   * Do not change the firmware watchdog or any active boot state. */
+  return EFI_SUCCESS;
+#endif
   if(!b->SetWatchdogTimer)return EFI_UNSUPPORTED;
 
   return b->SetWatchdogTimer(0,0,0,NULL);
