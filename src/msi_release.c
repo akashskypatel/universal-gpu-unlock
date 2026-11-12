@@ -1018,10 +1018,14 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
   UINT32 c[64];
   /* GuMsiFinish already verified the entire post-close protocol graph.
    * Do not scan it a second time or read BAR0 after CloseProtocol. */
-  return Alive()==EFI_SUCCESS&&Gops(FALSE)==EFI_SUCCESS&&
+  BOOLEAN ready=Alive()==EFI_SUCCESS&&Gops(FALSE)==EFI_SUCCESS&&
          ReadOnlyAmdConsoleOwnership()==EFI_SUCCESS&&
          ReadConfig(c)==EFI_SUCCESS&&ConfigStable(c)&&
-    GuVerifyActivePeers(Plan.table)==EFI_SUCCESS;
+         GuVerifyActivePeers(Plan.table)==EFI_SUCCESS;
+  /* Once the final handover has observed a lost survivor, peer or PCI
+   * identity, no later recheck may restore approval in this transaction. */
+  if(!ready)Plan.hardware_verified=FALSE;
+  return ready;
 }
 
 const VOID *GuMsiPlanOwnerToken(VOID) {return &Plan;}

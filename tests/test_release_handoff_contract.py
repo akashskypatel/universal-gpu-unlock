@@ -77,6 +77,28 @@ class HandoverOrderTests(unittest.TestCase):
         self.assertNotIn("GuRead32(", handover)
         self.assertNotIn("Snapshot(", handover)
 
+    def test_failed_handover_revokes_verification_for_later_calls(self):
+        handover = function_body("GuMsiReadyForWindows")
+        # After the finish latch is set, any failed read-only post-close
+        # revalidation must permanently refuse handover, not allow retry.
+        verification_guard = handover.index("!Plan.hardware_verified")
+        ready_check = handover.index("BOOLEAN ready=")
+        invalidate = handover.index("if(!ready)Plan.hardware_verified=FALSE;")
+        success_return = handover.index("return ready;")
+        self.assertLess(verification_guard, ready_check)
+        self.assertLess(ready_check, invalidate)
+        self.assertLess(invalidate, success_return)
+        for check in ("Alive()", "Gops(FALSE)", "ReadOnlyAmdConsoleOwnership()",
+                      "ReadConfig(c)", "ConfigStable(c)",
+                      "GuVerifyActivePeers(Plan.table)"):
+            self.assertIn(check, handover[ready_check:invalidate])
+        self.assertNotIn("GuRead32(", handover)
+        self.assertNotIn("Snapshot(", handover)
+        # This may not turn a failed handover into a new claim or replay.
+        self.assertNotIn("ClaimRestore(", handover)
+        self.assertNotIn("CloseProtocol(", handover)
+        self.assertNotIn("DisconnectController(", handover)
+
     def test_bus_master_exception_rejects_set_or_unrelated_changes(self):
         stable = function_body("ConfigStable")
         for required in (
