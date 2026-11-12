@@ -2,13 +2,32 @@
 /* Compare two separately bounded UEFI device paths by complete nodes. */
 #pragma once
 #include <stddef.h>
+/* Inspect the full bounded path before any prefix comparison. A mismatch
+ * at the first node must not conceal a malformed later node. The caller's
+ * byte bound may exceed the actual path size (UEFI protocol handle), so
+ * the first valid END_ENTIRE terminates parsing. */
+static inline int GuDevicePathValid(const unsigned char *path,size_t bytes)
+{
+  size_t pos=0;
+  if(!path||bytes<4)return 0;
+  for(unsigned nodes=0;nodes<64;nodes++) {
+    if(pos>bytes-4)return 0;
+    size_t length=(size_t)path[pos+2]+((size_t)path[pos+3]<<8);
+    if(length<4||length>bytes-pos)return 0;
+    if(path[pos]==0x7f)
+      return path[pos+1]==0xff&&length==4;
+    pos+=length;
+  }
+  return 0;
+}
 static inline int GuDevicePathHasPrefix(const unsigned char *parent,
                                        size_t parent_bytes,
                                        const unsigned char *child,
                                        size_t child_bytes)
 {
   size_t a=0,b=0;
-  if(!parent||!child||parent_bytes<4||child_bytes<4)return -1;
+  if(!GuDevicePathValid(parent,parent_bytes)||
+     !GuDevicePathValid(child,child_bytes))return -1;
   for(unsigned nodes=0;nodes<64;nodes++) {
     if(a>parent_bytes-4||b>child_bytes-4)return -1;
     size_t an=(size_t)parent[a+2]+((size_t)parent[a+3]<<8);

@@ -119,6 +119,32 @@ int main(void) {
     assert(GuDevicePathAmdDisplayOwner(
         amd_console,sizeof(amd_console),original,2)==-1);
   }
+  /* A mismatched first node must not hide a corrupt later node.
+   * The old prefix comparator returned 0 before inspecting that suffix. */
+  {
+    static const unsigned char corrupt_unrelated[]={
+      3,1,8,0,1,2,3,4,1,1,0,0,0,0
+    };
+    assert(GuDevicePathValid(target,sizeof(target))==1);
+    assert(GuDevicePathValid(corrupt_unrelated,sizeof(corrupt_unrelated))==0);
+    assert(GuDevicePathHasPrefix(target,sizeof(target),
+                                 corrupt_unrelated,sizeof(corrupt_unrelated))==-1);
+    assert(GuDevicePathHasPrefix(corrupt_unrelated,sizeof(corrupt_unrelated),
+                                 target,sizeof(target))==-1);
+    GU_DEVICE_PATH_DISPLAY_OWNER unrelated[2]={
+      {amd_gop,sizeof(amd_gop),0x1002,0x0300},
+      {corrupt_unrelated,sizeof(corrupt_unrelated),0x10de,0x0300}
+    };
+    assert(GuDevicePathAmdDisplayOwner(
+        amd_gop,sizeof(amd_gop),unrelated,2)==-1);
+    assert(GuDevicePathAmdDisplayOwner(
+        corrupt_unrelated,sizeof(corrupt_unrelated),unrelated,1)==-1);
+    /* An invalid END_INSTANCE is not a complete single-instance GOP. */
+    static const unsigned char bad_end[]={
+      3,1,8,0,1,2,3,4,0x7f,0x01,4,0
+    };
+    assert(GuDevicePathHasPrefix(target,sizeof(target),bad_end,sizeof(bad_end))==-1);
+  }
   puts("STATUS=COMPLETE DEVICE_PATH_AMD_OWNERSHIP_AND_BOUNDS");
   return 0;
 }
