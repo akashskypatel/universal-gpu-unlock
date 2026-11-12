@@ -1,5 +1,42 @@
 # Dynamic read-only NVIDIA GPU and PCI/GOP topology diagnostic
 
+## MSI B850 Gaming Plus WiFi (MS-7E56) ROM variable capture
+
+The MSI-only passive diagnostic reads the original firmware variables
+ROM_CMN and CSM_CMN before Windows starts, without a separate UEFI Shell.
+From the repository root, build on Windows with MSVC:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -MsiB850RomVariables
+```
+
+Output: `src\build_diagnostic\MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI`.
+The generic diagnostic does not read these MSI variables. The MSI-only
+build requires a saved log and forbids Windows handoff and GPU selection.
+
+Before either variable read, the current passive PCI inventory must contain
+exactly one AMD iGPU `1002:13C0`/subsystem `1462:7E56`, one ASUS
+RTX 4090 `10DE:2684`/subsystem `1043:88E6`, and one ZOTAC RTX 3080
+`10DE:220A`/subsystem `19DA:B612`. Missing, duplicate, extra
+NVIDIA or mismatched platform identities refuse the variable reads.
+These PCI identities are a system fingerprint, not a validated SMBIOS
+motherboard model or a verified installed BIOS version.
+
+The reader calls only UEFI `GetVariable` for `ROM_CMN` and `CSM_CMN` under
+vendor GUID `97CDC6BE-7792-4782-BA6D-E6E3BB56ACD8`. It logs the
+exact status, byte count, attributes and raw hexadecimal data, with a
+1,024-byte bound. A missing or oversized value is reported without
+guessing its contents. Original `ROM_CMN` size `0x147` (327) is checked
+but no unverified RTX slot or mode interpretation is applied.
+
+The same numbered `GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT` USB log also
+contains the normal PCI, GOP and console ownership report. Use only the
+previously reviewed standalone passive boot procedure. Do not change
+BootOrder, CSM, PEG/IGD, graphics detection, GPU ownership or firmware
+variables. No `SetVariable`, PCI write, NVIDIA Stop, reset, flash
+or unlock function is linked or called. This is not an active-release test.
+
+
 This standalone, **non-mutating UEFI application** discovers hardware without a
 hardcoded motherboard, NVIDIA GPU model, subsystem ID, BDF, or fixed two-card
 layout. It inventories NVIDIA display/3D controllers, PCI-to-PCI bridges,

@@ -1,6 +1,7 @@
 param(
     [string]$VcVars,
     [switch]$SaveLog,
+    [switch]$MsiB850RomVariables,
     [string]$WindowsEspGuid,
     [string]$SelectionBdf,
     [string]$SelectionBdfs
@@ -24,6 +25,8 @@ try {
     New-Item -ItemType Directory -Force -Path $output | Out-Null
     . (Join-Path $PSScriptRoot 'Gpu-Selection-Build.ps1')
     $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $output
+    if ($MsiB850RomVariables -and -not $SaveLog) { throw '-MsiB850RomVariables requires -SaveLog.' }
+    if ($MsiB850RomVariables -and ($selection.Count -or $WindowsEspGuid)) { throw 'MSI B850 variable diagnostic cannot select GPUs or hand off Windows.' }
     if ($selection.Count -and $WindowsEspGuid) {
         throw 'Selection-only diagnostic cannot include Windows handoff.'
     }
@@ -44,8 +47,11 @@ try {
     }
     $flags = '/nologo /O2 /Oi- /GS- /Gs65536 /Zl /c /TC /DGU_GPU_DIAGNOSTIC_ONLY /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild_diagnostic /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
     if ($SaveLog) { $flags += ' /DGU_TOPO_SAVE_LOG' }
+    if ($MsiB850RomVariables) { $flags += ' /DGU_MSI_B850_ROM_VARIABLES' }
     if ($selection.Count) { $flags += ' /DGU_TOPO_SELECTION_ENABLED' }
-    $binaryName = if ($selection.Count) {
+    $binaryName = if ($MsiB850RomVariables) {
+        'MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI'
+    } elseif ($selection.Count) {
         'GPU-SELECTION-' + $selection.Label + '-DIAGNOSTIC.EFI'
     } else { 'GPU-TOPOLOGY-DIAGNOSTIC.EFI' }
     if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }
@@ -75,7 +81,7 @@ try {
     $binary = Join-Path $output $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'No diagnostic EFI output produced' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SELECTION_BDFS=$($selection.Locations -join ',') SELECTION_COUNT=$($selection.Count) CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SELECTION_BDFS=$($selection.Locations -join ',') MSI_B850_ROM_VARIABLES=$([int]$MsiB850RomVariables.IsPresent) SELECTION_COUNT=$($selection.Count) CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
 } finally {
     Pop-Location
 }

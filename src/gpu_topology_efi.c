@@ -30,6 +30,12 @@ static const GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
 #endif
 #include "gpu_pci_observation.h"
+#ifdef GU_MSI_B850_ROM_VARIABLES
+#include "msi_b850_rom_diag.h"
+#if defined(GU_TOPO_SELECTION_ENABLED) || defined(GU_TOPO_WINDOWS_HANDOFF)
+#error MSI B850 variable diagnostic cannot select GPUs or hand off Windows
+#endif
+#endif
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #include "gpu_windows_handoff.h"
 #endif
@@ -82,6 +88,81 @@ static void Say(const char *format, ...) {
   if(System && System->ConOut && System->ConOut->OutputString)
     (VOID)System->ConOut->OutputString(System->ConOut,wide);
 }
+
+
+#ifdef GU_MSI_B850_ROM_VARIABLES
+/* MSI 1A70 ROM_CMN and CSM_CMN: GetVariable only, before ExitBootServices.
+ * A captured mode or UEFI status does not authorize original NVIDIA Stop. */
+static EFI_GUID MsiB850RomGuid =
+  {0x97cdc6be,0x7792,0x4782,{0xba,0x6d,0xe6,0xe3,0xbb,0x56,0xac,0xd8}};
+#define GU_MSI_B850_VAR_CAP 1024U
+
+static void ReportMsiB850Variable(EFI_SYSTEM_TABLE *table,
+                                  CHAR16 *name, const char *label) {
+  UINT8 data[GU_MSI_B850_VAR_CAP];
+  UINTN bytes=sizeof(data),off;
+  UINT32 attrs=0;
+  EFI_STATUS s;
+  static const char digits[]="0123456789ABCDEF";
+  if(!table->RuntimeServices || !table->RuntimeServices->GetVariable) {
+    Say("MSI_B850_VARIABLE NAME=%s STATUS=NO_GET_VARIABLE READ_ONLY=1\r\n",label);
+    return;
+  }
+  memset(data,0,sizeof(data));
+  s=table->RuntimeServices->GetVariable(name,&MsiB850RomGuid,
+                                         &attrs,&bytes,data);
+  Say("MSI_B850_VARIABLE NAME=%s EFI_STATUS=%#llx BYTES=%zu ATTRS=%#x CAP=%u RAW_ONLY=1 READ_ONLY=1\r\n",
+      label,(unsigned long long)s,(size_t)bytes,
+      (unsigned)attrs,(unsigned)sizeof(data));
+  if(s!=EFI_SUCCESS) {
+    Say("MSI_B850_VARIABLE_RESULT NAME=%s STATE=%s NO_DATA_READ=1\r\n",
+        label,s==EFI_NOT_FOUND?"ABSENT":
+        s==EFI_BUFFER_TOO_SMALL?"TOO_LARGE":"ERROR");
+    return;
+  }
+  if(bytes>sizeof(data)) {
+    Say("MSI_B850_VARIABLE_RESULT NAME=%s STATE=INVALID_LENGTH\r\n",label);
+    return;
+  }
+  if(bytes==0) {
+    Say("MSI_B850_VARIABLE_RESULT NAME=%s STATE=EMPTY\r\n",label);
+    return;
+  }
+  if((attrs & EFI_VARIABLE_BOOTSERVICE_ACCESS)==0)
+    Say("MSI_B850_VARIABLE_WARNING NAME=%s BOOTSERVICE_ATTR_MISSING=1\r\n",label);
+  if(name[0]=='R' && bytes!=0x147U)
+    Say("MSI_B850_VARIABLE_WARNING NAME=%s EXPECTED_BYTES=327 ACTUAL_BYTES=%zu RAW_ONLY=1\r\n",
+        label,(size_t)bytes);
+  for(off=0;off<bytes;off+=16U) {
+    size_t j,count=(size_t)(bytes-off);
+    char hex[33];
+    if(count>16U)count=16U;
+    for(j=0;j<count;j++) {
+      UINT8 val=data[off+j];
+      hex[2*j]=digits[val>>4];
+      hex[2*j+1]=digits[val&0xfU];
+    }
+    hex[count*2]=0;
+    Say("MSI_B850_VARIABLE_HEX NAME=%s OFFSET=%04x DATA=%s\r\n",
+        label,(unsigned)off,hex);
+  }
+  Say("MSI_B850_VARIABLE_RESULT NAME=%s STATE=CAPTURED BYTES=%zu AUTHENTICATED=0\r\n",
+      label,(size_t)bytes);
+}
+static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
+  Say("MSI_B850_ROM_VARIABLES MODE=READ_ONLY PLATFORM=MS-7E56 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0\r\n");
+  /* This is the exact MSI 7E56 iGPU and owner dual-NVIDIA PCI fingerprint.
+   * It is NOT a signed motherboard/BIOS model certificate. */
+  if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot)) {
+    Say("MSI_B850_ROM_VARIABLES STATUS=SKIPPED PLATFORM_FINGERPRINT=UNVERIFIED GPU_MUTATION=NONE\r\n");
+    return;
+  }
+  Say("MSI_B850_ROM_VARIABLES PLATFORM_FINGERPRINT=MATCH SMBIOS_VERIFIED=0 BIOS_VERSION_VERIFIED=0 GPU_MUTATION=NONE\r\n");
+  ReportMsiB850Variable(table,L"ROM_CMN","ROM_CMN");
+  ReportMsiB850Variable(table,L"CSM_CMN","CSM_CMN");
+  Say("MSI_B850_ROM_VARIABLES STATUS=OBSERVED_OR_REFUSED ORIGINAL_ROM_DISPATCH_UNVERIFIED=1\r\n");
+}
+#endif
 
 #ifdef GU_TOPO_SELECTION_ENABLED
 /* Resolve all requested devices before emitting ordered per-device results.
@@ -1177,6 +1258,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   Say("READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n");
   pci_ok=CapturePci(bs);
   if(!pci_ok)ReportPciEvidence(bs);
+#ifdef GU_MSI_B850_ROM_VARIABLES
+  ReportMsiB850RomVariables(table,pci_ok);
+#endif
   gop_ok=CaptureGop(bs);
   console_ok=ReadConfiguredConsole(table,L"ConOut","CONOUT",
                                    Snapshot.console,&Snapshot.console_count);
