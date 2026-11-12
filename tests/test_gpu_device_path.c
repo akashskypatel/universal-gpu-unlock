@@ -61,6 +61,8 @@ int main(void) {
     owners[2].display_class=0x0604;
     assert(GuDevicePathAmdDisplayOwner(amd_gop,sizeof(amd_gop),owners,3)==-1);
     owners[2].display_class=0x0300;
+    assert(GuDevicePathAmdDisplayOwner(amd_gop,sizeof(amd_gop),owners,3)==-1);
+    owners[2].path=own_gop;owners[2].path_bytes=sizeof(own_gop);
     assert(GuDevicePathAmdDisplayOwner(amd_gop,sizeof(amd_gop),owners,3)==1);
     owners[1].vendor=0x10de;
     assert(GuDevicePathAmdDisplayOwner(amd_gop,sizeof(amd_gop),owners,3)==0);
