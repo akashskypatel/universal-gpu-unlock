@@ -240,6 +240,18 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target DXE compilation failed'}
             if(-not (Test-Path .\src\build_dxe\GPU-ONE-TARGET-COMPILE-ONLY-DXE-0000-09-02-0.efi)){throw 'One-target DXE EFI missing'}
             'ONE_TARGET_COMPILE_EXIT=0 HARDWARE_ACTION=NONE' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Live-active output must fail before any compiler or USB stage.
+            # This negative check must still pass when Visual Studio is present.
+            foreach ($builder in @('.\src\Build-Experimental-MSVC.ps1', '.\src\Build-Dxe-Driver.ps1')) {
+              $liveRejected = $false
+              try {
+                & $builder -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution
+              } catch {
+                $liveRejected = $_.Exception.Message -match 'Live GPU execution build refused'
+              }
+              if(-not $liveRejected) { throw "Unsafe live-active EFI builder admitted: $builder" }
+            }
+            'LIVE_ACTIVE_APP_AND_DXE=REFUSED BEFORE_COMPILATION=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # The shipped builders must refuse an unselected legacy active
             # image before compilation, not quietly emit a mutating binary.
             $unsafeAppRejected = $false
