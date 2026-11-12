@@ -320,6 +320,12 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: success()
         with:
+          name: msi-b850-rom-variables-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
           name: gpu-discovery-selection-unsigned-${{ github.sha }}
           path: src/build_diagnostic/GPU-SELECTION-*-DIAGNOSTIC.EFI
           if-no-files-found: error
