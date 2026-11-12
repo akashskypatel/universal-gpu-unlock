@@ -6,6 +6,12 @@ param(
     [switch]$SyntheticCompileProfile
 )
 $ErrorActionPreference = 'Stop'
+# This fork has no approved original MSI B850 NVIDIA Stop/recovery contract or
+# stock Windows 617.42 signed Booter acceptance for live single-target mode.
+# Keep compile-only coverage; do not emit a hardware-mutating EFI image.
+if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile) {
+    throw 'Live GPU execution build refused: MSI B850 vendor Stop, Windows signed Booter, and cold recovery are unverified. Use -SyntheticCompileProfile only for compile validation.'
+}
 if (-not $SelectionBdf -and -not $SelectionBdfs) {
     throw 'Active firmware build refused: supply -SelectionBdf or -SelectionBdfs. Only preparation-only artifacts are supported.'
 }
