@@ -730,11 +730,11 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(s==EFI_SUCCESS) { s=Snapshot(&Original); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Snapshot(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) {
     s=ReadOnlyAmdConsoleOwnership();
-    if(s!=EFI_SUCCESS)GuLog("Preflight refused independent AMD ownership: %#llx\\n",(unsigned long long)s);
+    if(s!=EFI_SUCCESS)GuLog("Preflight refused independent AMD ownership: %#llx\n",(unsigned long long)s);
   }
   if(s==EFI_SUCCESS) {
     s=ReadOnlyAmdConsoleGraph(&Original);
-    if(s!=EFI_SUCCESS)GuLog("Preflight refused active AMD console graph: %#llx\\n",(unsigned long long)s);
+    if(s!=EFI_SUCCESS)GuLog("Preflight refused active AMD console graph: %#llx\n",(unsigned long long)s);
   }
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=PointerBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at PointerBaseline(): %#llx\n", (unsigned long long)s); }
