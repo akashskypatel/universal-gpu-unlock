@@ -39,6 +39,27 @@ class BootBinding(unittest.TestCase):
         self.assertIn("ReadPinnedAssetFromConfiguredEsp(",loader)
         self.assertIn("GuFree((VOID *)GuAssets[i].firmware.data)",loader)
 
+    def test_preparation_only_usb_log_preserves_uefi_watchdog(self):
+        """Verify the original boot-open path keeps active watchdog behavior isolated."""
+        begin = BOOT.index("EFI_STATUS GuBootOpen(")
+        end = BOOT.index("static EFI_STATUS ReadFile(", begin)
+        opened = BOOT[begin:end]
+        guard = opened.index("#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY")
+        finish_log = opened.index("if(closed!=EFI_SUCCESS)return closed;")
+        watchdog = opened.index("if(!b->SetWatchdogTimer)return EFI_UNSUPPORTED;")
+        self.assertLess(finish_log, guard)
+        self.assertLess(guard, watchdog)
+        self.assertEqual(
+            opened[guard:watchdog].strip(),
+            "#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY\\n"
+            "  /* Preparation reads PCI identity and writes only its removable USB log.\\n"
+            "   * Do not change the firmware watchdog or any active boot state. */\\n"
+            "  return EFI_SUCCESS;\\n"
+            "#endif")
+        self.assertIn("return b->SetWatchdogTimer(0,0,0,NULL);", opened[watchdog:])
+        for source in (APP, DXE):
+            self.assertIn("/DGU_ACTIVE_SEQUENCE_PREPARE_ONLY", source)
+
     def test_windows_binary_reader_rejects_invalid_info_lengths(self):
         """Run the actual boot-file reader with independent fake EFI file services."""
         source = BOOT.split("static EFI_STATUS ReadWindowsBinary(", 1)[1].split(
