@@ -906,6 +906,9 @@ EFI_STATUS GuMsiRelease(VOID) {
     }
     if(s==EFI_SUCCESS)s=Alive();
     if(s==EFI_SUCCESS)s=Gops(FALSE);
+    /* A vendor Stop may change the surviving PCI controller even when
+     * its GOP handle and console graph still appear unchanged. */
+    if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
     if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
     if(s!=EFI_SUCCESS)return s;
   }
@@ -924,6 +927,7 @@ BOOLEAN GuMsiReleased(VOID) {
      !Plan.master_normalized)failed="state";
   else if(Alive()!=EFI_SUCCESS)failed="console";
   else if(Gops(FALSE)!=EFI_SUCCESS)failed="GOP";
+  else if(ReadOnlyAmdConsoleOwnership()!=EFI_SUCCESS)failed="amd-ownership";
   else if(ReadConfig(c)!=EFI_SUCCESS)failed="config-read";
   else if(!ConfigStable(c))failed="config-drift";
   else if(Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&attrs)!=EFI_SUCCESS)failed="attributes-get";
@@ -974,6 +978,9 @@ EFI_STATUS GuMsiFinish(VOID) {
   Plan.claimed=FALSE;Gu.owned=FALSE;
   s=Snapshot(&Current);
   if(s==EFI_SUCCESS&&!Expected(3,FALSE)){s=EFI_NOT_READY;GraphDiff(3,FALSE);}
+  /* The exclusive PCI claim is gone; verify that the AMD console is
+   * still linked to the same read-only PCI display owner before handover. */
+  if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s!=EFI_SUCCESS){
     Plan.hardware_verified=FALSE;
     NOTE("MSI finish after close status=%#llx graph=%zu\n",(unsigned long long)s,(size_t)Current.count);
@@ -988,6 +995,7 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
   /* GuMsiFinish already verified the entire post-close protocol graph.
    * Do not scan it a second time or read BAR0 after CloseProtocol. */
   return Alive()==EFI_SUCCESS&&Gops(FALSE)==EFI_SUCCESS&&
+         ReadOnlyAmdConsoleOwnership()==EFI_SUCCESS&&
          ReadConfig(c)==EFI_SUCCESS&&ConfigStable(c)&&
     GuVerifyActivePeers(Plan.table)==EFI_SUCCESS;
 }

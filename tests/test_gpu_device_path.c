@@ -69,6 +69,56 @@ int main(void) {
     owners[1].vendor=0x1002;
     assert(GuDevicePathAmdDisplayOwner(amd_gop,4,owners,3)==-1);
   }
+  /* Original B850 read-only diagnostic 0018: AMD 0000:0f:00.0
+   * controller and GOP; 0021: NVIDIA 0000:04:00.0 peer and GOP.
+   * These saved paths are static fixtures, not a new physical test. */
+  {
+    static const unsigned char amd_pci[]={
+      0x02,0x01,0x0c,0x00,0xd0,0x41,0x03,0x0a,0,0,0,0,
+      0x01,0x01,0x06,0,0x01,0x08,0x01,0x01,0x06,0,0,0,
+      0x7f,0xff,0x04,0
+    };
+    static const unsigned char amd_console[]={
+      0x02,0x01,0x0c,0,0xd0,0x41,0x03,0x0a,0,0,0,0,
+      0x01,0x01,0x06,0,0x01,0x08,0x01,0x01,0x06,0,0,0,
+      0x02,0x03,0x08,0,0x00,0x03,0x01,0x80,0x7f,0xff,0x04,0
+    };
+    static const unsigned char nvidia_pci[]={
+      0x02,0x01,0x0c,0,0xd0,0x41,0x03,0x0a,0,0,0,0,
+      0x01,0x01,0x06,0,0x01,0x02,0x01,0x01,0x06,0,0,0,
+      0x01,0x01,0x06,0,0,0,0x01,0x01,0x06,0,0,0,
+      0x7f,0xff,0x04,0
+    };
+    static const unsigned char nvidia_console[]={
+      0x02,0x01,0x0c,0,0xd0,0x41,0x03,0x0a,0,0,0,0,
+      0x01,0x01,0x06,0,0x01,0x02,0x01,0x01,0x06,0,0,0,
+      0x01,0x01,0x06,0,0,0,0x01,0x01,0x06,0,0,0,
+      0x02,0x03,0x08,0,0x40,0x03,0x01,0x80,0x7f,0xff,0x04,0
+    };
+    GU_DEVICE_PATH_DISPLAY_OWNER original[2]={
+      {nvidia_pci,sizeof(nvidia_pci),0x10de,0x0300},
+      {amd_pci,sizeof(amd_pci),0x1002,0x0300}
+    };
+    assert(sizeof(amd_pci)==28);
+    assert(sizeof(amd_console)==36);
+    assert(sizeof(nvidia_pci)==40);
+    assert(sizeof(nvidia_console)==48);
+    assert(GuDevicePathAmdDisplayOwner(
+        amd_console,sizeof(amd_console),original,2)==1);
+    assert(GuDevicePathAmdDisplayOwner(
+        nvidia_console,sizeof(nvidia_console),original,2)==0);
+    /* A peer-only GOP cannot replace the independent AMD output. */
+    assert(GuDevicePathAmdDisplayOwner(
+        nvidia_console,sizeof(nvidia_console),original,1)==0);
+    /* An unplugged/replaced AMD identity must not pass unchanged paths. */
+    original[1].vendor=0x10de;
+    assert(GuDevicePathAmdDisplayOwner(
+        amd_console,sizeof(amd_console),original,2)==0);
+    original[1].vendor=0x1002;
+    original[1].display_class=0x0604;
+    assert(GuDevicePathAmdDisplayOwner(
+        amd_console,sizeof(amd_console),original,2)==-1);
+  }
   puts("STATUS=COMPLETE DEVICE_PATH_AMD_OWNERSHIP_AND_BOUNDS");
   return 0;
 }

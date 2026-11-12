@@ -90,6 +90,45 @@ class HandoverOrderTests(unittest.TestCase):
         self.assertNotIn("GuConfigWrite(",normalize)
         self.assertIn("!Plan.master_normalized",function_body("GuMsiReleased"))
 
+    def test_amd_owner_rechecked_after_each_stop_and_before_handover(self):
+        # A post-Stop controller identity change must not be accepted solely
+        # because its previously captured GOP and console edges still exist.
+        release = function_body("GuMsiRelease")
+        stop = release.index("DisconnectController(")
+        self.assertIn("ReadOnlyAmdConsoleOwnership()", release[:stop])
+        self.assertIn("ReadOnlyAmdConsoleOwnership()", release[stop:])
+        self.assertLess(release.index("ReadOnlyAmdConsoleOwnership()", stop),
+                        release.index("NormalizeMasterAfterStop()"))
+        released = function_body("GuMsiReleased")
+        self.assertIn('ReadOnlyAmdConsoleOwnership()!=EFI_SUCCESS', released)
+        self.assertLess(released.index("ReadOnlyAmdConsoleOwnership()"),
+                        released.index("Snapshot(&Current)"))
+        finish = function_body("GuMsiFinish")
+        after_close = finish.index("CloseProtocol(")
+        self.assertIn("ReadOnlyAmdConsoleOwnership()", finish[after_close:])
+        self.assertIn("Plan.hardware_verified=FALSE;", finish[after_close:])
+        handover = function_body("GuMsiReadyForWindows")
+        self.assertIn("ReadOnlyAmdConsoleOwnership()==EFI_SUCCESS", handover)
+        self.assertNotIn("Snapshot(", handover)
+        self.assertNotIn("GuRead32(", handover)
+
+    def test_amd_owner_validation_is_read_only(self):
+        owner = function_body("ReadOnlyAmdConsoleOwnership")
+        paths = function_body("AmdConsoleVariable")
+        graph = function_body("ReadOnlyAmdConsoleGraph")
+        self.assertIn("EfiPciIoWidthUint32", owner)
+        self.assertIn("GuDevicePathAmdDisplayOwner(", owner)
+        self.assertIn('AmdConsoleVariable(L"ConOut"', owner)
+        self.assertIn('AmdConsoleVariable(L"ErrOut"', owner)
+        self.assertIn("GetVariable(", paths)
+        self.assertIn("matching_gops!=1", paths)
+        self.assertIn("EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER", graph)
+        for text in (owner, paths, graph):
+            for forbidden in ("DisconnectController(", "Pci.Write(",
+                              "GuWrite32(", "EfiPciIoAttributeOperationEnable",
+                              "SetVariable(", "ResetSystem("):
+                self.assertNotIn(forbidden, text)
+
     def test_full_non_target_protocol_ownership_is_preserved(self):
         self.assertIn("GuIsPreparedPeerHandle(h)",function_body("ProtectedHandle"))
 
