@@ -446,6 +446,130 @@ static EFI_STATUS Gops(BOOLEAN first) {
   }
   return EFI_SUCCESS;
 }
+
+/* This is a read-only identity screen, NOT a vendor Stop contract. Match
+ * complete current-boot PCI controller paths, not a historic MSI board path
+ * or a non-target GOP count. The NVIDIA peer is never an AMD survivor. */
+static EFI_GUID GlobalVarGuid={
+  0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}
+};
+static EFI_STATUS AmdConsoleVariable(
+    const CHAR16 *name,
+    const GU_DEVICE_PATH_DISPLAY_OWNER *owners,UINTN owner_count)
+{
+  UINT8 data[8u*192u];
+  UINTN used=sizeof(data),at=0,start=0,paths=0,nodes=0;
+  UINT32 attrs=0;
+  EFI_RUNTIME_SERVICES *rt=Plan.table->RuntimeServices;
+  if(!rt||!rt->GetVariable)return EFI_UNSUPPORTED;
+  EFI_STATUS s=rt->GetVariable((CHAR16 *)name,&GlobalVarGuid,&attrs,&used,data);
+  if(s!=EFI_SUCCESS||!used||used>sizeof(data))return EFI_NOT_READY;
+  while(at+4<=used && nodes++<64) {
+    UINTN n=(UINTN)data[at+2]+((UINTN)data[at+3]<<8);
+    if(n<4||n>used-at)return EFI_COMPROMISED_DATA;
+    if(data[at]==0x7f) {
+      UINT8 subtype=data[at+1];
+      if(n!=4||(subtype!=1&&subtype!=0xff)||
+         at+n-start>192u||paths==8)return EFI_COMPROMISED_DATA;
+      /* Normalize only this private GetVariable copy to END_ENTIRE. */
+      data[at+1]=0xff;
+      int owner=GuDevicePathAmdDisplayOwner(
+          data+start,at+n-start,owners,(size_t)owner_count);
+      UINTN matching_gops=0;
+      for(UINTN k=0;k<Plan.survivor_count;k++) {
+        EFI_DEVICE_PATH_PROTOCOL *gop_path=NULL;
+        if(Interface(Plan.survivors[k],&PathGuid,(VOID **)&gop_path)!=EFI_SUCCESS)
+          return EFI_NOT_READY;
+        int match=GuDevicePathHasPrefix(
+            (const unsigned char *)gop_path,4096u,
+            data+start,(size_t)(at+n-start));
+        if(match<0)return EFI_COMPROMISED_DATA;
+        if(match)matching_gops++;
+      }
+      data[at+1]=subtype;
+      if(owner!=1||matching_gops!=1)return EFI_ACCESS_DENIED;
+      paths++;start=at+n;
+      if(subtype==0xff)return start==used&&paths?EFI_SUCCESS:EFI_COMPROMISED_DATA;
+    }
+    at+=n;
+  }
+  return EFI_COMPROMISED_DATA;
+}
+static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
+{
+  EFI_BOOT_SERVICES *b=Plan.table->BootServices;
+  EFI_HANDLE *handles=NULL;UINTN count=0,display_count=0,amd_count=0;
+  GU_DEVICE_PATH_DISPLAY_OWNER owners[GU_DISPLAY_OWNER_MAX];
+  EFI_STATUS s;
+  if(!Plan.survivor_count||!b||!b->LocateHandleBuffer||!b->FreePool)
+    return EFI_NOT_READY;
+  s=b->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
+  if(s!=EFI_SUCCESS)return s;
+  if(!handles||!count||count>4096u)s=EFI_BAD_BUFFER_SIZE;
+  for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
+    EFI_PCI_IO_PROTOCOL *io=NULL;
+    EFI_DEVICE_PATH_PROTOCOL *p=NULL;
+    UINT32 h[3],again[3];
+    UINTN seg=0,bus=0,dev=0,fun=0;
+    s=Interface(handles[i],&PciGuid,(VOID **)&io);
+    if(s!=EFI_SUCCESS||!io||!io->Pci.Read||!io->GetLocation) {
+      s=EFI_NOT_READY;break;
+    }
+    s=io->GetLocation(io,&seg,&bus,&dev,&fun);
+    if(s!=EFI_SUCCESS||seg||bus>255u||dev>31u||fun>7u) {
+      s=EFI_NOT_READY;break;
+    }
+    s=io->Pci.Read(io,EfiPciIoWidthUint32,0,3,h);
+    if(s==EFI_SUCCESS)s=io->Pci.Read(io,EfiPciIoWidthUint32,0,3,again);
+    if(s!=EFI_SUCCESS||h[0]!=again[0]||h[2]!=again[2]) {
+      s=EFI_NOT_READY;break;
+    }
+    UINT16 cls=(UINT16)((h[2]>>16)&0xffffu);
+    if((cls&0xff00u)!=0x0300u)continue;
+    if(display_count==GU_DISPLAY_OWNER_MAX){s=EFI_BAD_BUFFER_SIZE;break;}
+    s=Interface(handles[i],&PathGuid,(VOID **)&p);
+    if(s!=EFI_SUCCESS||!p){s=EFI_NOT_READY;break;}
+    owners[display_count++]=(GU_DEVICE_PATH_DISPLAY_OWNER){
+        (const unsigned char *)p,4096u,(UINT16)(h[0]&0xffffu),cls};
+    if((h[0]&0xffffu)==0x1002u)amd_count++;
+  }
+  if(s==EFI_SUCCESS&&(!amd_count||!display_count))s=EFI_ACCESS_DENIED;
+  for(UINTN k=0;s==EFI_SUCCESS&&k<Plan.survivor_count;k++) {
+    EFI_DEVICE_PATH_PROTOCOL *p=NULL;
+    s=Interface(Plan.survivors[k],&PathGuid,(VOID **)&p);
+    if(s!=EFI_SUCCESS)break;
+    if(GuDevicePathAmdDisplayOwner(
+          (const unsigned char *)p,4096u,owners,(size_t)display_count)!=1)
+      s=EFI_ACCESS_DENIED;
+  }
+  if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ConOut",owners,display_count);
+  if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ErrOut",owners,display_count);
+  if(handles&&b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  return s;
+}
+/* Require graph evidence that the currently bound text console actually
+ * consumes only verified AMD survivor GOPs. A configured path alone does
+ * not establish that the live ConsoleOutHandle uses that path. */
+static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
+{
+  BOOLEAN out=FALSE,err=FALSE;
+  if(!graph||!Plan.console||!Plan.error)return EFI_NOT_READY;
+  for(UINTN i=0;i<graph->count;i++) {
+    const EDGE *e=&graph->edges[i];
+    if(!Guid(&e->protocol,&TextGuid)||
+       e->attributes!=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER||
+       (e->controller!=Plan.console&&e->controller!=Plan.error))
+      continue;
+    BOOLEAN survivor=FALSE;
+    for(UINTN k=0;k<Plan.survivor_count;k++)
+      if(e->handle==Plan.survivors[k])survivor=TRUE;
+    if(!survivor||e->count!=1)return EFI_ACCESS_DENIED;
+    if(e->controller==Plan.console)out=TRUE;
+    if(e->controller==Plan.error)err=TRUE;
+  }
+  return out&&err?EFI_SUCCESS:EFI_NOT_READY;
+}
+
 static EFI_STATUS ReadConfigMode(UINT32 c[64],BOOLEAN permit_initial_master) {
   EFI_PCI_IO_PROTOCOL *io=NULL;UINTN seg,bus,dev,fun;
   EFI_STATUS s=Interface(Plan.pci,&PciGuid,(VOID **)&io);
@@ -604,6 +728,14 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
     s=EFI_NOT_READY;
   }
   if(s==EFI_SUCCESS) { s=Snapshot(&Original); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Snapshot(): %#llx\n", (unsigned long long)s); }
+  if(s==EFI_SUCCESS) {
+    s=ReadOnlyAmdConsoleOwnership();
+    if(s!=EFI_SUCCESS)GuLog("Preflight refused independent AMD ownership: %#llx\\n",(unsigned long long)s);
+  }
+  if(s==EFI_SUCCESS) {
+    s=ReadOnlyAmdConsoleGraph(&Original);
+    if(s!=EFI_SUCCESS)GuLog("Preflight refused active AMD console graph: %#llx\\n",(unsigned long long)s);
+  }
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=PointerBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at PointerBaseline(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=UsbBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at UsbBaseline(): %#llx\n", (unsigned long long)s); }
@@ -745,9 +877,11 @@ EFI_STATUS GuMsiRelease(VOID) {
     if(s==EFI_SUCCESS&&!Equal(c,Plan.config,sizeof(c)))s=EFI_NOT_READY;
     if(s==EFI_SUCCESS&&!GuAd104ColdEntry())s=EFI_NOT_READY;
     if(s==EFI_SUCCESS)s=Gops(FALSE);
+    if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
     if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
     EFI_TPL old=b->RaiseTPL(TPL_NOTIFY);
     if(s==EFI_SUCCESS)s=Snapshot(&Current);
+    if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
     if(s==EFI_SUCCESS&&!Expected(stage-1,FALSE)) {
       NOTE("GuMsiRelease: pre-detach Expected(%zu) failed\n", (size_t)(stage-1));
       GraphDiff(stage-1, FALSE);
@@ -764,6 +898,7 @@ EFI_STATUS GuMsiRelease(VOID) {
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
     Plan.stage=stage;
     s=Snapshot(&Current);
+    if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
     if(s==EFI_SUCCESS&&!Expected(stage,FALSE)) {
       NOTE("GuMsiRelease: post-detach Expected(%zu) failed\n", (size_t)stage);
       GraphDiff(stage, FALSE);

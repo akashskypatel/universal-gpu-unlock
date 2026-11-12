@@ -39,3 +39,36 @@ static inline int GuDevicePathHasPrefix(const unsigned char *parent,
   }
   return -1;
 }
+
+/* Current-boot display-controller identities only; paths are read-only.
+ * Return 1 for exactly one AMD display owner, 0 for no AMD owner or a
+ * different display vendor, -1 for invalid input or ambiguous ancestry.
+ * A root-port-only prefix and a GOP count do not identify the owner. */
+#define GU_DISPLAY_OWNER_MAX 32u
+typedef struct {
+  const unsigned char *path;
+  size_t path_bytes;
+  unsigned short vendor;
+  unsigned short display_class;
+} GU_DEVICE_PATH_DISPLAY_OWNER;
+
+static inline int GuDevicePathAmdDisplayOwner(
+    const unsigned char *candidate, size_t candidate_bytes,
+    const GU_DEVICE_PATH_DISPLAY_OWNER *owners, size_t count)
+{
+  unsigned matches=0;
+  int amd=0;
+  if(!candidate||!owners||!count||count>GU_DISPLAY_OWNER_MAX)return -1;
+  for(size_t i=0;i<count;i++) {
+    if(!owners[i].path ||
+       (owners[i].display_class&0xff00u)!=0x0300u)return -1;
+    int match=GuDevicePathHasPrefix(
+        owners[i].path,owners[i].path_bytes,candidate,candidate_bytes);
+    if(match<0)return -1;
+    if(match) {
+      if(++matches>1)return -1;
+      amd=owners[i].vendor==0x1002u;
+    }
+  }
+  return matches&&amd?1:0;
+}
