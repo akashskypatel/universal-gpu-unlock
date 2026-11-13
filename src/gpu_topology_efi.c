@@ -49,6 +49,9 @@ static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID TextOutGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID DriverBindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID;
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
+#ifdef GU_MSI_B850_ROM_VARIABLES
+static EFI_GUID LoadedImagePathGuid=EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID;
+#endif
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 static GU_TOPO_CAPTURE Snapshot;
 /* The underlying GOP handles are boot-local: never persist or use for Stop. */
@@ -225,6 +228,7 @@ static void ReportMsiB850ImageParents(EFI_BOOT_SERVICES *bs) {
     const GU_TOPO_PCI *node=&Snapshot.pci[i];
     EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
     EFI_LOADED_IMAGE_PROTOCOL *child=NULL,*parent=NULL;
+    EFI_DEVICE_PATH_PROTOCOL *loaded_image_path=NULL;
     EFI_STATUS status;
     GU_TOPO_PATH path;
     const char *gpu;
@@ -252,6 +256,20 @@ static void ReportMsiB850ImageParents(EFI_BOOT_SERVICES *bs) {
         gpu,binding->ImageHandle,
         (unsigned)(child->DeviceHandle==(EFI_HANDLE)node->identity.handle),
         child->ParentHandle);
+    /* This is the exact image-wide DevicePath passed to LoadImage, distinct
+     * from LoadedImage.FilePath, which is only relative to DeviceHandle.
+     * HandleProtocol is a passive lookup; no call on any NVIDIA interface. */
+    status=bs->HandleProtocol(binding->ImageHandle,&LoadedImagePathGuid,
+                              (VOID **)&loaded_image_path);
+    Say("MSI_B850_LOAD_PATH GPU=%s EFI_STATUS=%#llx PRESENT=%u SOURCE=LOADED_IMAGE_DEVICE_PATH READ_ONLY=1\r\n",
+        gpu,(unsigned long long)status,
+        (unsigned)(!EFI_ERROR(status)&&loaded_image_path!=NULL));
+    if(!EFI_ERROR(status)&&loaded_image_path&&PathCopy(loaded_image_path,&path)) {
+      Say("MSI_B850_LOAD_PATH GPU=%s PATH_LEN=%zu\r\n",gpu,path.length);
+      SayPath("MSI_B850_LOAD_DEVICE_PATH",i,&path);
+    } else {
+      Say("MSI_B850_LOAD_PATH GPU=%s PATH_STATUS=UNAVAILABLE_OR_INVALID NO_INFERENCE=1\r\n",gpu);
+    }
     if(!child->ParentHandle) {
       Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_STATUS=ABSENT\r\n",gpu);
       continue;
