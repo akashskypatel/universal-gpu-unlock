@@ -36,6 +36,22 @@ int main(void) {
   CHECK(!GuMsiB850KnownRomDiagnosticHardware(&capture));
   Setup();capture.pci_count=4;capture.pci[3].identity=(GU_GPU_RECORD){.pci_id=0x12348086U,.class_code=0x0604};
   CHECK(GuMsiB850KnownRomDiagnosticHardware(&capture));
+  Setup();
+  CHECK(GuMsiB850IsOwnerNvidia(&capture.pci[1].identity));
+  CHECK(GuMsiB850IsOwnerNvidia(&capture.pci[2].identity));
+  CHECK(!GuMsiB850IsOwnerNvidia(NULL));
+  CHECK(!GuMsiB850IsOwnerNvidia(&capture.pci[0].identity));
+  capture.pci[2].identity.subsystem_id=0x123419daU;
+  CHECK(!GuMsiB850IsOwnerNvidia(&capture.pci[2].identity));
+  capture.pci[2].identity.subsystem_id=0xb61219daU;
+  capture.pci[2].identity.class_code=0x0200;
+  CHECK(!GuMsiB850IsOwnerNvidia(&capture.pci[2].identity));
+  CHECK(GuMsiB850PrivateOpensValid(0,NULL));
+  CHECK(!GuMsiB850PrivateOpensValid(1,NULL));
+  CHECK(GuMsiB850PrivateOpensValid(1,&capture));
+  CHECK(GuMsiB850PrivateOpensValid(GU_MSI_B850_PRIVATE_OPEN_LIMIT,&capture));
+  CHECK(!GuMsiB850PrivateOpensValid(GU_MSI_B850_PRIVATE_OPEN_LIMIT+1U,&capture));
+  CHECK(!GuMsiB850PrivateOpensValid((size_t)-1,&capture));
   printf("MSI_B850_PLATFORM_TESTS=%u PASS\n",checks);
   return 0;
 }

@@ -1,5 +1,34 @@
 # Dynamic read-only NVIDIA GPU and PCI/GOP topology diagnostic
 
+### Original NVIDIA private-interface ownership observation
+
+The opt-in MSI B850 `-MsiB850RomVariables` image now also inspects the
+original NVIDIA controller protocol `FE47349A-7F0D-4641-822B-34BAA28ECDD0`.
+The same previously verified MSI/ASUS/ZOTAC PCI fingerprint must pass before
+these extra read-only observations. This diagnostic is a new build; the older
+`0024` log does **not** contain these records.
+
+For each exactly identified RTX 4090 and RTX 3080 PCI handle, it records:
+the return status of `HandleProtocol`, whether the private interface exists,
+the current PCI `BY_DRIVER` owner token, and the existence and size of
+the PCI bus driver's in-memory option-ROM image. It uses
+`OpenProtocolInformation` to report at most 64 interface-open records,
+including agent and controller tokens, flags and their equality with the
+already observed PCI owner. A missing, oversized or invalid open-record list
+is reported without accessing entries. The firmware-allocated list is freed
+with the standard EFI pool service.
+
+No NVIDIA private callback is called. No private interface content or ROM
+image byte is dereferenced. A private protocol's presence or an open record
+does not establish who installed it, original first-bind order, NVIDIA
+quiescence, or permission to release PCI ownership. The current shared
+NVIDIA/AMD UEFI console is an independent active-execution blocker.
+Look for `MSI_B850_PRIVATE_BEGIN`, `MSI_B850_PRIVATE GPU=`,
+`MSI_B850_PRIVATE_OPENER`, and `MSI_B850_PRIVATE_END`
+in the new numbered log. Do not attempt NVIDIA Stop, UEFI disconnect,
+firmware-variable writes or image-load overrides to obtain these records.
+
+
 ## MSI B850 Gaming Plus WiFi (MS-7E56) ROM variable capture
 
 The MSI-only passive diagnostic reads the original firmware variables

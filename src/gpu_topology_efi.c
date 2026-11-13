@@ -149,6 +149,68 @@ static void ReportMsiB850Variable(EFI_SYSTEM_TABLE *table,
   Say("MSI_B850_VARIABLE_RESULT NAME=%s STATE=CAPTURED BYTES=%zu AUTHENTICATED=0\r\n",
       label,(size_t)bytes);
 }
+
+/* Original NVIDIA EFI private-controller GUID used in IMG00/IMG01.
+ * Diagnostic never invokes an interface callback and never dereferences
+ * the opaque interface pointer; an interface is not quiescence consent. */
+static EFI_GUID MsiB850NvidiaControllerGuid =
+  {0xfe47349a,0x7f0d,0x4641,{0x82,0x2b,0x34,0xba,0xa2,0x8e,0xcd,0xd0}};
+
+static void ReportMsiB850PrivateBindings(EFI_BOOT_SERVICES *bs) {
+  size_t i;
+  Say("MSI_B850_PRIVATE_BEGIN SCOPE=EXACT_TWO_NVIDIA READ_ONLY=1 NO_VENDOR_CALLBACK=1\r\n");
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *node=&Snapshot.pci[i];
+    EFI_HANDLE h=(EFI_HANDLE)node->identity.handle;
+    EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)node->identity.pci;
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
+    VOID *private_interface=NULL;
+    EFI_STATUS ps,os;
+    UINTN count=0,j;
+    const char *gpu;
+    if(!GuMsiB850IsOwnerNvidia(&node->identity))continue;
+    gpu=node->identity.pci_id==0x268410deU?"4090":"3080";
+    if(!h || !pci) {
+      Say("MSI_B850_PRIVATE GPU=%s STATE=SKIPPED REASON=NULL_PCI_HANDLE\r\n",gpu);
+      continue;
+    }
+    ps=bs->HandleProtocol(h,&MsiB850NvidiaControllerGuid,&private_interface);
+    Say("MSI_B850_PRIVATE GPU=%s BDF=%04x:%02x:%02x.%u PRIVATE_STATUS=%#llx PRESENT=%u PCI_BY_DRIVER=%u OWNER_AGENT=%p ROM_IMAGE_PRESENT=%u ROM_BYTES=%llu CALLS=ZERO\r\n",
+        gpu,(unsigned)node->identity.segment,(unsigned)node->identity.bus,
+        (unsigned)node->identity.device,(unsigned)node->identity.function,
+        (unsigned long long)ps,(unsigned)(!EFI_ERROR(ps)&&private_interface!=NULL),
+        node->by_driver,node->first_owner_agent,
+        (unsigned)(pci->RomImage!=NULL),(unsigned long long)pci->RomSize);
+    if(!bs->OpenProtocolInformation || !bs->FreePool) {
+      Say("MSI_B850_PRIVATE_OPENS GPU=%s STATUS=UNSUPPORTED\r\n",gpu);
+      continue;
+    }
+    os=bs->OpenProtocolInformation(h,&MsiB850NvidiaControllerGuid,&opens,&count);
+    Say("MSI_B850_PRIVATE_OPENS GPU=%s STATUS=%#llx COUNT=%llu CAP=%u\r\n",
+        gpu,(unsigned long long)os,(unsigned long long)count,
+        (unsigned)GU_MSI_B850_PRIVATE_OPEN_LIMIT);
+    if(!EFI_ERROR(os)) {
+      if(!GuMsiB850PrivateOpensValid((size_t)count,opens)) {
+        Say("MSI_B850_PRIVATE_OPENS GPU=%s RESULT=INVALID_OR_OVER_CAP NO_ENTRIES_READ=1\r\n",gpu);
+      } else {
+        for(j=0;j<count;j++) {
+          const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entry=&opens[j];
+          Say("MSI_B850_PRIVATE_OPENER GPU=%s INDEX=%llu AGENT=%p CONTROLLER=%p ATTRS=%#x OPEN_COUNT=%u AGENT_IS_PCI_OWNER=%u\r\n",
+              gpu,(unsigned long long)j,entry->AgentHandle,
+              entry->ControllerHandle,(unsigned)entry->Attributes,
+              (unsigned)entry->OpenCount,
+              (unsigned)(node->by_driver && entry->AgentHandle==node->first_owner_agent));
+        }
+      }
+    }
+    if(opens) {
+      EFI_STATUS fs=bs->FreePool(opens);
+      Say("MSI_B850_PRIVATE_OPENS_FREE GPU=%s STATUS=%#llx\r\n",gpu,(unsigned long long)fs);
+    }
+  }
+  Say("MSI_B850_PRIVATE_END NO_PRIVATE_METHOD=1 NO_ROM_DEREFERENCE=1 NO_RELEASE=1\r\n");
+}
+
 static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
   Say("MSI_B850_ROM_VARIABLES MODE=READ_ONLY PLATFORM=MS-7E56 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0\r\n");
   /* This is the exact MSI 7E56 iGPU and owner dual-NVIDIA PCI fingerprint.
@@ -160,6 +222,7 @@ static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
   Say("MSI_B850_ROM_VARIABLES PLATFORM_FINGERPRINT=MATCH SMBIOS_VERIFIED=0 BIOS_VERSION_VERIFIED=0 GPU_MUTATION=NONE\r\n");
   ReportMsiB850Variable(table,L"ROM_CMN","ROM_CMN");
   ReportMsiB850Variable(table,L"CSM_CMN","CSM_CMN");
+  ReportMsiB850PrivateBindings(table->BootServices);
   Say("MSI_B850_ROM_VARIABLES STATUS=OBSERVED_OR_REFUSED ORIGINAL_ROM_DISPATCH_UNVERIFIED=1\r\n");
 }
 #endif
