@@ -373,9 +373,9 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
   size_t i,child_count=0,rva=0,text_bytes=0;
   int parent_ok=1;
   UINT8 digest[32];
-  Say("MSI_B850_POLICY_PTR_BEGIN ORIGINAL_PCIBUS_ONLY=1 READ_ONLY=1 NO_ROM_CMN_WRITE=1\\r\\n");
+  Say("MSI_B850_POLICY_PTR_BEGIN ORIGINAL_PCIBUS_ONLY=1 READ_ONLY=1 NO_ROM_CMN_WRITE=1\r\n");
   if(!bs || !bs->GetMemoryMap || !bs->HandleProtocol) {
-    Say("MSI_B850_POLICY_PTR STATE=SKIPPED NO_BOOT_SERVICES=1\\r\\n");
+    Say("MSI_B850_POLICY_PTR STATE=SKIPPED NO_BOOT_SERVICES=1\r\n");
     goto done;
   }
   for(i=0;i<Snapshot.pci_count;i++) {
@@ -397,7 +397,7 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
     child_count++;
   }
   if(!parent_ok || child_count!=2 || !parent_handle) {
-    Say("MSI_B850_POLICY_PTR STATE=SKIPPED PARENT_IDENTITY_UNVERIFIED=1\\r\\n");
+    Say("MSI_B850_POLICY_PTR STATE=SKIPPED PARENT_IDENTITY_UNVERIFIED=1\r\n");
     goto done;
   }
   status=bs->HandleProtocol(parent_handle,&LoadedGuid,(VOID **)&parent);
@@ -406,22 +406,22 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
      !GuLoadedPeTextRange(parent->ImageBase,(size_t)parent->ImageSize,
                           &rva,&text_bytes) ||
      rva!=640U || text_bytes!=68716U) {
-    Say("MSI_B850_POLICY_PTR STATE=SKIPPED PCIBUS_IMAGE_LAYOUT_UNVERIFIED=1\\r\\n");
+    Say("MSI_B850_POLICY_PTR STATE=SKIPPED PCIBUS_IMAGE_LAYOUT_UNVERIFIED=1\r\n");
     goto done;
   }
   GuSha256((const UINT8 *)parent->ImageBase+rva,text_bytes,digest);
   if(memcmp(digest,MsiPciBusTextDigest,sizeof(digest))!=0) {
-    Say("MSI_B850_POLICY_PTR STATE=SKIPPED PCIBUS_TEXT_HASH_MISMATCH=1\\r\\n");
+    Say("MSI_B850_POLICY_PTR STATE=SKIPPED PCIBUS_TEXT_HASH_MISMATCH=1\r\n");
     goto done;
   }
   status=bs->GetMemoryMap(&map_size,map,&key,&desc_size,&desc_version);
-  Say("MSI_B850_POLICY_PTR MAP_STATUS=%#llx MAP_BYTES=%zu DESC_BYTES=%zu CAP=%u\\r\\n",
+  Say("MSI_B850_POLICY_PTR MAP_STATUS=%#llx MAP_BYTES=%zu DESC_BYTES=%zu CAP=%u\r\n",
       (unsigned long long)status,(size_t)map_size,(size_t)desc_size,
       (unsigned)sizeof(MsiPolicyMemoryWords));
   if(EFI_ERROR(status)||map_size>sizeof(MsiPolicyMemoryWords) ||
      desc_size<sizeof(EFI_MEMORY_DESCRIPTOR) || desc_size>256U ||
      (desc_size%sizeof(UINT64))!=0 || map_size%desc_size!=0) {
-    Say("MSI_B850_POLICY_PTR STATE=SKIPPED MEMORY_MAP_UNVERIFIED=1\\r\\n");
+    Say("MSI_B850_POLICY_PTR STATE=SKIPPED MEMORY_MAP_UNVERIFIED=1\r\n");
     goto done;
   }
   for(i=0;i<Snapshot.pci_count;i++) {
@@ -437,7 +437,7 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
     UINTN text_end=text_start+(UINTN)text_bytes;
     if(!MsiPolicyTarget(node,&label,&expected_kind,&object_span))continue;
     if(!pci || !MsiPolicyMapped(map,map_size,desc_size,pci,object_span)) {
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=SKIPPED OBJECT_NOT_IN_BOOT_POOL=1\\r\\n",label);
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=SKIPPED OBJECT_NOT_IN_BOOT_POOL=1\r\n",label);
       continue;
     }
     /* Original FUN_0000A334 installs the *object base* as PciIo.  Verify the
@@ -450,17 +450,17 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
     if(method<text_start || method>=text_end ||
        config_id!=node->identity.pci_id || kind!=expected_kind ||
        obj[0xefU]!=(UINT8)(node->identity.class_code>>8)) {
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=SKIPPED OBJECT_IDENTITY_MISMATCH=1\\r\\n",label);
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=SKIPPED OBJECT_IDENTITY_MISMATCH=1\r\n",label);
       continue;
     }
     memcpy(&modeptr,obj+0x3c0U,sizeof(modeptr));
     if(!modeptr) {
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED POLICY=ABSENT KIND=%u NO_RUNTIME_MODE=1\\r\\n",
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED POLICY=ABSENT KIND=%u NO_RUNTIME_MODE=1\r\n",
           label,(unsigned)kind);
       continue;
     }
     if(!MsiPolicyMapped(map,map_size,desc_size,modeptr,0x20U)) {
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED POLICY=UNREADABLE KIND=%u NO_DEREF=1\\r\\n",
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED POLICY=UNREADABLE KIND=%u NO_DEREF=1\r\n",
           label,(unsigned)kind);
       continue;
     }
@@ -469,14 +469,14 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
       VOID *record_owner=NULL;
       UINT8 mode=entry[0x18U];
       memcpy(&record_owner,entry+0x10U,sizeof(record_owner));
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED KIND=%u ENTRY=%p MODE=%u RECORD_OWNER=%p OWNER_IS_SELF=%u ENTRY_FLAGS=%#x INHERITED_CLASS=%#x READ_ONLY=1\\r\\n",
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED KIND=%u ENTRY=%p MODE=%u RECORD_OWNER=%p OWNER_IS_SELF=%u ENTRY_FLAGS=%#x ENTRY_CLASS_CACHE=%#x READ_ONLY=1\r\n",
           label,(unsigned)kind,modeptr,(unsigned)mode,record_owner,
           (unsigned)(record_owner==(VOID *)pci),(unsigned)entry[0x19U],
           (unsigned)entry[0x1aU]);
     }
   }
 done:
-  Say("MSI_B850_POLICY_PTR_END NO_VENDOR_CALLBACK=1 NO_PCI_CONFIG=1 NO_RELEASE=1\\r\\n");
+  Say("MSI_B850_POLICY_PTR_END NO_VENDOR_CALLBACK=1 NO_PCI_CONFIG=1 NO_RELEASE=1\r\n");
 }
 
 static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
