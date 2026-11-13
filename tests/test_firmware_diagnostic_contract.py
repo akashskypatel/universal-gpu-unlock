@@ -39,6 +39,35 @@ class DiagnosticContract(unittest.TestCase):
         self.assertNotIn("StartImage(",parent)
         self.assertNotIn("SetVariable(",parent)
 
+    def test_msi_policy_pointer_read_requires_original_image_and_map(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        report=source.split("static void ReportMsiB850RomVariables(",1)[1].split(
+            "\n#endif",1)[0]
+        self.assertLess(report.index(
+            "if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot))"),
+            report.index("ReportMsiB850PolicyPointers(table->BootServices);"))
+        probe=source.split("static void ReportMsiB850PolicyPointers(",1)[1].split(
+            "static void ReportMsiB850RomVariables(",1)[0]
+        self.assertIn("child->ParentHandle",probe)
+        self.assertIn("child->DeviceHandle!=(EFI_HANDLE)node->identity.handle",probe)
+        self.assertIn("GuSha256(",probe)
+        self.assertIn("memcmp(digest,MsiPciBusTextDigest",probe)
+        self.assertIn("bs->GetMemoryMap(",probe)
+        self.assertIn("MsiPolicyMapped(map,map_size,desc_size,pci,object_span)",probe)
+        self.assertIn("config_id!=node->identity.pci_id",probe)
+        self.assertIn("kind!=expected_kind",probe)
+        self.assertIn("obj[0xefU]!=(UINT8)(node->identity.class_code>>8)",probe)
+        self.assertLess(probe.index("MsiPolicyMapped(map,map_size,desc_size,pci,object_span)"),
+                        probe.index("memcpy(&modeptr,obj+0x3c0U,sizeof(modeptr))"))
+        self.assertLess(probe.index("if(method<text_start || method>=text_end"),
+                        probe.index("memcpy(&modeptr,obj+0x3c0U,sizeof(modeptr))"))
+        self.assertLess(probe.index("MsiPolicyMapped(map,map_size,desc_size,modeptr,0x20U)"),
+                        probe.index("mode=entry[0x18U]"))
+        for unsafe in ("DisconnectController(", "Stop(", "StartImage(",
+                       "SetVariable(", "OpenProtocol(", "Pci.Write(",
+                       "Pci.Read(", "Mem.Write(", "Mem.Read("):
+            self.assertNotIn(unsafe,probe)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)
