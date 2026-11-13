@@ -50,6 +50,7 @@ typedef struct {EFI_HANDLE DeviceHandle;} EFI_LOADED_IMAGE_PROTOCOL;
 #define TRUE 1
 #define FALSE 0
 #define LOAD_OPTION_ACTIVE 1U
+#define LOAD_OPTION_FORCE_RECONNECT 2U
 #define GU_DRIVER_SCAN_SLOTS 256U
 #define GU_DRIVER_ORDER_MAX 128U
 #define GU_DRIVER_VAR_ATTRS 7U
@@ -117,7 +118,7 @@ static EFI_STATUS GetVariable(CHAR16 *name,EFI_GUID *guid,UINT32 *attrs,
     order_reads++;
     if(mode==9)return EFI_DEVICE_ERROR;
     if(mode==4)return EFI_NOT_FOUND;
-    UINTN count=(mode==3||mode==7)?127:128;
+    UINTN count=(mode==3||mode==7||mode==10||mode==11||mode==12||mode==13||mode==14)?127:128;
     if(mode==5){*bytes=258;return EFI_SUCCESS;}
     if(*bytes<count*sizeof(UINT16))return EFI_BUFFER_TOO_SMALL;
     UINT16 *order=(UINT16 *)data;
@@ -127,6 +128,15 @@ static EFI_STATUS GetVariable(CHAR16 *name,EFI_GUID *guid,UINT32 *attrs,
     return EFI_SUCCESS;
   }
   if(mode==8 && wcscmp(name,L"Driver0001")==0)return EFI_DEVICE_ERROR;
+  if(wcscmp(name,L"Driver0003")==0) {
+    if(mode==11){*bytes=2048;return EFI_BUFFER_TOO_SMALL;}
+    if(mode==10||mode==12||mode==13||mode==14){
+      const UINT32 flags=mode==10?3U:mode==12?2U:1U;
+      const UINTN n=mode==14?3:sizeof(flags);
+      if(*bytes<n)return EFI_BUFFER_TOO_SMALL;
+      memcpy(data,&flags,n);*bytes=n;return EFI_SUCCESS;
+    }
+  }
   if(mode==6 && wcscmp(name,L"Driver0002")==0) {
     *bytes=1025;return EFI_SUCCESS;
   }
@@ -156,20 +166,21 @@ int main(int argc,char **argv) {
   EFI_RUNTIME_SERVICES rs={GetVariable,SetVariable};
   EFI_SYSTEM_TABLE st={&bs,&rs};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>9)return 2;
+  if(mode<0||mode>14)return 2;
   EFI_STATUS result=GuInstallDriverOption((EFI_HANDLE)(uintptr_t)0x55,&st);
   EFI_STATUS wanted=mode==0||mode==2?EFI_OUT_OF_RESOURCES:
-                    mode==5||mode==6?EFI_COMPROMISED_DATA:
+                    mode==5||mode==6||mode==14?EFI_COMPROMISED_DATA:
+                    mode==10||mode==11?EFI_UNSUPPORTED:
                     mode==7||mode==8||mode==9?EFI_DEVICE_ERROR:EFI_SUCCESS;
   CHECK(result==wanted);
   CHECK(order_reads==1);
-  if(mode==0||mode==2||mode==5||mode==6||mode==8||mode==9) {
+  if(mode==0||mode==2||mode==5||mode==6||mode==8||mode==9||mode==10||mode==11||mode==14) {
     CHECK(allocs==0&&frees==0);
     CHECK(driver_writes==0&&order_writes==0&&driver_deletes==0);
   } else if(mode==1) {
     CHECK(driver_writes==1&&order_writes==0&&driver_deletes==0);
     CHECK(allocs==1&&frees==1);
-  } else if(mode==3||mode==4) {
+  } else if(mode==3||mode==4||mode==12||mode==13) {
     CHECK(driver_writes==1&&order_writes==1&&driver_deletes==0);
     CHECK(allocs==1&&frees==1);
   } else if(mode==7) {
@@ -189,7 +200,7 @@ int main(int argc,char **argv) {
                      "-Werror","-pedantic",str(source),"-o",str(binary)],
                     capture_output=True,text=True)
                 self.assertEqual(built.returncode,0,built.stderr)
-                for mode in range(10):
+                for mode in range(15):
                     with self.subTest(compiler=compiler,mode=mode):
                         result=subprocess.run(
                             [str(binary),str(mode)],
@@ -223,6 +234,7 @@ typedef struct { int opaque; } EFI_GUID;
 #define BOOLEAN int
 #define TRUE 1
 #define FALSE 0
+#define LOAD_OPTION_FORCE_RECONNECT 2U
 #define GU_DRIVER_SCAN_SLOTS 256U
 #define GU_DRIVER_ORDER_MAX 128U
 #define GU_DRIVER_VAR_ATTRS 7U
