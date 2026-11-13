@@ -26,6 +26,14 @@ class DiagnosticContract(unittest.TestCase):
         self.assertIn("child->ParentHandle",parent)
         self.assertIn("bs->HandleProtocol(child->ParentHandle,&LoadedGuid",parent)
         self.assertIn("PARENT_TEXT_SHA256=",parent)
+        # The new evidence is the full LoadImage DevicePath, not just the
+        # relative LoadedImage.FilePath previously captured by the probe.
+        self.assertIn("LoadedImagePathGuid=EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID",source)
+        self.assertIn("bs->HandleProtocol(binding->ImageHandle,&LoadedImagePathGuid",parent)
+        self.assertIn("SOURCE=LOADED_IMAGE_DEVICE_PATH READ_ONLY=1",parent)
+        self.assertIn("loaded_image_path&&PathCopy(loaded_image_path,&path)",parent)
+        self.assertIn('SayPath("MSI_B850_LOAD_DEVICE_PATH",i,&path)',parent)
+        self.assertNotIn("bs->OpenProtocol(",parent)
         self.assertNotIn("DisconnectController(",parent)
         self.assertNotIn("Stop(",parent)
         self.assertNotIn("StartImage(",parent)
