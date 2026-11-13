@@ -27,6 +27,23 @@ def function_body(name):
 
 
 class HandoverOrderTests(unittest.TestCase):
+    def test_original_rtx_4090_and_3080_release_refuses_before_vendor_stop(self):
+        """Source contract: known active GPUs cannot reach proprietary Stop."""
+        release = function_body("GuMsiRelease")
+        readiness = release.index("if(!Plan.ready||Plan.mutated")
+        guard = re.search(
+            r"if\(Gu\.device_id==0x2684U\|\|Gu\.device_id==0x220aU\)"
+            r"\s*\{(?P<body>[^{}]*)\}",
+            release,
+        )
+        self.assertIsNotNone(guard, "Missing exact AD102/GA102 safety refusal")
+        self.assertIn("return EFI_UNSUPPORTED;", guard.group("body"))
+        self.assertLess(readiness, guard.start())
+        self.assertLess(guard.end(), release.index("Plan.table->BootServices"))
+        self.assertLess(guard.end(), release.index("DisconnectController("))
+        self.assertLess(guard.end(), release.index("GuAd104ColdEntry()"))
+        self.assertIn("signed loader not verified", guard.group("body"))
+
     def test_preclose_reads_require_valid_claim_and_full_register_checks(self):
         pre = function_body("GuMsiHardwareVerifiedBeforeClose")
         self.assertEqual(pre.count("GuRead32("), 7)
