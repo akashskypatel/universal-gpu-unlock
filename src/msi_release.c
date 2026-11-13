@@ -889,6 +889,15 @@ static EFI_STATUS ClaimRestore(VOID) {
 }
 EFI_STATUS GuMsiRelease(VOID) {
   if(!Plan.ready||Plan.mutated||Gu.started||Gu.owned)return EFI_NOT_READY;
+  /* The exact stock AD102/GA102 NVIDIA zero-child Stop path is not safe:
+   * it can write BAR0 and enter a poll without a proven local bound.
+   * Profile hashes and a structurally valid FWSEC descriptor do not prove
+   * Windows 617.42 signed Booter acceptance or physical cold recovery.
+   * Reject before any firmware callback, independent of entrypoint/build. */
+  if(Gu.device_id==0x2684U||Gu.device_id==0x220aU) {
+    GuLog("MSI release refused for original AD102/GA102: vendor Stop and signed loader not verified\n");
+    return EFI_UNSUPPORTED;
+  }
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   for(UINTN stage=Plan.headless?3u:1u;stage<=3;stage++) {
     GuLog("MSI driver detach intent: stage=%zu\n",(size_t)stage);
