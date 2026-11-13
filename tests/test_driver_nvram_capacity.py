@@ -234,6 +234,7 @@ typedef struct { int opaque; } EFI_GUID;
 #define BOOLEAN int
 #define TRUE 1
 #define FALSE 0
+#define LOAD_OPTION_ACTIVE 1U
 #define LOAD_OPTION_FORCE_RECONNECT 2U
 #define GU_DRIVER_SCAN_SLOTS 256U
 #define GU_DRIVER_ORDER_MAX 128U
@@ -244,6 +245,7 @@ typedef struct { int opaque; } EFI_GUID;
 #define EFI_OUT_OF_RESOURCES 3
 #define EFI_COMPROMISED_DATA 4
 #define EFI_DEVICE_ERROR 5
+#define EFI_UNSUPPORTED 6
 #define EFI_INVALID_PARAMETER 7
 typedef struct EFI_RUNTIME_SERVICES {
     EFI_STATUS (*GetVariable)(CHAR16 *, EFI_GUID *, UINT32 *, UINTN *, VOID *);
