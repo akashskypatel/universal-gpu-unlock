@@ -27,7 +27,8 @@ class NvramCapacityTests(unittest.TestCase):
     def test_real_install_refuses_unreadable_driver_order_before_any_write(self):
         code = "\n\n".join(production(name) for name in (
             "GetDevicePathSize", "SetDriverSlot", "IsOwnOption",
-            "ScanDriverOptions", "ReadDriverOrder", "GuInstallDriverOption"))
+            "ScanDriverOptions", "ReadDriverOrder", "CheckOrderedReconnect",
+            "GuInstallDriverOption"))
         host = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -118,16 +119,25 @@ static EFI_STATUS GetVariable(CHAR16 *name,EFI_GUID *guid,UINT32 *attrs,
     order_reads++;
     if(mode==9)return EFI_DEVICE_ERROR;
     if(mode==4)return EFI_NOT_FOUND;
-    UINTN count=(mode==3||mode==7||mode==10||mode==11||mode==12||mode==13||mode==14)?127:128;
+    UINTN count=(mode==3||mode==7||(mode>=10&&mode<=19))?127:128;
     if(mode==5){*bytes=258;return EFI_SUCCESS;}
     if(*bytes<count*sizeof(UINT16))return EFI_BUFFER_TOO_SMALL;
     UINT16 *order=(UINT16 *)data;
     for(UINTN i=0;i<count;i++)order[i]=(UINT16)(100+i);
     if(mode==1)order[0]=2;
+    if(mode>=10&&mode<=14)order[0]=3;
+    if(mode>=15&&mode<=19)order[0]=0x1234;
     *bytes=count*sizeof(UINT16);
     return EFI_SUCCESS;
   }
   if(mode==8 && wcscmp(name,L"Driver0001")==0)return EFI_DEVICE_ERROR;
+  if(wcscmp(name,L"Driver1234")==0 && mode>=15&&mode<=19) {
+    if(mode==16){*bytes=2048;return EFI_BUFFER_TOO_SMALL;}
+    const UINT32 flags=mode==15?3U:mode==17?2U:1U;
+    const UINTN n=mode==19?3:sizeof(flags);
+    if(*bytes<n)return EFI_BUFFER_TOO_SMALL;
+    memcpy(data,&flags,n);*bytes=n;return EFI_SUCCESS;
+  }
   if(wcscmp(name,L"Driver0003")==0) {
     if(mode==11){*bytes=2048;return EFI_BUFFER_TOO_SMALL;}
     if(mode==10||mode==12||mode==13||mode==14){
@@ -166,21 +176,21 @@ int main(int argc,char **argv) {
   EFI_RUNTIME_SERVICES rs={GetVariable,SetVariable};
   EFI_SYSTEM_TABLE st={&bs,&rs};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>14)return 2;
+  if(mode<0||mode>19)return 2;
   EFI_STATUS result=GuInstallDriverOption((EFI_HANDLE)(uintptr_t)0x55,&st);
   EFI_STATUS wanted=mode==0||mode==2?EFI_OUT_OF_RESOURCES:
-                    mode==5||mode==6||mode==14?EFI_COMPROMISED_DATA:
-                    mode==10||mode==11?EFI_UNSUPPORTED:
+                    mode==5||mode==6||mode==14||mode==19?EFI_COMPROMISED_DATA:
+                    mode==10||mode==11||mode==15||mode==16?EFI_UNSUPPORTED:
                     mode==7||mode==8||mode==9?EFI_DEVICE_ERROR:EFI_SUCCESS;
   CHECK(result==wanted);
   CHECK(order_reads==1);
-  if(mode==0||mode==2||mode==5||mode==6||mode==8||mode==9||mode==10||mode==11||mode==14) {
+  if(mode==0||mode==2||mode==5||mode==6||mode==8||mode==9||mode==10||mode==11||mode==14||mode==15||mode==16||mode==19) {
     CHECK(allocs==0&&frees==0);
     CHECK(driver_writes==0&&order_writes==0&&driver_deletes==0);
   } else if(mode==1) {
     CHECK(driver_writes==1&&order_writes==0&&driver_deletes==0);
     CHECK(allocs==1&&frees==1);
-  } else if(mode==3||mode==4||mode==12||mode==13) {
+  } else if(mode==3||mode==4||mode==12||mode==13||mode==17||mode==18) {
     CHECK(driver_writes==1&&order_writes==1&&driver_deletes==0);
     CHECK(allocs==1&&frees==1);
   } else if(mode==7) {
@@ -200,7 +210,7 @@ int main(int argc,char **argv) {
                      "-Werror","-pedantic",str(source),"-o",str(binary)],
                     capture_output=True,text=True)
                 self.assertEqual(built.returncode,0,built.stderr)
-                for mode in range(15):
+                for mode in range(20):
                     with self.subTest(compiler=compiler,mode=mode):
                         result=subprocess.run(
                             [str(binary),str(mode)],
