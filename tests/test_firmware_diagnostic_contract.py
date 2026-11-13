@@ -12,6 +12,25 @@ class DiagnosticContract(unittest.TestCase):
         self.assertLess(descriptor.index("range(length, off, 44)"),descriptor.index("raw descriptor[0:16]"))
         self.assertLess(descriptor.index("range(length, off, size)"),descriptor.index("raw descriptor[0:16]"))
         self.assertIn("SIGNATURE_AUTHENTICATED=0",descriptor)
+    def test_msi_parent_image_observation_stays_behind_fingerprint_gate(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        report=source.split("static void ReportMsiB850RomVariables(",1)[1].split("\n#endif",1)[0]
+        gate="if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot))"
+        call="ReportMsiB850ImageParents(table->BootServices);"
+        self.assertLess(report.index(gate),report.index("return;"))
+        self.assertLess(report.index("return;"),report.index(call))
+        parent=source.split("static void ReportMsiB850ImageParents(",1)[1].split(
+            "static void ReportMsiB850RomVariables(",1)[0]
+        self.assertIn("GuMsiB850IsOwnerNvidia(&node->identity)",parent)
+        self.assertIn("node->by_driver!=1",parent)
+        self.assertIn("child->ParentHandle",parent)
+        self.assertIn("bs->HandleProtocol(child->ParentHandle,&LoadedGuid",parent)
+        self.assertIn("PARENT_TEXT_SHA256=",parent)
+        self.assertNotIn("DisconnectController(",parent)
+        self.assertNotIn("Stop(",parent)
+        self.assertNotIn("StartImage(",parent)
+        self.assertNotIn("SetVariable(",parent)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)
