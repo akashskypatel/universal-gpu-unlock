@@ -455,13 +455,13 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
     }
     memcpy(&modeptr,obj+0x3c0U,sizeof(modeptr));
     if(!modeptr) {
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED POLICY=ABSENT KIND=%u NO_RUNTIME_MODE=1\r\n",
-          label,(unsigned)kind);
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED PCI_OBJECT=%p POLICY=ABSENT KIND=%u NO_RUNTIME_MODE=1\r\n",
+          label,(VOID *)pci,(unsigned)kind);
       continue;
     }
     if(!MsiPolicyMapped(map,map_size,desc_size,modeptr,0x20U)) {
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED POLICY=UNREADABLE KIND=%u NO_DEREF=1\r\n",
-          label,(unsigned)kind);
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED PCI_OBJECT=%p POLICY=UNREADABLE KIND=%u NO_DEREF=1\r\n",
+          label,(VOID *)pci,(unsigned)kind);
       continue;
     }
     {
@@ -469,8 +469,8 @@ static void ReportMsiB850PolicyPointers(EFI_BOOT_SERVICES *bs) {
       VOID *record_owner=NULL;
       UINT8 mode=entry[0x18U];
       memcpy(&record_owner,entry+0x10U,sizeof(record_owner));
-      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED KIND=%u ENTRY=%p MODE=%u RECORD_OWNER=%p OWNER_IS_SELF=%u ENTRY_FLAGS=%#x ENTRY_CLASS_CACHE=%#x READ_ONLY=1\r\n",
-          label,(unsigned)kind,modeptr,(unsigned)mode,record_owner,
+      Say("MSI_B850_POLICY_PTR TARGET=%s STATE=OBSERVED PCI_OBJECT=%p KIND=%u ENTRY=%p MODE=%u RECORD_OWNER=%p OWNER_IS_SELF=%u ENTRY_FLAGS=%#x ENTRY_CLASS_CACHE=%#x READ_ONLY=1\r\n",
+          label,(VOID *)pci,(unsigned)kind,modeptr,(unsigned)mode,record_owner,
           (unsigned)(record_owner==(VOID *)pci),(unsigned)entry[0x19U],
           (unsigned)entry[0x1aU]);
     }
