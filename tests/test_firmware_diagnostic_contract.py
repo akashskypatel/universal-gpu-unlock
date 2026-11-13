@@ -55,6 +55,7 @@ class DiagnosticContract(unittest.TestCase):
         self.assertIn("bs->GetMemoryMap(",probe)
         self.assertIn("MsiPolicyMapped(map,map_size,desc_size,pci,object_span)",probe)
         self.assertIn("config_id!=node->identity.pci_id",probe)
+        self.assertIn("STATE=OBSERVED PCI_OBJECT=%p KIND=%u ENTRY=%p MODE=%u RECORD_OWNER=%p",probe)
         self.assertIn("kind!=expected_kind",probe)
         self.assertIn("obj[0xefU]!=(UINT8)(node->identity.class_code>>8)",probe)
         self.assertLess(probe.index("MsiPolicyMapped(map,map_size,desc_size,pci,object_span)"),
