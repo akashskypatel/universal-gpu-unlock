@@ -211,6 +211,86 @@ static void ReportMsiB850PrivateBindings(EFI_BOOT_SERVICES *bs) {
   Say("MSI_B850_PRIVATE_END NO_PRIVATE_METHOD=1 NO_ROM_DEREFERENCE=1 NO_RELEASE=1\r\n");
 }
 
+/* The loaded image's ParentHandle records the parent supplied to LoadImage.
+ * Identify that image without invoking any driver function or altering PCI
+ * ownership. This does not prove that the parent called StartImage or
+ * enforced a particular per-device option-ROM mode. */
+static void ReportMsiB850ImageParents(EFI_BOOT_SERVICES *bs) {
+  size_t i;
+  Say("MSI_B850_IMAGE_PARENT_BEGIN READ_ONLY=1 ORIGINAL_LOAD_CALLER_NOT_PROVEN=1\r\n");
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *node=&Snapshot.pci[i];
+    EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
+    EFI_LOADED_IMAGE_PROTOCOL *child=NULL,*parent=NULL;
+    EFI_STATUS status;
+    GU_TOPO_PATH path;
+    const char *gpu;
+    if(!GuMsiB850IsOwnerNvidia(&node->identity))continue;
+    gpu=node->identity.pci_id==0x268410deU?"4090":"3080";
+    if(!node->openers_known || node->by_driver!=1 ||
+       !node->first_owner_agent) {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s STATUS=UNRESOLVED OWNER_NOT_UNIQUE=1\r\n",gpu);
+      continue;
+    }
+    status=bs->HandleProtocol(node->first_owner_agent,&DriverBindingGuid,
+                              (VOID **)&binding);
+    if(EFI_ERROR(status)||!binding||!binding->ImageHandle) {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s STATUS=UNRESOLVED DRIVER_BINDING_STATUS=%#llx\r\n",
+          gpu,(unsigned long long)status);
+      continue;
+    }
+    status=bs->HandleProtocol(binding->ImageHandle,&LoadedGuid,(VOID **)&child);
+    if(EFI_ERROR(status)||!child) {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s STATUS=UNRESOLVED CHILD_LOADED_STATUS=%#llx\r\n",
+          gpu,(unsigned long long)status);
+      continue;
+    }
+    Say("MSI_B850_IMAGE_PARENT GPU=%s CHILD_IMAGE=%p CHILD_SOURCE_IS_PCI=%u PARENT_IMAGE=%p READ_ONLY=1\r\n",
+        gpu,binding->ImageHandle,
+        (unsigned)(child->DeviceHandle==(EFI_HANDLE)node->identity.handle),
+        child->ParentHandle);
+    if(!child->ParentHandle) {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_STATUS=ABSENT\r\n",gpu);
+      continue;
+    }
+    status=bs->HandleProtocol(child->ParentHandle,&LoadedGuid,(VOID **)&parent);
+    if(EFI_ERROR(status)||!parent) {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_STATUS=UNRESOLVED EFI_STATUS=%#llx\r\n",
+          gpu,(unsigned long long)status);
+      continue;
+    }
+    Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_STATUS=OBSERVED PARENT_IMAGE_BYTES=%llu PARENT_SOURCE_DEVICE=%p FIRST_BIND_ORDER_UNVERIFIED=1\r\n",
+        gpu,(unsigned long long)parent->ImageSize,parent->DeviceHandle);
+    if(parent->FilePath && PathCopy(parent->FilePath,&path)) {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_FILE_PATH_LEN=%zu\r\n",gpu,path.length);
+      SayPath("MSI_B850_PARENT_FILE",i,&path);
+    } else {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_FILE_PATH=UNAVAILABLE\r\n",gpu);
+    }
+    if(parent->ImageBase && parent->ImageSize &&
+       parent->ImageSize<=8U*1024U*1024U) {
+      size_t rva=0,bytes=0,k;
+      if(GuLoadedPeTextRange(parent->ImageBase,(size_t)parent->ImageSize,&rva,&bytes)) {
+        UINT8 digest[32];char hex[65];
+        static const char digits[]="0123456789abcdef";
+        GuSha256((const UINT8 *)parent->ImageBase+rva,bytes,digest);
+        for(k=0;k<32;k++) {
+          hex[2*k]=digits[digest[k]>>4];
+          hex[2*k+1]=digits[digest[k]&15U];
+        }
+        hex[64]=0;
+        Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_TEXT_SHA256=%s TEXT_RVA=%zu TEXT_BYTES=%zu RELOCATIONS_NOT_CHECKED=1 SIGNATURE_NOT_VERIFIED=1\r\n",
+            gpu,hex,rva,bytes);
+      } else {
+        Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_TEXT_SHA256=UNAVAILABLE PE_TEXT_UNRESOLVED=1\r\n",gpu);
+      }
+    } else {
+      Say("MSI_B850_IMAGE_PARENT GPU=%s PARENT_TEXT_SHA256=UNAVAILABLE IMAGE_MAPPING_UNAVAILABLE=1\r\n",gpu);
+    }
+  }
+  Say("MSI_B850_IMAGE_PARENT_END NO_VENDOR_CALLBACK=1 NO_PCI_WRITES=1 NO_RELEASE=1\r\n");
+}
+
 static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
   Say("MSI_B850_ROM_VARIABLES MODE=READ_ONLY PLATFORM=MS-7E56 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0\r\n");
   /* This is the exact MSI 7E56 iGPU and owner dual-NVIDIA PCI fingerprint.
@@ -223,6 +303,7 @@ static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
   ReportMsiB850Variable(table,L"ROM_CMN","ROM_CMN");
   ReportMsiB850Variable(table,L"CSM_CMN","CSM_CMN");
   ReportMsiB850PrivateBindings(table->BootServices);
+  ReportMsiB850ImageParents(table->BootServices);
   Say("MSI_B850_ROM_VARIABLES STATUS=OBSERVED_OR_REFUSED ORIGINAL_ROM_DISPATCH_UNVERIFIED=1\r\n");
 }
 #endif
