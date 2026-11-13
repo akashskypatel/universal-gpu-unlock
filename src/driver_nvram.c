@@ -65,8 +65,7 @@ static BOOLEAN IsOwnOption(const UINT8 *option, UINTN size) {
 
 /* A read error aborts the scan: an unreadable slot must never count as free. */
 static EFI_STATUS ScanDriverOptions(EFI_RUNTIME_SERVICES *rs, BOOLEAN own[GU_DRIVER_SCAN_SLOTS],
-                                    UINTN *first_own, UINTN *first_free,
-                                    BOOLEAN reject_force_reconnect) {
+                                    UINTN *first_own, UINTN *first_free) {
   *first_own = *first_free = GU_DRIVER_SCAN_SLOTS;
   for (UINTN slot = 0; slot < GU_DRIVER_SCAN_SLOTS; slot++) {
     CHAR16 name[] = L"Driver0000";
@@ -80,21 +79,9 @@ static EFI_STATUS ScanDriverOptions(EFI_RUNTIME_SERVICES *rs, BOOLEAN own[GU_DRI
       if (*first_free == GU_DRIVER_SCAN_SLOTS) *first_free = slot;
       continue;
     }
-    if (s == EFI_BUFFER_TOO_SMALL) {
-      /* A startup option that cannot be checked is not safe to extend. */
-      if (reject_force_reconnect) return EFI_UNSUPPORTED;
-      continue;
-    }
+    if (s == EFI_BUFFER_TOO_SMALL) continue; /* Preserve unrelated large slots. */
     if (s != EFI_SUCCESS) return s;
-    if (size > sizeof(option) || (reject_force_reconnect && size < sizeof(UINT32)))
-      return EFI_COMPROMISED_DATA;
-    if (reject_force_reconnect) {
-      UINT32 flags = 0;
-      memcpy(&flags, option, sizeof(flags));
-      if ((flags & (LOAD_OPTION_ACTIVE | LOAD_OPTION_FORCE_RECONNECT)) ==
-          (LOAD_OPTION_ACTIVE | LOAD_OPTION_FORCE_RECONNECT))
-        return EFI_UNSUPPORTED;
-    }
+    if (size > sizeof(option)) return EFI_COMPROMISED_DATA;
     if (IsOwnOption(option, size)) {
       own[slot] = TRUE;
       if (*first_own == GU_DRIVER_SCAN_SLOTS) *first_own = slot;
@@ -114,6 +101,36 @@ static EFI_STATUS ReadDriverOrder(EFI_RUNTIME_SERVICES *rs, UINT16 order[GU_DRIV
   if (size > GU_DRIVER_ORDER_MAX * sizeof(UINT16) ||
       size % sizeof(UINT16)) return EFI_COMPROMISED_DATA;
   *count = size / sizeof(UINT16);
+  return EFI_SUCCESS;
+}
+
+/* The boot manager processes Driver#### entries referenced by DriverOrder,
+ * including slot numbers beyond our bounded installer allocation range.
+ * Refuse installing another resident driver if an active ordered driver can
+ * trigger the platform-wide DisconnectController/ConnectController sequence.
+ * This performs only GetVariable and never changes an existing load option. */
+static EFI_STATUS CheckOrderedReconnect(EFI_RUNTIME_SERVICES *rs,
+                                       const UINT16 order[GU_DRIVER_ORDER_MAX],
+                                       UINTN count) {
+  if (!rs || !rs->GetVariable || !order || count > GU_DRIVER_ORDER_MAX)
+    return EFI_INVALID_PARAMETER;
+  for (UINTN i = 0; i < count; i++) {
+    CHAR16 name[] = L"Driver0000";
+    UINT8 option[1024];
+    UINTN size = sizeof(option);
+    UINT32 attrs = 0, flags = 0;
+    SetDriverSlot(name, order[i]);
+    EFI_STATUS s = rs->GetVariable(name, &GlobalGuid, &attrs, &size, option);
+    if (s == EFI_NOT_FOUND) continue;
+    if (s == EFI_BUFFER_TOO_SMALL) return EFI_UNSUPPORTED;
+    if (s != EFI_SUCCESS) return s;
+    if (size < sizeof(flags) || size > sizeof(option))
+      return EFI_COMPROMISED_DATA;
+    memcpy(&flags, option, sizeof(flags));
+    if ((flags & (LOAD_OPTION_ACTIVE | LOAD_OPTION_FORCE_RECONNECT)) ==
+        (LOAD_OPTION_ACTIVE | LOAD_OPTION_FORCE_RECONNECT))
+      return EFI_UNSUPPORTED;
+  }
   return EFI_SUCCESS;
 }
 
@@ -156,7 +173,9 @@ EFI_STATUS GuInstallDriverOption(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
   s = ReadDriverOrder(rs, order, &count);
   if (s != EFI_SUCCESS) return s;
-  s = ScanDriverOptions(rs, own, &first_own, &first_free, TRUE);
+  s = CheckOrderedReconnect(rs, order, count);
+  if (s != EFI_SUCCESS) return s;
+  s = ScanDriverOptions(rs, own, &first_own, &first_free);
   if (s != EFI_SUCCESS) return s;
   BOOLEAN reinstall = first_own != GU_DRIVER_SCAN_SLOTS;
   UINTN slot = reinstall ? first_own : first_free;
@@ -252,7 +271,7 @@ EFI_STATUS GuDisableDriverOption(EFI_SYSTEM_TABLE *t) {
 
   EFI_STATUS s = ReadDriverOrder(rs, order, &count);
   if (s != EFI_SUCCESS) return s;
-  s = ScanDriverOptions(rs, own, &first_own, &first_free, FALSE);
+  s = ScanDriverOptions(rs, own, &first_own, &first_free);
   if (s != EFI_SUCCESS) return s;
   if (first_own == GU_DRIVER_SCAN_SLOTS) return EFI_NOT_FOUND;
   return RemoveOwnedFromOrder(rs, order, count, own);
@@ -267,7 +286,7 @@ EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {
   BOOLEAN own[GU_DRIVER_SCAN_SLOTS];
   EFI_STATUS s = ReadDriverOrder(rs, order, &count);
   if (s != EFI_SUCCESS) return s;
-  s = ScanDriverOptions(rs, own, &first_own, &first_free, FALSE);
+  s = ScanDriverOptions(rs, own, &first_own, &first_free);
   if (s != EFI_SUCCESS) return s;
   if (first_own == GU_DRIVER_SCAN_SLOTS) return EFI_NOT_FOUND;
 
