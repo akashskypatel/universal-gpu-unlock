@@ -215,6 +215,9 @@ static void ReportMsiB850PrivateBindings(EFI_BOOT_SERVICES *bs) {
  * Identify that image without invoking any driver function or altering PCI
  * ownership. This does not prove that the parent called StartImage or
  * enforced a particular per-device option-ROM mode. */
+static void SayPath(const char *kind, size_t index, const GU_TOPO_PATH *path);
+static int PathCopy(const EFI_DEVICE_PATH_PROTOCOL *source, GU_TOPO_PATH *out);
+
 static void ReportMsiB850ImageParents(EFI_BOOT_SERVICES *bs) {
   size_t i;
   Say("MSI_B850_IMAGE_PARENT_BEGIN READ_ONLY=1 ORIGINAL_LOAD_CALLER_NOT_PROVEN=1\r\n");
