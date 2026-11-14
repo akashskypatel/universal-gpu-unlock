@@ -25,6 +25,16 @@ class StopOnlyObservation(unittest.TestCase):
         self.assertIn("image->ImageSize!=162016U", SOURCE)
         self.assertIn("Image4090Sha", SOURCE)
         self.assertIn("Cards[0].io->RomSize!=RomSize4090", SOURCE)
+        self.assertIn("TargetHasNoChildren()",SOURCE)
+        for pinned in ("8e2b676ed8eccbb582ca6a80d6bf39196dcc574a1c3c4cc73d35b53c2d4de312",
+                       "b96b0411dcd378e6433c609f94f6828ea18d8713f5055e4d76ffe9c4901b2908",
+                       "fcb89e38b347b79e6fd126ade23dab174a5c5bfb9bfe7686b1072835986038e0"):
+            self.assertIn(pinned,SOURCE)
+        self.assertIn("GuHashMatches(Cards[i].path,Cards[i].path_size,ExactPaths[i])",SOURCE)
+        self.assertIn("if(s==EFI_SUCCESS)s=Owner(&Cards[1]);",SOURCE)
+        self.assertIn("if(s==EFI_SUCCESS)s=Owner(&Cards[2]);",SOURCE)
+        self.assertIn("POST_STOP_PEER_OWNER=",SOURCE)
+
         self.assertIn("STOP_ATTEMPT=IMMINENT", SOURCE)
         before=SOURCE.index("s=Flush();\n  if(EFI_ERROR(s)||!Log)goto refuse;", SOURCE.index("STOP_ATTEMPT=IMMINENT"))
         attempt=SOURCE.index("s=table->BootServices->DisconnectController(")
