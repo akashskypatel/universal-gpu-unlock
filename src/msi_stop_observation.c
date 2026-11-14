@@ -19,6 +19,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
   EFI_HANDLE handle,owner;
