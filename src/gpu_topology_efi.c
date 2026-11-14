@@ -524,22 +524,22 @@ static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
   VOID *method_get=NULL,*method_set=NULL,*method_class=NULL;
   VOID *head_forward=NULL,*head_backward=NULL;
   const UINT8 *head;
-  Say("MSI_B850_BDS_POLICY_BEGIN READ_ONLY=1 VENDOR_CALLS=0 ENTRIES_NOT_WALKED=1\\r\\n");
+  Say("MSI_B850_BDS_POLICY_BEGIN READ_ONLY=1 VENDOR_CALLS=0 ENTRIES_NOT_WALKED=1\r\n");
   if(!bs || !bs->LocateProtocol || !bs->LocateHandleBuffer ||
      !bs->HandleProtocol || !bs->FreePool || !bs->GetMemoryMap) {
-    Say("MSI_B850_BDS_POLICY STATE=SKIPPED BOOT_SERVICES_UNAVAILABLE=1\\r\\n");
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED BOOT_SERVICES_UNAVAILABLE=1\r\n");
     goto done;
   }
   status=bs->LocateProtocol(&MsiBdsConnectGuid,NULL,&policy);
-  Say("MSI_B850_BDS_POLICY LOCATE_STATUS=%#llx PRESENT=%u\\r\\n",
+  Say("MSI_B850_BDS_POLICY LOCATE_STATUS=%#llx PRESENT=%u\r\n",
       (unsigned long long)status,(unsigned)(status==EFI_SUCCESS && policy!=NULL));
   if(EFI_ERROR(status) || !policy) {
-    Say("MSI_B850_BDS_POLICY STATE=SKIPPED PROTOCOL_NOT_VERIFIED=1\\r\\n");
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED PROTOCOL_NOT_VERIFIED=1\r\n");
     goto done;
   }
   status=bs->LocateHandleBuffer(ByProtocol,&LoadedGuid,NULL,&count,&handles);
   if(EFI_ERROR(status) || !count || count>1024U || !handles) {
-    Say("MSI_B850_BDS_POLICY STATE=SKIPPED LOADED_IMAGES_UNAVAILABLE=1 COUNT=%zu\\r\\n",
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED LOADED_IMAGES_UNAVAILABLE=1 COUNT=%zu\r\n",
         (size_t)count);
     goto done;
   }
@@ -547,7 +547,7 @@ static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
   if(EFI_ERROR(status) || map_bytes>sizeof(MsiPolicyMemoryWords) ||
      desc_size<sizeof(EFI_MEMORY_DESCRIPTOR) || desc_size>256U ||
      (desc_size%sizeof(UINT64))!=0 || (map_bytes%desc_size)!=0) {
-    Say("MSI_B850_BDS_POLICY STATE=SKIPPED MEMORY_MAP_UNVERIFIED=1\\r\\n");
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED MEMORY_MAP_UNVERIFIED=1\r\n");
     goto done;
   }
   for(i=0;i<count;i++) {
@@ -569,7 +569,7 @@ static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
   }
   if(matches!=1 || base>(UINTN)-1-0x163b0U ||
      policy!=(VOID *)(base+0x16330U)) {
-    Say("MSI_B850_BDS_POLICY STATE=SKIPPED ORIGINAL_BDS_MISMATCH=1 MATCHES=%zu\\r\\n",
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED ORIGINAL_BDS_MISMATCH=1 MATCHES=%zu\r\n",
         (size_t)matches);
     goto done;
   }
@@ -580,22 +580,22 @@ static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
   if(revision!=0x10000U || method_get!=(VOID *)(base+0x3260U) ||
      method_set!=(VOID *)(base+0x33e4U) ||
      method_class!=(VOID *)(base+0x34e4U)) {
-    Say("MSI_B850_BDS_POLICY STATE=SKIPPED INTERFACE_METHODS_UNVERIFIED=1\\r\\n");
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED INTERFACE_METHODS_UNVERIFIED=1\r\n");
     goto done;
   }
   head=(const UINT8 *)policy+0x70U;
   memcpy(&head_forward,head,sizeof(head_forward));
   memcpy(&head_backward,head+sizeof(head_forward),sizeof(head_backward));
-  Say("MSI_B850_BDS_POLICY STATE=%s HEAD=%p NEXT=%p PREVIOUS=%p CURRENT_BOOT_ONLY=1 EARLY_BINDING_UNPROVEN=1\\r\\n",
+  Say("MSI_B850_BDS_POLICY STATE=%s HEAD=%p NEXT=%p PREVIOUS=%p CURRENT_BOOT_ONLY=1 EARLY_BINDING_UNPROVEN=1\r\n",
       head_forward==(VOID *)head && head_backward==(VOID *)head ?
       "EMPTY_AT_OBSERVATION":"NONEMPTY_OR_INCONSISTENT",
       (const VOID *)head,head_forward,head_backward);
 done:
   if(handles && bs && bs->FreePool) {
     EFI_STATUS freed=bs->FreePool(handles);
-    Say("MSI_B850_BDS_POLICY FREE_STATUS=%#llx\\r\\n",(unsigned long long)freed);
+    Say("MSI_B850_BDS_POLICY FREE_STATUS=%#llx\r\n",(unsigned long long)freed);
   }
-  Say("MSI_B850_BDS_POLICY_END NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1 NO_GPU_ACTION=1\\r\\n");
+  Say("MSI_B850_BDS_POLICY_END NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1 NO_GPU_ACTION=1\r\n");
 }
 
 static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
