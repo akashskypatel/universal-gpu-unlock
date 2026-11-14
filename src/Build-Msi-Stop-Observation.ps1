@@ -1,0 +1,49 @@
+param(
+    [string]$VcVars,
+    [switch]$AcceptUnboundedStopRisk
+)
+$ErrorActionPreference='Stop'
+# A separate one-card test, without any unlock, flash, DMA, reset or
+# Windows handoff source. No active EFI image is built by default.
+if (-not $AcceptUnboundedStopRisk) {
+    throw 'Explicit -AcceptUnboundedStopRisk switch required; original Stop may hang.'
+}
+if (-not $VcVars) {
+    $vswhere=Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path -LiteralPath $vswhere) {
+        $install=& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($install) { $VcVars=Join-Path $install 'VC\Auxiliary\Build\vcvars64.bat' }
+    }
+}
+if (-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)) {
+    throw 'MSVC x64 build environment not found; specify -VcVars.'
+}
+Push-Location -LiteralPath $PSScriptRoot
+try {
+    $output=Join-Path $PSScriptRoot 'build_stop_observation'
+    New-Item -ItemType Directory -Force -Path $output | Out-Null
+    $sources=@('msi_stop_observation.c','sha256.c','format.c','runtime.c')
+    $flags='/nologo /O2 /Oi- /GS- /Gs65536 /Zl /c /TC /DGU_EXPERIMENTAL_STOP_OBSERVATION /D_CRT_SECURE_NO_WARNINGS /I. /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
+    $commands=@('@echo off',('call "'+$VcVars+'" >nul'),'if errorlevel 1 exit /b 1',('cd /d "'+$PSScriptRoot+'"'))
+    $objects=@()
+    foreach ($source in $sources) {
+        $obj='build_stop_observation\' + [IO.Path]::GetFileNameWithoutExtension($source) + '.obj'
+        $objects+=$obj
+        $commands+=('cl '+$flags+' /Fo"'+$obj+'" "'+$source+'"')
+        $commands+='if errorlevel 1 exit /b 1'
+    }
+    $joined=($objects | ForEach-Object { '"'+$_+'"' }) -join ' '
+    $binary='MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI'
+    $commands+=('link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_stop_observation\'+$binary+' '+$joined)
+    $commands+='if errorlevel 1 exit /b 1'
+    $batch=Join-Path $output 'build-stop-only.cmd'
+    Set-Content -LiteralPath $batch -Encoding ascii -Value $commands
+    & $env:ComSpec /d /c $batch
+    if ($LASTEXITCODE -ne 0) {throw "Stop observer build failed (exit=$LASTEXITCODE)"}
+    $path=Join-Path $output $binary
+    if (-not (Test-Path -LiteralPath $path)) {throw 'Stop observer EFI missing'}
+    $sha=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+    Write-Output "STATUS=BUILT PATH=$path SHA256=$sha STOP_ONLY=1 TARGET=0000:01:00.0 UNLOCK=0 FLASH=0 RESET=0 PEER_STOP=0 RECOVERY_VERIFIED=0 HARDWARE_TESTED=0"
+} finally {
+    Pop-Location
+}
