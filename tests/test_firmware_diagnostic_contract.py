@@ -83,7 +83,7 @@ class DiagnosticContract(unittest.TestCase):
         self.assertIn("MsiBdsTextDigest[32]",source)
         self.assertIn("expected_size=113568U,expected_rva=704U,expected_text=89076U;",probe)
         digest_initializer=source.split("static const UINT8 MsiBdsTextDigest[32]={",1)[1].split("};",1)[0]
-        digest=bytes(int(word,16) for word in re.findall(r"0x([0-9a-fA-F]{2})\\b",digest_initializer))
+        digest=bytes(int(word,16) for word in re.findall(r"0x([0-9a-fA-F]{2})\b",digest_initializer))
         self.assertEqual(digest.hex(),"b17dc40833da35c094671ff1da25b1e7ac367daf77637eebc65b7d6cf5f00151")
         self.assertIn("MsiBdsExecutableMapped(map,map_bytes,desc_size,li->ImageBase,expected_size)",probe)
         self.assertIn("GuLoadedPeTextRange(",probe)
