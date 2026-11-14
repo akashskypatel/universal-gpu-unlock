@@ -39,6 +39,10 @@ class StopOnlyObservation(unittest.TestCase):
         before=SOURCE.index("s=Flush();\n  if(EFI_ERROR(s)||!Log)goto refuse;", SOURCE.index("STOP_ATTEMPT=IMMINENT"))
         attempt=SOURCE.index("s=table->BootServices->DisconnectController(")
         self.assertLess(before, attempt)
+        self.assertLess(SOURCE.index("s=Log->Close(Log);",before),attempt)
+        self.assertLess(SOURCE.index("s=Root->Close(Root);",before),attempt)
+        self.assertGreater(SOURCE.index("EFI_STATUS postlog=StartLog(image);"),attempt)
+
         self.assertIn("if(EFI_ERROR(s)||!Log)goto refuse;",SOURCE)
         self.assertIn("s=KeyY();",SOURCE)
         self.assertIn("for(;;)(VOID)Sys->BootServices->Stall(1000000);",SOURCE)
