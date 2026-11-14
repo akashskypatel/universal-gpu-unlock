@@ -45,6 +45,12 @@ static const UINTN Buses[3]={1,4,15};
 static const UINTN RomSize4090=150016U;
 static const char Image4090Sha[]=
   "0fbd44f3455d4df5ade4bc738dbbc73fbd213487a7456a953af9e8ccbc14c2ba";
+/* Exact controller paths captured in physical diagnostic 0029. */
+static const char * const ExactPaths[3]={
+  "8e2b676ed8eccbb582ca6a80d6bf39196dcc574a1c3c4cc73d35b53c2d4de312",
+  "b96b0411dcd378e6433c609f94f6828ea18d8713f5055e4d76ffe9c4901b2908",
+  "fcb89e38b347b79e6fd126ade23dab174a5c5bfb9bfe7686b1072835986038e0"
+};
 
 static EFI_STATUS Flush(VOID) {
   return Log && Log->Flush ? Log->Flush(Log) : EFI_UNSUPPORTED;
@@ -152,6 +158,36 @@ static EFI_STATUS Owner(GPU *card) {
   card->owner=agent;
   return EFI_SUCCESS;
 }
+/* A bound child or a second protocol driver on the target is not headless.
+ * Read every installed target-protocol open record; do not invoke callbacks. */
+static EFI_STATUS TargetHasNoChildren(VOID) {
+  EFI_BOOT_SERVICES *bs=Sys->BootServices;
+  EFI_GUID **protocols=NULL;
+  UINTN count=0,i,j;
+  EFI_STATUS s=bs->ProtocolsPerHandle(Cards[0].handle,&protocols,&count);
+  if(EFI_ERROR(s)||count<2||count>64||!protocols)return EFI_ACCESS_DENIED;
+  for(i=0;i<count;i++) {
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
+    UINTN edges=0;
+    if(!protocols[i]) {s=EFI_COMPROMISED_DATA;break;}
+    s=bs->OpenProtocolInformation(Cards[0].handle,protocols[i],
+                                  &entries,&edges);
+    if(EFI_ERROR(s)||edges>128||(edges&&!entries))s=EFI_COMPROMISED_DATA;
+    else for(j=0;j<edges;j++) {
+      UINT32 attr=entries[j].Attributes;
+      if(attr==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER ||
+         attr==EFI_OPEN_PROTOCOL_EXCLUSIVE ||
+         (attr==EFI_OPEN_PROTOCOL_BY_DRIVER &&
+          memcmp(protocols[i],&PciGuid,sizeof(PciGuid))!=0))
+        s=EFI_ACCESS_DENIED;
+    }
+    if(entries && EFI_ERROR(bs->FreePool(entries)))s=EFI_DEVICE_ERROR;
+    if(EFI_ERROR(s))break;
+  }
+  if(protocols && EFI_ERROR(bs->FreePool(protocols)))s=EFI_DEVICE_ERROR;
+  return s;
+}
+
 static EFI_STATUS Inventory(VOID) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
   EFI_HANDLE *handles=NULL;
@@ -188,10 +224,12 @@ static EFI_STATUS Inventory(VOID) {
      Cards[2].path_size!=28 || !Cards[0].io->RomImage ||
      Cards[0].io->RomSize!=RomSize4090)return EFI_SECURITY_VIOLATION;
   for(i=0;i<3;i++) {
+    if(!GuHashMatches(Cards[i].path,Cards[i].path_size,ExactPaths[i]))
+      return EFI_SECURITY_VIOLATION;
     s=Owner(&Cards[i]);
     if(EFI_ERROR(s))return s;
   }
-  return EFI_SUCCESS;
+  return TargetHasNoChildren();
 }
 static EFI_STATUS Gops(VOID) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
@@ -281,7 +319,7 @@ static VOID HaltAfterAttempt(VOID) {
 }
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   EFI_STATUS s;
-  EFI_HANDLE expected_agent;
+  EFI_HANDLE expected_agent,expected_peer,expected_amd;
   if(!table||!table->BootServices||!table->RuntimeServices ||
      !table->ConOut)return EFI_INVALID_PARAMETER;
   Sys=table;
@@ -306,6 +344,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
       (unsigned long long)s);
   if(EFI_ERROR(s))goto refuse;
   expected_agent=Cards[0].owner;
+  expected_peer=Cards[1].owner;
+  expected_amd=Cards[2].owner;
   Say("WARNING: NVIDIA Stop can write GPU registers and hang forever.\r\n");
   Say("On hang or return: hold physical power until OFF, remove AC power,\r\n");
   Say("then restore power. Recovery is NOT verified. Press Y to attempt once;\r\n");
@@ -316,6 +356,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   if(EFI_ERROR(s))goto refuse;
   s=Owner(&Cards[0]);
   if(s==EFI_SUCCESS && Cards[0].owner!=expected_agent)s=EFI_NOT_READY;
+  if(s==EFI_SUCCESS)s=Owner(&Cards[1]);
+  if(s==EFI_SUCCESS && Cards[1].owner!=expected_peer)s=EFI_NOT_READY;
+  if(s==EFI_SUCCESS)s=Owner(&Cards[2]);
+  if(s==EFI_SUCCESS && Cards[2].owner!=expected_amd)s=EFI_NOT_READY;
+  if(s==EFI_SUCCESS)s=TargetHasNoChildren();
   if(s==EFI_SUCCESS)s=Gops();
   if(s==EFI_SUCCESS)s=ConsoleVar(L"ConOut");
   if(s==EFI_SUCCESS)s=ConsoleVar(L"ErrOut");
@@ -331,9 +376,22 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
                                                expected_agent,NULL);
   Say("STOP_RETURNED=1 EFI_STATUS=%#llx\r\n",(unsigned long long)s);
   if(s==EFI_SUCCESS) {
-    EFI_STATUS post=Owner(&Cards[0]);
-    Say("POST_STOP_PCI_OWNER_CHECK=%#llx (EFI_ACCESS_DENIED=no sole original owner)\r\n",
-        (unsigned long long)post);
+    EFI_STATUS post_target=Owner(&Cards[0]);
+    EFI_STATUS post_peer=Owner(&Cards[1]);
+    EFI_STATUS post_amd=Owner(&Cards[2]);
+    EFI_STATUS post_gop=Gops();
+    EFI_STATUS post_conout=ConsoleVar(L"ConOut");
+    EFI_STATUS post_errout=ConsoleVar(L"ErrOut");
+    Say("POST_STOP_TARGET_PCI_OWNER=%#llx NO_SOLE_OWNER_IF_ACCESS_DENIED=1\r\n",
+        (unsigned long long)post_target);
+    Say("POST_STOP_PEER_OWNER=%#llx UNCHANGED=%u AMD_OWNER=%#llx UNCHANGED=%u\r\n",
+        (unsigned long long)post_peer,
+        (unsigned)(post_peer==EFI_SUCCESS && Cards[1].owner==expected_peer),
+        (unsigned long long)post_amd,
+        (unsigned)(post_amd==EFI_SUCCESS && Cards[2].owner==expected_amd));
+    Say("POST_STOP_GOP=%#llx CONOUT=%#llx ERROUT=%#llx\r\n",
+        (unsigned long long)post_gop,
+        (unsigned long long)post_conout,(unsigned long long)post_errout);
   }
   HaltAfterAttempt();
 refuse:
