@@ -69,6 +69,36 @@ class DiagnosticContract(unittest.TestCase):
                        "Pci.Read(", "Mem.Write(", "Mem.Read("):
             self.assertNotIn(unsafe,probe)
 
+    def test_msi_bds_policy_snapshot_requires_exact_original_image(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        report=source.split("static void ReportMsiB850RomVariables(",1)[1].split(
+            "\\n#endif",1)[0]
+        gate="if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot))"
+        call="ReportMsiB850BdsPolicyState(table->BootServices);"
+        self.assertLess(report.index(gate),report.index("return;"))
+        self.assertLess(report.index("return;"),report.index(call))
+        probe=source.split("static void ReportMsiB850BdsPolicyState(",1)[1].split(
+            "static void ReportMsiB850RomVariables(",1)[0]
+        self.assertIn("MsiBdsTextDigest[32]",source)
+        self.assertIn("MsiBdsExecutableMapped(map,map_bytes,desc_size,li->ImageBase,expected_size)",probe)
+        self.assertIn("GuLoadedPeTextRange(",probe)
+        self.assertIn("memcmp(digest,MsiBdsTextDigest,sizeof(digest))",probe)
+        self.assertIn("policy!=(VOID *)(base+0x16330U)",probe)
+        self.assertIn("revision!=0x10000U",probe)
+        self.assertIn("method_set!=(VOID *)(base+0x33e4U)",probe)
+        self.assertIn("head=(const UINT8 *)policy+0x70U;",probe)
+        self.assertLess(probe.index("memcmp(digest,MsiBdsTextDigest,sizeof(digest))"),
+                        probe.index("memcpy(&head_forward,head,sizeof(head_forward))"))
+        self.assertLess(probe.index("INTERFACE_METHODS_UNVERIFIED"),
+                        probe.index("memcpy(&head_forward,head,sizeof(head_forward))"))
+        for action in ("DisconnectController(", "ConnectController(",
+                       "Stop(", "StartImage(", "SetVariable(",
+                       "OpenProtocol(", "Pci.Write(", "Pci.Read(",
+                       "Mem.Write(", "Mem.Read(", "method_get(",
+                       "method_set(", "method_class("):
+            self.assertNotIn(action,probe)
+        self.assertIn("NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1",probe)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)

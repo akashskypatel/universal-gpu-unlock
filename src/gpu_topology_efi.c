@@ -479,6 +479,125 @@ done:
   Say("MSI_B850_POLICY_PTR_END NO_VENDOR_CALLBACK=1 NO_PCI_CONFIG=1 NO_RELEASE=1\r\n");
 }
 
+/* The original MSI 1A70 Bds PE has a static AMI Connect Policy at RVA
+ * 0x16330 and a list head at RVA 0x163A0. Check its initial/current list
+ * state without calling any vendor method or following unknown pointers.
+ * This late observation cannot prove historical first-binding order. */
+static EFI_GUID MsiBdsConnectGuid =
+  {0x38d65ec3,0x8f39,0x4660,{0xb8,0xa6,0xf3,0x6a,0xa3,0x92,0x54,0x75}};
+static const UINT8 MsiBdsTextDigest[32]={
+  0x19,0x32,0x59,0x15,0x8d,0xf0,0x02,0x81,0x33,0x74,0xb2,0x21,0x9b,0x78,0xc7,0xa6,
+  0xc0,0xdc,0x96,0xa0,0x28,0x92,0x26,0x5b,0x40,0x0c,0xeb,0x99,0x69,0x35,0x64,0x8b};
+
+static int MsiBdsExecutableMapped(const EFI_MEMORY_DESCRIPTOR *map,
+                                 UINTN bytes, UINTN desc_size,
+                                 const VOID *ptr, size_t length) {
+  UINTN offset;
+  UINT64 addr=(UINT64)(UINTN)ptr;
+  if(!map || !ptr || !length ||
+     desc_size<sizeof(EFI_MEMORY_DESCRIPTOR) || desc_size>256U ||
+     (desc_size%sizeof(UINT64))!=0 || bytes%desc_size!=0 ||
+     addr>UINT64_MAX-(UINT64)length)return 0;
+  for(offset=0;offset<bytes;offset+=desc_size) {
+    const EFI_MEMORY_DESCRIPTOR *d=(const EFI_MEMORY_DESCRIPTOR *)
+      ((const UINT8 *)map+offset);
+    UINT64 start=(UINT64)d->PhysicalStart,pages=(UINT64)d->NumberOfPages;
+    if((d->Type!=EfiBootServicesCode && d->Type!=EfiBootServicesData) ||
+       pages>UINT64_MAX/4096U || start>UINT64_MAX-pages*4096U)continue;
+    if(addr>=start && addr+(UINT64)length<=start+pages*4096U)return 1;
+  }
+  return 0;
+}
+
+static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
+  VOID *policy=NULL;
+  EFI_HANDLE *handles=NULL;
+  EFI_STATUS status;
+  UINTN count=0,i,matches=0,base=0;
+  UINTN map_bytes=sizeof(MsiPolicyMemoryWords),map_key=0,desc_size=0;
+  UINT32 desc_version=0;
+  EFI_MEMORY_DESCRIPTOR *map=(EFI_MEMORY_DESCRIPTOR *)MsiPolicyMemoryWords;
+  static const UINTN expected_size=113568U,expected_rva=704U,expected_text=89088U;
+  UINT8 digest[32];
+  size_t text_rva=0,text_bytes=0;
+  UINT64 revision=0;
+  VOID *method_get=NULL,*method_set=NULL,*method_class=NULL;
+  VOID *head_forward=NULL,*head_backward=NULL;
+  const UINT8 *head;
+  Say("MSI_B850_BDS_POLICY_BEGIN READ_ONLY=1 VENDOR_CALLS=0 ENTRIES_NOT_WALKED=1\\r\\n");
+  if(!bs || !bs->LocateProtocol || !bs->LocateHandleBuffer ||
+     !bs->HandleProtocol || !bs->FreePool || !bs->GetMemoryMap) {
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED BOOT_SERVICES_UNAVAILABLE=1\\r\\n");
+    goto done;
+  }
+  status=bs->LocateProtocol(&MsiBdsConnectGuid,NULL,&policy);
+  Say("MSI_B850_BDS_POLICY LOCATE_STATUS=%#llx PRESENT=%u\\r\\n",
+      (unsigned long long)status,(unsigned)(status==EFI_SUCCESS && policy!=NULL));
+  if(EFI_ERROR(status) || !policy) {
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED PROTOCOL_NOT_VERIFIED=1\\r\\n");
+    goto done;
+  }
+  status=bs->LocateHandleBuffer(ByProtocol,&LoadedGuid,NULL,&count,&handles);
+  if(EFI_ERROR(status) || !count || count>1024U || !handles) {
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED LOADED_IMAGES_UNAVAILABLE=1 COUNT=%zu\\r\\n",
+        (size_t)count);
+    goto done;
+  }
+  status=bs->GetMemoryMap(&map_bytes,map,&map_key,&desc_size,&desc_version);
+  if(EFI_ERROR(status) || map_bytes>sizeof(MsiPolicyMemoryWords) ||
+     desc_size<sizeof(EFI_MEMORY_DESCRIPTOR) || desc_size>256U ||
+     (desc_size%sizeof(UINT64))!=0 || (map_bytes%desc_size)!=0) {
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED MEMORY_MAP_UNVERIFIED=1\\r\\n");
+    goto done;
+  }
+  for(i=0;i<count;i++) {
+    EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
+    UINTN candidate;
+    status=bs->HandleProtocol(handles[i],&LoadedGuid,(VOID **)&li);
+    if(EFI_ERROR(status) || !li || !li->ImageBase ||
+       li->ImageSize!=(UINT64)expected_size)continue;
+    candidate=(UINTN)li->ImageBase;
+    if(candidate>(UINTN)-1-expected_size ||
+       !MsiBdsExecutableMapped(map,map_bytes,desc_size,li->ImageBase,expected_size) ||
+       !GuLoadedPeTextRange(li->ImageBase,(size_t)li->ImageSize,
+                            &text_rva,&text_bytes) ||
+       text_rva!=(size_t)expected_rva || text_bytes!=(size_t)expected_text)continue;
+    GuSha256((const UINT8 *)li->ImageBase+text_rva,text_bytes,digest);
+    if(memcmp(digest,MsiBdsTextDigest,sizeof(digest))!=0)continue;
+    matches++;
+    base=candidate;
+  }
+  if(matches!=1 || base>(UINTN)-1-0x163b0U ||
+     policy!=(VOID *)(base+0x16330U)) {
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED ORIGINAL_BDS_MISMATCH=1 MATCHES=%zu\\r\\n",
+        (size_t)matches);
+    goto done;
+  }
+  memcpy(&revision,policy,sizeof(revision));
+  memcpy(&method_get,(const UINT8 *)policy+8U,sizeof(method_get));
+  memcpy(&method_set,(const UINT8 *)policy+16U,sizeof(method_set));
+  memcpy(&method_class,(const UINT8 *)policy+24U,sizeof(method_class));
+  if(revision!=0x10000U || method_get!=(VOID *)(base+0x3260U) ||
+     method_set!=(VOID *)(base+0x33e4U) ||
+     method_class!=(VOID *)(base+0x34e4U)) {
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED INTERFACE_METHODS_UNVERIFIED=1\\r\\n");
+    goto done;
+  }
+  head=(const UINT8 *)policy+0x70U;
+  memcpy(&head_forward,head,sizeof(head_forward));
+  memcpy(&head_backward,head+sizeof(head_forward),sizeof(head_backward));
+  Say("MSI_B850_BDS_POLICY STATE=%s HEAD=%p NEXT=%p PREVIOUS=%p CURRENT_BOOT_ONLY=1 EARLY_BINDING_UNPROVEN=1\\r\\n",
+      head_forward==(VOID *)head && head_backward==(VOID *)head ?
+      "EMPTY_AT_OBSERVATION":"NONEMPTY_OR_INCONSISTENT",
+      (const VOID *)head,head_forward,head_backward);
+done:
+  if(handles && bs && bs->FreePool) {
+    EFI_STATUS freed=bs->FreePool(handles);
+    Say("MSI_B850_BDS_POLICY FREE_STATUS=%#llx\\r\\n",(unsigned long long)freed);
+  }
+  Say("MSI_B850_BDS_POLICY_END NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1 NO_GPU_ACTION=1\\r\\n");
+}
+
 static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
   Say("MSI_B850_ROM_VARIABLES MODE=READ_ONLY PLATFORM=MS-7E56 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0\r\n");
   /* This is the exact MSI 7E56 iGPU and owner dual-NVIDIA PCI fingerprint.
@@ -493,6 +612,7 @@ static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
   ReportMsiB850PrivateBindings(table->BootServices);
   ReportMsiB850ImageParents(table->BootServices);
   ReportMsiB850PolicyPointers(table->BootServices);
+  ReportMsiB850BdsPolicyState(table->BootServices);
   Say("MSI_B850_ROM_VARIABLES STATUS=OBSERVED_OR_REFUSED ORIGINAL_ROM_DISPATCH_UNVERIFIED=1\r\n");
 }
 #endif
