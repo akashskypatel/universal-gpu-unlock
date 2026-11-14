@@ -103,6 +103,7 @@ jobs:
             CC=clang python3 -m unittest discover -s tests -p test_turing_cold_state.py -v
             python3 -m unittest discover -s tests -p test_profile_asset_contract.py -v
             python3 -m unittest discover -s tests -p test_firmware_diagnostic_contract.py -v
+            python3 -m unittest discover -s tests -p test_stop_only_observation_contract.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_$compiler"
@@ -276,6 +277,20 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'MSI B850 passive ROM variable diagnostic build failed'}
             if(-not (Test-Path .\src\build_diagnostic\MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI)){throw 'MSI B850 passive ROM variable diagnostic missing'}
             'MSI_B850_VARIABLE_DIAGNOSTIC=COMPILED_READ_ONLY' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Separate original 4090 Stop observer: compile only, never run.
+            # The EFI binary is not published in CI artifacts.
+            $unarmedRejected=$false
+            try {
+              & .\src\Build-Msi-Stop-Observation.ps1
+            } catch {
+              $unarmedRejected=$_.Exception.Message -match 'Explicit -AcceptUnboundedStopRisk'
+            }
+            if(-not $unarmedRejected){throw 'Stop-only observer build must reject missing risk flag'}
+            & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only observer MSVC compile failed'}
+            if(-not (Test-Path .\src\build_stop_observation\MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI)){throw 'Stop observer missing'}
+            'MSI_4090_STOP_OBSERVER=COMPILED_ONLY NEVER_RUN=1 NOT_ARTIFACT_PUBLISHED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+
             # Real active app/DXE sources compile with preparation-only guard.
             & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "Active app prep compilation failed: $LASTEXITCODE"}
