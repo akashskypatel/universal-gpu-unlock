@@ -48,9 +48,16 @@ This is a new observation. Old numbered logs do not contain this result.
 
 The probe finds the installed protocol without calling its methods. It
 locates the original MSI Bds loaded image. The probe requires image size
-113,568 bytes and the original code section at RVA `0x2C0`, 89,088 bytes.
-The section SHA-256 must be
-`193259158df002813374b2219b78c7a6c0dc96a02892265b400ceb996935648b`.
+113,568 bytes and the original code section at RVA `0x2C0`, **89,076 virtual bytes**.
+The original PE file stores 89,088 raw bytes for the same section.
+The loaded-image reader uses the 89,076-byte virtual section.
+Its SHA-256 must be
+`b17dc40833da35c094671ff1da25b1e7ac367daf77637eebc65b7d6cf5f00151`.
+The original raw-file SHA-256
+`193259158df002813374b2219b78c7a6c0dc96a02892265b400ceb996935648b`
+must **not** be used for the loaded-image size and hash check.
+The mismatch was found by exact-original-firmware audit
+[43565923957](https://github.com/akashskypatel/Windows-GPU-UNLOCK/actions/runs/43565923957).
 The interface must be at original RVA `0x16330`. The revision and all
 three method pointers must match the original image. The image must also
 fit in one valid UEFI boot-service memory region.
