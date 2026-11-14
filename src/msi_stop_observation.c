@@ -313,7 +313,15 @@ static EFI_STATUS KeyY(VOID) {
 }
 static VOID HaltAfterAttempt(VOID) {
   Say("NO_WINDOWS_HANDOFF=1 POWER_OFF_REQUIRED=1 DO_NOT_RETRY=1\r\n");
-  (VOID)Flush();
+  if(Log) {
+    (VOID)Flush();
+    (VOID)Log->Close(Log);
+    Log=NULL;
+  }
+  if(Root) {
+    (VOID)Root->Close(Root);
+    Root=NULL;
+  }
   /* Prevent Shell/Boot Manager continuation after any Stop attempt. */
   for(;;)(VOID)Sys->BootServices->Stall(1000000);
 }
@@ -370,10 +378,23 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   Say("STOP_SERVICE=DisconnectController DRIVER=PINNED_ORIGINAL IMAGE=SHA_MATCH\r\n");
   s=Flush();
   if(EFI_ERROR(s)||!Log)goto refuse;
+  /* The intent log must be CLOSED before the vendor call. A Flush alone
+   * does not guarantee the file name survives an abrupt power removal. */
+  s=Log->Close(Log);
+  Log=NULL;
+  if(EFI_ERROR(s))goto refuse;
+  s=Root->Close(Root);
+  Root=NULL;
+  if(EFI_ERROR(s))goto refuse;
   /* This is the ONLY deliberate hardware-mutating call in this image.
    * Do not retry, reconnect, reset the GPU or touch the RTX 3080/AMD. */
   s=table->BootServices->DisconnectController(Cards[0].handle,
                                                expected_agent,NULL);
+  /* This second file exists only if the original Stop returns. */
+  {
+    EFI_STATUS postlog=StartLog(image);
+    Say("POST_STOP_LOG_CREATE=%#llx\r\n",(unsigned long long)postlog);
+  }
   Say("STOP_RETURNED=1 EFI_STATUS=%#llx\r\n",(unsigned long long)s);
   if(s==EFI_SUCCESS) {
     EFI_STATUS post_target=Owner(&Cards[0]);
