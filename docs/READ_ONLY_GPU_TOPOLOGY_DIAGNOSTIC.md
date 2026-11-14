@@ -43,6 +43,44 @@ Output: `src\build_diagnostic\MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI`.
 The generic diagnostic does not read these MSI variables. The MSI-only
 build requires a saved log and forbids Windows handoff and GPU selection.
 
+The MSI-only build also reports the AMI BDS Connect Policy list state.
+This is a new observation. Old numbered logs do not contain this result.
+
+The probe finds the installed protocol without calling its methods. It
+locates the original MSI Bds loaded image. The probe requires image size
+113,568 bytes and the original code section at RVA `0x2C0`, 89,088 bytes.
+The section SHA-256 must be
+`193259158df002813374b2219b78c7a6c0dc96a02892265b400ceb996935648b`.
+The interface must be at original RVA `0x16330`. The revision and all
+three method pointers must match the original image. The image must also
+fit in one valid UEFI boot-service memory region.
+
+Only after these checks does the probe read two pointers from the list
+head at original RVA `0x163A0`. It does not follow either pointer.
+It does not call an MSI policy method. It does not read or change the
+policy values of a GPU.
+
+The result is `EMPTY_AT_OBSERVATION` when both pointers point to the
+list head. A different result is `NONEMPTY_OR_INCONSISTENT`.
+That second result does not prove a valid entry or an NVIDIA-specific
+policy. A `SKIPPED` result means the version or memory checks failed.
+The pointers apply only to that boot. Do not reuse them.
+
+Look for `MSI_B850_BDS_POLICY_BEGIN`,
+`MSI_B850_BDS_POLICY STATE=`, and
+`MSI_B850_BDS_POLICY_END` in the next numbered USB log.
+An empty late list does not prove that the list was empty before the
+first NVIDIA driver binding. No result permits NVIDIA Stop or unlock.
+
+The read-only probe passed host checks and Windows MSVC EFI compilation
+in [CI 43564694596](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/43564694596).
+Its physical execution has not yet been verified. Use the same reviewed
+removable-media UEFI Shell procedure as the previous MSI diagnostic.
+Do not change Secure Boot keys, boot order, BIOS policy, GPU wiring or
+drivers for this test. The only intended persistent write is the
+next unused numbered log file.
+
+
 Before either variable read, the current passive PCI inventory must contain
 exactly one AMD iGPU `1002:13C0`/subsystem `1462:7E56`, one ASUS
 RTX 4090 `10DE:2684`/subsystem `1043:88E6`, and one ZOTAC RTX 3080
