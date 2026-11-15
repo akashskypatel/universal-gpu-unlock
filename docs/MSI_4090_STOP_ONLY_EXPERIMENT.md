@@ -71,44 +71,51 @@ The current build and source checks do not prove that physical
 execution will be safe. Successful execution is also **not**
 permission to run unlock or flash code.
 
-## Current physical observation — exact failure isolated, Stop not entered
+## Current hardware state — identity checks pass, GOP refusal unresolved
 
-All four owner reports `STOP-4090-0000` through `0003` refused
-before NVIDIA Stop. The first two did not have detailed ownership records.
-The newer reports reproduce the same exact rejection following a normal
-restart (`0002`) and a full shutdown/power-on (`0003`). Both include
-`STOP_PREFLIGHT_PCI_IDENTITY_COUNTS DISPLAY=3 GPU0=1 GPU1=1 AMD=1`.
-The 4090 (slot 0) and 3080 (slot 1) each have one qualifying `BY_DRIVER`
-owner. Slot 2 (AMD) has one qualifying `BY_DRIVER` owner **and** one
-`BY_CHILD_CONTROLLER` record (`ATTRS=0x8`, `COUNT=1`, non-null agent,
-child controller distinct from its own handle). The previous generic
-`Owner()` rejection treated this non-target child edge as a reason to
-refuse the single-card experiment. This is an overly broad predicate,
-not evidence that 100 drivers own AMD. Both newer reports end with
-`STOP_ATTEMPT=REFUSED ... GPU_MUTATION=NONE`; no original Stop call or
-full-power recovery test has occurred.
+The current owner report `STOP-4090-0004.TXT`, obtained after a normal
+restart, has **2,165 bytes / 32 lines** and SHA-256
+`6f6d5ba657dab23554871d8eadcabb16a19f9aac253a9d957367b62c4eb8a3b5`.
+The corrected source now passes exact PCI identities, the one original
+`BY_DRIVER` owner per card, and the selected RTX4090 six-protocol
+no-child check: `STOP_PREFLIGHT_CHILD_RESULT STATUS=0` and
+`IDENTITY_STATUS=0 INVENTORY_ACCEPTED=1`. The expected AMD PCI child
+record remains visible and accepted (`CHILD=1 INVALID=0`); the previous
+false ownership rejection is therefore resolved **on hardware**.
 
-- `0002` full-log SHA-256:
-  `d1206d4674236717ce2a92e08281e9bb9846a4880e9ca39e6d65b07c72c7a519`
-- `0003` full-log SHA-256:
-  `8989f0df5d6fde70b670e8542732c1c67a0865832ce2996c9bc009b126feb3b7`
+The next check returns `GOP_STATUS=EFI_ACCESS_DENIED`,
+`GOP_POLICY_ACCEPTED=0`, followed by `STOP_ATTEMPT=REFUSED`
+and `GPU_MUTATION=NONE`. **Original NVIDIA Stop was not entered.**
+The older observer recorded only this combined GOP result, not actual
+GOP count, per-handle device-path status, or which GPU each GOP
+belongs to. The previous physical `0029` evidence supports a headless
+RTX4090 and an RTX3080+AMD graphics configuration **on that earlier
+boot**; it does not prove that the same GOP count or paths persisted
+after the new normal restart. Earlier `0002/0003` normal-restart and
+full-shutdown reports were identical on the *old* AMD owner refusal;
+that is not evidence that a cold start repairs the new GOP failure.
 
-The source now accepts a well-formed child-controller record **only on
-non-target RTX 3080/AMD**, while checking one exact `BY_DRIVER` owner
-and rejecting exclusive opens, malformed child records, duplicate drivers
-and **all target-4090 child records**. The target's independent
-`TargetHasNoChildren()` check is unchanged. All GOP, console, driver
-image, exact PCI/path/ROM and confirmation checks remain in effect.
-Production `GuMsiRelease()` remains closed.
+The observer now records `STOP_PREFLIGHT_GOP_ENUM`,
+`STOP_PREFLIGHT_GOP_ENTRY` (each bounded handle's device-path status,
+length and matched card), and `STOP_PREFLIGHT_GOP_COUNTS`.
+On a GOP refusal it also obtains the two UEFI console-variable
+statuses **read-only**, logs their lengths and matches if available,
+and still refuses before driver verification, confirmation or Stop.
+The original admission rule remains exactly **zero RTX4090 GOP,
+one RTX3080 GOP, one AMD GOP**. Missing, duplicate, unknown or
+unreadable paths are not accepted. The distinct source checks of the
+original signed NVIDIA driver, exact PCI image/path, explicit
+confirmation and closed intent log are preserved. Synthetic host tests
+and the Windows EFI compile cannot prove actual GOP layout.
 
-**Next physical pass is preflight-only.** Rebuild and restage the corrected
-binary; verify its executed SHA-256. If all checks pass and the program
-prompts for `Y`, press **any other key** and attach the complete log.
-Do not infer that downstream GOP, console and exact-driver checks pass
-because the owner check is corrected. A real Stop test requires a
-separate review of that new log and the original owner-authorized risk.
-Do not repeat the earlier two monitor arrangements merely to chase
-the unchanged AMD child record.
+**Owner action:** One new signed/staged observer run after a normal
+restart, preserving existing graphics cables and firmware settings.
+No full power cycle is required to obtain this missing read-only
+evidence. If all checks reach the confirmation prompt, press a key
+other than `Y`. Attach the one new complete numbered log, the exact
+staged image SHA-256, and the source commit. A real Stop attempt
+remains a separate owner-authorized risk and is **not** the purpose of
+this GOP classification run.
 
 ## Recommendation — Owner procedure
 
