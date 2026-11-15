@@ -171,6 +171,8 @@ jobs:
               "$RUNNER_TEMP/test_gpu_windows_path_$compiler"
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_$compiler"
               "$RUNNER_TEMP/test_gpu_windows_handoff_$compiler"
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_EXPERIMENTAL_STOP_OBSERVATION -DGU_STOP_WINDOWS_HANDOFF -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_stop_windows_handoff_$compiler"
+              "$RUNNER_TEMP/test_stop_windows_handoff_$compiler"
             done
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_GPU_DIAGNOSTIC_ONLY -DGU_PCI_OBSERVATION_HOST_TEST -Isrc tests/test_gpu_pci_observation.c src/gpu_pci_observation.c -o "$RUNNER_TEMP/test_gpu_pci_observation_$compiler"
@@ -290,6 +292,19 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only observer MSVC compile failed'}
             if(-not (Test-Path .\src\build_stop_observation\MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI)){throw 'Stop observer missing'}
             'MSI_4090_STOP_OBSERVER=COMPILED_ONLY NEVER_RUN=1 NOT_ARTIFACT_PUBLISHED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # A second, opt-in Stop-to-Windows variant. Compile only; use
+            # synthetic pinned GPT identity for CI, never publish executable.
+            $missingHandoffConsent=$false
+            try {
+              & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31'
+            } catch {
+              $missingHandoffConsent=$_.Exception.Message -match 'explicit -AcceptWindowsHandoffRisk'
+            }
+            if(-not $missingHandoffConsent){throw 'Handoff build must refuse without a second risk switch'}
+            & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -AcceptWindowsHandoffRisk *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-to-Windows experimental MSVC build failed'}
+            if(-not (Test-Path .\src\build_stop_observation\MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI)){throw 'Stop-to-Windows EFI missing'}
+            'MSI_4090_STOP_WINDOWS=COMPILED_ONLY NEVER_RUN=1 NOT_ARTIFACT_PUBLISHED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
 
             # Real active app/DXE sources compile with preparation-only guard.
             & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
