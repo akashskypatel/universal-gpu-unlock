@@ -234,6 +234,7 @@ int main(void) {
 #include <stddef.h>
 #include <string.h>
 #include <stdio.h>
+typedef void VOID;
 typedef void *EFI_HANDLE;
 typedef uint64_t EFI_STATUS;
 typedef uintptr_t UINTN;
