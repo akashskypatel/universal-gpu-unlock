@@ -35,7 +35,10 @@ class StopOnlyObservation(unittest.TestCase):
         self.assertIn("if(s==EFI_SUCCESS)s=Owner(&Cards[2]);",SOURCE)
         self.assertIn("POST_STOP_PEER_OWNER=",SOURCE)
         # A refused Inventory() result must identify its exact read-only gate.
-        for record in ("STOP_PREFLIGHT_PCI_OPENS SLOT=",
+        for record in ("STOP_PREFLIGHT_PCI_ENUM STATUS=",
+                       "STOP_PREFLIGHT_PCI_ERROR INDEX=",
+                       "STOP_PREFLIGHT_PCI_IDENTITY_COUNTS DISPLAY=",
+                       "STOP_PREFLIGHT_PCI_OPENS SLOT=",
                        "STOP_PREFLIGHT_PCI_OPEN SLOT=",
                        "STOP_PREFLIGHT_PCI_OWNER SLOT=",
                        "STOP_PREFLIGHT_OWNER_RESULT SLOT=",
@@ -54,6 +57,16 @@ class StopOnlyObservation(unittest.TestCase):
         self.assertLess(inventory.index("s=TargetHasNoChildren();"),
                         inventory.index("STOP_PREFLIGHT_CHILD_RESULT STATUS="))
         self.assertIn("if(EFI_ERROR(s))return s;", inventory)
+        for phase in ("STAGE=HANDLE_PCI","STAGE=GET_LOCATION","STAGE=READ_CONFIG",
+                      "STAGE=DEVICE_PATH"):
+            self.assertIn(phase, inventory)
+        self.assertIn("INVENTORY_ACCEPTED=%u", SOURCE)
+        self.assertIn("(unsigned)(s==EFI_SUCCESS)", SOURCE)
+        self.assertNotIn("IDENTITY_STATUS=%#llx EXACT_3_DISPLAY=1", SOURCE)
+        for field in ("GOP_POLICY_ACCEPTED=%u", "CONSOLE_POLICY_ACCEPTED=%u",
+                      "DRIVER_VERIFIED=%u"):
+            self.assertIn(field, SOURCE)
+
 
 
         self.assertIn("STOP_ATTEMPT=IMMINENT", SOURCE)
