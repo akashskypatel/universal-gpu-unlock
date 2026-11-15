@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* One explicitly armed AD102 Stop experiment. Not an unlock, not a release
- * adapter, not a BIOS patch. A post-Stop return is NEVER Windows handoff.
- * Firmware may hang inside original NVIDIA Stop without a local timeout.
- * A manual complete power-off is required after the single attempt. */
+ * adapter or BIOS patch. Optional Windows handoff is separately built
+ * and may run only after the original Stop and peer/console checks pass.
+ * Original Stop or Windows start can hang; manual hard power recovery
+ * remains necessary if the boot cannot continue. */
 #if !defined(GU_EXPERIMENTAL_STOP_OBSERVATION) || defined(GU_GPU_DIAGNOSTIC_ONLY) || \
     defined(GU_AD104_TRANSACTION) || defined(GU_FULL_UNLOCK)
 #error Only the separate experimental Stop observer may compile this file
@@ -14,6 +15,9 @@
 #include <Protocol/DriverBinding.h>
 #include <Protocol/LoadedImage.h>
 #include <Protocol/SimpleFileSystem.h>
+#ifdef GU_STOP_WINDOWS_HANDOFF
+#include "gpu_windows_handoff.h"
+#endif
 #include "sha256.h"
 #include "format.h"
 #include <stdarg.h>
@@ -41,6 +45,9 @@ static EFI_FILE_PROTOCOL *Root,*Log;
 static GPU Cards[3]; /* 0=4090, 1=3080, 2=AMD; exact identities required */
 /* Set only by a successful exact GOP inventory on this boot. */
 static UINTN AcceptedPeerGopCount=(UINTN)-1;
+#ifdef GU_STOP_WINDOWS_HANDOFF
+static EFI_HANDLE PreparedWindowsImage=NULL;
+#endif
 static const UINT32 Ids[3]={0x268410deU,0x220a10deU,0x13c01002U};
 static const UINT32 Subs[3]={0x88e61043U,0xb61219daU,0x7e561462U};
 static const UINTN Buses[3]={1,4,15};
@@ -386,6 +393,36 @@ static EFI_STATUS ExactOriginalDriver(VOID) {
                     Image4090Sha))return EFI_SECURITY_VIOLATION;
   return EFI_SUCCESS;
 }
+#ifdef GU_STOP_WINDOWS_HANDOFF
+/* Post-Stop Owner() denies both a truly unbound device and an invalid owner
+ * graph. For Windows admission distinguish these cases explicitly. */
+static EFI_STATUS TargetHasNoDriverAfterStop(VOID) {
+  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
+  UINTN count=0,i,remaining=0,invalid=0;
+  EFI_STATUS s=Sys->BootServices->OpenProtocolInformation(
+      Cards[0].handle,&PciGuid,&entries,&count);
+  if(EFI_ERROR(s) || count==0 || count>64 || !entries) {
+    if(entries)(VOID)Sys->BootServices->FreePool(entries);
+    return EFI_ACCESS_DENIED;
+  }
+  for(i=0;i<count;i++) {
+    const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&entries[i];
+    /* Only observed ordinary GET/HANDLE open references are allowed. */
+    if((e->Attributes!=EFI_OPEN_PROTOCOL_GET_PROTOCOL &&
+        e->Attributes!=EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL) ||
+       !e->AgentHandle || !e->OpenCount || e->ControllerHandle)
+      invalid++;
+    if(e->Attributes==EFI_OPEN_PROTOCOL_BY_DRIVER ||
+       e->Attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER ||
+       (e->Attributes & EFI_OPEN_PROTOCOL_EXCLUSIVE))remaining++;
+  }
+  Say("POST_STOP_TARGET_PCI_UNBOUND STATUS=%#llx OPENS=%zu DRIVER_OR_CHILD=%zu INVALID=%zu\r\n",
+      (unsigned long long)s,(size_t)count,
+      (size_t)remaining,(size_t)invalid);
+  if(EFI_ERROR(Sys->BootServices->FreePool(entries)))return EFI_DEVICE_ERROR;
+  return remaining==0 && invalid==0?EFI_SUCCESS:EFI_ACCESS_DENIED;
+}
+#endif
 static EFI_STATUS KeyY(VOID) {
   EFI_INPUT_KEY key;
   EFI_STATUS s;
@@ -400,7 +437,11 @@ static EFI_STATUS KeyY(VOID) {
          ? EFI_SUCCESS:EFI_ABORTED;
 }
 static VOID HaltAfterAttempt(VOID) {
+#ifdef GU_STOP_WINDOWS_HANDOFF
+  Say("WINDOWS_HANDOFF_NOT_COMPLETED=1 POWER_OFF_REQUIRED=1 DO_NOT_RETRY=1\r\n");
+#else
   Say("NO_WINDOWS_HANDOFF=1 POWER_OFF_REQUIRED=1 DO_NOT_RETRY=1\r\n");
+#endif
   if(Log) {
     (VOID)Flush();
     (VOID)Log->Close(Log);
@@ -459,6 +500,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   if(EFI_ERROR(s))goto refuse;
   s=KeyY();
   if(EFI_ERROR(s))goto refuse;
+#ifdef GU_STOP_WINDOWS_HANDOFF
+  /* Authenticate and load only the pinned Windows Boot Manager while the
+   * original NVIDIA driver is still bound. Do not start it here. */
+  s=GuWindowsBootManagerPrepare(image,table,&PreparedWindowsImage);
+  Say("WINDOWS_BOOT_MANAGER_PREPARED STATUS=%#llx IMAGE_NONZERO=%u\r\n",
+      (unsigned long long)s,(unsigned)(PreparedWindowsImage!=NULL));
+  if(EFI_ERROR(s)||!PreparedWindowsImage)goto refuse;
+#endif
   s=Owner(&Cards[0]);
   if(s==EFI_SUCCESS && Cards[0].owner!=expected_agent)s=EFI_NOT_READY;
   if(s==EFI_SUCCESS)s=Owner(&Cards[1]);
@@ -510,6 +559,46 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
     Say("POST_STOP_GOP=%#llx CONOUT=%#llx ERROUT=%#llx\r\n",
         (unsigned long long)post_gop,
         (unsigned long long)post_conout,(unsigned long long)post_errout);
+#ifdef GU_STOP_WINDOWS_HANDOFF
+    EFI_STATUS post_unbound=TargetHasNoDriverAfterStop();
+    BOOLEAN eligible=post_unbound==EFI_SUCCESS &&
+        post_target==EFI_ACCESS_DENIED &&
+        post_peer==EFI_SUCCESS && Cards[1].owner==expected_peer &&
+        post_amd==EFI_SUCCESS && Cards[2].owner==expected_amd &&
+        post_gop==EFI_SUCCESS &&
+        post_conout==EFI_SUCCESS && post_errout==EFI_SUCCESS &&
+        PreparedWindowsImage!=NULL;
+    Say("WINDOWS_HANDOFF_POST_STOP_ELIGIBLE=%u TARGET_UNBOUND=%u PEER_UNCHANGED=%u AMD_UNCHANGED=%u\r\n",
+        (unsigned)eligible,(unsigned)(post_unbound==EFI_SUCCESS),
+        (unsigned)(post_peer==EFI_SUCCESS && Cards[1].owner==expected_peer),
+        (unsigned)(post_amd==EFI_SUCCESS && Cards[2].owner==expected_amd));
+    if(eligible && Log && Root) {
+      /* The result record is closed before StartImage, which may never
+       * return. Never hand control back to the UEFI Shell after Stop. */
+      Say("WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER\r\n");
+      EFI_STATUS record=Flush();
+      if(record==EFI_SUCCESS) {
+        record=Log->Close(Log);
+        Log=NULL;
+      }
+      if(record==EFI_SUCCESS) {
+        record=Root->Close(Root);
+        Root=NULL;
+      }
+      if(record==EFI_SUCCESS) {
+        EFI_STATUS started=GuWindowsBootManagerStartPrepared(
+            PreparedWindowsImage,table);
+        /* A Boot Manager return is a failed/ended handoff, not permission
+         * to reconnect firmware drivers or retry the original Stop. */
+        (VOID)StartLog(image);
+        Say("WINDOWS_HANDOFF_RETURNED=1 EFI_STATUS=%#llx POWER_OFF_REQUIRED=1\r\n",
+            (unsigned long long)started);
+      } else {
+        Say("WINDOWS_HANDOFF_LOG_CLOSE_FAILED=%#llx\r\n",
+            (unsigned long long)record);
+      }
+    }
+#endif
   }
   HaltAfterAttempt();
 refuse:
