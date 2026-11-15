@@ -479,6 +479,134 @@ int main(void) {
         # The original one-card Stop count and production fail-closed remain.
         self.assertIn("HaltAfterAttempt();",SOURCE)
 
+    def test_post_stop_unbound_evidence_is_actual_c_not_owner_denial(self):
+        import shutil
+        import subprocess
+        import tempfile
+        compiler = shutil.which("gcc") or shutil.which("clang")
+        if not compiler:
+            self.skipTest("A host C compiler is required")
+        start = SOURCE.index("static EFI_STATUS TargetHasNoDriverAfterStop(VOID) {")
+        end = SOURCE.index("#endif", start)
+        actual = SOURCE[start:end]
+        prefix = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef uint64_t EFI_STATUS;
+typedef uintptr_t UINTN;
+typedef uint32_t UINT32;
+typedef struct {
+  EFI_HANDLE AgentHandle, ControllerHandle;
+  UINT32 Attributes, OpenCount;
+} EFI_OPEN_PROTOCOL_INFORMATION_ENTRY;
+#define EFI_SUCCESS UINT64_C(0)
+#define EFI_ACCESS_DENIED UINT64_C(0x800000000000000f)
+#define EFI_DEVICE_ERROR UINT64_C(0x8000000000000007)
+#define EFI_OPEN_PROTOCOL_BY_DRIVER 0x10
+#define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 0x8
+#define EFI_OPEN_PROTOCOL_EXCLUSIVE 0x20
+#define EFI_OPEN_PROTOCOL_GET_PROTOCOL 0x2
+#define EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL 0x1
+#define EFI_ERROR(s) (!!((s)&UINT64_C(0x8000000000000000)))
+static EFI_OPEN_PROTOCOL_INFORMATION_ENTRY entries[2];
+static UINTN entry_count=1;
+static EFI_STATUS open_status=EFI_SUCCESS;
+static EFI_STATUS free_status=EFI_SUCCESS;
+static int pci_guid;
+static int PciGuid;
+typedef struct {EFI_HANDLE handle;} GPU;
+static GPU Cards[3];
+typedef struct {
+  EFI_STATUS (*OpenProtocolInformation)(
+    EFI_HANDLE,void *,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **,UINTN *);
+  EFI_STATUS (*FreePool)(void *);
+} EFI_BOOT_SERVICES;
+typedef struct {EFI_BOOT_SERVICES *BootServices;} SYSTEM;
+static EFI_STATUS Open(EFI_HANDLE handle,void *guid,
+                       EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out,UINTN *count) {
+  (void)guid;
+  if(handle!=Cards[0].handle)return EFI_DEVICE_ERROR;
+  if(EFI_ERROR(open_status))return open_status;
+  *out=entries; *count=entry_count; return EFI_SUCCESS;
+}
+static EFI_STATUS Free(void *data) {
+  return data==entries?free_status:EFI_DEVICE_ERROR;
+}
+static EFI_BOOT_SERVICES Boot={Open,Free};
+static SYSTEM Table={&Boot},*Sys=&Table;
+static void Say(const char *format,...) {(void)format;}
+"""
+        suffix = r"""
+static int check(unsigned id,EFI_STATUS expected) {
+  EFI_STATUS actual=TargetHasNoDriverAfterStop();
+  if(actual!=expected) {
+    fprintf(stderr,"case %u: got %#llx wanted %#llx\n",id,
+            (unsigned long long)actual,(unsigned long long)expected);
+    return 1;
+  }
+  return 0;
+}
+int main(void) {
+  Cards[0].handle=(EFI_HANDLE)(uintptr_t)0x123;
+  entries[0]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){
+    (EFI_HANDLE)(uintptr_t)1,NULL,EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL,38};
+  if(check(1,EFI_SUCCESS))return 1;
+  entries[0].Attributes=EFI_OPEN_PROTOCOL_GET_PROTOCOL;
+  if(check(2,EFI_SUCCESS))return 1;
+  entries[0].Attributes=EFI_OPEN_PROTOCOL_BY_DRIVER;
+  if(check(3,EFI_ACCESS_DENIED))return 1;
+  entries[0].Attributes=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER;
+  if(check(4,EFI_ACCESS_DENIED))return 1;
+  entries[0].Attributes=EFI_OPEN_PROTOCOL_EXCLUSIVE;
+  if(check(5,EFI_ACCESS_DENIED))return 1;
+  entries[0].Attributes=0x40;
+  if(check(6,EFI_ACCESS_DENIED))return 1;
+  entries[0].Attributes=EFI_OPEN_PROTOCOL_BY_HANDLE_PROTOCOL;
+  entries[0].ControllerHandle=(EFI_HANDLE)(uintptr_t)2;
+  if(check(7,EFI_ACCESS_DENIED))return 1;
+  entries[0].ControllerHandle=NULL;
+  entries[0].AgentHandle=NULL;
+  if(check(8,EFI_ACCESS_DENIED))return 1;
+  entries[0].AgentHandle=(EFI_HANDLE)(uintptr_t)1;
+  entries[0].OpenCount=0;
+  if(check(9,EFI_ACCESS_DENIED))return 1;
+  entries[0].OpenCount=38;
+  entry_count=0;
+  if(check(10,EFI_ACCESS_DENIED))return 1;
+  entry_count=65;
+  if(check(11,EFI_ACCESS_DENIED))return 1;
+  entry_count=1;
+  open_status=EFI_DEVICE_ERROR;
+  if(check(12,EFI_ACCESS_DENIED))return 1;
+  open_status=EFI_SUCCESS;
+  free_status=EFI_DEVICE_ERROR;
+  if(check(13,EFI_DEVICE_ERROR))return 1;
+  free_status=EFI_SUCCESS;
+  entry_count=2;
+  entries[1]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){
+    (EFI_HANDLE)(uintptr_t)2,NULL,EFI_OPEN_PROTOCOL_GET_PROTOCOL,1};
+  if(check(14,EFI_SUCCESS))return 1;
+  entries[1].Attributes=EFI_OPEN_PROTOCOL_BY_DRIVER;
+  if(check(15,EFI_ACCESS_DENIED))return 1;
+  puts("PASS actual post-Stop target-unbound C: 15 independent scenarios");
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "unbound.c"
+            exe = Path(directory) / "unbound"
+            source.write_text(prefix + actual + suffix, encoding="utf-8")
+            result = subprocess.run(
+                [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 str(source), "-o", str(exe)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(exe)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("15 independent scenarios", result.stdout)
+
     def test_build_is_explicitly_opt_in_and_does_not_change_passive_image(self):
         self.assertIn("if (-not $AcceptUnboundedStopRisk)",BUILD)
         self.assertIn("'msi_stop_observation.c','sha256.c','format.c','runtime.c'",BUILD)
