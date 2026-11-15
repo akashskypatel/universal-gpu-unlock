@@ -71,50 +71,44 @@ The current build and source checks do not prove that physical
 execution will be safe. Successful execution is also **not**
 permission to run unlock or flash code.
 
-## Current physical observation — first two runs refused before Stop
+## Current physical observation — exact failure isolated, Stop not entered
 
-The owner ran the standalone observer twice. Both files are complete
-five-line refusal logs:
+All four owner reports `STOP-4090-0000` through `0003` refused
+before NVIDIA Stop. The first two did not have detailed ownership records.
+The newer reports reproduce the same exact rejection following a normal
+restart (`0002`) and a full shutdown/power-on (`0003`). Both include
+`STOP_PREFLIGHT_PCI_IDENTITY_COUNTS DISPLAY=3 GPU0=1 GPU1=1 AMD=1`.
+The 4090 (slot 0) and 3080 (slot 1) each have one qualifying `BY_DRIVER`
+owner. Slot 2 (AMD) has one qualifying `BY_DRIVER` owner **and** one
+`BY_CHILD_CONTROLLER` record (`ATTRS=0x8`, `COUNT=1`, non-null agent,
+child controller distinct from its own handle). The previous generic
+`Owner()` rejection treated this non-target child edge as a reason to
+refuse the single-card experiment. This is an overly broad predicate,
+not evidence that 100 drivers own AMD. Both newer reports end with
+`STOP_ATTEMPT=REFUSED ... GPU_MUTATION=NONE`; no original Stop call or
+full-power recovery test has occurred.
 
-- `STOP-4090-0000.TXT`: SHA-256
-  `b156092cc1ddf68f7c13c7b5a8cd512aa4636bfb9e9c5c099bd4ae3dcab6db9d`
-- `STOP-4090-0001.TXT`: SHA-256
-  `9e345006d84b98aa0e66fca07b22804ea6e5e0639330f81e25c2238f87560208`
+- `0002` full-log SHA-256:
+  `d1206d4674236717ce2a92e08281e9bb9846a4880e9ca39e6d65b07c72c7a519`
+- `0003` full-log SHA-256:
+  `8989f0df5d6fde70b670e8542732c1c67a0865832ce2996c9bc009b126feb3b7`
 
-Both report `IDENTITY_STATUS=0x800000000000000f` and
-`STOP_ATTEMPT=REFUSED ... GPU_MUTATION=NONE`. That status is
-`EFI_ACCESS_DENIED`. The failure occurred within `Inventory()`,
-before GOP, console, original driver-image, confirmation or Stop.
-No original NVIDIA Stop call occurred in either run. The physical
-RTX3080 monitor count differed (two in the first run; zero in the
-second). A connected monitor count is **not** a firmware GOP count or
-proof of UEFI owner state.
+The source now accepts a well-formed child-controller record **only on
+non-target RTX 3080/AMD**, while checking one exact `BY_DRIVER` owner
+and rejecting exclusive opens, malformed child records, duplicate drivers
+and **all target-4090 child records**. The target's independent
+`TargetHasNoChildren()` check is unchanged. All GOP, console, driver
+image, exact PCI/path/ROM and confirmation checks remain in effect.
+Production `GuMsiRelease()` remains closed.
 
-The earlier source combined multiple failure paths into one
-`IDENTITY_STATUS`. Both `Owner()` (when a PCI `BY_DRIVER` entry
-does not match) and `TargetHasNoChildren()` (when the selected
-card has an unexpected protocol opener or insufficient protocol count)
-can explicitly return `EFI_ACCESS_DENIED`. An earlier UEFI PCI
-read service could also return that status and have it passed through
-`Inventory()`. The two files cannot distinguish these paths.
-`EXACT_3_DISPLAY=1` in the old five-line logs was fixed display text,
-not a verified result; do not use it as an inventory success claim.
-
-The new source logs `STOP_PREFLIGHT_PCI_ENUM`, each failed
-`STOP_PREFLIGHT_PCI_ERROR` read stage, validated PCI identity counts,
-per-card `STOP_PREFLIGHT_PCI_*` owner details, and
-`STOP_PREFLIGHT_TARGET_*` protocol/child details. The
-`INVENTORY_ACCEPTED`, GOP, console and original-driver success
-fields now reflect their real statuses rather than fixed numbers.
-No UEFI driver callback is called during this reporting.
-Do **not** remove a denial condition to force Stop.
-
-One new, independently compiled run is sufficient for this next
-diagnostic. **Do not press Y** merely to collect the refusal details.
-If all guards do pass and the application asks for confirmation, use
-any key other than Y to cancel. The original owner-approved Stop
-experiment can only proceed after the new identity/child status and
-console state have been classified.
+**Next physical pass is preflight-only.** Rebuild and restage the corrected
+binary; verify its executed SHA-256. If all checks pass and the program
+prompts for `Y`, press **any other key** and attach the complete log.
+Do not infer that downstream GOP, console and exact-driver checks pass
+because the owner check is corrected. A real Stop test requires a
+separate review of that new log and the original owner-authorized risk.
+Do not repeat the earlier two monitor arrangements merely to chase
+the unchanged AMD child record.
 
 ## Recommendation — Owner procedure
 
@@ -144,8 +138,10 @@ On Windows, from the `universal-gpu-unlock` repository root:
    wall power. If this is not possible, do not start the experiment.
 6. Run this file once from the UEFI Shell. Check that the displayed
    target is RTX 4090 at `0000:01:00.0`, and that all guards pass.
-   Press `Y` only if you intend to make one real Stop attempt.
-   Press any other key to refuse. Do not attempt the RTX 3080.
+   For the **next preflight-only validation**, press a key other
+   than `Y` if prompted. Do not execute Stop yet. After the new log
+   is reviewed, a separately chosen original owner-authorized one-time
+   Stop test may follow; do not attempt the RTX 3080.
 7. After the Stop call returns **or** if firmware becomes unresponsive,
    hold the physical power button until the computer is off. Disconnect
    external AC power, then restore power for a full cold start. Do not
