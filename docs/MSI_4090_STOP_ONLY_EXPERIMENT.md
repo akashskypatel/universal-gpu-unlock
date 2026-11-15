@@ -36,9 +36,11 @@ Before the call, the program must verify:
 - The RTX 4090 PCI option-ROM buffer is present and has 150,016 bytes
 - Each device has one original `BY_DRIVER` owner
 - The RTX 4090 has no firmware graphics-output path or child owner
-- The RTX 3080 and AMD iGPU each have one graphics-output path
-- The stored `ConOut` and `ErrOut` paths refer to the RTX 3080
-  and AMD iGPU and not the RTX 4090
+- The AMD iGPU has one graphics-output path; the RTX 3080 may have zero
+  (AMD-only display configuration) or one (previous mixed-console setup)
+- The stored `ConOut` and `ErrOut` paths refer only to AMD with one
+  AMD GOP, or to exactly AMD and RTX 3080 when both GOPs exist.
+  Neither may refer to the RTX 4090 or an unidentified controller.
 - The original RTX 4090 loaded driver image is 162,016 bytes and its
   SHA-256 equals
   `0fbd44f3455d4df5ade4bc738dbbc73fbd213487a7456a953af9e8ccbc14c2ba`
@@ -71,51 +73,54 @@ The current build and source checks do not prove that physical
 execution will be safe. Successful execution is also **not**
 permission to run unlock or flash code.
 
-## Current hardware state — identity checks pass, GOP refusal unresolved
+## Current hardware state — AMD-only display is the expected case
 
-The current owner report `STOP-4090-0004.TXT`, obtained after a normal
-restart, has **2,165 bytes / 32 lines** and SHA-256
-`6f6d5ba657dab23554871d8eadcabb16a19f9aac253a9d957367b62c4eb8a3b5`.
-The corrected source now passes exact PCI identities, the one original
-`BY_DRIVER` owner per card, and the selected RTX4090 six-protocol
-no-child check: `STOP_PREFLIGHT_CHILD_RESULT STATUS=0` and
-`IDENTITY_STATUS=0 INVENTORY_ACCEPTED=1`. The expected AMD PCI child
-record remains visible and accepted (`CHILD=1 INVALID=0`); the previous
-false ownership rejection is therefore resolved **on hardware**.
+Owner physical wiring: exactly one display, connected to the AMD
+integrated GPU. Neither NVIDIA card has a connected display.
+The original passive `0022` previously observed AMD-only GOP and
+console ownership. Do not re-open the settled MSI GOP, PCI option-ROM,
+or console-provider reverse engineering.
 
-The next check returns `GOP_STATUS=EFI_ACCESS_DENIED`,
-`GOP_POLICY_ACCEPTED=0`, followed by `STOP_ATTEMPT=REFUSED`
-and `GPU_MUTATION=NONE`. **Original NVIDIA Stop was not entered.**
-The older observer recorded only this combined GOP result, not actual
-GOP count, per-handle device-path status, or which GPU each GOP
-belongs to. The previous physical `0029` evidence supports a headless
-RTX4090 and an RTX3080+AMD graphics configuration **on that earlier
-boot**; it does not prove that the same GOP count or paths persisted
-after the new normal restart. Earlier `0002/0003` normal-restart and
-full-shutdown reports were identical on the *old* AMD owner refusal;
-that is not evidence that a cold start repairs the new GOP failure.
+The current `STOP-4090-0005.TXT` is **2,662 bytes**, SHA-256
+`1afc88b5501aed2c3a49942ab5072745a1ac1a038fcee96263ebe53b4314b923`,
+from a normal restart. Its three exact PCI card identities, three
+one-owner checks and RTX4090 child/target protocol checks all pass.
+The read-only UEFI GOP observation is exactly
+`TARGET=0 PEER=0 AMD=1 UNKNOWN=0 INVALID=0 TOTAL=1`. The single GOP
+path matches the AMD iGPU, with path length 36 bytes.
+`ConOut` and `ErrOut` are separately present (status 0), each 36
+bytes with boot-service/runtime variable attributes `0x7`; old
+`ConsoleVar()` refuses both **before inspecting their content** because
+it required 84 bytes. The log does **not yet prove the two console
+values' path bytes**. `STOP_ATTEMPT=REFUSED GPU_MUTATION=NONE` proves
+the original NVIDIA Stop did not run. A full power cycle is not
+needed merely to resolve this configuration mismatch.
 
-The observer now records `STOP_PREFLIGHT_GOP_ENUM`,
-`STOP_PREFLIGHT_GOP_ENTRY` (each bounded handle's device-path status,
-length and matched card), and `STOP_PREFLIGHT_GOP_COUNTS`.
-On a GOP refusal it also obtains the two UEFI console-variable
-statuses **read-only**, logs their lengths and matches if available,
-and still refuses before driver verification, confirmation or Stop.
-The original admission rule remains exactly **zero RTX4090 GOP,
-one RTX3080 GOP, one AMD GOP**. Missing, duplicate, unknown or
-unreadable paths are not accepted. The distinct source checks of the
-original signed NVIDIA driver, exact PCI image/path, explicit
-confirmation and closed intent log are preserved. Synthetic host tests
-and the Windows EFI compile cannot prove actual GOP layout.
+**Source correction:** This one-card-only observer now accepts two
+originally observed complete configurations: (a) one AMD GOP, no NVIDIA
+GOP, a single AMD `ConOut` and `ErrOut` instance, with each console
+variable exactly 36 bytes; (b) one AMD and one RTX3080 GOP, no RTX4090
+GOP, one AMD and one RTX3080 console instance for each variable,
+with exactly 84 bytes. The second layout remains valid for reference,
+but **no display should be added to either NVIDIA card**.
+The runtime GOP count determines which exact console contract is used.
+Unknown, extra, duplicate or selected-4090 GOPs; malformed, missing
+or nonmatching console paths; and missing original NVIDIA driver hash
+still refuse. The RTX4090 no-child, one-owner, exact path and
+option-ROM, one attempt/closed intent log, Y confirmation and
+no-Windows-handoff restrictions are unchanged. The normal release
+function remains disabled for both NVIDIA cards.
 
-**Owner action:** One new signed/staged observer run after a normal
-restart, preserving existing graphics cables and firmware settings.
-No full power cycle is required to obtain this missing read-only
-evidence. If all checks reach the confirmation prompt, press a key
-other than `Y`. Attach the one new complete numbered log, the exact
-staged image SHA-256, and the source commit. A real Stop attempt
-remains a separate owner-authorized risk and is **not** the purpose of
-this GOP classification run.
+**Next hardware check:** Rebuild and sign/stage the current source.
+Use one ordinary restart with only the AMD display, execute the
+isolated observer once, **do not press Y** if the confirmation appears,
+and attach the complete next `STOP-4090-NNNN.TXT`, source revision
+and staged EFI SHA-256. This checks the actual AMD-only console
+variable paths and original NVIDIA loaded-image hash without a Stop
+attempt. If both pass, independently reassess the separately approved
+one-card Stop risk and power-off recovery procedure. A real Stop test
+requires deliberate Y confirmation and **manual full power removal
+afterward**, whether the callback returns or does not return.
 
 ## Recommendation — Owner procedure
 
