@@ -164,60 +164,74 @@ one-card hardware experiment, not production Windows handoff or
 unlock enablement. Have physical AC disconnect, Windows recovery
 media and any applicable BitLocker recovery key ready before using it.
 
-## Recommendation — Owner procedure
+## Recommendation — Owner procedure: optional automatic Windows handoff
 
-Only use the reviewed, approved USB/UEFI Shell method that worked
-for passive diagnostic `0029`. Keep the existing BIOS, Secure
-Boot settings, display cables and both NVIDIA cards unchanged.
-Do not bypass image-signing checks.
+Use the original signed EFI execution route that was approved for the
+previous diagnostic. Do not change BIOS security, BootOrder, GPU drivers,
+display cables, or the default boot device. Do not make the experimental
+EFI program a permanent boot option. Keep one monitor on the AMD iGPU.
 
-On Windows, from the `universal-gpu-unlock` repository root:
+1. On Windows, identify the actual Windows EFI System Partition (ESP)
+   and its **unique GPT partition GUID** (not its partition type GUID).
+   The following command lists ESP candidates:
 
-1. Update from `main`:
+   `Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } | Select-Object DiskNumber,PartitionNumber,Guid,Size`
+
+   Identify the Windows system disk, not the removable USB. Previous
+   approved evidence used `a005858c-4487-4ee2-976e-1710ff484c31`
+   but this value must match the current installed Windows ESP.
+
+2. From the `universal-gpu-unlock` repository root, update the source:
 
    `git pull --ff-only https://github.com/akashskypatel/universal-gpu-unlock.git main`
 
-2. Build the standalone experiment with the explicit risk switch:
+3. Build the separately named EFI program with the **verified** unique
+   Windows ESP GUID and both explicit risk switches:
 
-   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk`
+   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -AcceptWindowsHandoffRisk`
 
-3. Record the resulting executable SHA-256:
+   If the current Windows ESP GUID is different, replace the above
+   example value before building. Do not run an image built with a
+   stale, ambiguous, USB or unknown ESP identifier.
 
-   `Get-FileHash .\src\build_stop_observation\MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI -Algorithm SHA256`
+4. Record the source commit and hash of the **new handoff executable**:
 
-4. Copy **only** this EFI executable to the same removable EFI Shell
-   volume used for the previous read-only diagnostic. Keep older logs.
-   Do not make this application the default boot option.
-5. Confirm you can physically reach the power switch and remove
-   wall power. If this is not possible, do not start the experiment.
-6. For the **optional automatic handoff variant**, validate the current
-   Windows ESP identifier before building. Use:
-   `Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } | Select-Object DiskNumber,PartitionNumber,Guid,Size`.
-   Identify the actual Windows ESP; a USB ESP or a stale partition GUID
-   is not acceptable. Then build:
-   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\src\\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -WindowsEspGuid '<verified-Windows-ESP-unique-GUID>' -AcceptWindowsHandoffRisk`.
-   Record the new binary SHA-256 and staged-file SHA-256 separately.
-7. Run **only the desired named EFI executable** from the trusted
-   USB/UEFI Shell. Confirm exact RTX4090 identity. In the handoff
-   variant `Y` deliberately authorizes the one-card Stop and
-   conditional automatic Windows Boot Manager start; any other key
-   cancels. The original `MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI`
-   still requires hard power removal after Stop and never boots Windows.
-8. If the handoff variant successfully enters Windows, preserve the USB
-   logs and collect `nvidia-smi -L`, both GPU driver statuses and
-   observed display/boot behavior. If firmware hangs, handoff fails or
-   Boot Manager returns, hold the power button until OFF, disconnect
-   external AC, and restore full power before normal Windows startup.
-   No retry is allowed within the same boot.
-8. Confirm whether the BIOS, both GPUs, AMD console, and Windows can
-   start normally. Preserve **all** new `STOP-4090-NNNN.TXT` files
-   (the intent log and, if Stop returned, a second result log), the exact
-   executed EFI SHA-256, and any physical symptom or recovery failure.
-   Do not rerun the experiment in the same boot or after any
-   unexpected recovery result.
+   `git rev-parse HEAD`
 
-**Agent:** Classify the original Stop return status and after-call
-ownership only from all complete new logs. Keep
-`CAN_DETACH=false`, `CAN_UNLOCK=false`, `CAN_FLASH=false`,
-and `RECOVERY_VERIFIED=false`. An experimental Stop result never
-opens the production unlock gate by itself.
+   `Get-FileHash -LiteralPath '.\src\build_stop_observation\MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI' -Algorithm SHA256`
+
+5. Sign and stage **only the handoff-named executable** by the already
+   approved removable USB/UEFI method. Compare its staged SHA-256
+   with the built SHA-256. Preserve all existing numbered USB logs.
+   Confirm that the Windows recovery media, any BitLocker recovery
+   key, physical power switch and removable AC power are accessible.
+
+6. Launch the handoff-named EFI program from the trusted UEFI Shell.
+   Before Stop, the program must show the exact original RTX4090 and
+   AMD/peer identity checks, a prepared Windows Boot Manager, and
+   the signed original NVIDIA driver match. A deliberate `Y` now
+   authorizes **one RTX4090 firmware disconnect and, only if safe
+   post-Stop checks pass, automatic `StartImage` for Windows**.
+   A key other than `Y` cancels before Stop. Do not attempt any
+   RTX3080 Stop or repeated Stop in the same boot.
+
+7. If Windows starts from this same boot, record `nvidia-smi -L`,
+   both NVIDIA device statuses, display operation and any driver
+   errors, and preserve all new `STOP-4090-NNNN.TXT` files. A
+   successful boot is not proof that the original signed firmware
+   unlock, DMA safety or production recovery has succeeded.
+
+8. If the original disconnect hangs, Windows Boot Manager refuses or
+   returns, or firmware becomes unresponsive, hold physical power
+   until OFF, disconnect AC, then restore power. Do not allow a
+   retry in the same boot. Preserve the logs, staged image hash and
+   exact observed failure. Recovery is still not guaranteed.
+
+**Agent:** Assess physical `WINDOWS_BOOT_MANAGER_PREPARED`,
+`POST_STOP_TARGET_PCI_UNBOUND`,
+`WINDOWS_HANDOFF_POST_STOP_ELIGIBLE`, and the attempted
+`WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER` transition. The
+previous stop-and-halt image is unchanged in behavior. Maintain
+`CAN_DETACH=false`, `CAN_UNLOCK=false`, `CAN_FLASH=false`, and
+`RECOVERY_VERIFIED=false` for the production system. An isolated
+firmware PCI owner disconnect is not proof of a GPU unlock.
