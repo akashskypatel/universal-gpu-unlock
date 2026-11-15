@@ -515,7 +515,6 @@ static EFI_OPEN_PROTOCOL_INFORMATION_ENTRY entries[2];
 static UINTN entry_count=1;
 static EFI_STATUS open_status=EFI_SUCCESS;
 static EFI_STATUS free_status=EFI_SUCCESS;
-static int pci_guid;
 static int PciGuid;
 typedef struct {EFI_HANDLE handle;} GPU;
 static GPU Cards[3];
