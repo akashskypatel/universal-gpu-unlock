@@ -517,7 +517,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
 #else
   Say("EXPERIMENT=EXACT_%s_STOP_ONLY TARGET=%s\r\n",TargetName,TargetBdf);
 #endif
+#ifdef GU_STOP_BOTH_NVIDIA
+  Say("CAN_UNLOCK=0 CAN_FLASH=0 CAN_FLR=0 SELECTED_STOP_COUNT=2 CAN_STOP_AMD=0\r\n");
+#else
   Say("CAN_UNLOCK=0 CAN_FLASH=0 CAN_FLR=0 CAN_STOP_OTHER_CARD=0\r\n");
+#endif
   s=Inventory();
   Say("IDENTITY_STATUS=%#llx INVENTORY_ACCEPTED=%u\r\n",
       (unsigned long long)s,(unsigned)(s==EFI_SUCCESS));

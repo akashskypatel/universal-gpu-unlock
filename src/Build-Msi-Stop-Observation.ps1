@@ -78,7 +78,8 @@ try {
     $sha=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
     $targetField=if ($BothNvidia) { 'TARGETS=0000:01:00.0,0000:04:00.0' } elseif ($Target3080) { 'TARGET=0000:04:00.0' } else { 'TARGET=0000:01:00.0' }
     $stopCount=if ($BothNvidia) { 2 } else { 1 }
-    Write-Output "STATUS=BUILT PATH=$path SHA256=$sha STOP_ONLY=1 $targetField STOP_COUNT=$stopCount NO_KEY_INPUT=1 UNLOCK=0 FLASH=0 RESET=0 PEER_STOP=0 WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid) RECOVERY_VERIFIED=0 HARDWARE_TESTED=0"
+    $peerStop=if ($BothNvidia) { 1 } else { 0 }
+    Write-Output "STATUS=BUILT PATH=$path SHA256=$sha STOP_ONLY=1 $targetField STOP_COUNT=$stopCount NO_KEY_INPUT=1 UNLOCK=0 FLASH=0 RESET=0 PEER_STOP=$peerStop AMD_STOP=0 WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid) RECOVERY_VERIFIED=0 HARDWARE_TESTED=0"
 } finally {
     Pop-Location
 }
