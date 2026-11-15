@@ -214,6 +214,8 @@ static EFI_STATUS Inventory(VOID) {
   EFI_HANDLE *handles=NULL;
   UINTN count=0,i,found[3]={0},display=0;
   EFI_STATUS s=bs->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
+  Say("STOP_PREFLIGHT_PCI_ENUM STATUS=%#llx COUNT=%zu\r\n",
+      (unsigned long long)s,(size_t)count);
   if(EFI_ERROR(s)||!handles||!count||count>4096)return EFI_UNSUPPORTED;
   for(i=0;i<count;i++) {
     EFI_PCI_IO_PROTOCOL *io=NULL;
@@ -221,11 +223,23 @@ static EFI_STATUS Inventory(VOID) {
     UINT32 config[16]={0};
     UINTN j;
     s=bs->HandleProtocol(handles[i],&PciGuid,(VOID **)&io);
-    if(EFI_ERROR(s)||!io||!io->Pci.Read||!io->GetLocation)break;
+    if(EFI_ERROR(s)||!io||!io->Pci.Read||!io->GetLocation) {
+      Say("STOP_PREFLIGHT_PCI_ERROR INDEX=%zu STAGE=HANDLE_PCI STATUS=%#llx\r\n",
+          (size_t)i,(unsigned long long)s);
+      break;
+    }
     s=io->GetLocation(io,&seg,&bus,&device,&function);
-    if(EFI_ERROR(s))break;
+    if(EFI_ERROR(s)) {
+      Say("STOP_PREFLIGHT_PCI_ERROR INDEX=%zu STAGE=GET_LOCATION STATUS=%#llx\r\n",
+          (size_t)i,(unsigned long long)s);
+      break;
+    }
     s=io->Pci.Read(io,EfiPciIoWidthUint32,0,16,config);
-    if(EFI_ERROR(s))break;
+    if(EFI_ERROR(s)) {
+      Say("STOP_PREFLIGHT_PCI_ERROR INDEX=%zu STAGE=READ_CONFIG STATUS=%#llx\r\n",
+          (size_t)i,(unsigned long long)s);
+      break;
+    }
     if((config[2]>>16)!=0x0300U)continue;
     display++;
     for(j=0;j<3;j++)
@@ -236,10 +250,16 @@ static EFI_STATUS Inventory(VOID) {
     Cards[j].handle=handles[i];
     s=bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&Cards[j].path);
     if(EFI_ERROR(s)||!Cards[j].path ||
-       !(Cards[j].path_size=PathBytes(Cards[j].path)))break;
+       !(Cards[j].path_size=PathBytes(Cards[j].path))) {
+      Say("STOP_PREFLIGHT_PCI_ERROR INDEX=%zu STAGE=DEVICE_PATH SLOT=%zu STATUS=%#llx\r\n",
+          (size_t)i,(size_t)j,(unsigned long long)s);
+      break;
+    }
   }
   if(handles && EFI_ERROR(bs->FreePool(handles)))s=EFI_DEVICE_ERROR;
   if(EFI_ERROR(s))return s;
+  Say("STOP_PREFLIGHT_PCI_IDENTITY_COUNTS DISPLAY=%zu GPU0=%zu GPU1=%zu AMD=%zu\r\n",
+      (size_t)display,(size_t)found[0],(size_t)found[1],(size_t)found[2]);
   if(display!=3 || found[0]!=1 || found[1]!=1 || found[2]!=1 ||
      Cards[0].path_size!=28 || Cards[1].path_size!=40 ||
      Cards[2].path_size!=28 || !Cards[0].io->RomImage ||
@@ -361,20 +381,21 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   Say("EXPERIMENT=EXACT_4090_STOP_ONLY TARGET=0000:01:00.0\r\n");
   Say("CAN_UNLOCK=0 CAN_FLASH=0 CAN_FLR=0 CAN_STOP_OTHER_CARD=0\r\n");
   s=Inventory();
-  Say("IDENTITY_STATUS=%#llx EXACT_3_DISPLAY=1\r\n",(unsigned long long)s);
+  Say("IDENTITY_STATUS=%#llx INVENTORY_ACCEPTED=%u\r\n",
+      (unsigned long long)s,(unsigned)(s==EFI_SUCCESS));
   if(EFI_ERROR(s))goto refuse;
   s=Gops();
-  Say("GOP_STATUS=%#llx TARGET_GOP=0 PEER_GOP=1 AMD_GOP=1\r\n",
-      (unsigned long long)s);
+  Say("GOP_STATUS=%#llx GOP_POLICY_ACCEPTED=%u EXPECTED_TARGET_GOP=0 EXPECTED_PEER_GOP=1 EXPECTED_AMD_GOP=1\r\n",
+      (unsigned long long)s,(unsigned)(s==EFI_SUCCESS));
   if(EFI_ERROR(s))goto refuse;
   s=ConsoleVar(L"ConOut");
   if(s==EFI_SUCCESS)s=ConsoleVar(L"ErrOut");
-  Say("CONSOLE_STATUS=%#llx TARGET_CONSOLE=0 PEER_AND_AMD=1\r\n",
-      (unsigned long long)s);
+  Say("CONSOLE_STATUS=%#llx CONSOLE_POLICY_ACCEPTED=%u EXPECTED_TARGET_CONSOLE=0 EXPECTED_PEER_AND_AMD=1\r\n",
+      (unsigned long long)s,(unsigned)(s==EFI_SUCCESS));
   if(EFI_ERROR(s))goto refuse;
   s=ExactOriginalDriver();
-  Say("ORIGINAL_DRIVER_STATUS=%#llx EXACT_IMAGE_SHA=1\r\n",
-      (unsigned long long)s);
+  Say("ORIGINAL_DRIVER_STATUS=%#llx DRIVER_VERIFIED=%u\r\n",
+      (unsigned long long)s,(unsigned)(s==EFI_SUCCESS));
   if(EFI_ERROR(s))goto refuse;
   expected_agent=Cards[0].owner;
   expected_peer=Cards[1].owner;
