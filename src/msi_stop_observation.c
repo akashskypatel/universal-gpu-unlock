@@ -139,12 +139,23 @@ static int OnController(const GPU *card,const EFI_DEVICE_PATH_PROTOCOL *path) {
 static EFI_STATUS Owner(GPU *card) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
   EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
-  UINTN count=0,i,owners=0;
+  UINTN count=0,i,owners=0,by_driver=0,child=0,exclusive=0;
+  UINTN slot=card==&Cards[0]?0U:card==&Cards[1]?1U:2U;
   EFI_HANDLE agent=NULL;
   EFI_STATUS s=bs->OpenProtocolInformation(card->handle,&PciGuid,&entries,&count);
+  Say("STOP_PREFLIGHT_PCI_OPENS SLOT=%zu STATUS=%#llx COUNT=%zu\r\n",
+      (size_t)slot,(unsigned long long)s,(size_t)count);
   if(EFI_ERROR(s)||count>64||(count&&!entries))return EFI_COMPROMISED_DATA;
   for(i=0;i<count;i++) {
     const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&entries[i];
+    if(e->Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER)by_driver++;
+    if(e->Attributes & EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER)child++;
+    if(e->Attributes & EFI_OPEN_PROTOCOL_EXCLUSIVE)exclusive++;
+    /* Inspect only: no OpenProtocol/CloseProtocol or driver callback. */
+    Say("STOP_PREFLIGHT_PCI_OPEN SLOT=%zu INDEX=%zu ATTRS=%#x COUNT=%u CONTROLLER_MATCH=%u AGENT_NONZERO=%u\r\n",
+        (size_t)slot,(size_t)i,(unsigned)e->Attributes,(unsigned)e->OpenCount,
+        (unsigned)(e->ControllerHandle==card->handle),
+        (unsigned)(e->AgentHandle!=NULL));
     if(e->Attributes==EFI_OPEN_PROTOCOL_BY_DRIVER && e->OpenCount==1 &&
        e->ControllerHandle==card->handle && e->AgentHandle) {
       owners++;agent=e->AgentHandle;
@@ -153,6 +164,8 @@ static EFI_STATUS Owner(GPU *card) {
       owners=100;
     }
   }
+  Say("STOP_PREFLIGHT_PCI_OWNER SLOT=%zu BY_DRIVER=%zu VALID_OWNER=%zu CHILD=%zu EXCLUSIVE=%zu\r\n",
+      (size_t)slot,(size_t)by_driver,(size_t)owners,(size_t)child,(size_t)exclusive);
   if(entries && EFI_ERROR(bs->FreePool(entries)))return EFI_DEVICE_ERROR;
   if(owners!=1)return EFI_ACCESS_DENIED;
   card->owner=agent;
@@ -165,6 +178,8 @@ static EFI_STATUS TargetHasNoChildren(VOID) {
   EFI_GUID **protocols=NULL;
   UINTN count=0,i,j;
   EFI_STATUS s=bs->ProtocolsPerHandle(Cards[0].handle,&protocols,&count);
+  Say("STOP_PREFLIGHT_TARGET_PROTOCOLS STATUS=%#llx COUNT=%zu\r\n",
+      (unsigned long long)s,(size_t)count);
   if(EFI_ERROR(s)||count<2||count>64||!protocols)return EFI_ACCESS_DENIED;
   for(i=0;i<count;i++) {
     EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
@@ -172,14 +187,20 @@ static EFI_STATUS TargetHasNoChildren(VOID) {
     if(!protocols[i]) {s=EFI_COMPROMISED_DATA;break;}
     s=bs->OpenProtocolInformation(Cards[0].handle,protocols[i],
                                   &entries,&edges);
+    Say("STOP_PREFLIGHT_TARGET_PROTOCOL INDEX=%zu PCI=%u STATUS=%#llx OPENS=%zu\r\n",
+        (size_t)i,(unsigned)(memcmp(protocols[i],&PciGuid,sizeof(PciGuid))==0),
+        (unsigned long long)s,(size_t)edges);
     if(EFI_ERROR(s)||edges>128||(edges&&!entries))s=EFI_COMPROMISED_DATA;
     else for(j=0;j<edges;j++) {
       UINT32 attr=entries[j].Attributes;
       if(attr==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER ||
          attr==EFI_OPEN_PROTOCOL_EXCLUSIVE ||
          (attr==EFI_OPEN_PROTOCOL_BY_DRIVER &&
-          memcmp(protocols[i],&PciGuid,sizeof(PciGuid))!=0))
+          memcmp(protocols[i],&PciGuid,sizeof(PciGuid))!=0)) {
+        Say("STOP_PREFLIGHT_TARGET_OPEN_BLOCKER PROTOCOL=%zu INDEX=%zu ATTRS=%#x OPEN_COUNT=%u\r\n",
+            (size_t)i,(size_t)j,(unsigned)attr,(unsigned)entries[j].OpenCount);
         s=EFI_ACCESS_DENIED;
+      }
     }
     if(entries && EFI_ERROR(bs->FreePool(entries)))s=EFI_DEVICE_ERROR;
     if(EFI_ERROR(s))break;
@@ -227,9 +248,13 @@ static EFI_STATUS Inventory(VOID) {
     if(!GuHashMatches(Cards[i].path,Cards[i].path_size,ExactPaths[i]))
       return EFI_SECURITY_VIOLATION;
     s=Owner(&Cards[i]);
+    Say("STOP_PREFLIGHT_OWNER_RESULT SLOT=%zu STATUS=%#llx\r\n",
+        (size_t)i,(unsigned long long)s);
     if(EFI_ERROR(s))return s;
   }
-  return TargetHasNoChildren();
+  s=TargetHasNoChildren();
+  Say("STOP_PREFLIGHT_CHILD_RESULT STATUS=%#llx\r\n",(unsigned long long)s);
+  return s;
 }
 static EFI_STATUS Gops(VOID) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
