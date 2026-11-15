@@ -438,6 +438,46 @@ int main(void) {
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("27 strict admission cases", result.stdout)
+            # Compile the same production C again with GA102 selected.
+            # This checks real target-specific GOP and console behavior,
+            # not only whether the new preprocessor branch exists.
+            ga_main = r"""
+int main(void) {
+  UINTN i;
+  for(i=0;i<3;i++) {
+    make_path(card_paths[i],(UINT8)(i+1),12);
+    Cards[i].path=(EFI_DEVICE_PATH_PROTOCOL *)card_paths[i];
+    Cards[i].path_size=12;
+    make_path(gop_paths[i],(UINT8)(i+1),16);
+  }
+  make_path(gop_paths[3],0x20,16);
+  if(run(1,1,2,0,0,EFI_SUCCESS))return 1;       /* AMD only */
+  if(run(2,2,1,2,0,EFI_ACCESS_DENIED))return 1; /* 4090 GOP */
+  if(run(3,1,0,0,0,EFI_ACCESS_DENIED))return 1; /* 3080 GOP */
+  if(run(4,1,1,0,0,EFI_ACCESS_DENIED))return 1; /* peer only */
+  if(run(5,2,2,2,0,EFI_ACCESS_DENIED))return 1; /* duplicate AMD */
+  if(run(6,1,3,0,0,EFI_ACCESS_DENIED))return 1; /* unknown GOP */
+  if(run(7,1,2,0,0,EFI_SUCCESS))return 1;
+  make_single_amd_console();
+  if(check_console(8,EFI_SUCCESS))return 1;
+  make_mixed_console();
+  if(check_console(9,EFI_ACCESS_DENIED))return 1;
+  make_single_amd_console();
+  var_bytes[1]=1;
+  if(check_console(10,EFI_ACCESS_DENIED))return 1;
+  puts("PASS production GA102 Gops/ConsoleVar: 10 isolated policy cases");
+  return 0;
+}
+"""
+            source.write_text(prefix + code + suffix[:suffix.index("int main(void) {")] + ga_main, encoding="utf-8")
+            result = subprocess.run(
+                [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 "-DGU_STOP_TARGET_3080", str(source), "-o", str(executable)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("10 isolated policy cases", result.stdout)
 
     def test_gop_denial_explains_count_and_each_path(self):
         before_stop = SOURCE[:SOURCE.index("STOP_ATTEMPT=IMMINENT")]
