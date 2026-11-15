@@ -55,6 +55,11 @@ int main(void) {
   /* Source-based FWSEC signature rank must not skip an absent or zero slot. */
   {
     unsigned version=99,slot=99;
+    CHECK(GuMsiB850FuseVersion(0x0000U)==0U);
+    CHECK(GuMsiB850FuseVersion(0x0001U)==1U);
+    CHECK(GuMsiB850FuseVersion(0x0003U)==2U);
+    CHECK(GuMsiB850FuseVersion(0x8000U)==16U);
+    CHECK(GuMsiB850FuseVersion(0xffffU)==16U);
     CHECK(GuMsiB850FwsecSignatureSlot(0x0000U,0x3U,&version,&slot));
     CHECK(version==0U && slot==0U);
     CHECK(GuMsiB850FwsecSignatureSlot(0x0001U,0x3U,&version,&slot));

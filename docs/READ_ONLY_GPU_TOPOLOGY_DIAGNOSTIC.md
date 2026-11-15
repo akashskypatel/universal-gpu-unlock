@@ -1,5 +1,34 @@
 # Dynamic read-only NVIDIA GPU and PCI/GOP topology diagnostic
 
+### Separate SEC2 version-register comparison (opt-in MSI fuse diagnostic)
+
+The first physical fuse log `0031` resolved the production FWSEC/GSP
+version: AD102 `0x1` → signature slot 1; GA102 `0x3` → signature
+slot 2. Neither signature was authenticated.
+
+The same `-MsiB850FuseVersion` diagnostic now makes a **second, independent
+read-only 32-bit register read per exact GPU**: SEC2 version family
+`0x00824140`, microcode ID 3, register offset **`0x00824148`**.
+The register address and highest-set-bit version rule come from NVIDIA's
+GA102+ source published as Linux `nova-core`. The reference SEC2
+engine `0x1` and microcode ID `3` originate from this repository's
+**Linux 610.43.03 comparison Booter geometry**. They are not evidence
+that original **Windows 617.42** selected this descriptor, image, microcode
+identifier or signature. The diagnostic records
+`MSI_B850_SEC2_FUSE GPU=` and `MSI_B850_SEC2_FUSE_END`,
+including the raw value, low 16 bits, inferred reference fuse version,
+exact success/error status and an explicit
+`WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN`. It does **not** select or patch a
+SEC2 signature, write a GPU register, reset a Falcon, or load firmware.
+No SEC2 read occurs in generic topology or ROM-variable builds.
+
+The earlier physical `0031` did **not** contain these new SEC2 records;
+a new run of the revised, signed MSI fuse image is necessary to observe
+that *different* register. This will not clear the original Windows
+signed Booter IMAGE/HEADER/SIG/PATCH producer, same-instance loader
+invocation, or safe GA102 release by itself.
+
+
 ## Automatic Windows handover for passive diagnostics
 
 The generic topology, MSI B850 ROM-variable and MSI B850 fuse-version

@@ -99,16 +99,20 @@ static void Say(const char *format, ...) {
 
 
 #ifdef GU_MSI_B850_FUSE_VERSION
-/* Linux nova-core GA102+ uses GSP ucode ID 9 with the fuse register family
- * based at BAR0+0x8241c0. ID 9 selects index 8, BAR0+0x8241e0.
- * This experimental *read-only* probe makes no secure acceptance claim.
- * It must never run from the normal topology or active release image. */
+/* Linux nova-core GA102+: GSP ucode ID 9 selects BAR0+0x8241e0.
+ * Separately, SEC2 ucode ID 3 selects BAR0+0x824148. The SEC2 ID/engine
+ * originate from the public 610.43.03 reference Booter header only;
+ * they are NOT a proved Windows 617.42 Booter descriptor or signature.
+ * Exactly one read of each register per identity-verified GPU is allowed.
+ * This opt-in read-only probe never runs in normal topology/active builds. */
 static void ReportMsiB850FwsecFuseVersion(int pci_ok) {
   size_t i;
-  unsigned observed=0U;
+  unsigned observed=0U,sec2_observed=0U;
   Say("MSI_B850_FWSEC_FUSE_BEGIN SOURCE=NOVA_CORE_GA102_PLUS READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 NO_STOP=1 NO_DMA=1 NO_RESET=1\r\n");
+  Say("MSI_B850_SEC2_FUSE_BEGIN SOURCE=NOVA_CORE_GA102_PLUS REFERENCE_BOOTER=LINUX_610_43_03 ENGINE_MASK=0x1 UCODE_ID=3 WINDOWS_61742_DESCRIPTOR=UNKNOWN READ_ONLY=1\r\n");
   if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot)) {
     Say("MSI_B850_FWSEC_FUSE STATUS=REFUSED REASON=PLATFORM_FINGERPRINT_NO_MATCH\r\n");
+    Say("MSI_B850_SEC2_FUSE STATUS=REFUSED REASON=PLATFORM_FINGERPRINT_NO_MATCH\r\n");
     return;
   }
   for(i=0;i<Snapshot.pci_count;i++) {
@@ -116,8 +120,8 @@ static void ReportMsiB850FwsecFuseVersion(int pci_ok) {
     const GU_GPU_RECORD *id=&node->identity;
     EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)id->pci;
     unsigned ada,expected_bus,version=0U,slot=0U;
-    UINT32 value=0U,mask;
-    EFI_STATUS status;
+    UINT32 value=0U,sec2_value=0U,mask;
+    EFI_STATUS status,sec2_status;
     int slot_known;
     if(!GuMsiB850IsOwnerNvidia(id))continue;
     ada=(id->pci_id==0x268410deU);
@@ -129,10 +133,26 @@ static void ReportMsiB850FwsecFuseVersion(int pci_ok) {
        !node->first_owner_agent || !pci || !pci->Mem.Read) {
       Say("MSI_B850_FWSEC_FUSE GPU=%s STATUS=REFUSED REASON=PCI_OWNER_OR_BDF_MISMATCH\r\n",
           ada?"4090":"3080");
+      Say("MSI_B850_SEC2_FUSE GPU=%s STATUS=REFUSED REASON=PCI_OWNER_OR_BDF_MISMATCH\r\n",
+          ada?"4090":"3080");
       continue;
     }
+    /* Independent SEC2 comparison read: current Windows signed Booter
+     * ucode ID/engine and signature selector are NOT known. Never infer
+     * a Windows signature slot or authentication result from this word. */
+    sec2_status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,0x00824148U,1U,&sec2_value);
+    if(EFI_ERROR(sec2_status)) {
+      Say("MSI_B850_SEC2_FUSE GPU=%s STATUS=UNAVAILABLE EFI_STATUS=%#llx BAR0_OFFSET=0x824148 NO_FALLBACK=1\r\n",
+          ada?"4090":"3080",(unsigned long long)sec2_status);
+    } else {
+      sec2_observed++;
+      Say("MSI_B850_SEC2_FUSE GPU=%s STATUS=OBSERVED BAR0_OFFSET=0x824148 RAW=%#x LOW16=%#x FUSE_VERSION=%u REFERENCE_ENGINE=SEC2 REFERENCE_UCODE_ID=3 WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",(unsigned)sec2_value,
+          (unsigned)(sec2_value&0xffffU),
+          GuMsiB850FuseVersion((uint16_t)sec2_value));
+    }
     /* PCI I/O provides BAR bounds checking. No direct CPU BAR mapping and no
-     * retry on failure. A single 32-bit BAR0 register read per known card. */
+     * retry on failure. A single 32-bit GSP BAR0 register read per card. */
     status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,0x008241e0U,1U,&value);
     if(EFI_ERROR(status)) {
       Say("MSI_B850_FWSEC_FUSE GPU=%s STATUS=UNAVAILABLE EFI_STATUS=%#llx OFFSET=0x8241e0 NO_FALLBACK=1\r\n",
@@ -151,6 +171,7 @@ static void ReportMsiB850FwsecFuseVersion(int pci_ok) {
         version,(unsigned)mask,slot,(unsigned)(ada || slot!=0U));
   }
   Say("MSI_B850_FWSEC_FUSE_END READS_SUCCEEDED=%u SECURITY_ACCEPTANCE=UNVERIFIED NO_GPU_WRITES=1\r\n",observed);
+  Say("MSI_B850_SEC2_FUSE_END READS_SUCCEEDED=%u WINDOWS_61742_DESCRIPTOR=UNKNOWN SECURITY_ACCEPTANCE=UNVERIFIED NO_GPU_WRITES=1\r\n",sec2_observed);
 }
 #endif
 

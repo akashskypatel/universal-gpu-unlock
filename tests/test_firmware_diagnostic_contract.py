@@ -104,6 +104,22 @@ class DiagnosticContract(unittest.TestCase):
             self.assertNotIn(action,probe)
         self.assertIn("NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1",probe)
 
+    def test_opt_in_sec2_fuse_is_independent_read_only_reference(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        probe=source.split("static void ReportMsiB850FwsecFuseVersion(",1)[1].split("\n#endif",1)[0]
+        gate="if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot))"
+        assert_owner="!node->openers_known || node->by_driver!=1U"
+        self.assertLess(probe.index(gate),probe.index("sec2_status=pci->Mem.Read("))
+        self.assertLess(probe.index(assert_owner),probe.index("sec2_status=pci->Mem.Read("))
+        self.assertEqual(probe.count("pci->Mem.Read("),2)
+        self.assertIn("0x00824148U,1U,&sec2_value",probe)
+        self.assertIn("0x008241e0U,1U,&value",probe)
+        self.assertIn("MSI_B850_SEC2_FUSE_END",probe)
+        self.assertIn("WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN",probe)
+        self.assertIn("NO_FALLBACK=1",probe)
+        for mutation in ("Mem.Write(", "Pci.Write(", "DisconnectController(", "Stop(", "SetVariable(", "ResetSystem("):
+            self.assertNotIn(mutation,probe)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)

@@ -13,15 +13,21 @@ static inline int GuMsiB850PrivateOpensValid(size_t count, const void *entries) 
  * the security version. The mask selects a rank within packed signatures.
  * This is a read-only source interpretation, never a secure acceptance check.
  * A zero fuse word selects version zero; unlisted versions fail closed. */
+/* Version shared by GSP/FWSEC and SEC2 fuse-family observations.
+ * A low16 zero word means version zero, not a missing register read. */
+static inline unsigned GuMsiB850FuseVersion(uint16_t fuse_bits) {
+  unsigned i,v=0U;
+  for(i=0;i<16U;i++)
+    if((fuse_bits & (uint16_t)(1U<<i))!=0U)v=i+1U;
+  return v;
+}
 static inline int GuMsiB850FwsecSignatureSlot(uint16_t fuse_bits,
                                                uint32_t signature_versions,
                                                unsigned *version,
                                                unsigned *slot) {
-  unsigned i,v=0,index=0;
+  unsigned i,index=0,v=GuMsiB850FuseVersion(fuse_bits);
   if(!version || !slot || (signature_versions!=0x3U && signature_versions!=0x7U))
     return 0;
-  for(i=0;i<16U;i++)
-    if((fuse_bits & (uint16_t)(1U<<i))!=0U)v=i+1U;
   if(v>=32U || (signature_versions & (1U<<v))==0U)return 0;
   for(i=0;i<v;i++)if((signature_versions & (1U<<i))!=0U)index++;
   *version=v;
