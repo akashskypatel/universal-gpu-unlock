@@ -2,11 +2,13 @@
 
 ## Situation
 
-The original NVIDIA UEFI driver owns both GPUs in hardware diagnostic
-`GPU-TOPOLOGY-DIAGNOSTIC-0029.TXT`. The RTX 4090 at `0000:01:00.0`
-has **no associated GOP or console path**. The RTX 3080 at
-`0000:04:00.0` has a GOP and shares the active console with the
-AMD integrated GPU. Do not run a Stop experiment on the RTX 3080.
+The original NVIDIA firmware driver was initially bound on both GPUs.
+The latest physical `STOP-4090-0006/0007.TXT` confirms that, with
+**one monitor on AMD iGPU only**, the RTX4090 and RTX3080 have no
+firmware graphics-output paths. The **single original RTX4090 Stop
+returned success and removed its PCI driver owner**, with AMD and
+RTX3080 owners unchanged. The old observer then halted deliberately.
+Do not run a Stop experiment on the RTX3080.
 
 The stock NVIDIA RTX 4090 Stop callback can write GPU registers and
 wait in a loop without a verified time limit. The owner explicitly
@@ -24,7 +26,11 @@ The experiment calls only the original RTX 4090's
 `DisconnectController(target, original_nvidia_driver, NULL)`.
 Firmware may invoke the original NVIDIA Stop callback. The program
 does not attempt firmware unlock, flash, GPU reset, a second card,
-device rebinding, or Windows handoff.
+device rebinding. The default build still halts after Stop; a
+**separate, explicitly opted-in executable** can prepare the original
+Windows Boot Manager from a pinned Windows EFI System Partition (ESP)
+and start it only when all post-Stop checks pass. This path has
+**not been tested on physical hardware**.
 
 Before the call, the program must verify:
 
@@ -60,8 +66,12 @@ full GPU recovery or the Windows 617.42 secure Booter acceptance.
 
 A post-call result may report the PCI owner, RTX 3080 and AMD
 driver owners, GOP paths, and console variables. These checks are
-read-only. The program does **not** return to the UEFI Shell after
-a Stop attempt. The owner must physically power off the system.
+read-only. Neither executable returns to the UEFI Shell after a Stop
+attempt. The default one-card executable requires a manual power-off.
+The optional Windows-handoff executable tries the pinned Windows
+Boot Manager only after Stop succeeds and the PCI/console checks pass.
+If it refuses or returns, the program halts and requires a manual
+power-off. A completed Windows boot is not proof of a safe unlock.
 
 An intent log containing `STOP_ATTEMPT=IMMINENT` without a separate
 `STOP_RETURNED=1` result log is consistent with a hang **or a file-close
@@ -73,54 +83,86 @@ The current build and source checks do not prove that physical
 execution will be safe. Successful execution is also **not**
 permission to run unlock or flash code.
 
-## Current hardware state — AMD-only display is the expected case
+## Current hardware result — original RTX4090 Stop physically succeeded
 
-Owner physical wiring: exactly one display, connected to the AMD
-integrated GPU. Neither NVIDIA card has a connected display.
-The original passive `0022` previously observed AMD-only GOP and
-console ownership. Do not re-open the settled MSI GOP, PCI option-ROM,
-or console-provider reverse engineering.
+The owner used an ordinary restart, one monitor on the AMD iGPU,
+and no display or dummy plug on either NVIDIA card. Complete
+original evidence:
 
-The current `STOP-4090-0005.TXT` is **2,662 bytes**, SHA-256
-`1afc88b5501aed2c3a49942ab5072745a1ac1a038fcee96263ebe53b4314b923`,
-from a normal restart. Its three exact PCI card identities, three
-one-owner checks and RTX4090 child/target protocol checks all pass.
-The read-only UEFI GOP observation is exactly
-`TARGET=0 PEER=0 AMD=1 UNKNOWN=0 INVALID=0 TOTAL=1`. The single GOP
-path matches the AMD iGPU, with path length 36 bytes.
-`ConOut` and `ErrOut` are separately present (status 0), each 36
-bytes with boot-service/runtime variable attributes `0x7`; old
-`ConsoleVar()` refuses both **before inspecting their content** because
-it required 84 bytes. The log does **not yet prove the two console
-values' path bytes**. `STOP_ATTEMPT=REFUSED GPU_MUTATION=NONE` proves
-the original NVIDIA Stop did not run. A full power cycle is not
-needed merely to resolve this configuration mismatch.
+- `STOP-4090-0006.TXT`: 5,264 bytes, SHA-256
+  `eb46cf91f82602f7724be84d1fae33420820f1d685701104140dbf3e0e64756a`
+- `STOP-4090-0007.TXT`: 1,891 bytes, SHA-256
+  `d7ef21d895906afb954f369e9188f6f6c9ad347db24ce87f49490a3b15579f14`
 
-**Source correction:** This one-card-only observer now accepts two
-originally observed complete configurations: (a) one AMD GOP, no NVIDIA
-GOP, a single AMD `ConOut` and `ErrOut` instance, with each console
-variable exactly 36 bytes; (b) one AMD and one RTX3080 GOP, no RTX4090
-GOP, one AMD and one RTX3080 console instance for each variable,
-with exactly 84 bytes. The second layout remains valid for reference,
-but **no display should be added to either NVIDIA card**.
-The runtime GOP count determines which exact console contract is used.
-Unknown, extra, duplicate or selected-4090 GOPs; malformed, missing
-or nonmatching console paths; and missing original NVIDIA driver hash
-still refuse. The RTX4090 no-child, one-owner, exact path and
-option-ROM, one attempt/closed intent log, Y confirmation and
-no-Windows-handoff restrictions are unchanged. The normal release
-function remains disabled for both NVIDIA cards.
+Before Stop, the RTX4090 original driver-image SHA-256 and Stop
+pointer match; the exact GPU identities, one original PCI owner per
+GPU, no target child, one AMD GOP, and only AMD `ConOut/ErrOut` all
+pass. The pre-call result file records `STOP_ATTEMPT=IMMINENT` and
+`STOP_SERVICE=DisconnectController DRIVER=PINNED_ORIGINAL IMAGE=SHA_MATCH`.
 
-**Next hardware check:** Rebuild and sign/stage the current source.
-Use one ordinary restart with only the AMD display, execute the
-isolated observer once, **do not press Y** if the confirmation appears,
-and attach the complete next `STOP-4090-NNNN.TXT`, source revision
-and staged EFI SHA-256. This checks the actual AMD-only console
-variable paths and original NVIDIA loaded-image hash without a Stop
-attempt. If both pass, independently reassess the separately approved
-one-card Stop risk and power-off recovery procedure. A real Stop test
-requires deliberate Y confirmation and **manual full power removal
-afterward**, whether the callback returns or does not return.
+The second, separately written file establishes
+`STOP_RETURNED=1 EFI_STATUS=0`, a target `BY_DRIVER` count of
+zero (one remaining ordinary protocol reference), unchanged original
+RTX3080 and AMD `BY_DRIVER` owners, AMD GOP alone, and exact
+post-Stop `ConOut/ErrOut` success. It ends with
+`NO_WINDOWS_HANDOFF=1 POWER_OFF_REQUIRED=1 DO_NOT_RETRY=1`.
+This last record is a **deliberate programmed halt**, not a failed
+NVIDIA Stop callback. Following manual power-cycle restart, Windows
+`nvidia-smi -L` showed **both original NVIDIA GPU identities**.
+This is evidence of basic cold-start Windows recognition, not a
+complete post-Stop same-boot handoff, DMA safety, signed Windows
+firmware-loader acceptance or repeatable recovery guarantee.
+
+## Experimental automatic Windows handoff — separate opt-in build
+
+The implementation reuses the repository's existing pinned Windows
+Boot Manager loader; it does **not** change `BootNext`, `BootOrder`,
+device driver packages, the original GPU ROM, or any production
+release gate. The new executable is named
+`MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI` so it cannot be
+mistaken for the original stop-and-halt image.
+
+The build requires both `-AcceptUnboundedStopRisk` and
+`-AcceptWindowsHandoffRisk`, together with `-WindowsEspGuid`
+set to the **current Windows EFI System Partition unique GPT
+partition identifier**. The owner must independently verify the
+current identifier. The previously reviewed candidate is
+`a005858c-4487-4ee2-976e-1710ff484c31`; do not assume a Windows
+reinstall or disk change preserved it. Use the previously approved
+signed USB execution route and keep this binary off the default
+firmware boot list.
+
+After deliberate `Y` confirmation, the application uses the
+original firmware `LoadImage` path to prepare the pinned
+`\\EFI\\Microsoft\\Boot\\bootmgfw.efi` **before Stop**, without
+running it. A missing/ambiguous ESP, USB match, invalid image or
+failed platform image-authentication check **refuses before Stop**.
+The code then repeats all original target, peer, GOP, console and
+original NVIDIA driver checks, saves/closes the intent log, and
+calls original `DisconnectController` **once** for RTX4090 only.
+
+After Stop, the application admits handoff only if: the original
+Stop returned `EFI_SUCCESS`; the target PCI protocol has **no**
+`BY_DRIVER`, child-controller, exclusive or unknown opener; the
+unchanged original RTX3080 and AMD driver owners remain; the AMD
+GOP/console checks pass; and the second result log is flushed and
+closed. Only then does it call `StartImage` for the already prepared
+Windows Boot Manager. New records are
+`WINDOWS_BOOT_MANAGER_PREPARED`,
+`POST_STOP_TARGET_PCI_UNBOUND`,
+`WINDOWS_HANDOFF_POST_STOP_ELIGIBLE`, and
+`WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER`.
+
+**Important limits:** `StartImage` may not return if Windows boots.
+The implementation does not prove that firmware, Boot Manager or
+Windows will leave the RTX4090 in precisely its post-Stop state.
+A Windows boot can fail, trigger recovery, or require a full hard
+power-off. If the Boot Manager returns, the observer persists its
+returned status when possible and **halts without retrying, connecting
+a GPU driver or returning to the Shell**. This remains a user-approved
+one-card hardware experiment, not production Windows handoff or
+unlock enablement. Have physical AC disconnect, Windows recovery
+media and any applicable BitLocker recovery key ready before using it.
 
 ## Recommendation — Owner procedure
 
@@ -148,16 +190,25 @@ On Windows, from the `universal-gpu-unlock` repository root:
    Do not make this application the default boot option.
 5. Confirm you can physically reach the power switch and remove
    wall power. If this is not possible, do not start the experiment.
-6. Run this file once from the UEFI Shell. Check that the displayed
-   target is RTX 4090 at `0000:01:00.0`, and that all guards pass.
-   For the **next preflight-only validation**, press a key other
-   than `Y` if prompted. Do not execute Stop yet. After the new log
-   is reviewed, a separately chosen original owner-authorized one-time
-   Stop test may follow; do not attempt the RTX 3080.
-7. After the Stop call returns **or** if firmware becomes unresponsive,
-   hold the physical power button until the computer is off. Disconnect
-   external AC power, then restore power for a full cold start. Do not
-   try to boot Windows while the test is still running.
+6. For the **optional automatic handoff variant**, validate the current
+   Windows ESP identifier before building. Use:
+   `Get-Partition | Where-Object { $_.GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' } | Select-Object DiskNumber,PartitionNumber,Guid,Size`.
+   Identify the actual Windows ESP; a USB ESP or a stale partition GUID
+   is not acceptable. Then build:
+   `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\src\\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -WindowsEspGuid '<verified-Windows-ESP-unique-GUID>' -AcceptWindowsHandoffRisk`.
+   Record the new binary SHA-256 and staged-file SHA-256 separately.
+7. Run **only the desired named EFI executable** from the trusted
+   USB/UEFI Shell. Confirm exact RTX4090 identity. In the handoff
+   variant `Y` deliberately authorizes the one-card Stop and
+   conditional automatic Windows Boot Manager start; any other key
+   cancels. The original `MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI`
+   still requires hard power removal after Stop and never boots Windows.
+8. If the handoff variant successfully enters Windows, preserve the USB
+   logs and collect `nvidia-smi -L`, both GPU driver statuses and
+   observed display/boot behavior. If firmware hangs, handoff fails or
+   Boot Manager returns, hold the power button until OFF, disconnect
+   external AC, and restore full power before normal Windows startup.
+   No retry is allowed within the same boot.
 8. Confirm whether the BIOS, both GPUs, AMD console, and Windows can
    start normally. Preserve **all** new `STOP-4090-NNNN.TXT` files
    (the intent log and, if Stop returned, a second result log), the exact
