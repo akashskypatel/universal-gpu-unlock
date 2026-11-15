@@ -139,7 +139,7 @@ static int OnController(const GPU *card,const EFI_DEVICE_PATH_PROTOCOL *path) {
 static EFI_STATUS Owner(GPU *card) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
   EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
-  UINTN count=0,i,owners=0,by_driver=0,child=0,exclusive=0;
+  UINTN count=0,i,owners=0,by_driver=0,child=0,exclusive=0,invalid=0;
   UINTN slot=card==&Cards[0]?0U:card==&Cards[1]?1U:2U;
   EFI_HANDLE agent=NULL;
   EFI_STATUS s=bs->OpenProtocolInformation(card->handle,&PciGuid,&entries,&count);
@@ -159,15 +159,19 @@ static EFI_STATUS Owner(GPU *card) {
     if(e->Attributes==EFI_OPEN_PROTOCOL_BY_DRIVER && e->OpenCount==1 &&
        e->ControllerHandle==card->handle && e->AgentHandle) {
       owners++;agent=e->AgentHandle;
-    } else if(e->Attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER ||
-              e->Attributes==EFI_OPEN_PROTOCOL_EXCLUSIVE) {
-      owners=100;
+    } else if(e->Attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER) {
+      /* The selected 4090 must be child-free. Child-controller opens on
+       * the untouched AMD or 3080 device are not second PCI drivers. */
+      if(slot==0 || e->OpenCount!=1 || !e->AgentHandle ||
+         !e->ControllerHandle || e->ControllerHandle==card->handle)
+        invalid=1;
     }
+    if(e->Attributes & EFI_OPEN_PROTOCOL_EXCLUSIVE)invalid=1;
   }
-  Say("STOP_PREFLIGHT_PCI_OWNER SLOT=%zu BY_DRIVER=%zu VALID_OWNER=%zu CHILD=%zu EXCLUSIVE=%zu\r\n",
-      (size_t)slot,(size_t)by_driver,(size_t)owners,(size_t)child,(size_t)exclusive);
+  Say("STOP_PREFLIGHT_PCI_OWNER SLOT=%zu BY_DRIVER=%zu VALID_OWNER=%zu CHILD=%zu EXCLUSIVE=%zu INVALID=%zu\\r\\n",
+      (size_t)slot,(size_t)by_driver,(size_t)owners,(size_t)child,(size_t)exclusive,(size_t)invalid);
   if(entries && EFI_ERROR(bs->FreePool(entries)))return EFI_DEVICE_ERROR;
-  if(owners!=1)return EFI_ACCESS_DENIED;
+  if(owners!=1 || by_driver!=1 || invalid)return EFI_ACCESS_DENIED;
   card->owner=agent;
   return EFI_SUCCESS;
 }
