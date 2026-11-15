@@ -215,6 +215,152 @@ int main(void) {
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("11 positive/negative ownership scenarios", result.stdout)
 
+    def test_gop_classifier_executes_original_c_and_keeps_strict_admission(self):
+        # Use the actual C code, not a rewritten Python model. These tests
+        # do not show what the original firmware exposes on the real machine.
+        import shutil
+        import subprocess
+        import tempfile
+        compiler = shutil.which("gcc") or shutil.which("clang")
+        if not compiler:
+            self.skipTest("A host C compiler is required")
+        path_start = SOURCE.index("static UINTN PathBytes(")
+        path_end = SOURCE.index("static EFI_STATUS Owner(", path_start)
+        gop_start = SOURCE.index("static EFI_STATUS Gops(VOID) {")
+        gop_end = SOURCE.index("static EFI_STATUS ConsoleVar(", gop_start)
+        code = SOURCE[path_start:path_end] + SOURCE[gop_start:gop_end]
+        prefix = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdio.h>
+typedef void *EFI_HANDLE;
+typedef uint64_t EFI_STATUS;
+typedef uintptr_t UINTN;
+typedef uint8_t UINT8;
+typedef struct { UINT8 Type,SubType,Length[2]; } EFI_DEVICE_PATH_PROTOCOL;
+typedef struct {
+  EFI_HANDLE handle,owner;
+  void *io;
+  EFI_DEVICE_PATH_PROTOCOL *path;
+  UINTN path_size;
+} GPU;
+typedef struct {
+  EFI_STATUS (*LocateHandleBuffer)(
+    int,void *,void *,UINTN *,EFI_HANDLE **);
+  EFI_STATUS (*HandleProtocol)(EFI_HANDLE,void *,void **);
+  EFI_STATUS (*FreePool)(void *);
+} EFI_BOOT_SERVICES;
+typedef struct { EFI_BOOT_SERVICES *BootServices; } SYSTEM;
+#define ByProtocol 2
+#define EFI_SUCCESS ((EFI_STATUS)0)
+#define EFI_ACCESS_DENIED UINT64_C(0x800000000000000f)
+#define EFI_DEVICE_ERROR UINT64_C(0x8000000000000007)
+#define EFI_ERROR(s) (((s) & UINT64_C(0x8000000000000000)) != 0)
+static int GopGuid,PathGuid;
+static GPU Cards[3];
+static EFI_HANDLE handles[65];
+static UINT8 card_paths[3][12],gop_paths[6][16];
+static UINTN active_count;
+static EFI_STATUS Locate(int mode,void *guid,void *unused,
+                         UINTN *count,EFI_HANDLE **out) {
+  (void)mode; (void)guid; (void)unused;
+  *count=active_count; *out=handles; return EFI_SUCCESS;
+}
+static EFI_STATUS Handle(EFI_HANDLE handle,void *guid,void **path) {
+  uintptr_t index=(uintptr_t)handle;
+  (void)guid;
+  if(index>=6 || index==5)return EFI_DEVICE_ERROR;
+  *path=(void *)gop_paths[index];
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Free(void *pointer) { (void)pointer; return EFI_SUCCESS; }
+static EFI_BOOT_SERVICES Boot={Locate,Handle,Free};
+static SYSTEM Table={&Boot},*Sys=&Table;
+static void Say(const char *fmt,...) { (void)fmt; }
+"""
+        suffix = r"""
+static void make_path(UINT8 *data,UINT8 subtype,UINTN total) {
+  UINTN i;
+  memset(data,0,total);
+  data[0]=1; data[1]=subtype; data[2]=4;
+  data[4]=2; data[5]=subtype; data[6]=4;
+  for(i=8;i+4<total;i+=4) {
+    data[i]=3; data[i+1]=(UINT8)(i/4); data[i+2]=4;
+  }
+  data[total-4]=0x7f; data[total-3]=0xff; data[total-2]=4;
+}
+static int run(unsigned id,UINTN count,int a,int b,int c,EFI_STATUS expected) {
+  EFI_STATUS got;
+  active_count=count;
+  handles[0]=(EFI_HANDLE)(uintptr_t)a;
+  handles[1]=(EFI_HANDLE)(uintptr_t)b;
+  handles[2]=(EFI_HANDLE)(uintptr_t)c;
+  got=Gops();
+  if(got!=expected) {
+    fprintf(stderr,"case %u: got %llx expected %llx\n",
+            id,(unsigned long long)got,(unsigned long long)expected);
+    return 1;
+  }
+  return 0;
+}
+int main(void) {
+  UINTN i;
+  for(i=0;i<3;i++) {
+    make_path(card_paths[i],(UINT8)(i+1),12);
+    Cards[i].path=(EFI_DEVICE_PATH_PROTOCOL *)card_paths[i];
+    Cards[i].path_size=12;
+    make_path(gop_paths[i],(UINT8)(i+1),16);
+  }
+  make_path(gop_paths[3],0x20,16);
+  make_path(gop_paths[4],3,16);
+  gop_paths[4][14]=0; /* invalid terminating node length */
+  make_path(gop_paths[5],2,16);
+  if(run(1,2,1,2,0,EFI_SUCCESS))return 1;
+  if(run(2,2,2,1,0,EFI_SUCCESS))return 1;
+  if(run(3,1,2,0,0,EFI_ACCESS_DENIED))return 1;
+  if(run(4,2,0,2,0,EFI_ACCESS_DENIED))return 1;
+  if(run(5,3,1,2,0,EFI_ACCESS_DENIED))return 1;
+  if(run(6,2,1,1,0,EFI_ACCESS_DENIED))return 1;
+  if(run(7,2,1,3,0,EFI_ACCESS_DENIED))return 1;
+  if(run(8,2,1,4,0,EFI_ACCESS_DENIED))return 1;
+  if(run(9,2,1,5,0,EFI_ACCESS_DENIED))return 1;
+  if(run(10,0,1,2,0,EFI_ACCESS_DENIED))return 1;
+  if(run(11,65,1,2,0,EFI_ACCESS_DENIED))return 1;
+  puts("PASS actual Gops() C: 11 strict admission cases");
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "gops.c"
+            executable = Path(directory) / "gops"
+            source.write_text(prefix + code + suffix, encoding="utf-8")
+            result = subprocess.run(
+                [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 str(source), "-o", str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("11 strict admission cases", result.stdout)
+
+    def test_gop_denial_explains_count_and_each_path(self):
+        before_stop = SOURCE[:SOURCE.index("STOP_ATTEMPT=IMMINENT")]
+        for label in ("STOP_PREFLIGHT_GOP_ENUM STATUS=",
+                      "STOP_PREFLIGHT_GOP_ENTRY INDEX=",
+                      "STOP_PREFLIGHT_GOP_COUNTS TARGET=",
+                      "STOP_PREFLIGHT_CONSOLE_VARIABLE NAME=",
+                      "STOP_PREFLIGHT_CONSOLE_COUNTS NAME=",
+                      "STOP_PREFLIGHT_CONSOLE_AFTER_GOP_REFUSAL"):
+            self.assertIn(label, before_stop)
+        gops = SOURCE.split("static EFI_STATUS Gops(VOID) {", 1)[1].split(
+            "static EFI_STATUS ConsoleVar(", 1)[0]
+        self.assertLess(gops.index("STOP_PREFLIGHT_GOP_ENTRY INDEX="),
+                        gops.index("STOP_PREFLIGHT_GOP_COUNTS TARGET="))
+        self.assertIn("return count==2 && invalid==0", gops)
+        self.assertIn("each[0]==0 && each[1]==1 && each[2]==1", gops)
+        self.assertLess(before_stop.index("STOP_PREFLIGHT_CONSOLE_AFTER_GOP_REFUSAL"),
+                        before_stop.index("s=KeyY();"))
+
     def test_build_is_explicitly_opt_in_and_does_not_change_passive_image(self):
         self.assertIn("if (-not $AcceptUnboundedStopRisk)",BUILD)
         self.assertIn("'msi_stop_observation.c','sha256.c','format.c','runtime.c'",BUILD)
