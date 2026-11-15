@@ -444,12 +444,48 @@ int main(void) {
         self.assertLess(before_stop.index("STOP_PREFLIGHT_CONSOLE_AFTER_GOP_REFUSAL"),
                         before_stop.index("s=KeyY();"))
 
+    def test_optional_windows_handoff_is_separately_gated_and_fail_closed(self):
+        self.assertIn("if ($WindowsEspGuid -and -not $AcceptWindowsHandoffRisk)",BUILD)
+        self.assertIn("if ($AcceptWindowsHandoffRisk -and -not $WindowsEspGuid)",BUILD)
+        self.assertIn("$sources+=@('gpu_windows_handoff.c','gpu_windows_path.c')",BUILD)
+        self.assertIn("$flags+=' /DGU_STOP_WINDOWS_HANDOFF'",BUILD)
+        self.assertIn("MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI",BUILD)
+        # Windows image preparation happens after explicit Y, before the Stop;
+        # a post-Stop boot is forbidden unless every relevant guard passes.
+        self.assertIn("#ifdef GU_STOP_WINDOWS_HANDOFF",SOURCE)
+        self.assertIn("GuWindowsBootManagerPrepare(image,table,&PreparedWindowsImage)",SOURCE)
+        self.assertIn("GuWindowsBootManagerStartPrepared(",SOURCE)
+        self.assertLess(SOURCE.index("s=KeyY();"),
+                        SOURCE.index("GuWindowsBootManagerPrepare("))
+        self.assertLess(SOURCE.index("GuWindowsBootManagerPrepare("),
+                        SOURCE.index("s=table->BootServices->DisconnectController("))
+        self.assertLess(SOURCE.index("s=table->BootServices->DisconnectController("),
+                        SOURCE.index("GuWindowsBootManagerStartPrepared("))
+        guarded=SOURCE.split("BOOLEAN eligible=",1)[1].split("if(eligible && Log && Root)",1)[0]
+        for required in ("post_unbound==EFI_SUCCESS",
+                         "post_target==EFI_ACCESS_DENIED",
+                         "post_peer==EFI_SUCCESS && Cards[1].owner==expected_peer",
+                         "post_amd==EFI_SUCCESS && Cards[2].owner==expected_amd",
+                         "post_gop==EFI_SUCCESS",
+                         "post_conout==EFI_SUCCESS && post_errout==EFI_SUCCESS",
+                         "PreparedWindowsImage!=NULL"):
+            self.assertIn(required,guarded)
+        before_start=SOURCE.split("if(eligible && Log && Root)",1)[1].split(
+            "GuWindowsBootManagerStartPrepared(",1)[0]
+        self.assertIn("WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER",before_start)
+        self.assertIn("record=Flush();",before_start)
+        self.assertIn("record=Log->Close(Log);",before_start)
+        self.assertIn("record=Root->Close(Root);",before_start)
+        # The original one-card Stop count and production fail-closed remain.
+        self.assertEqual(len(re.findall(r"->DisconnectController\\s*\\(",SOURCE)),1)
+        self.assertIn("HaltAfterAttempt();",SOURCE)
+
     def test_build_is_explicitly_opt_in_and_does_not_change_passive_image(self):
         self.assertIn("if (-not $AcceptUnboundedStopRisk)",BUILD)
         self.assertIn("'msi_stop_observation.c','sha256.c','format.c','runtime.c'",BUILD)
         self.assertIn("MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI",BUILD)
         for source in ("unlock_execution.c","msi_release.c","gpu_topology_efi.c",
-                       "app.c","dxe_main.c","gpu_windows_handoff.c"):
+                       "app.c","dxe_main.c"):
             self.assertNotIn("'"+source+"'", BUILD)
         self.assertNotIn("GU_EXPERIMENTAL_STOP_OBSERVATION", PASSIVE)
         self.assertIn("GU_GPU_DIAGNOSTIC_ONLY", PASSIVE)
