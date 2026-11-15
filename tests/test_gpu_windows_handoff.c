@@ -102,6 +102,23 @@ int main(void){
   CHECK(GuWindowsBootManager(image,&t)==EFI_UNSUPPORTED);
   CHECK(startCalls==1);
   CHECK(freeCalls>0);
+  /* Distinct pre-Stop image load and post-Stop StartImage boundary.
+   * Preparation must NOT start the child. */
+  bs.LoadImage=load;
+  EFI_HANDLE prepared=NULL;
+  CHECK(GuWindowsBootManagerPrepare(NULL,&t,&prepared)==EFI_INVALID_PARAMETER);
+  CHECK(GuWindowsBootManagerPrepare(image,&t,NULL)==EFI_INVALID_PARAMETER);
+  CHECK(startCalls==1 && loadCalls==3);
+  CHECK(GuWindowsBootManagerPrepare(image,&t,&prepared)==EFI_SUCCESS);
+  CHECK(prepared==child && loadCalls==4 && startCalls==1);
+  CHECK(GuWindowsBootManagerStartPrepared(NULL,&t)==EFI_INVALID_PARAMETER);
+  CHECK(startCalls==1);
+  CHECK(GuWindowsBootManagerStartPrepared(prepared,&t)==EFI_ACCESS_DENIED);
+  CHECK(startCalls==2);
+  wrongChild=1;
+  prepared=NULL;
+  CHECK(GuWindowsBootManagerPrepare(image,&t,&prepared)==EFI_COMPROMISED_DATA);
+  CHECK(prepared==NULL && startCalls==2);
   puts("PASS pinned Windows handoff host mocks; no EFI/hardware calls");
   printf("CHECKS=%u\n",checks);
   return 0;
