@@ -1,8 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Passive diagnostic -> explicitly pinned Windows Boot Manager, no reset. */
-#if !defined(GU_GPU_DIAGNOSTIC_ONLY) || !defined(GU_TOPO_WINDOWS_HANDOFF) || \
-    !defined(GU_TOPO_SAVE_LOG) || defined(GU_FULL_UNLOCK)
-#error Windows handoff is only available to a file-logging passive diagnostic
+/* Pinned Windows Boot Manager: passive diagnostic or isolated one-card
+ * Stop experiment with an additional, explicit compile-time opt-in. */
+#if defined(GU_FULL_UNLOCK) || \
+    !((defined(GU_GPU_DIAGNOSTIC_ONLY) && defined(GU_TOPO_WINDOWS_HANDOFF) && \
+       defined(GU_TOPO_SAVE_LOG) && !defined(GU_EXPERIMENTAL_STOP_OBSERVATION)) || \
+      (defined(GU_EXPERIMENTAL_STOP_OBSERVATION) && \
+       defined(GU_STOP_WINDOWS_HANDOFF) && !defined(GU_GPU_DIAGNOSTIC_ONLY)))
+#error Windows handoff requires an approved isolated diagnostic or Stop build
 #endif
 #ifdef GU_WINDOWS_HANDOFF_HOST_TEST
 #include "../tests/gpu_windows_handoff_mock.h"
@@ -93,20 +97,26 @@ static EFI_STATUS WindowsPath(EFI_BOOT_SERVICES *bs, EFI_HANDLE volume,
   return EFI_SUCCESS;
 }
 
-EFI_STATUS GuWindowsBootManager(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
+EFI_STATUS GuWindowsBootManagerPrepare(EFI_HANDLE image,
+                                        EFI_SYSTEM_TABLE *table,
+                                        EFI_HANDLE *prepared) {
   EFI_BOOT_SERVICES *bs;
   EFI_HANDLE volume=NULL,child=NULL;
   EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
   EFI_DEVICE_PATH_PROTOCOL *path=NULL;
   EFI_STATUS s,freed;
-  if(!image || !table || !table->BootServices)return EFI_INVALID_PARAMETER;
+  if(prepared)*prepared=NULL;
+  if(!image || !table || !table->BootServices || !prepared)
+    return EFI_INVALID_PARAMETER;
   bs=table->BootServices;
   if(!bs->LocateHandleBuffer || !bs->HandleProtocol || !bs->FreePool ||
-     !bs->AllocatePool || !bs->LoadImage || !bs->StartImage)return EFI_UNSUPPORTED;
+     !bs->AllocatePool || !bs->LoadImage)return EFI_UNSUPPORTED;
   s=WindowsVolume(image,bs,&volume);
   if(EFI_ERROR(s))return s;
   s=WindowsPath(bs,volume,&path);
   if(EFI_ERROR(s))return s;
+  /* Load and authenticate the exact pinned boot manager before a Stop.
+   * It must not run until the caller has passed post-Stop peer checks. */
   s=bs->LoadImage(FALSE,image,path,NULL,0,&child);
   freed=bs->FreePool(path);
   if(EFI_ERROR(freed))return freed;
@@ -114,6 +124,22 @@ EFI_STATUS GuWindowsBootManager(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   s=bs->HandleProtocol(child,&LoadedGuid,(VOID **)&loaded);
   if(EFI_ERROR(s) || !loaded || loaded->DeviceHandle!=volume)
     return EFI_COMPROMISED_DATA;
-  /* Never rewrite BootNext/BootOrder or restart; Windows owns normal startup. */
-  return bs->StartImage(child,NULL,NULL);
+  *prepared=child;
+  return EFI_SUCCESS;
+}
+
+EFI_STATUS GuWindowsBootManagerStartPrepared(EFI_HANDLE prepared,
+                                              EFI_SYSTEM_TABLE *table) {
+  if(!prepared || !table || !table->BootServices)return EFI_INVALID_PARAMETER;
+  if(!table->BootServices->StartImage)return EFI_UNSUPPORTED;
+  /* This is a transfer to the original Windows Boot Manager. The caller
+   * must not return to the EFI Shell if the child returns an error. */
+  return table->BootServices->StartImage(prepared,NULL,NULL);
+}
+
+EFI_STATUS GuWindowsBootManager(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
+  EFI_HANDLE prepared=NULL;
+  EFI_STATUS s=GuWindowsBootManagerPrepare(image,table,&prepared);
+  if(EFI_ERROR(s))return s;
+  return GuWindowsBootManagerStartPrepared(prepared,table);
 }
