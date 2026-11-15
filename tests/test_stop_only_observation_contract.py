@@ -34,6 +34,26 @@ class StopOnlyObservation(unittest.TestCase):
         self.assertIn("if(s==EFI_SUCCESS)s=Owner(&Cards[1]);",SOURCE)
         self.assertIn("if(s==EFI_SUCCESS)s=Owner(&Cards[2]);",SOURCE)
         self.assertIn("POST_STOP_PEER_OWNER=",SOURCE)
+        # A refused Inventory() result must identify its exact read-only gate.
+        for record in ("STOP_PREFLIGHT_PCI_OPENS SLOT=",
+                       "STOP_PREFLIGHT_PCI_OPEN SLOT=",
+                       "STOP_PREFLIGHT_PCI_OWNER SLOT=",
+                       "STOP_PREFLIGHT_OWNER_RESULT SLOT=",
+                       "STOP_PREFLIGHT_TARGET_PROTOCOLS STATUS=",
+                       "STOP_PREFLIGHT_TARGET_PROTOCOL INDEX=",
+                       "STOP_PREFLIGHT_TARGET_OPEN_BLOCKER PROTOCOL=",
+                       "STOP_PREFLIGHT_CHILD_RESULT STATUS="):
+            self.assertIn(record, SOURCE)
+        inventory=SOURCE.split("static EFI_STATUS Inventory(VOID) {",1)[1].split(
+            "static EFI_STATUS Gops(VOID) {",1)[0]
+        self.assertLess(inventory.index("s=Owner(&Cards[i]);"),
+                        inventory.index("STOP_PREFLIGHT_OWNER_RESULT SLOT="))
+        self.assertLess(inventory.index("STOP_PREFLIGHT_OWNER_RESULT SLOT="),
+                        inventory.index("if(EFI_ERROR(s))return s;"))
+        self.assertLess(inventory.index("s=TargetHasNoChildren();"),
+                        inventory.index("STOP_PREFLIGHT_CHILD_RESULT STATUS="))
+        self.assertIn("if(EFI_ERROR(s))return s;", inventory)
+
 
         self.assertIn("STOP_ATTEMPT=IMMINENT", SOURCE)
         before=SOURCE.index("s=Flush();\n  if(EFI_ERROR(s)||!Log)goto refuse;", SOURCE.index("STOP_ATTEMPT=IMMINENT"))
