@@ -48,8 +48,9 @@ class StopOnlyObservation(unittest.TestCase):
             "static EFI_STATUS Gops(VOID) {",1)[0]
         self.assertLess(inventory.index("s=Owner(&Cards[i]);"),
                         inventory.index("STOP_PREFLIGHT_OWNER_RESULT SLOT="))
-        self.assertLess(inventory.index("STOP_PREFLIGHT_OWNER_RESULT SLOT="),
-                        inventory.index("if(EFI_ERROR(s))return s;"))
+        owner_checks=inventory.split("for(i=0;i<3;i++) {",1)[1]
+        self.assertLess(owner_checks.index("STOP_PREFLIGHT_OWNER_RESULT SLOT="),
+                        owner_checks.index("if(EFI_ERROR(s))return s;"))
         self.assertLess(inventory.index("s=TargetHasNoChildren();"),
                         inventory.index("STOP_PREFLIGHT_CHILD_RESULT STATUS="))
         self.assertIn("if(EFI_ERROR(s))return s;", inventory)
