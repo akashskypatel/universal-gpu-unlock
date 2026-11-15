@@ -3,11 +3,14 @@
 ## Situation
 
 The original NVIDIA firmware driver was initially bound on both GPUs.
-The latest physical `STOP-4090-0006/0007.TXT` confirms that, with
+The latest physical `STOP-4090-0008/0009.TXT` confirms that, with
 **one monitor on AMD iGPU only**, the RTX4090 and RTX3080 have no
-firmware graphics-output paths. The **single original RTX4090 Stop
-returned success and removed its PCI driver owner**, with AMD and
-RTX3080 owners unchanged. The old observer then halted deliberately.
+firmware graphics-output paths. The original RTX4090 UEFI
+`DisconnectController` returned success and removed its PCI driver
+owner, with AMD and RTX3080 owners unchanged. The separately pinned
+Windows Boot Manager handoff passed its checks and was started;
+the owner reports Windows boot succeeded. The earlier `0006/0007`
+observer deliberately halted after its own successful disconnect.
 Do not run a Stop experiment on the RTX3080.
 
 The stock NVIDIA RTX 4090 Stop callback can write GPU registers and
@@ -83,35 +86,57 @@ The current build and source checks do not prove that physical
 execution will be safe. Successful execution is also **not**
 permission to run unlock or flash code.
 
-## Current hardware result — original RTX4090 Stop physically succeeded
+## Current hardware result — isolated firmware disconnect and Windows handoff
 
-The owner used an ordinary restart, one monitor on the AMD iGPU,
-and no display or dummy plug on either NVIDIA card. Complete
-original evidence:
+The owner used a normal restart, one monitor connected to AMD iGPU,
+and no display or dummy plugs on either NVIDIA card. The complete
+new original file evidence is:
 
-- `STOP-4090-0006.TXT`: 5,264 bytes, SHA-256
-  `eb46cf91f82602f7724be84d1fae33420820f1d685701104140dbf3e0e64756a`
-- `STOP-4090-0007.TXT`: 1,891 bytes, SHA-256
-  `d7ef21d895906afb954f369e9188f6f6c9ad347db24ce87f49490a3b15579f14`
+- `STOP-4090-0008.TXT`: **5,320 bytes**, SHA-256
+  `c49a3779f8b751443b5bb59ff10ebfe95ca516713b95cd353e678554c2258ef8`
+- `STOP-4090-0009.TXT`: **2,042 bytes**, SHA-256
+  `e5b373939b38ec06412421de672132f2d79219135561c61f746ecfcce3dd6a79`
 
-Before Stop, the RTX4090 original driver-image SHA-256 and Stop
-pointer match; the exact GPU identities, one original PCI owner per
-GPU, no target child, one AMD GOP, and only AMD `ConOut/ErrOut` all
-pass. The pre-call result file records `STOP_ATTEMPT=IMMINENT` and
-`STOP_SERVICE=DisconnectController DRIVER=PINNED_ORIGINAL IMAGE=SHA_MATCH`.
+Before Stop, the exact GPUs and their original PCI owners, zero
+RTX4090 and RTX3080 GOP paths, one AMD GOP, matching AMD-only
+`ConOut/ErrOut`, original RTX4090 loaded NVIDIA image SHA and
+`DriverBinding.Stop` pointer all pass. The pinned Windows
+Boot Manager preloading reports
+`WINDOWS_BOOT_MANAGER_PREPARED STATUS=0 IMAGE_NONZERO=1`.
 
-The second, separately written file establishes
-`STOP_RETURNED=1 EFI_STATUS=0`, a target `BY_DRIVER` count of
-zero (one remaining ordinary protocol reference), unchanged original
-RTX3080 and AMD `BY_DRIVER` owners, AMD GOP alone, and exact
-post-Stop `ConOut/ErrOut` success. It ends with
-`NO_WINDOWS_HANDOFF=1 POWER_OFF_REQUIRED=1 DO_NOT_RETRY=1`.
-This last record is a **deliberate programmed halt**, not a failed
-NVIDIA Stop callback. Following manual power-cycle restart, Windows
-`nvidia-smi -L` showed **both original NVIDIA GPU identities**.
-This is evidence of basic cold-start Windows recognition, not a
-complete post-Stop same-boot handoff, DMA safety, signed Windows
-firmware-loader acceptance or repeatable recovery guarantee.
+The original RTX4090 `DisconnectController` service returned
+`EFI_STATUS=0`. Its original PCI `BY_DRIVER` owner is absent after
+Stop (one ordinary `ATTRS=0x1` opener remains); original RTX3080
+and AMD PCI `BY_DRIVER` owners are unchanged; AMD GOP, `ConOut`
+and `ErrOut` remain accepted. The new independent post-Stop
+target-unbound checker reports `STATUS=0 OPENS=1 DRIVER_OR_CHILD=0
+INVALID=0`. All handoff checks pass:
+`WINDOWS_HANDOFF_POST_STOP_ELIGIBLE=1 TARGET_UNBOUND=1
+PEER_UNCHANGED=1 AMD_UNCHANGED=1`.
+The final result record is
+`WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER`.
+
+**Owner observation:** Windows handoff succeeded. There is no
+`WINDOWS_HANDOFF_RETURNED` record. The application only writes the
+start marker before `StartImage`, so that marker is not an operating
+system driver report. The supplied `nvidia-smi -L` listing both
+expected NVIDIA cards was recorded **after another hard power-cycle
+reboot**. That report proves both cards were enumerated on the later
+boot; it does **not** prove that `nvlddmkm.sys` started either GPU
+on the original handoff boot. The post-Stop firmware disconnect,
+peer protection and pinned Windows Boot Manager handoff admission
+are physically supported; Windows 617.42 signed loader/secure firmware
+acceptance, DMA safety, same-boot Windows GPU driver health, two-card
+release and complete recovery are still unproved.
+
+**Next:** First look for previous Windows boot/Kernel-PnP event records
+corresponding to this handoff. If they are insufficient, a separately
+authorized repeat can gather Windows `LastBootUpTime`,
+`Get-PnpDevice -Class Display` and `nvidia-smi` on the first Windows
+login **before any additional reboot**. Do not repeat the firmware
+experiment merely to reconfirm the original UEFI owner release.
+Neither NVIDIA card needs a display connection. Production
+`GuMsiRelease()` remains fail-closed for AD102 and GA102.
 
 ## Experimental automatic Windows handoff — separate opt-in build
 
@@ -161,8 +186,10 @@ cases, including ordinary opens, duplicate/malformed owners,
 child-controller and exclusive records, and failed firmware services.
 The workflow compiles the separate opt-in image with an example GPT
 identifier but neither executes it on firmware nor publishes it as
-a signed physical diagnostic. **Same-boot Windows handoff remains
-untested on this hardware.**
+a signed physical diagnostic. **The core original RTX4090
+disconnect and guarded Windows Boot Manager handoff entry have now
+run successfully on the physical board in `0008/0009`. Windows
+GPU driver initialization on that same boot remains unverified.**
 
 **Important limits:** `StartImage` may not return if Windows boots.
 The implementation does not prove that firmware, Boot Manager or
@@ -226,11 +253,18 @@ EFI program a permanent boot option. Keep one monitor on the AMD iGPU.
    A key other than `Y` cancels before Stop. Do not attempt any
    RTX3080 Stop or repeated Stop in the same boot.
 
-7. If Windows starts from this same boot, record `nvidia-smi -L`,
-   both NVIDIA device statuses, display operation and any driver
-   errors, and preserve all new `STOP-4090-NNNN.TXT` files. A
-   successful boot is not proof that the original signed firmware
-   unlock, DMA safety or production recovery has succeeded.
+7. If Windows starts on the handoff boot, **before any separate
+   normal restart or power-cycle** run `Get-CimInstance
+   Win32_OperatingSystem | Select-Object LastBootUpTime`,
+   `Get-PnpDevice -Class Display | Select-Object FriendlyName,Status,InstanceId`,
+   `nvidia-smi -L` and
+   `nvidia-smi --query-gpu=index,name,pci.bus_id,driver_version,memory.total --format=csv`.
+   Save output with all new `STOP-4090-NNNN.TXT` files. If the
+   Windows login succeeds but the original boot is no longer
+   available, inspect the surviving Windows Kernel-PnP and System
+   event records **before repeating Stop**. Successful Windows
+   startup or later GPU recognition is not proof of an unlock,
+   DMA safety or production recovery.
 
 8. If the original disconnect hangs, Windows Boot Manager refuses or
    returns, or firmware becomes unresponsive, hold physical power
@@ -238,11 +272,15 @@ EFI program a permanent boot option. Keep one monitor on the AMD iGPU.
    retry in the same boot. Preserve the logs, staged image hash and
    exact observed failure. Recovery is still not guaranteed.
 
-**Agent:** Assess physical `WINDOWS_BOOT_MANAGER_PREPARED`,
+**Agent:** The physical `WINDOWS_BOOT_MANAGER_PREPARED`,
 `POST_STOP_TARGET_PCI_UNBOUND`,
-`WINDOWS_HANDOFF_POST_STOP_ELIGIBLE`, and the attempted
-`WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER` transition. The
-previous stop-and-halt image is unchanged in behavior. Maintain
-`CAN_DETACH=false`, `CAN_UNLOCK=false`, `CAN_FLASH=false`, and
-`RECOVERY_VERIFIED=false` for the production system. An isolated
-firmware PCI owner disconnect is not proof of a GPU unlock.
+`WINDOWS_HANDOFF_POST_STOP_ELIGIBLE`, and
+`WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER` records have been
+analyzed and support successful original RTX4090 UEFI disconnect
+and guarded Windows Boot Manager handoff entry. Next, verify
+the actual NVIDIA Windows GPU driver start **on the same boot**
+from surviving logs or a separately approved first-boot capture.
+Do not modify the verified experimental Stop gates or repeat
+closed firmware analyses. Keep `CAN_DETACH=false`,
+`CAN_UNLOCK=false`, `CAN_FLASH=false`, and
+`RECOVERY_VERIFIED=false` in the production system.
