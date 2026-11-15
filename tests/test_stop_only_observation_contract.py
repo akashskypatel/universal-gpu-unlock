@@ -85,7 +85,9 @@ class StopOnlyObservation(unittest.TestCase):
     def test_gpu_peer_and_console_guards_precede_stop(self):
         before = SOURCE[:SOURCE.index("STOP_ATTEMPT=IMMINENT")]
         for required in ('display!=3', 'found[0]!=1', 'found[1]!=1', 'found[2]!=1',
-                         'each[0]==0 && each[1]==1 && each[2]==1',
+                         'each[0]!=0 || each[2]!=1',
+                         '(count==1 && each[1]==0)',
+                         '(count==2 && each[1]==1)',
                          'ConsoleVar(L"ConOut")','ConsoleVar(L"ErrOut")',
                          'Cards[0].owner!=expected_agent',
                          'ExactOriginalDriver()',
