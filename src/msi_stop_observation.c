@@ -24,6 +24,12 @@
 #include <string.h>
 #include <stddef.h>
 #include <stdint.h>
+#if defined(GU_STOP_BOTH_NVIDIA) && defined(GU_STOP_TARGET_3080)
+#error Dual Stop must start with the RTX4090-first target configuration
+#endif
+#if defined(GU_STOP_BOTH_NVIDIA) && !defined(GU_STOP_WINDOWS_HANDOFF)
+#error Dual Stop requires a separately authorized pinned Windows handoff
+#endif
 
 typedef struct {
   EFI_HANDLE handle,owner;
@@ -74,6 +80,11 @@ static const char * const ExactPaths[3]={
 "fcb89e38b347b79e6fd126ade23dab174a5c5bfb9bfe7686b1072835986038e0"
 };
 #endif
+#ifdef GU_STOP_BOTH_NVIDIA
+static const UINTN PeerExactRomSize=148992U, PeerExactImageSize=158432U;
+static const UINTN PeerExactStopRva=0x678U;
+static const char PeerOriginalImageSha[]="a9da4af0bf448feb458f55da926329e135b2739e043dd0bfda69915747b728e9";
+#endif
 static EFI_STATUS Flush(VOID) {
   return Log && Log->Flush ? Log->Flush(Log) : EFI_UNSUPPORTED;
 }
@@ -109,7 +120,9 @@ static EFI_STATUS StartLog(EFI_HANDLE image) {
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
   EFI_STATUS s;
   UINTN i;
-#ifdef GU_STOP_TARGET_3080
+#ifdef GU_STOP_BOTH_NVIDIA
+  CHAR16 file_name[]=L"\\STOP-BOTH-0000.TXT";
+#elif defined(GU_STOP_TARGET_3080)
   CHAR16 file_name[]=L"\\STOP-3080-0000.TXT";
 #else
   CHAR16 file_name[]=L"\\STOP-4090-0000.TXT";
@@ -138,7 +151,11 @@ static EFI_STATUS StartLog(EFI_HANDLE image) {
                  EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
     if(EFI_ERROR(s)||!Log||!Log->Write||!Log->Flush||!Log->Close)
       return EFI_UNSUPPORTED;
+#ifdef GU_STOP_BOTH_NVIDIA
+    Say("LOG_FILE=STOP-BOTH-%04u.TXT EXPERIMENT=DUAL_STOP_ONLY\r\n",(unsigned)i);
+#else
     Say("LOG_FILE=STOP-%s-%04u.TXT EXPERIMENT=STOP_ONLY\r\n",TargetName,(unsigned)i);
+#endif
     return Flush();
   }
   return EFI_VOLUME_FULL;
@@ -188,7 +205,11 @@ static EFI_STATUS Owner(GPU *card) {
     } else if(e->Attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER) {
       /* The selected NVIDIA must be child-free. Child-controller opens on
        * the untouched AMD or peer device are not second PCI drivers. */
-      if(slot==0 || e->OpenCount!=1 || !e->AgentHandle ||
+      if(slot==0
+#ifdef GU_STOP_BOTH_NVIDIA
+          || slot==1
+#endif
+          || e->OpenCount!=1 || !e->AgentHandle ||
          !e->ControllerHandle || e->ControllerHandle==card->handle)
         invalid=1;
     }
@@ -203,11 +224,11 @@ static EFI_STATUS Owner(GPU *card) {
 }
 /* A bound child or a second protocol driver on the target is not headless.
  * Read every installed target-protocol open record; do not invoke callbacks. */
-static EFI_STATUS TargetHasNoChildren(VOID) {
+static EFI_STATUS TargetHasNoChildrenFor(GPU *target) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
   EFI_GUID **protocols=NULL;
   UINTN count=0,i,j;
-  EFI_STATUS s=bs->ProtocolsPerHandle(Cards[0].handle,&protocols,&count);
+  EFI_STATUS s=bs->ProtocolsPerHandle(target->handle,&protocols,&count);
   Say("STOP_PREFLIGHT_TARGET_PROTOCOLS STATUS=%#llx COUNT=%zu\r\n",
       (unsigned long long)s,(size_t)count);
   if(EFI_ERROR(s)||count<2||count>64||!protocols)return EFI_ACCESS_DENIED;
@@ -215,7 +236,7 @@ static EFI_STATUS TargetHasNoChildren(VOID) {
     EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
     UINTN edges=0;
     if(!protocols[i]) {s=EFI_COMPROMISED_DATA;break;}
-    s=bs->OpenProtocolInformation(Cards[0].handle,protocols[i],
+    s=bs->OpenProtocolInformation(target->handle,protocols[i],
                                   &entries,&edges);
     Say("STOP_PREFLIGHT_TARGET_PROTOCOL INDEX=%zu PCI=%u STATUS=%#llx OPENS=%zu\r\n",
         (size_t)i,(unsigned)(memcmp(protocols[i],&PciGuid,sizeof(PciGuid))==0),
@@ -237,6 +258,9 @@ static EFI_STATUS TargetHasNoChildren(VOID) {
   }
   if(protocols && EFI_ERROR(bs->FreePool(protocols)))s=EFI_DEVICE_ERROR;
   return s;
+}
+static EFI_STATUS TargetHasNoChildren(VOID) {
+  return TargetHasNoChildrenFor(&Cards[0]);
 }
 
 static EFI_STATUS Inventory(VOID) {
@@ -294,7 +318,11 @@ static EFI_STATUS Inventory(VOID) {
      Cards[0].path_size!=ExactPathBytes[0] ||
      Cards[1].path_size!=ExactPathBytes[1] ||
      Cards[2].path_size!=ExactPathBytes[2] || !Cards[0].io->RomImage ||
-     Cards[0].io->RomSize!=ExactRomSize)return EFI_SECURITY_VIOLATION;
+     Cards[0].io->RomSize!=ExactRomSize
+#ifdef GU_STOP_BOTH_NVIDIA
+      || !Cards[1].io->RomImage || Cards[1].io->RomSize!=PeerExactRomSize
+#endif
+      )return EFI_SECURITY_VIOLATION;
   for(i=0;i<3;i++) {
     if(!GuHashMatches(Cards[i].path,Cards[i].path_size,ExactPaths[i]))
       return EFI_SECURITY_VIOLATION;
@@ -350,6 +378,9 @@ static EFI_STATUS Gops(VOID) {
   /* Only physical 0032 AMD-only GOP/console and zero NVIDIA GOPs. */
   if(invalid || count!=1 || each[0]!=0 || each[1]!=0 || each[2]!=1)
     return EFI_ACCESS_DENIED;
+#elif defined(GU_STOP_BOTH_NVIDIA)
+  if(invalid || count!=1 || each[0]!=0 || each[1]!=0 || each[2]!=1)
+    return EFI_ACCESS_DENIED;
 #else
   if(invalid || each[0]!=0 || each[2]!=1 ||
      !((count==1 && each[1]==0) || (count==2 && each[1]==1)))
@@ -400,31 +431,36 @@ static EFI_STATUS ConsoleVar(CHAR16 *name) {
          instances==AcceptedPeerGopCount+1 &&
          each[1]==AcceptedPeerGopCount ? EFI_SUCCESS:EFI_ACCESS_DENIED;
 }
-static EFI_STATUS ExactOriginalDriver(VOID) {
+static EFI_STATUS ExactOriginalDriverFor(GPU *card,UINTN image_size,UINTN stop_rva,
+                                         const char *sha) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
   EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
   EFI_LOADED_IMAGE_PROTOCOL *image=NULL;
-  EFI_STATUS s=bs->HandleProtocol(Cards[0].owner,&DriverGuid,
+  EFI_STATUS s=bs->HandleProtocol(card->owner,&DriverGuid,
                                   (VOID **)&binding);
-  if(EFI_ERROR(s)||!binding||binding->ImageHandle!=Cards[0].owner ||
-     binding->DriverBindingHandle!=Cards[0].owner)return EFI_ACCESS_DENIED;
-  s=bs->HandleProtocol(Cards[0].owner,&LoadedGuid,(VOID **)&image);
+  if(EFI_ERROR(s)||!binding||binding->ImageHandle!=card->owner ||
+     binding->DriverBindingHandle!=card->owner)return EFI_ACCESS_DENIED;
+  s=bs->HandleProtocol(card->owner,&LoadedGuid,(VOID **)&image);
   if(EFI_ERROR(s)||!image||!image->ImageBase||
-     image->ImageSize!=ExactImageSize)return EFI_ACCESS_DENIED;
-  if((UINTN)image->ImageBase>(UINTN)-1-ExactImageSize ||
-     binding->Stop!=(EFI_DRIVER_BINDING_STOP)((UINT8 *)image->ImageBase+ExactStopRva) ||
+     image->ImageSize!=image_size)return EFI_ACCESS_DENIED;
+  if((UINTN)image->ImageBase>(UINTN)-1-image_size ||
+     binding->Stop!=(EFI_DRIVER_BINDING_STOP)((UINT8 *)image->ImageBase+stop_rva) ||
      !GuHashMatches(image->ImageBase,(UINTN)image->ImageSize,
-                    OriginalImageSha))return EFI_SECURITY_VIOLATION;
+                    sha))return EFI_SECURITY_VIOLATION;
   return EFI_SUCCESS;
+}
+static EFI_STATUS ExactOriginalDriver(VOID) {
+  return ExactOriginalDriverFor(&Cards[0],ExactImageSize,ExactStopRva,
+                                OriginalImageSha);
 }
 #ifdef GU_STOP_WINDOWS_HANDOFF
 /* Post-Stop Owner() denies both a truly unbound device and an invalid owner
  * graph. For Windows admission distinguish these cases explicitly. */
-static EFI_STATUS TargetHasNoDriverAfterStop(VOID) {
+static EFI_STATUS TargetHasNoDriverAfterStopFor(GPU *target) {
   EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
   UINTN count=0,i,remaining=0,invalid=0;
   EFI_STATUS s=Sys->BootServices->OpenProtocolInformation(
-      Cards[0].handle,&PciGuid,&entries,&count);
+      target->handle,&PciGuid,&entries,&count);
   if(EFI_ERROR(s) || count==0 || count>64 || !entries) {
     if(entries)(VOID)Sys->BootServices->FreePool(entries);
     return EFI_ACCESS_DENIED;
@@ -446,20 +482,10 @@ static EFI_STATUS TargetHasNoDriverAfterStop(VOID) {
   if(EFI_ERROR(Sys->BootServices->FreePool(entries)))return EFI_DEVICE_ERROR;
   return remaining==0 && invalid==0?EFI_SUCCESS:EFI_ACCESS_DENIED;
 }
-#endif
-static EFI_STATUS KeyY(VOID) {
-  EFI_INPUT_KEY key;
-  EFI_STATUS s;
-  UINTN event=0;
-  if(!Sys->ConIn || !Sys->ConIn->ReadKeyStroke ||
-     !Sys->ConIn->WaitForKey || !Sys->BootServices->WaitForEvent)
-    return EFI_UNSUPPORTED;
-  s=Sys->BootServices->WaitForEvent(1,&Sys->ConIn->WaitForKey,&event);
-  if(EFI_ERROR(s))return s;
-  s=Sys->ConIn->ReadKeyStroke(Sys->ConIn,&key);
-  return s==EFI_SUCCESS && (key.UnicodeChar=='Y' || key.UnicodeChar=='y')
-         ? EFI_SUCCESS:EFI_ABORTED;
+static EFI_STATUS TargetHasNoDriverAfterStop(VOID) {
+  return TargetHasNoDriverAfterStopFor(&Cards[0]);
 }
+#endif
 static VOID HaltAfterAttempt(VOID) {
 #ifdef GU_STOP_WINDOWS_HANDOFF
   Say("WINDOWS_HANDOFF_NOT_COMPLETED=1 POWER_OFF_REQUIRED=1 DO_NOT_RETRY=1\r\n");
@@ -486,7 +512,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   Sys=table;
   s=StartLog(image);
   if(EFI_ERROR(s))return s; /* No persistent pre-Stop evidence, no Stop. */
+#ifdef GU_STOP_BOTH_NVIDIA
+  Say("EXPERIMENT=EXACT_DUAL_NVIDIA_STOP TARGETS=0000:01:00.0,0000:04:00.0 AMD=PROTECTED\r\n");
+#else
   Say("EXPERIMENT=EXACT_%s_STOP_ONLY TARGET=%s\r\n",TargetName,TargetBdf);
+#endif
   Say("CAN_UNLOCK=0 CAN_FLASH=0 CAN_FLR=0 CAN_STOP_OTHER_CARD=0\r\n");
   s=Inventory();
   Say("IDENTITY_STATUS=%#llx INVENTORY_ACCEPTED=%u\r\n",
@@ -513,17 +543,24 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   Say("ORIGINAL_DRIVER_STATUS=%#llx DRIVER_VERIFIED=%u\r\n",
       (unsigned long long)s,(unsigned)(s==EFI_SUCCESS));
   if(EFI_ERROR(s))goto refuse;
+#ifdef GU_STOP_BOTH_NVIDIA
+  s=TargetHasNoChildrenFor(&Cards[1]);
+  Say("DUAL_SECOND_TARGET_CHILD_PREFLIGHT STATUS=%#llx\r\n",(unsigned long long)s);
+  if(EFI_ERROR(s))goto refuse;
+  s=ExactOriginalDriverFor(&Cards[1],PeerExactImageSize,PeerExactStopRva,
+                           PeerOriginalImageSha);
+  Say("DUAL_SECOND_ORIGINAL_DRIVER STATUS=%#llx\r\n",(unsigned long long)s);
+  if(EFI_ERROR(s))goto refuse;
+#endif
   expected_agent=Cards[0].owner;
   expected_peer=Cards[1].owner;
   expected_amd=Cards[2].owner;
   Say("WARNING: NVIDIA Stop can write GPU registers and hang forever.\r\n");
   Say("On hang or return: hold physical power until OFF, remove AC power,\r\n");
-  Say("then restore power. Recovery is NOT verified. Press Y to attempt once;\r\n");
-  Say("any other key cancels without a Stop call.\r\n");
+  Say("then restore power. Recovery is NOT verified.\r\n");
+  Say("STOP_ARMED_AT_BUILD=1 AUTOMATIC_AFTER_PREFLIGHT=1 NO_KEY_INPUT=1\r\n");
   s=Flush();
-  if(EFI_ERROR(s))goto refuse;
-  s=KeyY();
-  if(EFI_ERROR(s))goto refuse;
+  if(EFI_ERROR(s)||!Log)goto refuse;
 #ifdef GU_STOP_WINDOWS_HANDOFF
   /* Load the pinned Windows Boot Manager under the firmware's current
    * image-authentication policy. Do not start it before NVIDIA Stop. */
@@ -539,6 +576,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   if(s==EFI_SUCCESS)s=Owner(&Cards[2]);
   if(s==EFI_SUCCESS && Cards[2].owner!=expected_amd)s=EFI_NOT_READY;
   if(s==EFI_SUCCESS)s=TargetHasNoChildren();
+#ifdef GU_STOP_BOTH_NVIDIA
+  if(s==EFI_SUCCESS)s=TargetHasNoChildrenFor(&Cards[1]);
+  if(s==EFI_SUCCESS)s=ExactOriginalDriverFor(&Cards[1],
+      PeerExactImageSize,PeerExactStopRva,PeerOriginalImageSha);
+#endif
   if(s==EFI_SUCCESS)s=Gops();
   if(s==EFI_SUCCESS)s=ConsoleVar(L"ConOut");
   if(s==EFI_SUCCESS)s=ConsoleVar(L"ErrOut");
@@ -560,12 +602,64 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
    * Do not retry, reconnect, reset the GPU or touch the peer/AMD. */
   s=table->BootServices->DisconnectController(Cards[0].handle,
                                                expected_agent,NULL);
-  /* This second file exists only if the original Stop returns. */
+  /* A new numbered file exists only if the original Stop returns. */
   {
     EFI_STATUS postlog=StartLog(image);
     Say("POST_STOP_LOG_CREATE=%#llx\r\n",(unsigned long long)postlog);
+#ifdef GU_STOP_BOTH_NVIDIA
+    if(EFI_ERROR(postlog)||!Log||!Root)HaltAfterAttempt();
+#endif
   }
   Say("STOP_RETURNED=1 EFI_STATUS=%#llx\r\n",(unsigned long long)s);
+#ifdef GU_STOP_BOTH_NVIDIA
+  /* A failed first Stop, missing log, changed peer or damaged AMD console
+   * permanently forbids the second Stop and Windows handover on this boot. */
+  if(s!=EFI_SUCCESS)HaltAfterAttempt();
+  {
+    EFI_STATUS unbound=TargetHasNoDriverAfterStopFor(&Cards[0]);
+    EFI_STATUS first_owner=Owner(&Cards[0]);
+    EFI_STATUS peer_owner=Owner(&Cards[1]);
+    EFI_STATUS amd_owner=Owner(&Cards[2]);
+    EFI_STATUS gop=Gops();
+    EFI_STATUS conout=ConsoleVar(L"ConOut");
+    EFI_STATUS errout=ConsoleVar(L"ErrOut");
+    EFI_STATUS child=TargetHasNoChildrenFor(&Cards[1]);
+    EFI_STATUS source=ExactOriginalDriverFor(&Cards[1],
+        PeerExactImageSize,PeerExactStopRva,PeerOriginalImageSha);
+    BOOLEAN safe=unbound==EFI_SUCCESS && first_owner==EFI_ACCESS_DENIED &&
+        peer_owner==EFI_SUCCESS && Cards[1].owner==expected_peer &&
+        amd_owner==EFI_SUCCESS && Cards[2].owner==expected_amd &&
+        gop==EFI_SUCCESS && conout==EFI_SUCCESS && errout==EFI_SUCCESS &&
+        child==EFI_SUCCESS && source==EFI_SUCCESS;
+    Say("DUAL_FIRST_STOP_CHECK ELIGIBLE=%u FIRST_UNBOUND=%u PEER_OWNER=%u AMD_OWNER=%u AMD_CONSOLE=%u SECOND_CHILD_FREE=%u SECOND_IMAGE_VALID=%u\r\n",
+        (unsigned)safe,(unsigned)(unbound==EFI_SUCCESS),
+        (unsigned)(peer_owner==EFI_SUCCESS && Cards[1].owner==expected_peer),
+        (unsigned)(amd_owner==EFI_SUCCESS && Cards[2].owner==expected_amd),
+        (unsigned)(gop==EFI_SUCCESS && conout==EFI_SUCCESS && errout==EFI_SUCCESS),
+        (unsigned)(child==EFI_SUCCESS),(unsigned)(source==EFI_SUCCESS));
+    if(!safe)HaltAfterAttempt();
+  }
+  Say("STOP_ATTEMPT=IMMINENT TARGET=3080 BDF=0000:04:00.0\r\n");
+  Say("STOP_SERVICE=DisconnectController DRIVER=PINNED_ORIGINAL SECOND_CARD=1\r\n");
+  s=Flush();
+  if(EFI_ERROR(s)||!Log)HaltAfterAttempt();
+  s=Log->Close(Log);
+  Log=NULL;
+  if(EFI_ERROR(s))HaltAfterAttempt();
+  s=Root->Close(Root);
+  Root=NULL;
+  if(EFI_ERROR(s))HaltAfterAttempt();
+  s=table->BootServices->DisconnectController(Cards[1].handle,
+                                               expected_peer,NULL);
+  {
+    EFI_STATUS postlog=StartLog(image);
+    Say("DUAL_SECOND_POST_STOP_LOG_CREATE=%#llx\r\n",
+        (unsigned long long)postlog);
+    if(EFI_ERROR(postlog)||!Log||!Root)HaltAfterAttempt();
+  }
+  Say("DUAL_SECOND_STOP_RETURNED=1 EFI_STATUS=%#llx\r\n",
+      (unsigned long long)s);
+#endif
   if(s==EFI_SUCCESS) {
     EFI_STATUS post_target=Owner(&Cards[0]);
     EFI_STATUS post_peer=Owner(&Cards[1]);
@@ -585,6 +679,20 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
         (unsigned long long)post_conout,(unsigned long long)post_errout);
 #ifdef GU_STOP_WINDOWS_HANDOFF
     EFI_STATUS post_unbound=TargetHasNoDriverAfterStop();
+#ifdef GU_STOP_BOTH_NVIDIA
+    EFI_STATUS second_unbound=TargetHasNoDriverAfterStopFor(&Cards[1]);
+    BOOLEAN eligible=post_unbound==EFI_SUCCESS &&
+        second_unbound==EFI_SUCCESS &&
+        post_target==EFI_ACCESS_DENIED && post_peer==EFI_ACCESS_DENIED &&
+        post_amd==EFI_SUCCESS && Cards[2].owner==expected_amd &&
+        post_gop==EFI_SUCCESS &&
+        post_conout==EFI_SUCCESS && post_errout==EFI_SUCCESS &&
+        PreparedWindowsImage!=NULL;
+    Say("DUAL_POST_STOP_ELIGIBLE=%u GPU4090_UNBOUND=%u GPU3080_UNBOUND=%u AMD_UNCHANGED=%u\r\n",
+        (unsigned)eligible,(unsigned)(post_unbound==EFI_SUCCESS),
+        (unsigned)(second_unbound==EFI_SUCCESS),
+        (unsigned)(post_amd==EFI_SUCCESS && Cards[2].owner==expected_amd));
+#else
     BOOLEAN eligible=post_unbound==EFI_SUCCESS &&
         post_target==EFI_ACCESS_DENIED &&
         post_peer==EFI_SUCCESS && Cards[1].owner==expected_peer &&
@@ -592,10 +700,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
         post_gop==EFI_SUCCESS &&
         post_conout==EFI_SUCCESS && post_errout==EFI_SUCCESS &&
         PreparedWindowsImage!=NULL;
+#endif
+#ifndef GU_STOP_BOTH_NVIDIA
     Say("WINDOWS_HANDOFF_POST_STOP_ELIGIBLE=%u TARGET_UNBOUND=%u PEER_UNCHANGED=%u AMD_UNCHANGED=%u\r\n",
         (unsigned)eligible,(unsigned)(post_unbound==EFI_SUCCESS),
         (unsigned)(post_peer==EFI_SUCCESS && Cards[1].owner==expected_peer),
         (unsigned)(post_amd==EFI_SUCCESS && Cards[2].owner==expected_amd));
+#endif
     if(eligible && Log && Root) {
       /* The result record is closed before StartImage, which may never
        * return. Never hand control back to the UEFI Shell after Stop. */

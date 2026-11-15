@@ -328,6 +328,26 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'RTX3080 Stop-to-Windows MSVC build failed'}
             if(-not (Test-Path .\src\build_stop_observation\MSI-RTX3080-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI)){throw 'RTX3080 Stop-to-Windows EFI missing'}
             'MSI_3080_STOP=COMPILED_ONLY NEVER_RUN=1 NOT_ARTIFACT_PUBLISHED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # New dual-card one-boot Stop: sequential 4090, then 3080, AMD preserved.
+            # Both Stop calls and any handoff are never executed on CI hardware.
+            $badDual=$false
+            try {
+              & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -BothNvidia
+            } catch {
+              $badDual=$_.Exception.Message -match 'requires explicit risk acceptance and pinned Windows handoff'
+            }
+            if(-not $badDual){throw 'Dual Stop must refuse a missing Windows handoff and second risk switch'}
+            $dualCombined=$false
+            try {
+              & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -BothNvidia -Target3080 -WindowsEspGuid '12345678-1234-4234-8234-123456789abc' -AcceptWindowsHandoffRisk
+            } catch {
+              $dualCombined=$_.Exception.Message -match 'cannot be combined'
+            }
+            if(-not $dualCombined){throw 'Dual Stop must refuse Target3080 mixing'}
+            & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -BothNvidia -WindowsEspGuid '12345678-1234-4234-8234-123456789abc' -AcceptWindowsHandoffRisk *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Dual NVIDIA Stop-to-Windows MSVC build failed'}
+            if(-not (Test-Path .\src\build_stop_observation\MSI-DUAL-NVIDIA-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI)){throw 'Dual NVIDIA Stop EFI missing'}
+            'MSI_DUAL_NVIDIA_STOP=COMPILED_ONLY SYNTHETIC_WINDOWS_ESP_GUID=1 NEVER_RUN=1 NOT_ARTIFACT_PUBLISHED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
 
             # Real active app/DXE sources compile with preparation-only guard.
             & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append

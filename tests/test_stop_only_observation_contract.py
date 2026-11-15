@@ -32,12 +32,16 @@ class StopOnlyObservation(unittest.TestCase):
     def test_one_vendor_stop_to_exact_original_driver_after_durable_log(self):
         # Actual direct Boot Services call count, not substring occurrences in comments.
         calls = re.findall(r"->DisconnectController\s*\(", SOURCE)
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("DisconnectController(Cards[1].handle,", SOURCE)
+        self.assertLess(SOURCE.index("DisconnectController(Cards[0].handle,"),
+                        SOURCE.index("DisconnectController(Cards[1].handle,"))
         self.assertIn("DisconnectController(Cards[0].handle,", SOURCE)
         self.assertIn("expected_agent,NULL)", SOURCE)
         self.assertIn("GuHashMatches(image->ImageBase", SOURCE)
         self.assertIn("binding->Stop!=(EFI_DRIVER_BINDING_STOP)", SOURCE)
-        self.assertIn("image->ImageSize!=ExactImageSize", SOURCE)
+        self.assertIn("image->ImageSize!=image_size", SOURCE)
+        self.assertIn("ExactOriginalDriverFor(&Cards[0],ExactImageSize,ExactStopRva",SOURCE)
         self.assertIn("OriginalImageSha", SOURCE)
         self.assertIn("Cards[0].io->RomSize!=ExactRomSize", SOURCE)
         self.assertIn("TargetHasNoChildren()",SOURCE)
@@ -93,7 +97,11 @@ class StopOnlyObservation(unittest.TestCase):
         self.assertGreater(SOURCE.index("EFI_STATUS postlog=StartLog(image);"),attempt)
 
         self.assertIn("if(EFI_ERROR(s)||!Log)goto refuse;",SOURCE)
-        self.assertIn("s=KeyY();",SOURCE)
+        self.assertNotIn("KeyY",SOURCE)
+        self.assertNotIn("ReadKeyStroke",SOURCE)
+        self.assertNotIn("WaitForKey",SOURCE)
+        self.assertNotIn("Press Y",SOURCE)
+        self.assertIn("STOP_ARMED_AT_BUILD=1 AUTOMATIC_AFTER_PREFLIGHT=1 NO_KEY_INPUT=1",SOURCE)
         self.assertIn("for(;;)(VOID)Sys->BootServices->Stall(1000000);",SOURCE)
         self.assertIn("NO_WINDOWS_HANDOFF=1 POWER_OFF_REQUIRED=1",SOURCE)
 
@@ -245,7 +253,7 @@ int main(void) {
         path_end = SOURCE.index("static EFI_STATUS Owner(", path_start)
         gop_start = SOURCE.index("static EFI_STATUS Gops(VOID) {")
         gop_end = SOURCE.index("static EFI_STATUS ConsoleVar(", gop_start)
-        console_end = SOURCE.index("static EFI_STATUS ExactOriginalDriver(", gop_end)
+        console_end = SOURCE.index("static EFI_STATUS ExactOriginalDriverFor(", gop_end)
         code = SOURCE[path_start:path_end] + SOURCE[gop_start:console_end]
         prefix = r"""
 #include <stdint.h>
@@ -497,7 +505,7 @@ int main(void) {
         self.assertIn("(count==2 && each[1]==1)", gops)
         self.assertIn("AcceptedPeerGopCount=each[1]", gops)
         self.assertLess(before_stop.index("STOP_PREFLIGHT_CONSOLE_AFTER_GOP_REFUSAL"),
-                        before_stop.index("s=KeyY();"))
+                        before_stop.index("STOP_ARMED_AT_BUILD=1"))
 
     def test_optional_windows_handoff_is_separately_gated_and_fail_closed(self):
         self.assertIn("if ($WindowsEspGuid -and -not $AcceptWindowsHandoffRisk)",BUILD)
@@ -505,12 +513,12 @@ int main(void) {
         self.assertIn("$sources+=@('gpu_windows_handoff.c','gpu_windows_path.c')",BUILD)
         self.assertIn("$flags+=' /DGU_STOP_WINDOWS_HANDOFF'",BUILD)
         self.assertIn('MSI-$targetName-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI',BUILD)
-        # Windows image preparation happens after explicit Y, before the Stop;
+        # Windows image preparation happens after exact preflight, before Stop;
         # a post-Stop boot is forbidden unless every relevant guard passes.
         self.assertIn("#ifdef GU_STOP_WINDOWS_HANDOFF",SOURCE)
         self.assertIn("GuWindowsBootManagerPrepare(image,table,&PreparedWindowsImage)",SOURCE)
         self.assertIn("GuWindowsBootManagerStartPrepared(",SOURCE)
-        self.assertLess(SOURCE.index("s=KeyY();"),
+        self.assertLess(SOURCE.index("STOP_ARMED_AT_BUILD=1"),
                         SOURCE.index("GuWindowsBootManagerPrepare("))
         self.assertLess(SOURCE.index("GuWindowsBootManagerPrepare("),
                         SOURCE.index("s=table->BootServices->DisconnectController("))
@@ -541,7 +549,7 @@ int main(void) {
         compiler = shutil.which("gcc") or shutil.which("clang")
         if not compiler:
             self.skipTest("A host C compiler is required")
-        start = SOURCE.index("static EFI_STATUS TargetHasNoDriverAfterStop(VOID) {")
+        start = SOURCE.index("static EFI_STATUS TargetHasNoDriverAfterStopFor(GPU *target) {")
         end = SOURCE.index("#endif", start)
         actual = SOURCE[start:end]
         prefix = r"""
@@ -660,6 +668,45 @@ int main(void) {
             result = subprocess.run([str(exe)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("15 independent scenarios", result.stdout)
+
+    def test_dual_4090_then_3080_release_and_automatic_handoff(self):
+        # The original one-card preflights remain required for both GPUs.
+        self.assertIn("#error Dual Stop requires a separately authorized pinned Windows handoff", SOURCE)
+        self.assertIn("if ($BothNvidia -and $Target3080)", BUILD)
+        self.assertIn("if ($BothNvidia -and (-not $AcceptWindowsHandoffRisk -or -not $WindowsEspGuid))", BUILD)
+        self.assertIn("$flags+=' /DGU_STOP_BOTH_NVIDIA'", BUILD)
+        self.assertIn("'DUAL-NVIDIA'", BUILD)
+        self.assertIn("TARGETS=0000:01:00.0,0000:04:00.0", BUILD)
+        self.assertIn("NO_KEY_INPUT=1", BUILD)
+        self.assertIn("PeerExactRomSize=148992U", SOURCE)
+        self.assertIn("PeerExactStopRva=0x678U", SOURCE)
+        self.assertIn("TargetHasNoChildrenFor(&Cards[1])", SOURCE)
+        self.assertIn("ExactOriginalDriverFor(&Cards[1],PeerExactImageSize,PeerExactStopRva,", SOURCE)
+        self.assertIn("DUAL_FIRST_STOP_CHECK ELIGIBLE=", SOURCE)
+        self.assertIn("DUAL_SECOND_STOP_RETURNED=1", SOURCE)
+        self.assertIn("DUAL_POST_STOP_ELIGIBLE=", SOURCE)
+        first = SOURCE.index("DisconnectController(Cards[0].handle,")
+        mid = SOURCE.index("DUAL_FIRST_STOP_CHECK ELIGIBLE=")
+        second = SOURCE.index("DisconnectController(Cards[1].handle,")
+        final = SOURCE.index("DUAL_POST_STOP_ELIGIBLE=")
+        handoff = SOURCE.index("GuWindowsBootManagerStartPrepared(")
+        self.assertLess(first,mid)
+        self.assertLess(mid,second)
+        self.assertLess(second,final)
+        self.assertLess(final,handoff)
+        intermediate = SOURCE[first:second]
+        for check in ("unbound==EFI_SUCCESS", "first_owner==EFI_ACCESS_DENIED",
+                      "Cards[1].owner==expected_peer", "Cards[2].owner==expected_amd",
+                      "gop==EFI_SUCCESS && conout==EFI_SUCCESS && errout==EFI_SUCCESS",
+                      "child==EFI_SUCCESS && source==EFI_SUCCESS",
+                      "s=Flush();", "s=Log->Close(Log);", "s=Root->Close(Root);"):
+            self.assertIn(check, intermediate)
+        final_guards = SOURCE[second:handoff]
+        for check in ("second_unbound==EFI_SUCCESS", "post_target==EFI_ACCESS_DENIED",
+                      "post_peer==EFI_ACCESS_DENIED", "post_amd==EFI_SUCCESS",
+                      "post_conout==EFI_SUCCESS && post_errout==EFI_SUCCESS",
+                      "PreparedWindowsImage!=NULL", "if(eligible && Log && Root)"):
+            self.assertIn(check,final_guards)
 
     def test_build_is_explicitly_opt_in_and_does_not_change_passive_image(self):
         self.assertIn("if (-not $AcceptUnboundedStopRisk)",BUILD)

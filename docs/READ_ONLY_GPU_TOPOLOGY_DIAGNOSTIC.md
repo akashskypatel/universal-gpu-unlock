@@ -43,16 +43,17 @@ unprepared pinned Windows Boot Manager. Only physical `0032`'s
 AMD-only single GOP and console state (both NVIDIA GOP counts zero)
 is admissible; a NVIDIA-owned GOP or configured console fails closed.
 
-This is a **one-time original UEFI vendor Stop experiment** only, with
-operator Y confirmation, a second explicit Windows handover risk switch,
-no unlock, no flash, no GPU reset, no second Stop and no retry.
-The proprietary GA102 Stop may write registers and poll without a bound;
-it can hang. The accepted recovery action is a hard power-off/reboot,
-which does not prove full cold-state safety. CI compiles the isolated
-target variants with a **synthetic Windows ESP** and never executes or
-publishes them. Physical operation and Windows GPU reinitialization
-remain **unverified**. Authenticated Windows 617.42 SEC2 Booter source
-and full dual-GPU release are separate blockers.
+The physical `STOP-3080-0000/0001/0002` reports original GA102 `DisconnectController` return `EFI_SUCCESS`, target `BY_DRIVER=0`, unchanged RTX4090 and AMD driver owners, unchanged AMD console, target PCI with no driver/child opens, and `WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER`. The owner separately confirmed that Windows started normally. The logs do not themselves prove Windows NVIDIA device-start or full power-loss recovery. This closes the **isolated GA102 Stop** observation, not a production release or signed Booter permission.
+
+All original Stop variants now execute automatically **only after** their strictly bounded source, board, peer, console and log preflights. There is **no boot-time keyboard prompt**. The build retains `-AcceptUnboundedStopRisk`; automatic Windows handoff retains separately authorized `-AcceptWindowsHandoffRisk` and a pinned reviewed System ESP. No variant retries failed Stop, writes firmware, resets the GPU or enables unlock. A Stop may hang; a hard power-off/reboot is the owner-accepted recovery action, not verified full cold-state safety.
+
+### Separate sequential two-NVIDIA Stop experiment
+
+`Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -BothNvidia -AcceptWindowsHandoffRisk -WindowsEspGuid <reviewed GUID>` builds only `MSI-DUAL-NVIDIA-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI`. `-BothNvidia` cannot combine with `-Target3080` and cannot build without pinned Windows handoff. The exact AMD `0000:0f:00.0` console must be the sole GOP, `ConOut` and `ErrOut`; both original NVIDIA PCI drivers must be bound and both per-card original images and Stop callback addresses must match. The code preflights **both** original NVIDIA controllers and their child-free state before the first Stop.
+
+The new single-boot sequence calls original RTX4090 `DisconnectController` once, saves the returned status, and admits a second Stop **only if** the RTX4090 is now independently unbound, original RTX3080 owner and driver still match, AMD owner/console still match, and all peer checks succeed. It closes the intermediate log before calling original RTX3080 `DisconnectController` once. It then requires **both** NVIDIA PCI controllers independently unbound and unchanged AMD owner/console before closing its final log and starting the pinned Windows Boot Manager. Any refused check, failed Stop, failed durable log or unexpected handoff return enters a no-retry halt. This combined Stop has **not been run on physical hardware**. CI uses a synthetic non-deployable ESP GUID and never executes or publishes these active binaries.
+
+Authenticated Windows 617.42 SEC2 Booter provenance, secure-loader invocation and safe firmware acceptance remain separate blockers.
 
 ## Automatic Windows handover for passive diagnostics
 
