@@ -501,8 +501,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   s=KeyY();
   if(EFI_ERROR(s))goto refuse;
 #ifdef GU_STOP_WINDOWS_HANDOFF
-  /* Authenticate and load only the pinned Windows Boot Manager while the
-   * original NVIDIA driver is still bound. Do not start it here. */
+  /* Load the pinned Windows Boot Manager under the firmware's current
+   * image-authentication policy. Do not start it before NVIDIA Stop. */
   s=GuWindowsBootManagerPrepare(image,table,&PreparedWindowsImage);
   Say("WINDOWS_BOOT_MANAGER_PREPARED STATUS=%#llx IMAGE_NONZERO=%u\r\n",
       (unsigned long long)s,(unsigned)(PreparedWindowsImage!=NULL));
