@@ -29,6 +29,31 @@ signed Booter IMAGE/HEADER/SIG/PATCH producer, same-instance loader
 invocation, or safe GA102 release by itself.
 
 
+## Original RTX 3080 isolated Stop experiment — not an unlock
+
+The original RTX 4090 Stop-only observer now supports `-Target3080`
+to select original GA102 RTX 3080 `0000:04:00.0` as the **only target**,
+leaving RTX 4090 and AMD as untouched peers. The original default
+RTX 4090 experiment is unchanged. The GA102 build requires its original
+board/PCI identity, exact device path, original 148,992-byte PCI ROM
+and 158,432-byte NVIDIA UEFI GOP driver with original Stop callback
+RVA `0x678`. The test refuses unknown PCI owner/children, changed
+original image, failed log saving, altered peer/AMD ownership or
+unprepared pinned Windows Boot Manager. Only physical `0032`'s
+AMD-only single GOP and console state (both NVIDIA GOP counts zero)
+is admissible; a NVIDIA-owned GOP or configured console fails closed.
+
+This is a **one-time original UEFI vendor Stop experiment** only, with
+operator Y confirmation, a second explicit Windows handover risk switch,
+no unlock, no flash, no GPU reset, no second Stop and no retry.
+The proprietary GA102 Stop may write registers and poll without a bound;
+it can hang. The accepted recovery action is a hard power-off/reboot,
+which does not prove full cold-state safety. CI compiles the isolated
+target variants with a **synthetic Windows ESP** and never executes or
+publishes them. Physical operation and Windows GPU reinitialization
+remain **unverified**. Authenticated Windows 617.42 SEC2 Booter source
+and full dual-GPU release are separate blockers.
+
 ## Automatic Windows handover for passive diagnostics
 
 The generic topology, MSI B850 ROM-variable and MSI B850 fuse-version

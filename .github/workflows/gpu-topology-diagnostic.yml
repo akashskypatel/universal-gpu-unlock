@@ -320,6 +320,14 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-to-Windows experimental MSVC build failed'}
             if(-not (Test-Path .\src\build_stop_observation\MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI)){throw 'Stop-to-Windows EFI missing'}
             'MSI_4090_STOP_WINDOWS=COMPILED_ONLY NEVER_RUN=1 NOT_ARTIFACT_PUBLISHED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # The GA102 original Stop variants are build-only; never run/upload them.
+            & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -Target3080 *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'RTX3080 Stop observer MSVC build failed'}
+            if(-not (Test-Path .\src\build_stop_observation\MSI-RTX3080-STOP-ONCE-EXPERIMENT.EFI)){throw 'RTX3080 Stop observer missing'}
+            & .\src\Build-Msi-Stop-Observation.ps1 -AcceptUnboundedStopRisk -Target3080 -WindowsEspGuid '12345678-1234-4234-8234-123456789abc' -AcceptWindowsHandoffRisk *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'RTX3080 Stop-to-Windows MSVC build failed'}
+            if(-not (Test-Path .\src\build_stop_observation\MSI-RTX3080-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI)){throw 'RTX3080 Stop-to-Windows EFI missing'}
+            'MSI_3080_STOP=COMPILED_ONLY NEVER_RUN=1 NOT_ARTIFACT_PUBLISHED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
 
             # Real active app/DXE sources compile with preparation-only guard.
             & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append

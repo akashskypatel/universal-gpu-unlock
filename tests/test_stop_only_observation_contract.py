@@ -464,7 +464,7 @@ int main(void) {
         self.assertIn("if ($AcceptWindowsHandoffRisk -and -not $WindowsEspGuid)",BUILD)
         self.assertIn("$sources+=@('gpu_windows_handoff.c','gpu_windows_path.c')",BUILD)
         self.assertIn("$flags+=' /DGU_STOP_WINDOWS_HANDOFF'",BUILD)
-        self.assertIn("MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI",BUILD)
+        self.assertIn('MSI-$targetName-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI',BUILD)
         # Windows image preparation happens after explicit Y, before the Stop;
         # a post-Stop boot is forbidden unless every relevant guard passes.
         self.assertIn("#ifdef GU_STOP_WINDOWS_HANDOFF",SOURCE)
@@ -624,7 +624,7 @@ int main(void) {
     def test_build_is_explicitly_opt_in_and_does_not_change_passive_image(self):
         self.assertIn("if (-not $AcceptUnboundedStopRisk)",BUILD)
         self.assertIn("'msi_stop_observation.c','sha256.c','format.c','runtime.c'",BUILD)
-        self.assertIn("MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI",BUILD)
+        self.assertIn('MSI-$targetName-STOP-ONCE-EXPERIMENT.EFI',BUILD)
         for source in ("unlock_execution.c","msi_release.c","gpu_topology_efi.c",
                        "app.c","dxe_main.c"):
             self.assertNotIn("'"+source+"'", BUILD)
