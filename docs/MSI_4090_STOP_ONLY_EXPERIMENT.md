@@ -153,6 +153,17 @@ Windows Boot Manager. New records are
 `WINDOWS_HANDOFF_POST_STOP_ELIGIBLE`, and
 `WINDOWS_HANDOFF=STARTING_PINNED_BOOT_MANAGER`.
 
+**Verified build status:** The [final GitHub Actions run 43662849749](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/43662849749)
+completed with host **PASS** and Windows UEFI compilation **PASS**.
+The host checks invoke the real pinned Windows loader functions and
+the actual post-Stop PCI-unbound C function in 15 positive/negative
+cases, including ordinary opens, duplicate/malformed owners,
+child-controller and exclusive records, and failed firmware services.
+The workflow compiles the separate opt-in image with an example GPT
+identifier but neither executes it on firmware nor publishes it as
+a signed physical diagnostic. **Same-boot Windows handoff remains
+untested on this hardware.**
+
 **Important limits:** `StartImage` may not return if Windows boots.
 The implementation does not prove that firmware, Boot Manager or
 Windows will leave the RTX4090 in precisely its post-Stop state.
