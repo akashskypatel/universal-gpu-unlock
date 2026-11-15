@@ -168,7 +168,7 @@ static EFI_STATUS Owner(GPU *card) {
     }
     if(e->Attributes & EFI_OPEN_PROTOCOL_EXCLUSIVE)invalid=1;
   }
-  Say("STOP_PREFLIGHT_PCI_OWNER SLOT=%zu BY_DRIVER=%zu VALID_OWNER=%zu CHILD=%zu EXCLUSIVE=%zu INVALID=%zu\\r\\n",
+  Say("STOP_PREFLIGHT_PCI_OWNER SLOT=%zu BY_DRIVER=%zu VALID_OWNER=%zu CHILD=%zu EXCLUSIVE=%zu INVALID=%zu\r\n",
       (size_t)slot,(size_t)by_driver,(size_t)owners,(size_t)child,(size_t)exclusive,(size_t)invalid);
   if(entries && EFI_ERROR(bs->FreePool(entries)))return EFI_DEVICE_ERROR;
   if(owners!=1 || by_driver!=1 || invalid)return EFI_ACCESS_DENIED;
