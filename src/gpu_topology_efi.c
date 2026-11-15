@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-/* Standalone diagnostic UEFI application: NO unlock, disconnect, MMIO, DMA,
- * PCI config writes, FLR, controller manipulation, or NVRAM writes. */
+/* Standalone diagnostic: no unlock, Stop, DMA, PCI config writes, FLR,
+ * controller changes, or NVRAM writes. An explicit MSI-only build adds
+ * one PCI BAR0 read of a GSP security-version fuse register. */
 #if !defined(GU_GPU_DIAGNOSTIC_ONLY) || defined(GU_AD104_TRANSACTION) || \
     defined(GU_ENTRY_LATCHED_SS1_FULL) || defined(GU_FULL_UNLOCK)
 #error This file may only be built as a standalone read-only diagnostic
@@ -30,11 +31,14 @@ static const GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
 #endif
 #include "gpu_pci_observation.h"
-#ifdef GU_MSI_B850_ROM_VARIABLES
+#if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION)
 #include "msi_b850_rom_diag.h"
 #if defined(GU_TOPO_SELECTION_ENABLED) || defined(GU_TOPO_WINDOWS_HANDOFF)
-#error MSI B850 variable diagnostic cannot select GPUs or hand off Windows
+#error MSI B850 source diagnostics cannot select GPUs or hand off Windows
 #endif
+#endif
+#if defined(GU_MSI_B850_ROM_VARIABLES) && defined(GU_MSI_B850_FUSE_VERSION)
+#error MSI B850 diagnostics must be built separately
 #endif
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #include "gpu_windows_handoff.h"
@@ -91,6 +95,64 @@ static void Say(const char *format, ...) {
   if(System && System->ConOut && System->ConOut->OutputString)
     (VOID)System->ConOut->OutputString(System->ConOut,wide);
 }
+
+
+
+#ifdef GU_MSI_B850_FUSE_VERSION
+/* Linux nova-core GA102+ uses GSP ucode ID 9 with the fuse register family
+ * based at BAR0+0x8241c0. ID 9 selects index 8, BAR0+0x8241e0.
+ * This experimental *read-only* probe makes no secure acceptance claim.
+ * It must never run from the normal topology or active release image. */
+static void ReportMsiB850FwsecFuseVersion(int pci_ok) {
+  size_t i;
+  unsigned observed=0U;
+  Say("MSI_B850_FWSEC_FUSE_BEGIN SOURCE=NOVA_CORE_GA102_PLUS READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 NO_STOP=1 NO_DMA=1 NO_RESET=1\r\n");
+  if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot)) {
+    Say("MSI_B850_FWSEC_FUSE STATUS=REFUSED REASON=PLATFORM_FINGERPRINT_NO_MATCH\r\n");
+    return;
+  }
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *node=&Snapshot.pci[i];
+    const GU_GPU_RECORD *id=&node->identity;
+    EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)id->pci;
+    unsigned ada,expected_bus,version=0U,slot=0U;
+    UINT32 value=0U,mask;
+    EFI_STATUS status;
+    int slot_known;
+    if(!GuMsiB850IsOwnerNvidia(id))continue;
+    ada=(id->pci_id==0x268410deU);
+    expected_bus=ada?1U:4U;
+    mask=ada?0x3U:0x7U;
+    if(id->segment!=0U || id->bus!=expected_bus ||
+       id->device!=0U || id->function!=0U ||
+       !node->openers_known || node->by_driver!=1U ||
+       !node->first_owner_agent || !pci || !pci->Mem.Read) {
+      Say("MSI_B850_FWSEC_FUSE GPU=%s STATUS=REFUSED REASON=PCI_OWNER_OR_BDF_MISMATCH\r\n",
+          ada?"4090":"3080");
+      continue;
+    }
+    /* PCI I/O provides BAR bounds checking. No direct CPU BAR mapping and no
+     * retry on failure. A single 32-bit BAR0 register read per known card. */
+    status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,0x008241e0U,1U,&value);
+    if(EFI_ERROR(status)) {
+      Say("MSI_B850_FWSEC_FUSE GPU=%s STATUS=UNAVAILABLE EFI_STATUS=%#llx OFFSET=0x8241e0 NO_FALLBACK=1\r\n",
+          ada?"4090":"3080",(unsigned long long)status);
+      continue;
+    }
+    observed++;
+    slot_known=GuMsiB850FwsecSignatureSlot((uint16_t)value,mask,&version,&slot);
+    if(!slot_known) {
+      Say("MSI_B850_FWSEC_FUSE GPU=%s STATUS=UNSUPPORTED_FUSE_MASK BAR0_OFFSET=0x8241e0 RAW=%#x LOW16=%#x ARCHIVED_ROM_SIG_MASK=%#x ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",(unsigned)value,(unsigned)(value&0xffffU),(unsigned)mask);
+      continue;
+    }
+    Say("MSI_B850_FWSEC_FUSE GPU=%s STATUS=OBSERVED BAR0_OFFSET=0x8241e0 RAW=%#x LOW16=%#x FUSE_VERSION=%u ARCHIVED_ROM_SIG_MASK=%#x CANDIDATE_SLOT=%u ARCHIVED_SLOT_NONZERO=%u ACCEPTANCE=UNVERIFIED\r\n",
+        ada?"4090":"3080",(unsigned)value,(unsigned)(value&0xffffU),
+        version,(unsigned)mask,slot,(unsigned)(ada || slot!=0U));
+  }
+  Say("MSI_B850_FWSEC_FUSE_END READS_SUCCEEDED=%u SECURITY_ACCEPTANCE=UNVERIFIED NO_GPU_WRITES=1\r\n",observed);
+}
+#endif
 
 
 #ifdef GU_MSI_B850_ROM_VARIABLES
@@ -1716,6 +1778,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   if(!pci_ok)ReportPciEvidence(bs);
 #ifdef GU_MSI_B850_ROM_VARIABLES
   ReportMsiB850RomVariables(table,pci_ok);
+#endif
+#ifdef GU_MSI_B850_FUSE_VERSION
+  ReportMsiB850FwsecFuseVersion(pci_ok);
 #endif
   gop_ok=CaptureGop(bs);
   console_ok=ReadConfiguredConsole(table,L"ConOut","CONOUT",
