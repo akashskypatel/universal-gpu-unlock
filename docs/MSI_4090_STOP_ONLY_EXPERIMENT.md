@@ -90,15 +90,24 @@ RTX3080 monitor count differed (two in the first run; zero in the
 second). A connected monitor count is **not** a firmware GOP count or
 proof of UEFI owner state.
 
-The earlier source combined the following two possible causes into
-one `IDENTITY_STATUS`: a per-card PCI `BY_DRIVER` owner mismatch in
-`Owner()`, or an unexpected target protocol/child owner in
-`TargetHasNoChildren()`. The two files cannot distinguish them.
-Source now writes detailed read-only `STOP_PREFLIGHT_PCI_*` and
-`STOP_PREFLIGHT_TARGET_*` records before the same unchanged refusal
-conditions. These records do not call vendor callbacks. Do **not**
-remove a failure condition to force Stop. The latest diagnostic
-build must be used to determine which check failed.
+The earlier source combined multiple failure paths into one
+`IDENTITY_STATUS`. Both `Owner()` (when a PCI `BY_DRIVER` entry
+does not match) and `TargetHasNoChildren()` (when the selected
+card has an unexpected protocol opener or insufficient protocol count)
+can explicitly return `EFI_ACCESS_DENIED`. An earlier UEFI PCI
+read service could also return that status and have it passed through
+`Inventory()`. The two files cannot distinguish these paths.
+`EXACT_3_DISPLAY=1` in the old five-line logs was fixed display text,
+not a verified result; do not use it as an inventory success claim.
+
+The new source logs `STOP_PREFLIGHT_PCI_ENUM`, each failed
+`STOP_PREFLIGHT_PCI_ERROR` read stage, validated PCI identity counts,
+per-card `STOP_PREFLIGHT_PCI_*` owner details, and
+`STOP_PREFLIGHT_TARGET_*` protocol/child details. The
+`INVENTORY_ACCEPTED`, GOP, console and original-driver success
+fields now reflect their real statuses rather than fixed numbers.
+No UEFI driver callback is called during this reporting.
+Do **not** remove a denial condition to force Stop.
 
 One new, independently compiled run is sufficient for this next
 diagnostic. **Do not press Y** merely to collect the refusal details.
