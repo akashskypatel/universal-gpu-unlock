@@ -283,19 +283,43 @@ static EFI_STATUS Inventory(VOID) {
 static EFI_STATUS Gops(VOID) {
   EFI_BOOT_SERVICES *bs=Sys->BootServices;
   EFI_HANDLE *handles=NULL;
-  UINTN count=0,i,each[3]={0};
+  UINTN count=0,i,j,each[3]={0},unknown=0,invalid=0;
   EFI_STATUS s=bs->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
-  if(EFI_ERROR(s)||count!=2||!handles)return EFI_ACCESS_DENIED;
+  Say("STOP_PREFLIGHT_GOP_ENUM STATUS=%#llx COUNT=%zu\r\n",
+      (unsigned long long)s,(size_t)count);
+  if(EFI_ERROR(s)||count==0||count>64||!handles) {
+    if(handles && EFI_ERROR(bs->FreePool(handles)))return EFI_DEVICE_ERROR;
+    return EFI_ACCESS_DENIED;
+  }
+  /* Inspect all bounded GOP handles even if the total is not two. The
+   * admission condition below is unchanged: no 4090 GOP, one peer, one AMD. */
   for(i=0;i<count;i++) {
     EFI_DEVICE_PATH_PROTOCOL *path=NULL;
-    UINTN j;
-    s=bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path);
-    if(EFI_ERROR(s)||!PathBytes(path))break;
-    for(j=0;j<3;j++)if(OnController(&Cards[j],path))break;
-    if(j==3 || ++each[j]>1){s=EFI_SECURITY_VIOLATION;break;}
+    UINTN n=0,matches=0,match=3;
+    EFI_STATUS path_status=bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path);
+    if(!EFI_ERROR(path_status))n=PathBytes(path);
+    if(!EFI_ERROR(path_status) && n) {
+      for(j=0;j<3;j++)if(OnController(&Cards[j],path)) {
+        match=j;
+        matches++;
+      }
+    }
+    Say("STOP_PREFLIGHT_GOP_ENTRY INDEX=%zu PATH_STATUS=%#llx PATH_BYTES=%zu MATCH_SLOT=%zu MATCH_COUNT=%zu\r\n",
+        (size_t)i,(unsigned long long)path_status,(size_t)n,
+        (size_t)match,(size_t)matches);
+    if(EFI_ERROR(path_status)||!n||matches!=1) {
+      invalid++;
+      if(!matches)unknown++;
+    } else {
+      each[match]++;
+    }
   }
-  if(handles && EFI_ERROR(bs->FreePool(handles)))s=EFI_DEVICE_ERROR;
-  return s==EFI_SUCCESS && each[0]==0 && each[1]==1 && each[2]==1 ?
+  Say("STOP_PREFLIGHT_GOP_COUNTS TARGET=%zu PEER=%zu AMD=%zu UNKNOWN=%zu INVALID=%zu TOTAL=%zu EXPECTED_TOTAL=2\r\n",
+      (size_t)each[0],(size_t)each[1],(size_t)each[2],
+      (size_t)unknown,(size_t)invalid,(size_t)count);
+  if(EFI_ERROR(bs->FreePool(handles)))return EFI_DEVICE_ERROR;
+  return count==2 && invalid==0 &&
+         each[0]==0 && each[1]==1 && each[2]==1 ?
          EFI_SUCCESS:EFI_ACCESS_DENIED;
 }
 static EFI_STATUS ConsoleVar(CHAR16 *name) {
@@ -304,6 +328,8 @@ static EFI_STATUS ConsoleVar(CHAR16 *name) {
   UINT32 attr=0;
   EFI_STATUS s=Sys->RuntimeServices->GetVariable(name,&GlobalGuid,
                                                  &attr,&n,bytes);
+  Say("STOP_PREFLIGHT_CONSOLE_VARIABLE NAME=%s STATUS=%#llx SIZE=%zu ATTRS=%#x EXPECTED_SIZE=84\r\n",
+      name[0]=='C'?"ConOut":"ErrOut",(unsigned long long)s,(size_t)n,(unsigned)attr);
   if(EFI_ERROR(s)||n!=84 || (attr & EFI_VARIABLE_BOOTSERVICE_ACCESS)==0)
     return EFI_ACCESS_DENIED;
   while(pos<n) {
@@ -327,6 +353,9 @@ static EFI_STATUS ConsoleVar(CHAR16 *name) {
     }
     pos+=sz;
   }
+  Say("STOP_PREFLIGHT_CONSOLE_COUNTS NAME=%s INSTANCES=%zu TARGET=%zu PEER=%zu AMD=%zu\r\n",
+      name[0]=='C'?"ConOut":"ErrOut",(size_t)instances,(size_t)each[0],
+      (size_t)each[1],(size_t)each[2]);
   return instances==2 && each[0]==0 && each[1]==1 && each[2]==1 ?
          EFI_SUCCESS:EFI_ACCESS_DENIED;
 }
@@ -391,7 +420,15 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   s=Gops();
   Say("GOP_STATUS=%#llx GOP_POLICY_ACCEPTED=%u EXPECTED_TARGET_GOP=0 EXPECTED_PEER_GOP=1 EXPECTED_AMD_GOP=1\r\n",
       (unsigned long long)s,(unsigned)(s==EFI_SUCCESS));
-  if(EFI_ERROR(s))goto refuse;
+  if(EFI_ERROR(s)) {
+    /* Read-only console context for a refused GOP check. Never proceed
+     * to driver validation, confirmation, or Stop after this failure. */
+    EFI_STATUS conout=ConsoleVar(L"ConOut");
+    EFI_STATUS errout=ConsoleVar(L"ErrOut");
+    Say("STOP_PREFLIGHT_CONSOLE_AFTER_GOP_REFUSAL CONOUT=%#llx ERROUT=%#llx\r\n",
+        (unsigned long long)conout,(unsigned long long)errout);
+    goto refuse;
+  }
   s=ConsoleVar(L"ConOut");
   if(s==EFI_SUCCESS)s=ConsoleVar(L"ErrOut");
   Say("CONSOLE_STATUS=%#llx CONSOLE_POLICY_ACCEPTED=%u EXPECTED_TARGET_CONSOLE=0 EXPECTED_PEER_AND_AMD=1\r\n",
