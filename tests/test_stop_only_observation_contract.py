@@ -228,7 +228,8 @@ int main(void) {
         path_end = SOURCE.index("static EFI_STATUS Owner(", path_start)
         gop_start = SOURCE.index("static EFI_STATUS Gops(VOID) {")
         gop_end = SOURCE.index("static EFI_STATUS ConsoleVar(", gop_start)
-        code = SOURCE[path_start:path_end] + SOURCE[gop_start:gop_end]
+        console_end = SOURCE.index("static EFI_STATUS ExactOriginalDriver(", gop_end)
+        code = SOURCE[path_start:path_end] + SOURCE[gop_start:console_end]
         prefix = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -239,6 +240,8 @@ typedef void *EFI_HANDLE;
 typedef uint64_t EFI_STATUS;
 typedef uintptr_t UINTN;
 typedef uint8_t UINT8;
+typedef uint16_t CHAR16;
+typedef uint32_t UINT32;
 typedef struct { UINT8 Type,SubType,Length[2]; } EFI_DEVICE_PATH_PROTOCOL;
 typedef struct {
   EFI_HANDLE handle,owner;
@@ -252,8 +255,16 @@ typedef struct {
   EFI_STATUS (*HandleProtocol)(EFI_HANDLE,void *,void **);
   EFI_STATUS (*FreePool)(void *);
 } EFI_BOOT_SERVICES;
-typedef struct { EFI_BOOT_SERVICES *BootServices; } SYSTEM;
+typedef struct {
+  EFI_STATUS (*GetVariable)(CHAR16 *,void *,UINT32 *,UINTN *,UINT8 *);
+} EFI_RUNTIME_SERVICES;
+typedef struct {
+  EFI_BOOT_SERVICES *BootServices;
+  EFI_RUNTIME_SERVICES *RuntimeServices;
+} SYSTEM;
 #define ByProtocol 2
+#define EFI_VARIABLE_BOOTSERVICE_ACCESS 0x2U
+#define EFI_COMPROMISED_DATA UINT64_C(0x8000000000000021)
 #define EFI_SUCCESS ((EFI_STATUS)0)
 #define EFI_ACCESS_DENIED UINT64_C(0x800000000000000f)
 #define EFI_DEVICE_ERROR UINT64_C(0x8000000000000007)
@@ -278,7 +289,20 @@ static EFI_STATUS Handle(EFI_HANDLE handle,void *guid,void **path) {
 }
 static EFI_STATUS Free(void *pointer) { (void)pointer; return EFI_SUCCESS; }
 static EFI_BOOT_SERVICES Boot={Locate,Handle,Free};
-static SYSTEM Table={&Boot},*Sys=&Table;
+static UINT8 var_bytes[128];
+static UINTN var_size;
+static UINT32 var_attrs=7;
+static int GlobalGuid;
+static EFI_STATUS GetVar(CHAR16 *name,void *guid,UINT32 *attrs,
+                         UINTN *size,UINT8 *out) {
+  (void)name; (void)guid;
+  if(*size<var_size)return EFI_DEVICE_ERROR;
+  *attrs=var_attrs; *size=var_size;
+  memcpy(out,var_bytes,var_size);
+  return EFI_SUCCESS;
+}
+static EFI_RUNTIME_SERVICES Runtime={GetVar};
+static SYSTEM Table={&Boot,&Runtime},*Sys=&Table;
 static void Say(const char *fmt,...) { (void)fmt; }
 """
         suffix = r"""
@@ -301,6 +325,33 @@ static int run(unsigned id,UINTN count,int a,int b,int c,EFI_STATUS expected) {
   got=Gops();
   if(got!=expected) {
     fprintf(stderr,"case %u: got %llx expected %llx\n",
+            id,(unsigned long long)got,(unsigned long long)expected);
+    return 1;
+  }
+  return 0;
+}
+static void make_single_amd_console(void) {
+  memset(var_bytes,0,sizeof(var_bytes));
+  var_size=36;
+  memcpy(var_bytes,card_paths[2],8);
+  var_bytes[8]=3; var_bytes[9]=1; var_bytes[10]=24;
+  var_bytes[32]=0x7f; var_bytes[33]=0xff; var_bytes[34]=4;
+}
+static void make_mixed_console(void) {
+  memset(var_bytes,0,sizeof(var_bytes));
+  var_size=84;
+  memcpy(var_bytes,card_paths[1],8);
+  var_bytes[8]=3; var_bytes[9]=1; var_bytes[10]=32;
+  var_bytes[40]=0x7f; var_bytes[41]=1; var_bytes[42]=4;
+  memcpy(var_bytes+44,card_paths[2],8);
+  var_bytes[52]=3; var_bytes[53]=1; var_bytes[54]=28;
+  var_bytes[80]=0x7f; var_bytes[81]=0xff; var_bytes[82]=4;
+}
+static int check_console(unsigned id,EFI_STATUS expected) {
+  CHAR16 name[]={'C','o','n','O','u','t',0};
+  EFI_STATUS got=ConsoleVar(name);
+  if(got!=expected) {
+    fprintf(stderr,"console case %u: got %llx expected %llx\\n",
             id,(unsigned long long)got,(unsigned long long)expected);
     return 1;
   }
@@ -335,7 +386,27 @@ int main(void) {
   if(run(15,1,4,0,0,EFI_ACCESS_DENIED))return 1;
   if(run(16,1,5,0,0,EFI_ACCESS_DENIED))return 1;
   if(run(17,2,2,2,0,EFI_ACCESS_DENIED))return 1;
-  puts("PASS actual Gops() C: 17 strict admission cases");
+  if(run(18,1,2,0,0,EFI_SUCCESS))return 1;
+  make_single_amd_console();
+  if(check_console(19,EFI_SUCCESS))return 1;
+  var_bytes[1]=1; /* RTX4090 path: must not be accepted */
+  if(check_console(20,EFI_ACCESS_DENIED))return 1;
+  make_single_amd_console();
+  var_bytes[33]=1; /* end-instance instead of end-entire */
+  if(check_console(21,EFI_COMPROMISED_DATA))return 1;
+  make_single_amd_console();
+  var_attrs=0;
+  if(check_console(22,EFI_ACCESS_DENIED))return 1;
+  var_attrs=7;
+  if(run(23,2,1,2,0,EFI_SUCCESS))return 1;
+  make_mixed_console();
+  if(check_console(24,EFI_SUCCESS))return 1;
+  make_single_amd_console();
+  if(check_console(25,EFI_ACCESS_DENIED))return 1;
+  if(run(26,1,0,0,0,EFI_ACCESS_DENIED))return 1;
+  make_single_amd_console();
+  if(check_console(27,EFI_ACCESS_DENIED))return 1;
+  puts("PASS actual GOP/ConsoleVar() C: 27 strict admission cases");
   return 0;
 }
 """
@@ -349,7 +420,7 @@ int main(void) {
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("17 strict admission cases", result.stdout)
+            self.assertIn("27 strict admission cases", result.stdout)
 
     def test_gop_denial_explains_count_and_each_path(self):
         before_stop = SOURCE[:SOURCE.index("STOP_ATTEMPT=IMMINENT")]
