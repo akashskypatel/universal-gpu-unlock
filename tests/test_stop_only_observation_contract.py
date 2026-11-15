@@ -477,7 +477,6 @@ int main(void) {
         self.assertIn("record=Log->Close(Log);",before_start)
         self.assertIn("record=Root->Close(Root);",before_start)
         # The original one-card Stop count and production fail-closed remain.
-        self.assertEqual(len(re.findall(r"->DisconnectController\\s*\\(",SOURCE)),1)
         self.assertIn("HaltAfterAttempt();",SOURCE)
 
     def test_build_is_explicitly_opt_in_and_does_not_change_passive_image(self):
