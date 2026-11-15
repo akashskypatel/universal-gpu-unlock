@@ -52,6 +52,23 @@ int main(void) {
   CHECK(GuMsiB850PrivateOpensValid(GU_MSI_B850_PRIVATE_OPEN_LIMIT,&capture));
   CHECK(!GuMsiB850PrivateOpensValid(GU_MSI_B850_PRIVATE_OPEN_LIMIT+1U,&capture));
   CHECK(!GuMsiB850PrivateOpensValid((size_t)-1,&capture));
+  /* Source-based FWSEC signature rank must not skip an absent or zero slot. */
+  {
+    unsigned version=99,slot=99;
+    CHECK(GuMsiB850FwsecSignatureSlot(0x0000U,0x3U,&version,&slot));
+    CHECK(version==0U && slot==0U);
+    CHECK(GuMsiB850FwsecSignatureSlot(0x0001U,0x3U,&version,&slot));
+    CHECK(version==1U && slot==1U);
+    CHECK(!GuMsiB850FwsecSignatureSlot(0x0002U,0x3U,&version,&slot));
+    CHECK(GuMsiB850FwsecSignatureSlot(0x0002U,0x7U,&version,&slot));
+    CHECK(version==2U && slot==2U);
+    CHECK(GuMsiB850FwsecSignatureSlot(0x0003U,0x7U,&version,&slot));
+    CHECK(version==2U && slot==2U);
+    CHECK(!GuMsiB850FwsecSignatureSlot(0x8000U,0x7U,&version,&slot));
+    CHECK(!GuMsiB850FwsecSignatureSlot(0x0001U,0x5U,&version,&slot));
+    CHECK(!GuMsiB850FwsecSignatureSlot(0x0000U,0x7U,NULL,&slot));
+    CHECK(!GuMsiB850FwsecSignatureSlot(0x0000U,0x7U,&version,NULL));
+  }
   printf("MSI_B850_PLATFORM_TESTS=%u PASS\n",checks);
   return 0;
 }
