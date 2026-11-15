@@ -95,6 +95,126 @@ class StopOnlyObservation(unittest.TestCase):
                            'ResetSystem(', 'StartImage(', 'LoadImage('):
             self.assertNotIn(disallowed,SOURCE)
 
+    def test_owner_child_open_behavior_from_production_c(self):
+        # Compile the actual C Owner function. The fixtures reproduce the two
+        # physical AMD PCI open records and exercise unsafe negative cases.
+        import shutil
+        import subprocess
+        import tempfile
+        compiler = shutil.which("gcc") or shutil.which("clang")
+        if not compiler:
+            self.skipTest("A host C compiler is required")
+        start = SOURCE.index("static EFI_STATUS Owner(GPU *card) {")
+        end = SOURCE.index("/* A bound child", start)
+        owner_c = SOURCE[start:end]
+        prefix = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+typedef void *EFI_HANDLE;
+typedef uint64_t EFI_STATUS;
+typedef uintptr_t UINTN;
+typedef uint32_t UINT32;
+typedef struct {
+  EFI_HANDLE AgentHandle, ControllerHandle;
+  UINT32 Attributes, OpenCount;
+} EFI_OPEN_PROTOCOL_INFORMATION_ENTRY;
+typedef struct {
+  EFI_HANDLE handle, owner;
+} GPU;
+typedef struct {
+  EFI_STATUS (*OpenProtocolInformation)(
+    EFI_HANDLE, void *, EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **, UINTN *);
+  EFI_STATUS (*FreePool)(void *);
+} EFI_BOOT_SERVICES;
+typedef struct { EFI_BOOT_SERVICES *BootServices; } SYSTEM;
+#define EFI_SUCCESS ((EFI_STATUS)0)
+#define EFI_ACCESS_DENIED UINT64_C(0x800000000000000f)
+#define EFI_DEVICE_ERROR UINT64_C(0x8000000000000007)
+#define EFI_COMPROMISED_DATA UINT64_C(0x8000000000000021)
+#define EFI_ERROR(s) (((s) & UINT64_C(0x8000000000000000)) != 0)
+#define EFI_OPEN_PROTOCOL_GET_PROTOCOL 0x01U
+#define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 0x08U
+#define EFI_OPEN_PROTOCOL_BY_DRIVER 0x10U
+#define EFI_OPEN_PROTOCOL_EXCLUSIVE 0x20U
+static GPU Cards[3];
+static int PciGuid;
+static EFI_OPEN_PROTOCOL_INFORMATION_ENTRY records[5];
+static UINTN count;
+static EFI_STATUS Open(EFI_HANDLE h, void *guid,
+  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out, UINTN *n) {
+  (void)h; (void)guid; *out=records; *n=count; return EFI_SUCCESS;
+}
+static EFI_STATUS Free(void *p) { (void)p; return EFI_SUCCESS; }
+static EFI_BOOT_SERVICES Boot={Open,Free};
+static SYSTEM Table={&Boot};
+static SYSTEM *Sys=&Table;
+static void Say(const char *fmt, ...) { (void)fmt; }
+"""
+        suffix = r"""
+static int check(unsigned slot, unsigned mode, EFI_STATUS expected) {
+  EFI_STATUS actual;
+  EFI_HANDLE h=Cards[slot].handle;
+  count=0;
+  Cards[slot].owner=NULL;
+  records[count++]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){
+    (EFI_HANDLE)(uintptr_t)0x7000, NULL, 0x01, 38};
+  if(mode!=6)
+    records[count++]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){
+      (EFI_HANDLE)(uintptr_t)0x7010, h, 0x10, 1};
+  if(mode==1 || mode==2 || mode==3 || mode==4) {
+    records[count++]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){
+      mode==2?NULL:(EFI_HANDLE)(uintptr_t)0x7020,
+      mode==3?h:(EFI_HANDLE)(uintptr_t)0x7030, 0x08,
+      mode==4?2U:1U};
+  }
+  if(mode==5 || mode==8)
+    records[count++]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){
+      (EFI_HANDLE)(uintptr_t)0x7040,h,
+      mode==8?0x30U:0x20U,1};
+  if(mode==7)
+    records[count++]=(EFI_OPEN_PROTOCOL_INFORMATION_ENTRY){
+      (EFI_HANDLE)(uintptr_t)0x7050,h,0x10,1};
+  actual=Owner(&Cards[slot]);
+  if(actual!=expected) {
+    fprintf(stderr,"slot=%u mode=%u expected=%llx actual=%llx\n",
+      slot,mode,(unsigned long long)expected,(unsigned long long)actual);
+    return 1;
+  }
+  if(actual==EFI_SUCCESS && Cards[slot].owner!=(EFI_HANDLE)(uintptr_t)0x7010)
+    return 2;
+  return 0;
+}
+int main(void) {
+  unsigned i;
+  const struct { unsigned slot,mode; EFI_STATUS expected; } cases[]={
+    {2,1,EFI_SUCCESS}, {1,1,EFI_SUCCESS},
+    {0,1,EFI_ACCESS_DENIED}, {0,0,EFI_SUCCESS},
+    {2,2,EFI_ACCESS_DENIED}, {2,3,EFI_ACCESS_DENIED},
+    {2,4,EFI_ACCESS_DENIED}, {2,5,EFI_ACCESS_DENIED},
+    {2,6,EFI_ACCESS_DENIED}, {2,7,EFI_ACCESS_DENIED},
+    {2,8,EFI_ACCESS_DENIED}
+  };
+  for(i=0;i<3;i++)Cards[i].handle=(EFI_HANDLE)(uintptr_t)(0x1000+i);
+  for(i=0;i<sizeof(cases)/sizeof(cases[0]);i++)
+    if(check(cases[i].slot,cases[i].mode,cases[i].expected))
+      return 1;
+  puts("PASS actual Owner() C: 11 positive/negative ownership scenarios");
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "owner.c"
+            executable = Path(directory) / "owner"
+            source.write_text(prefix + owner_c + suffix, encoding="utf-8")
+            result = subprocess.run(
+                [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                 str(source), "-o", str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("11 positive/negative ownership scenarios", result.stdout)
+
     def test_build_is_explicitly_opt_in_and_does_not_change_passive_image(self):
         self.assertIn("if (-not $AcceptUnboundedStopRisk)",BUILD)
         self.assertIn("'msi_stop_observation.c','sha256.c','format.c','runtime.c'",BUILD)
