@@ -71,6 +71,42 @@ The current build and source checks do not prove that physical
 execution will be safe. Successful execution is also **not**
 permission to run unlock or flash code.
 
+## Current physical observation — first two runs refused before Stop
+
+The owner ran the standalone observer twice. Both files are complete
+five-line refusal logs:
+
+- `STOP-4090-0000.TXT`: SHA-256
+  `b156092cc1ddf68f7c13c7b5a8cd512aa4636bfb9e9c5c099bd4ae3dcab6db9d`
+- `STOP-4090-0001.TXT`: SHA-256
+  `9e345006d84b98aa0e66fca07b22804ea6e5e0639330f81e25c2238f87560208`
+
+Both report `IDENTITY_STATUS=0x800000000000000f` and
+`STOP_ATTEMPT=REFUSED ... GPU_MUTATION=NONE`. That status is
+`EFI_ACCESS_DENIED`. The failure occurred within `Inventory()`,
+before GOP, console, original driver-image, confirmation or Stop.
+No original NVIDIA Stop call occurred in either run. The physical
+RTX3080 monitor count differed (two in the first run; zero in the
+second). A connected monitor count is **not** a firmware GOP count or
+proof of UEFI owner state.
+
+The earlier source combined the following two possible causes into
+one `IDENTITY_STATUS`: a per-card PCI `BY_DRIVER` owner mismatch in
+`Owner()`, or an unexpected target protocol/child owner in
+`TargetHasNoChildren()`. The two files cannot distinguish them.
+Source now writes detailed read-only `STOP_PREFLIGHT_PCI_*` and
+`STOP_PREFLIGHT_TARGET_*` records before the same unchanged refusal
+conditions. These records do not call vendor callbacks. Do **not**
+remove a failure condition to force Stop. The latest diagnostic
+build must be used to determine which check failed.
+
+One new, independently compiled run is sufficient for this next
+diagnostic. **Do not press Y** merely to collect the refusal details.
+If all guards do pass and the application asks for confirmation, use
+any key other than Y to cancel. The original owner-approved Stop
+experiment can only proceed after the new identity/child status and
+console state have been classified.
+
 ## Recommendation — Owner procedure
 
 Only use the reviewed, approved USB/UEFI Shell method that worked
