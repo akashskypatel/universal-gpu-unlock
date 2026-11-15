@@ -14,6 +14,21 @@ PASSIVE = (ROOT/"src/Build-Gpu-Topology-Diagnostic.ps1").read_text(encoding="utf
 
 
 class StopOnlyObservation(unittest.TestCase):
+    def test_ga102_identity_and_amd_only_preflight(self):
+        ga=SOURCE.split("#ifdef GU_STOP_TARGET_3080",1)[1].split("#else",1)[0]
+        ad=SOURCE.split("#else",1)[1].split("#endif",1)[0]
+        for value in ('0000:04:00.0', 'Buses[3]={4,1,15}', 'ExactRomSize=148992U',
+                      'ExactImageSize=158432U', 'ExactStopRva=0x678U',
+                      'a9da4af0bf448feb458f55da926329e135b2739e043dd0bfda69915747b728e9'):
+            self.assertIn(value,ga)
+        for value in ('0000:01:00.0','Buses[3]={1,4,15}','ExactStopRva=0x6ecU'):
+            self.assertIn(value,ad)
+        gop=SOURCE.split("static EFI_STATUS Gops(VOID) {",1)[1].split("static EFI_STATUS ConsoleVar(",1)[0]
+        ga_guard=gop.split("#ifdef GU_STOP_TARGET_3080",1)[1].split("#else",1)[0]
+        self.assertIn("count!=1 || each[0]!=0 || each[1]!=0 || each[2]!=1",ga_guard)
+        self.assertIn("$flags+=' /DGU_STOP_TARGET_3080'",BUILD)
+        self.assertIn('MSI-$targetName-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI',BUILD)
+
     def test_one_vendor_stop_to_exact_original_driver_after_durable_log(self):
         # Actual direct Boot Services call count, not substring occurrences in comments.
         calls = re.findall(r"->DisconnectController\s*\(", SOURCE)
@@ -22,9 +37,9 @@ class StopOnlyObservation(unittest.TestCase):
         self.assertIn("expected_agent,NULL)", SOURCE)
         self.assertIn("GuHashMatches(image->ImageBase", SOURCE)
         self.assertIn("binding->Stop!=(EFI_DRIVER_BINDING_STOP)", SOURCE)
-        self.assertIn("image->ImageSize!=162016U", SOURCE)
-        self.assertIn("Image4090Sha", SOURCE)
-        self.assertIn("Cards[0].io->RomSize!=RomSize4090", SOURCE)
+        self.assertIn("image->ImageSize!=ExactImageSize", SOURCE)
+        self.assertIn("OriginalImageSha", SOURCE)
+        self.assertIn("Cards[0].io->RomSize!=ExactRomSize", SOURCE)
         self.assertIn("TargetHasNoChildren()",SOURCE)
         for pinned in ("8e2b676ed8eccbb582ca6a80d6bf39196dcc574a1c3c4cc73d35b53c2d4de312",
                        "b96b0411dcd378e6433c609f94f6828ea18d8713f5055e4d76ffe9c4901b2908",

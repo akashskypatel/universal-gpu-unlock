@@ -1,6 +1,7 @@
 param(
     [string]$VcVars,
     [switch]$AcceptUnboundedStopRisk,
+    [switch]$Target3080,
     [string]$WindowsEspGuid,
     [switch]$AcceptWindowsHandoffRisk
 )
@@ -32,6 +33,7 @@ try {
     New-Item -ItemType Directory -Force -Path $output | Out-Null
     $sources=@('msi_stop_observation.c','sha256.c','format.c','runtime.c')
     $flags='/nologo /O2 /Oi- /GS- /Gs65536 /Zl /c /TC /DGU_EXPERIMENTAL_STOP_OBSERVATION /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild_stop_observation /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
+    if ($Target3080) { $flags+=' /DGU_STOP_TARGET_3080' }
     if ($WindowsEspGuid) {
         $parsed=[guid]::Empty
         if (-not [guid]::TryParse($WindowsEspGuid,[ref]$parsed) -or $parsed -eq [guid]::Empty) {
@@ -54,11 +56,9 @@ try {
         $commands+='if errorlevel 1 exit /b 1'
     }
     $joined=($objects | ForEach-Object { '"'+$_+'"' }) -join ' '
-    $binary=if ($WindowsEspGuid) {
-        'MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI'
-    } else {
-        'MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI'
-    }
+    $targetName=if ($Target3080) { 'RTX3080' } else { 'RTX4090' }
+    $binary=if ($WindowsEspGuid) { "MSI-$targetName-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI" }
+        else { "MSI-$targetName-STOP-ONCE-EXPERIMENT.EFI" }
     $commands+=('link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_stop_observation\'+$binary+' '+$joined)
     $commands+='if errorlevel 1 exit /b 1'
     $batch=Join-Path $output 'build-stop-only.cmd'
@@ -68,7 +68,8 @@ try {
     $path=Join-Path $output $binary
     if (-not (Test-Path -LiteralPath $path)) {throw 'Stop observer EFI missing'}
     $sha=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
-    Write-Output "STATUS=BUILT PATH=$path SHA256=$sha STOP_ONLY=1 TARGET=0000:01:00.0 UNLOCK=0 FLASH=0 RESET=0 PEER_STOP=0 WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid) RECOVERY_VERIFIED=0 HARDWARE_TESTED=0"
+    $targetBdf=if ($Target3080) { '0000:04:00.0' } else { '0000:01:00.0' }
+    Write-Output "STATUS=BUILT PATH=$path SHA256=$sha STOP_ONLY=1 TARGET=$targetBdf UNLOCK=0 FLASH=0 RESET=0 PEER_STOP=0 WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid) RECOVERY_VERIFIED=0 HARDWARE_TESTED=0"
 } finally {
     Pop-Location
 }

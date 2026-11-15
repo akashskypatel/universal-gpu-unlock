@@ -42,25 +42,38 @@ static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,
                             {0xaa,0x0d,0x00,0xe0,0x98,0x03,0x2b,0x8c}};
 static EFI_SYSTEM_TABLE *Sys;
 static EFI_FILE_PROTOCOL *Root,*Log;
-static GPU Cards[3]; /* 0=4090, 1=3080, 2=AMD; exact identities required */
+static GPU Cards[3]; /* 0=selected NVIDIA, 1=untouched NVIDIA peer, 2=AMD */
 /* Set only by a successful exact GOP inventory on this boot. */
 static UINTN AcceptedPeerGopCount=(UINTN)-1;
 #ifdef GU_STOP_WINDOWS_HANDOFF
 static EFI_HANDLE PreparedWindowsImage=NULL;
 #endif
+#ifdef GU_STOP_TARGET_3080
+/* GA102 original driver and PCI ROM, only on the reviewed MSI B850 board. */
+static const char TargetName[]="3080", TargetBdf[]="0000:04:00.0";
+static const UINT32 Ids[3]={0x220a10deU,0x268410deU,0x13c01002U};
+static const UINT32 Subs[3]={0xb61219daU,0x88e61043U,0x7e561462U};
+static const UINTN Buses[3]={4,1,15}, ExactPathBytes[3]={40,28,28};
+static const UINTN ExactRomSize=148992U, ExactImageSize=158432U, ExactStopRva=0x678U;
+static const char OriginalImageSha[]="a9da4af0bf448feb458f55da926329e135b2739e043dd0bfda69915747b728e9";
+static const char * const ExactPaths[3]={
+"b96b0411dcd378e6433c609f94f6828ea18d8713f5055e4d76ffe9c4901b2908",
+"8e2b676ed8eccbb582ca6a80d6bf39196dcc574a1c3c4cc73d35b53c2d4de312",
+"fcb89e38b347b79e6fd126ade23dab174a5c5bfb9bfe7686b1072835986038e0"
+};
+#else
+static const char TargetName[]="4090", TargetBdf[]="0000:01:00.0";
 static const UINT32 Ids[3]={0x268410deU,0x220a10deU,0x13c01002U};
 static const UINT32 Subs[3]={0x88e61043U,0xb61219daU,0x7e561462U};
-static const UINTN Buses[3]={1,4,15};
-static const UINTN RomSize4090=150016U;
-static const char Image4090Sha[]=
-  "0fbd44f3455d4df5ade4bc738dbbc73fbd213487a7456a953af9e8ccbc14c2ba";
-/* Exact controller paths captured in physical diagnostic 0029. */
+static const UINTN Buses[3]={1,4,15}, ExactPathBytes[3]={28,40,28};
+static const UINTN ExactRomSize=150016U, ExactImageSize=162016U, ExactStopRva=0x6ecU;
+static const char OriginalImageSha[]="0fbd44f3455d4df5ade4bc738dbbc73fbd213487a7456a953af9e8ccbc14c2ba";
 static const char * const ExactPaths[3]={
-  "8e2b676ed8eccbb582ca6a80d6bf39196dcc574a1c3c4cc73d35b53c2d4de312",
-  "b96b0411dcd378e6433c609f94f6828ea18d8713f5055e4d76ffe9c4901b2908",
-  "fcb89e38b347b79e6fd126ade23dab174a5c5bfb9bfe7686b1072835986038e0"
+"8e2b676ed8eccbb582ca6a80d6bf39196dcc574a1c3c4cc73d35b53c2d4de312",
+"b96b0411dcd378e6433c609f94f6828ea18d8713f5055e4d76ffe9c4901b2908",
+"fcb89e38b347b79e6fd126ade23dab174a5c5bfb9bfe7686b1072835986038e0"
 };
-
+#endif
 static EFI_STATUS Flush(VOID) {
   return Log && Log->Flush ? Log->Flush(Log) : EFI_UNSUPPORTED;
 }
@@ -96,7 +109,11 @@ static EFI_STATUS StartLog(EFI_HANDLE image) {
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
   EFI_STATUS s;
   UINTN i;
+#ifdef GU_STOP_TARGET_3080
+  CHAR16 file_name[]=L"\\STOP-3080-0000.TXT";
+#else
   CHAR16 file_name[]=L"\\STOP-4090-0000.TXT";
+#endif
   if(!Sys || !Sys->BootServices)return EFI_INVALID_PARAMETER;
   s=Sys->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&loaded);
   if(EFI_ERROR(s)||!loaded)return EFI_UNSUPPORTED;
@@ -121,7 +138,7 @@ static EFI_STATUS StartLog(EFI_HANDLE image) {
                  EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
     if(EFI_ERROR(s)||!Log||!Log->Write||!Log->Flush||!Log->Close)
       return EFI_UNSUPPORTED;
-    Say("LOG_FILE=STOP-4090-%04u.TXT EXPERIMENT=STOP_ONLY\r\n",(unsigned)i);
+    Say("LOG_FILE=STOP-%s-%04u.TXT EXPERIMENT=STOP_ONLY\r\n",TargetName,(unsigned)i);
     return Flush();
   }
   return EFI_VOLUME_FULL;
@@ -169,8 +186,8 @@ static EFI_STATUS Owner(GPU *card) {
        e->ControllerHandle==card->handle && e->AgentHandle) {
       owners++;agent=e->AgentHandle;
     } else if(e->Attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER) {
-      /* The selected 4090 must be child-free. Child-controller opens on
-       * the untouched AMD or 3080 device are not second PCI drivers. */
+      /* The selected NVIDIA must be child-free. Child-controller opens on
+       * the untouched AMD or peer device are not second PCI drivers. */
       if(slot==0 || e->OpenCount!=1 || !e->AgentHandle ||
          !e->ControllerHandle || e->ControllerHandle==card->handle)
         invalid=1;
@@ -274,9 +291,10 @@ static EFI_STATUS Inventory(VOID) {
   Say("STOP_PREFLIGHT_PCI_IDENTITY_COUNTS DISPLAY=%zu GPU0=%zu GPU1=%zu AMD=%zu\r\n",
       (size_t)display,(size_t)found[0],(size_t)found[1],(size_t)found[2]);
   if(display!=3 || found[0]!=1 || found[1]!=1 || found[2]!=1 ||
-     Cards[0].path_size!=28 || Cards[1].path_size!=40 ||
-     Cards[2].path_size!=28 || !Cards[0].io->RomImage ||
-     Cards[0].io->RomSize!=RomSize4090)return EFI_SECURITY_VIOLATION;
+     Cards[0].path_size!=ExactPathBytes[0] ||
+     Cards[1].path_size!=ExactPathBytes[1] ||
+     Cards[2].path_size!=ExactPathBytes[2] || !Cards[0].io->RomImage ||
+     Cards[0].io->RomSize!=ExactRomSize)return EFI_SECURITY_VIOLATION;
   for(i=0;i<3;i++) {
     if(!GuHashMatches(Cards[i].path,Cards[i].path_size,ExactPaths[i]))
       return EFI_SECURITY_VIOLATION;
@@ -328,9 +346,15 @@ static EFI_STATUS Gops(VOID) {
       (size_t)each[0],(size_t)each[1],(size_t)each[2],
       (size_t)unknown,(size_t)invalid,(size_t)count);
   if(EFI_ERROR(bs->FreePool(handles)))return EFI_DEVICE_ERROR;
+#ifdef GU_STOP_TARGET_3080
+  /* Only physical 0032 AMD-only GOP/console and zero NVIDIA GOPs. */
+  if(invalid || count!=1 || each[0]!=0 || each[1]!=0 || each[2]!=1)
+    return EFI_ACCESS_DENIED;
+#else
   if(invalid || each[0]!=0 || each[2]!=1 ||
      !((count==1 && each[1]==0) || (count==2 && each[1]==1)))
     return EFI_ACCESS_DENIED;
+#endif
   AcceptedPeerGopCount=each[1];
   return EFI_SUCCESS;
 }
@@ -386,11 +410,11 @@ static EFI_STATUS ExactOriginalDriver(VOID) {
      binding->DriverBindingHandle!=Cards[0].owner)return EFI_ACCESS_DENIED;
   s=bs->HandleProtocol(Cards[0].owner,&LoadedGuid,(VOID **)&image);
   if(EFI_ERROR(s)||!image||!image->ImageBase||
-     image->ImageSize!=162016U)return EFI_ACCESS_DENIED;
-  if((UINTN)image->ImageBase>(UINTN)-1-162016U ||
-     binding->Stop!=(EFI_DRIVER_BINDING_STOP)((UINT8 *)image->ImageBase+0x6ecU) ||
+     image->ImageSize!=ExactImageSize)return EFI_ACCESS_DENIED;
+  if((UINTN)image->ImageBase>(UINTN)-1-ExactImageSize ||
+     binding->Stop!=(EFI_DRIVER_BINDING_STOP)((UINT8 *)image->ImageBase+ExactStopRva) ||
      !GuHashMatches(image->ImageBase,(UINTN)image->ImageSize,
-                    Image4090Sha))return EFI_SECURITY_VIOLATION;
+                    OriginalImageSha))return EFI_SECURITY_VIOLATION;
   return EFI_SUCCESS;
 }
 #ifdef GU_STOP_WINDOWS_HANDOFF
@@ -462,7 +486,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   Sys=table;
   s=StartLog(image);
   if(EFI_ERROR(s))return s; /* No persistent pre-Stop evidence, no Stop. */
-  Say("EXPERIMENT=EXACT_4090_STOP_ONLY TARGET=0000:01:00.0\r\n");
+  Say("EXPERIMENT=EXACT_%s_STOP_ONLY TARGET=%s\r\n",TargetName,TargetBdf);
   Say("CAN_UNLOCK=0 CAN_FLASH=0 CAN_FLR=0 CAN_STOP_OTHER_CARD=0\r\n");
   s=Inventory();
   Say("IDENTITY_STATUS=%#llx INVENTORY_ACCEPTED=%u\r\n",
@@ -520,7 +544,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   if(s==EFI_SUCCESS)s=ConsoleVar(L"ErrOut");
   if(s==EFI_SUCCESS)s=ExactOriginalDriver();
   if(EFI_ERROR(s))goto refuse;
-  Say("STOP_ATTEMPT=IMMINENT TARGET=4090 BDF=0000:01:00.0\r\n");
+  Say("STOP_ATTEMPT=IMMINENT TARGET=%s BDF=%s\r\n",TargetName,TargetBdf);
   Say("STOP_SERVICE=DisconnectController DRIVER=PINNED_ORIGINAL IMAGE=SHA_MATCH\r\n");
   s=Flush();
   if(EFI_ERROR(s)||!Log)goto refuse;
@@ -533,7 +557,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *table) {
   Root=NULL;
   if(EFI_ERROR(s))goto refuse;
   /* This is the ONLY deliberate hardware-mutating call in this image.
-   * Do not retry, reconnect, reset the GPU or touch the RTX 3080/AMD. */
+   * Do not retry, reconnect, reset the GPU or touch the peer/AMD. */
   s=table->BootServices->DisconnectController(Cards[0].handle,
                                                expected_agent,NULL);
   /* This second file exists only if the original Stop returns. */
