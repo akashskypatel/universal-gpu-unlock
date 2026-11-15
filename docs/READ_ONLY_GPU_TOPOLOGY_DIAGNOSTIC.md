@@ -1,5 +1,45 @@
 # Dynamic read-only NVIDIA GPU and PCI/GOP topology diagnostic
 
+## Automatic Windows handover for passive diagnostics
+
+The generic topology, MSI B850 ROM-variable and MSI B850 fuse-version
+diagnostics can start the existing pinned Windows Boot Manager automatically
+**after** saving the complete numbered USB log. Each build requires
+`-SaveLog` and the exact, reviewed Windows EFI System Partition (ESP) GUID.
+There is no guessed or implicit ESP. If saving the log fails, Windows handover
+does not run. A read-only diagnostic result of `CONFLICT` or `PARTIAL` is
+preserved and does not prevent normal Windows startup.
+
+For the previously reviewed owner Windows ESP partition GUID
+`a005858c-4487-4ee2-976e-1710ff484c31`, use one of the commands below:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31'
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -MsiB850RomVariables -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31'
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -MsiB850FuseVersion -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31'
+```
+
+The three distinct outputs are
+`GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI`,
+`MSI-B850-ROM-VARIABLES-WINDOWS-HANDOFF-DIAGNOSTIC.EFI` and
+`MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI`.
+The normal no-handover images remain unchanged. GPU selection with handover
+is still rejected. The reused handover code identifies exactly one matching
+non-USB ESP, loads `\\EFI\\Microsoft\\Boot\\bootmgfw.efi`,
+verifies the child image device and runs it. No BootOrder change, GPU Stop,
+GPU reset, unlock or flash occurs. A handover error does not trigger a retry.
+
+CI uses a **synthetic** ESP GUID in its unsigned builds. These CI images
+are not configured for the owner's Windows partition. Build, review and
+sign the correctly pinned image before any physical run.
+
+
 ### Original NVIDIA private-interface ownership observation
 
 The opt-in MSI B850 `-MsiB850RomVariables` image now also inspects the
@@ -41,7 +81,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology
 
 Output: `src\build_diagnostic\MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI`.
 The generic diagnostic does not read these MSI variables. The MSI-only
-build requires a saved log and forbids Windows handoff and GPU selection.
+build requires a saved log and does not permit GPU selection. With an
+explicit `-WindowsEspGuid`, it starts the original Windows Boot Manager
+only after the diagnostic log is saved and closed.
 
 The MSI-only build also reports the AMI BDS Connect Policy list state.
 This is a new observation. Old numbered logs do not contain this result.

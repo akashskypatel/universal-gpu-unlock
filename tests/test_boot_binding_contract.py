@@ -173,6 +173,39 @@ int main(int argc,char **argv) {
                             [str(binary),str(mode)],capture_output=True,text=True)
                         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+    def test_passive_msi_and_topology_handoff_require_durable_log_and_pinned_esp(self):
+        builder=(ROOT/"Build-Gpu-Topology-Diagnostic.ps1").read_text(encoding="utf-8")
+        source=(ROOT/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        handover=(ROOT/"gpu_windows_handoff.c").read_text(encoding="utf-8")
+        self.assertIn("'-WindowsEspGuid requires -SaveLog",builder)
+        self.assertIn("($MsiB850RomVariables -or $MsiB850FuseVersion) -and $selection.Count",builder)
+        self.assertNotIn("($selection.Count -or $WindowsEspGuid)",builder)
+        self.assertIn("if ($selection.Count -and $WindowsEspGuid)",builder)
+        self.assertIn("if ($MsiB850RomVariables -and $MsiB850FuseVersion)",builder)
+        self.assertIn("$sources += 'gpu_windows_handoff.c'",builder)
+        self.assertIn("if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }",builder)
+        for name in ("GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+                     "MSI-B850-ROM-VARIABLES-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+                     "MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI"):
+            with self.subTest(name=name):
+                self.assertIn(name,builder)
+        msi=source.split('#include "msi_b850_rom_diag.h"',1)[1].split("#endif",1)[0]
+        self.assertIn("defined(GU_TOPO_SELECTION_ENABLED)",msi)
+        self.assertNotIn("defined(GU_TOPO_WINDOWS_HANDOFF)",msi)
+        entry=source.split("EFI_STATUS EFIAPI UefiMain(",1)[1]
+        saved=entry.index("EFI_STATUS written=SaveLog(image,table);")
+        fail=entry.index("if(EFI_ERROR(written))return written;",saved)
+        start=entry.index("GuWindowsBootManager(image,table)",fail)
+        self.assertLess(saved,fail)
+        self.assertLess(fail,start)
+        self.assertIn("#ifdef GU_TOPO_WINDOWS_HANDOFF",entry[fail:start])
+        self.assertNotIn("result==GU_TOPO_COMPLETE",entry[fail:start])
+        self.assertIn("if(matches!=1)",handover)
+        self.assertIn("GuWindowsEspPathMatches(",handover)
+        self.assertIn("StartImage(prepared,NULL,NULL)",handover)
+        self.assertNotIn("DisconnectController(",entry)
+        self.assertNotIn("SetVariable(",entry)
+
     def test_log_path_requires_open_log(self):
         self.assertIn("return Log?ActiveLogPath:NULL;",BOOT)
         self.assertIn("ActiveLogPath[14+k]=name[k]",BOOT)

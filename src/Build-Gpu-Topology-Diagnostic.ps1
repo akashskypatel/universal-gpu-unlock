@@ -29,7 +29,7 @@ try {
     if ($MsiB850RomVariables -and -not $SaveLog) { throw '-MsiB850RomVariables requires -SaveLog.' }
     if ($MsiB850FuseVersion -and -not $SaveLog) { throw '-MsiB850FuseVersion requires -SaveLog.' }
     if ($MsiB850RomVariables -and $MsiB850FuseVersion) { throw 'MSI B850 diagnostics must be built separately.' }
-    if (($MsiB850RomVariables -or $MsiB850FuseVersion) -and ($selection.Count -or $WindowsEspGuid)) { throw 'MSI B850 source diagnostics cannot select GPUs or hand off Windows.' }
+    if (($MsiB850RomVariables -or $MsiB850FuseVersion) -and $selection.Count) { throw 'MSI B850 source diagnostics cannot select GPUs.' }
     if ($selection.Count -and $WindowsEspGuid) {
         throw 'Selection-only diagnostic cannot include Windows handoff.'
     }
@@ -54,11 +54,15 @@ try {
     if ($MsiB850FuseVersion) { $flags += ' /DGU_MSI_B850_FUSE_VERSION' }
     if ($selection.Count) { $flags += ' /DGU_TOPO_SELECTION_ENABLED' }
     $binaryName = if ($MsiB850RomVariables) {
-        'MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI'
+        if ($WindowsEspGuid) { 'MSI-B850-ROM-VARIABLES-WINDOWS-HANDOFF-DIAGNOSTIC.EFI' }
+        else { 'MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI' }
     } elseif ($MsiB850FuseVersion) {
-        'MSI-B850-FUSE-VERSION-DIAGNOSTIC.EFI'
+        if ($WindowsEspGuid) { 'MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI' }
+        else { 'MSI-B850-FUSE-VERSION-DIAGNOSTIC.EFI' }
     } elseif ($selection.Count) {
         'GPU-SELECTION-' + $selection.Label + '-DIAGNOSTIC.EFI'
+    } elseif ($WindowsEspGuid) {
+        'GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI'
     } else { 'GPU-TOPOLOGY-DIAGNOSTIC.EFI' }
     if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }
     $commands = @('@echo off', "call `"$VcVars`" >nul", 'if errorlevel 1 exit /b 1', "cd /d `"$PSScriptRoot`"")

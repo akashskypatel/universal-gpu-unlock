@@ -33,8 +33,8 @@ static const GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT] =
 #include "gpu_pci_observation.h"
 #if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION)
 #include "msi_b850_rom_diag.h"
-#if defined(GU_TOPO_SELECTION_ENABLED) || defined(GU_TOPO_WINDOWS_HANDOFF)
-#error MSI B850 source diagnostics cannot select GPUs or hand off Windows
+#if defined(GU_TOPO_SELECTION_ENABLED)
+#error MSI B850 source diagnostics cannot select GPUs
 #endif
 #endif
 #if defined(GU_MSI_B850_ROM_VARIABLES) && defined(GU_MSI_B850_FUSE_VERSION)
