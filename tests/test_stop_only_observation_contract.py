@@ -260,6 +260,7 @@ typedef struct { EFI_BOOT_SERVICES *BootServices; } SYSTEM;
 #define EFI_ERROR(s) (((s) & UINT64_C(0x8000000000000000)) != 0)
 static int GopGuid,PathGuid;
 static GPU Cards[3];
+static UINTN AcceptedPeerGopCount=(UINTN)-1;
 static EFI_HANDLE handles[65];
 static UINT8 card_paths[3][12],gop_paths[6][16];
 static UINTN active_count;
@@ -319,7 +320,7 @@ int main(void) {
   make_path(gop_paths[5],2,16);
   if(run(1,2,1,2,0,EFI_SUCCESS))return 1;
   if(run(2,2,2,1,0,EFI_SUCCESS))return 1;
-  if(run(3,1,2,0,0,EFI_ACCESS_DENIED))return 1;
+  if(run(3,1,2,0,0,EFI_SUCCESS))return 1;
   if(run(4,2,0,2,0,EFI_ACCESS_DENIED))return 1;
   if(run(5,3,1,2,0,EFI_ACCESS_DENIED))return 1;
   if(run(6,2,1,1,0,EFI_ACCESS_DENIED))return 1;
@@ -328,7 +329,13 @@ int main(void) {
   if(run(9,2,1,5,0,EFI_ACCESS_DENIED))return 1;
   if(run(10,0,1,2,0,EFI_ACCESS_DENIED))return 1;
   if(run(11,65,1,2,0,EFI_ACCESS_DENIED))return 1;
-  puts("PASS actual Gops() C: 11 strict admission cases");
+  if(run(12,1,1,0,0,EFI_ACCESS_DENIED))return 1;
+  if(run(13,1,0,0,0,EFI_ACCESS_DENIED))return 1;
+  if(run(14,1,3,0,0,EFI_ACCESS_DENIED))return 1;
+  if(run(15,1,4,0,0,EFI_ACCESS_DENIED))return 1;
+  if(run(16,1,5,0,0,EFI_ACCESS_DENIED))return 1;
+  if(run(17,2,2,2,0,EFI_ACCESS_DENIED))return 1;
+  puts("PASS actual Gops() C: 17 strict admission cases");
   return 0;
 }
 """
@@ -342,7 +349,7 @@ int main(void) {
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertIn("11 strict admission cases", result.stdout)
+            self.assertIn("17 strict admission cases", result.stdout)
 
     def test_gop_denial_explains_count_and_each_path(self):
         before_stop = SOURCE[:SOURCE.index("STOP_ATTEMPT=IMMINENT")]
@@ -357,8 +364,10 @@ int main(void) {
             "static EFI_STATUS ConsoleVar(", 1)[0]
         self.assertLess(gops.index("STOP_PREFLIGHT_GOP_ENTRY INDEX="),
                         gops.index("STOP_PREFLIGHT_GOP_COUNTS TARGET="))
-        self.assertIn("return count==2 && invalid==0", gops)
-        self.assertIn("each[0]==0 && each[1]==1 && each[2]==1", gops)
+        self.assertIn("if(invalid || each[0]!=0 || each[2]!=1", gops)
+        self.assertIn("(count==1 && each[1]==0)", gops)
+        self.assertIn("(count==2 && each[1]==1)", gops)
+        self.assertIn("AcceptedPeerGopCount=each[1]", gops)
         self.assertLess(before_stop.index("STOP_PREFLIGHT_CONSOLE_AFTER_GOP_REFUSAL"),
                         before_stop.index("s=KeyY();"))
 
