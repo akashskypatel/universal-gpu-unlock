@@ -178,15 +178,25 @@ int main(int argc,char **argv) {
         source=(ROOT/"gpu_topology_efi.c").read_text(encoding="utf-8")
         handover=(ROOT/"gpu_windows_handoff.c").read_text(encoding="utf-8")
         self.assertIn("'-WindowsEspGuid requires -SaveLog",builder)
-        self.assertIn("($MsiB850RomVariables -or $MsiB850FuseVersion) -and $selection.Count",builder)
+        # All three opt-in MSI diagnostics must reject PCI selection.
+        self.assertIn(
+            "($MsiB850RomVariables -or $MsiB850FuseVersion -or $MsiB850Sec2Ucode1) -and $selection.Count",
+            builder)
+        for option in ("$MsiB850RomVariables.IsPresent", "$MsiB850FuseVersion.IsPresent",
+                       "$MsiB850Sec2Ucode1.IsPresent"):
+            self.assertIn(option,builder)
+        self.assertIn(".Where({ $_ }).Count -gt 1",builder)
+        self.assertIn("MSI B850 diagnostics must be built separately.",builder)
         self.assertNotIn("($selection.Count -or $WindowsEspGuid)",builder)
         self.assertIn("if ($selection.Count -and $WindowsEspGuid)",builder)
-        self.assertIn("if ($MsiB850RomVariables -and $MsiB850FuseVersion)",builder)
+        self.assertIn("if ($MsiB850Sec2Ucode1 -and -not $SaveLog)",builder)
+        self.assertIn("if (@($MsiB850RomVariables.IsPresent, $MsiB850FuseVersion.IsPresent, $MsiB850Sec2Ucode1.IsPresent).Where({ $_ }).Count -gt 1)",builder)
         self.assertIn("$sources += 'gpu_windows_handoff.c'",builder)
         self.assertIn("if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }",builder)
         for name in ("GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
                      "MSI-B850-ROM-VARIABLES-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
-                     "MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI"):
+                     "MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+                     "MSI-B850-SEC2-UCODE1-WINDOWS-HANDOFF-DIAGNOSTIC.EFI"):
             with self.subTest(name=name):
                 self.assertIn(name,builder)
         msi=source.split('#include "msi_b850_rom_diag.h"',1)[1].split("#endif",1)[0]
