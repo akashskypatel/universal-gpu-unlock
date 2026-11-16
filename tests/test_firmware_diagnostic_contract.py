@@ -120,6 +120,34 @@ class DiagnosticContract(unittest.TestCase):
         for mutation in ("Mem.Write(", "Pci.Write(", "DisconnectController(", "Stop(", "SetVariable(", "ResetSystem("):
             self.assertNotIn(mutation,probe)
 
+    def test_opt_in_sec2_ucode1_reads_only_matching_original_register(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        probe=source.split("static void ReportMsiB850Sec2Ucode1(",1)[1].split("\n#endif",1)[0]
+        gate="if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot))"
+        assert_owner="!node->openers_known || node->by_driver!=1U"
+        assert_location="id->segment!=0U || id->bus!=expected_bus"
+        register_read="status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,0x00824140U,1U,&raw)"
+        for check in (gate, assert_owner, assert_location):
+            self.assertLess(probe.index(check),probe.index(register_read))
+        self.assertEqual(probe.count("pci->Mem.Read("),1)
+        self.assertIn(register_read,probe)
+        self.assertIn("if(!GuMsiB850IsOwnerNvidia(id))continue;",probe)
+        self.assertIn("!node->first_owner_agent",probe)
+        self.assertIn("0x268410deU",probe)
+        self.assertIn("MSI_B850_SEC2_UCODE1_END READS_SUCCEEDED=%u EXPECTED=2",probe)
+        self.assertIn("NO_FALLBACK=1",probe)
+        self.assertNotIn("0x00824148U",probe)
+        self.assertNotIn("0x008241e0U",probe)
+        for mutation in ("Mem.Write(", "Pci.Write(", "DisconnectController(",
+                         "Stop(", "SetVariable(", "ResetSystem(", "Stall("):
+            self.assertNotIn(mutation,probe)
+        self.assertIn("#ifdef GU_MSI_B850_SEC2_UCODE1\n  ReportMsiB850Sec2Ucode1(pci_ok);\n#endif",source)
+        build=(P/"Build-Gpu-Topology-Diagnostic.ps1").read_text(encoding="utf-8")
+        self.assertIn("if ($MsiB850Sec2Ucode1 -and -not $SaveLog)",build)
+        self.assertIn("/DGU_MSI_B850_SEC2_UCODE1",build)
+        self.assertIn("MSI-B850-SEC2-UCODE1-DIAGNOSTIC.EFI",build)
+        self.assertIn("MSI-B850-SEC2-UCODE1-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",build)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)
