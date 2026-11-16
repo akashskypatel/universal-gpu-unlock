@@ -3,6 +3,7 @@ param(
     [switch]$SaveLog,
     [switch]$MsiB850RomVariables,
     [switch]$MsiB850FuseVersion,
+    [switch]$MsiB850Sec2Ucode1,
     [string]$WindowsEspGuid,
     [string]$SelectionBdf,
     [string]$SelectionBdfs
@@ -28,8 +29,9 @@ try {
     $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $output
     if ($MsiB850RomVariables -and -not $SaveLog) { throw '-MsiB850RomVariables requires -SaveLog.' }
     if ($MsiB850FuseVersion -and -not $SaveLog) { throw '-MsiB850FuseVersion requires -SaveLog.' }
-    if ($MsiB850RomVariables -and $MsiB850FuseVersion) { throw 'MSI B850 diagnostics must be built separately.' }
-    if (($MsiB850RomVariables -or $MsiB850FuseVersion) -and $selection.Count) { throw 'MSI B850 source diagnostics cannot select GPUs.' }
+    if ($MsiB850Sec2Ucode1 -and -not $SaveLog) { throw '-MsiB850Sec2Ucode1 requires -SaveLog.' }
+    if (@($MsiB850RomVariables.IsPresent, $MsiB850FuseVersion.IsPresent, $MsiB850Sec2Ucode1.IsPresent).Where({ $_ }).Count -gt 1) { throw 'MSI B850 diagnostics must be built separately.' }
+    if (($MsiB850RomVariables -or $MsiB850FuseVersion -or $MsiB850Sec2Ucode1) -and $selection.Count) { throw 'MSI B850 source diagnostics cannot select GPUs.' }
     if ($selection.Count -and $WindowsEspGuid) {
         throw 'Selection-only diagnostic cannot include Windows handoff.'
     }
@@ -52,6 +54,7 @@ try {
     if ($SaveLog) { $flags += ' /DGU_TOPO_SAVE_LOG' }
     if ($MsiB850RomVariables) { $flags += ' /DGU_MSI_B850_ROM_VARIABLES' }
     if ($MsiB850FuseVersion) { $flags += ' /DGU_MSI_B850_FUSE_VERSION' }
+    if ($MsiB850Sec2Ucode1) { $flags += ' /DGU_MSI_B850_SEC2_UCODE1' }
     if ($selection.Count) { $flags += ' /DGU_TOPO_SELECTION_ENABLED' }
     $binaryName = if ($MsiB850RomVariables) {
         if ($WindowsEspGuid) { 'MSI-B850-ROM-VARIABLES-WINDOWS-HANDOFF-DIAGNOSTIC.EFI' }
@@ -59,6 +62,9 @@ try {
     } elseif ($MsiB850FuseVersion) {
         if ($WindowsEspGuid) { 'MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI' }
         else { 'MSI-B850-FUSE-VERSION-DIAGNOSTIC.EFI' }
+    } elseif ($MsiB850Sec2Ucode1) {
+        if ($WindowsEspGuid) { 'MSI-B850-SEC2-UCODE1-WINDOWS-HANDOFF-DIAGNOSTIC.EFI' }
+        else { 'MSI-B850-SEC2-UCODE1-DIAGNOSTIC.EFI' }
     } elseif ($selection.Count) {
         'GPU-SELECTION-' + $selection.Label + '-DIAGNOSTIC.EFI'
     } elseif ($WindowsEspGuid) {
@@ -91,7 +97,7 @@ try {
     $binary = Join-Path $output $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'No diagnostic EFI output produced' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SELECTION_BDFS=$($selection.Locations -join ',') MSI_B850_FUSE_VERSION=$([int]$MsiB850FuseVersion.IsPresent) MSI_B850_ROM_VARIABLES=$([int]$MsiB850RomVariables.IsPresent) SELECTION_COUNT=$($selection.Count) CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash READ_ONLY=1 SELECTION_BDFS=$($selection.Locations -join ',') MSI_B850_FUSE_VERSION=$([int]$MsiB850FuseVersion.IsPresent) MSI_B850_SEC2_UCODE1=$([int]$MsiB850Sec2Ucode1.IsPresent) MSI_B850_ROM_VARIABLES=$([int]$MsiB850RomVariables.IsPresent) SELECTION_COUNT=$($selection.Count) CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0 SAVE_LOG=$([int]$SaveLog.IsPresent) WINDOWS_HANDOFF=$([int][bool]$WindowsEspGuid)"
 } finally {
     Pop-Location
 }
