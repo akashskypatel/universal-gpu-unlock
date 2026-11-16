@@ -31,13 +31,14 @@ static const GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
 #endif
 #include "gpu_pci_observation.h"
-#if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION)
+#if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1)
 #include "msi_b850_rom_diag.h"
 #if defined(GU_TOPO_SELECTION_ENABLED)
 #error MSI B850 source diagnostics cannot select GPUs
 #endif
 #endif
-#if defined(GU_MSI_B850_ROM_VARIABLES) && defined(GU_MSI_B850_FUSE_VERSION)
+#if (defined(GU_MSI_B850_ROM_VARIABLES) && (defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1))) || \
+    (defined(GU_MSI_B850_FUSE_VERSION) && defined(GU_MSI_B850_SEC2_UCODE1))
 #error MSI B850 diagnostics must be built separately
 #endif
 #ifdef GU_TOPO_WINDOWS_HANDOFF
@@ -175,6 +176,51 @@ static void ReportMsiB850FwsecFuseVersion(int pci_ok) {
 }
 #endif
 
+
+#ifdef GU_MSI_B850_SEC2_UCODE1
+/* Original Windows 617.42 mode-19 records name SEC2 engine 1 and ucode ID 1.
+ * Read only the corresponding 32-bit BAR0 register on each exact known card.
+ * No signed image, callback, DMA, release, or register write is performed. */
+static void ReportMsiB850Sec2Ucode1(int pci_ok) {
+  size_t i;
+  unsigned observed=0U;
+  Say("MSI_B850_SEC2_UCODE1_BEGIN SOURCE=WINDOWS_61742_SEC2_VERSION_REGISTER UCODE_ID=1 BAR0_OFFSET=0x824140 READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1\r\n");
+  if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot)) {
+    Say("MSI_B850_SEC2_UCODE1 STATUS=REFUSED REASON=PLATFORM_FINGERPRINT_NO_MATCH NO_GPU_READS=1\r\n");
+    return;
+  }
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *node=&Snapshot.pci[i];
+    const GU_GPU_RECORD *id=&node->identity;
+    EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)id->pci;
+    unsigned ada,expected_bus;
+    EFI_STATUS status;
+    UINT32 raw=0U;
+    if(!GuMsiB850IsOwnerNvidia(id))continue;
+    ada=(id->pci_id==0x268410deU);
+    expected_bus=ada?1U:4U;
+    if(id->segment!=0U || id->bus!=expected_bus ||
+       id->device!=0U || id->function!=0U ||
+       !node->openers_known || node->by_driver!=1U ||
+       !node->first_owner_agent || !pci || !pci->Mem.Read) {
+      Say("MSI_B850_SEC2_UCODE1 GPU=%s STATUS=REFUSED REASON=PCI_OWNER_OR_BDF_MISMATCH NO_GPU_READ=1\r\n",
+          ada?"4090":"3080");
+      continue;
+    }
+    status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,0x00824140U,1U,&raw);
+    if(EFI_ERROR(status)) {
+      Say("MSI_B850_SEC2_UCODE1 GPU=%s STATUS=UNAVAILABLE EFI_STATUS=%#llx BAR0_OFFSET=0x824140 NO_FALLBACK=1\r\n",
+          ada?"4090":"3080",(unsigned long long)status);
+      continue;
+    }
+    observed++;
+    Say("MSI_B850_SEC2_UCODE1 GPU=%s STATUS=OBSERVED BDF=0000:%02x:00.0 BAR0_OFFSET=0x824140 RAW=%#x LOW16=%#x FUSE_VERSION=%u ENGINE_ID=1 UCODE_ID=1 SELECTED_SIGNATURE=UNVERIFIED SECURE_ACCEPTANCE=UNVERIFIED READ_ONLY=1\r\n",
+        ada?"4090":"3080",expected_bus,(unsigned)raw,
+        (unsigned)(raw&0xffffU),GuMsiB850FuseVersion((uint16_t)raw));
+  }
+  Say("MSI_B850_SEC2_UCODE1_END READS_SUCCEEDED=%u EXPECTED=2 NO_GPU_WRITES=1 SECURE_ACCEPTANCE=UNVERIFIED\r\n",observed);
+}
+#endif
 
 #ifdef GU_MSI_B850_ROM_VARIABLES
 /* MSI 1A70 ROM_CMN and CSM_CMN: GetVariable only, before ExitBootServices.
@@ -1802,6 +1848,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #endif
 #ifdef GU_MSI_B850_FUSE_VERSION
   ReportMsiB850FwsecFuseVersion(pci_ok);
+#endif
+#ifdef GU_MSI_B850_SEC2_UCODE1
+  ReportMsiB850Sec2Ucode1(pci_ok);
 #endif
   gop_ok=CaptureGop(bs);
   console_ok=ReadConfiguredConsole(table,L"ConOut","CONOUT",
