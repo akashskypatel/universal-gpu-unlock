@@ -195,8 +195,8 @@ static void ResetPair(void) {
  * Earlier mock Segment=1 is intentionally not accepted by GuCheckConfig. */
 static void ResetActivePair(void) {
   /* A test reset models a new boot, not a production unbind. */
-  free(ActiveSequenceTargets);free(ActiveSequenceOrder);
-  ActiveSequenceTargets=NULL;ActiveSequenceOrder=NULL;
+  free(ActiveSequenceTargets);free(ActiveSequenceOrder);free(ActiveObservations);
+  ActiveSequenceTargets=NULL;ActiveSequenceOrder=NULL;ActiveObservations=NULL;
   memset(&ActiveSequence,0,sizeof(ActiveSequence));
   ActiveSequenceValid=ActiveInventoryValid=0;
   state_allocs=state_frees=fail_state_alloc=0;
@@ -258,7 +258,7 @@ int main(void) {
   ResetActivePair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_SUCCESS && init_calls==1);
-  CHECK(state_allocs==2 && state_frees==0 && ActiveSequence.capacity==2);
+  CHECK(state_allocs==3 && state_frees==0 && ActiveSequence.capacity==2);
   CHECK(Gu.handle==handles[1] && Gu.device_id==0x2503U);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
   /* A refused rebind must not replace the previous target or saved peer
@@ -268,13 +268,14 @@ int main(void) {
     UINT32 original_peer=ActiveSequence.targets[0].expected_config[4];
     GU_GPU_EXEC_TARGET *original_targets=ActiveSequence.targets;
     size_t *original_order=ActiveSequence.order;
+    GU_GPU_EXEC_OBSERVATION *original_observations=ActiveObservations;
     refuse_init=1;
     gpu[0].dwords[4]^=0x1000U;
     CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
     CHECK(Gu.handle==old && ActiveInventoryValid);
     CHECK(ActiveSequence.targets[0].expected_config[4]==original_peer);
-    CHECK(ActiveSequence.targets==original_targets && ActiveSequence.order==original_order);
-    CHECK(state_allocs==2 && state_frees==0 && init_calls==1);
+    CHECK(ActiveSequence.targets==original_targets && ActiveSequence.order==original_order && ActiveObservations==original_observations);
+    CHECK(state_allocs==3 && state_frees==0 && init_calls==1);
     refuse_init=0;
   }
   /* Independent allocation failures must not spend GuInit or publish storage. */
@@ -286,14 +287,19 @@ int main(void) {
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
   CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
         init_calls==0 && state_allocs==2 && state_frees==1);
+  ResetActivePair();fail_state_alloc=3;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
+  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
+        !ActiveObservations && init_calls==0 && state_allocs==3 && state_frees==2);
   ResetActivePair();refuse_init=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
   CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
-        init_calls==1 && state_allocs==2 && state_frees==2);
+        !ActiveObservations && init_calls==1 && state_allocs==3 && state_frees==3);
   ResetActivePair();
   gpu[1].dwords[1]=4u; /* initial selected UEFI driver Bus Master enabled */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+  CHECK(ActiveObservations && ActiveSequence.capacity==2);
   /* The selected GPU may change its own BAR after the active transaction. */
   gpu[1].dwords[4]^=0x1000U;
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
