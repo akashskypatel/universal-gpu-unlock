@@ -219,6 +219,10 @@ class HandoverOrderTests(unittest.TestCase):
 typedef void VOID;
 typedef int BOOLEAN;
 typedef int EFI_STATUS;
+typedef void *EFI_HANDLE;
+typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
+#define TRUE 1
+#define FALSE 0
 #define EFI_SUCCESS 0
 #define EFI_NOT_READY 1
 #define EFI_ALREADY_STARTED 2
@@ -232,9 +236,11 @@ typedef struct {
 } EFI_BOOT_SERVICES;
 typedef struct {
   EFI_BOOT_SERVICES *bs;
-  void *handle;
+  EFI_HANDLE handle,image;
+  EFI_PCI_IO_PROTOCOL *pci;
   int profile_verified,prom_verified,started,owned,armed,fault,retained;
   struct GU_MSI_OWNED_STATE *release_state;
+  BOOLEAN release_state_reserved,release_owner_invalid;
 } MOCK_PLATFORM;
 static MOCK_PLATFORM *platforms,*current;
 #define Gu (*current)
@@ -248,13 +254,16 @@ static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(void) {
   EFI_BOOT_SERVICES bs={Allocate};
-  const size_t count=4;
+  const size_t count=8;
+  EFI_PCI_IO_PROTOCOL pci[8]={0};
+  EFI_BOOT_SERVICES other_bs={Allocate};
   platforms=calloc(count,sizeof(*platforms));
   CHECK(platforms);
   current=&platforms[0];
   for(size_t i=0;i<count;i++) {
     platforms[i].bs=&bs;
     platforms[i].handle=&platforms[i];
+    platforms[i].image=&bs;platforms[i].pci=&pci[i];
     platforms[i].profile_verified=platforms[i].prom_verified=1;
   }
   CHECK(!GuMsiPlanOwnerToken() && !GuMsiMutated());
@@ -297,6 +306,40 @@ int main(void) {
     current=&platforms[i];
     CHECK(!GuMsiMutated() && Original.count==i+10);
   }
+  /* A substitution must not expose another card's protocol graph. */
+  current=&platforms[1];
+  Gu.release_state=first;
+  CHECK(!GuMsiPlanOwnerToken() && GuMsiMutated());
+  CHECK(Gu.release_owner_invalid && Gu.fault && Gu.retained);
+  CHECK(first->original.count==11 && first->plan.mutated==1);
+  Gu.release_state=second;
+  CHECK(!GuMsiPlanOwnerToken() && GuMsiMutated());
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
+  /* Removing the pointer after reservation is not an unused context. */
+  current=&platforms[2];
+  GU_MSI_OWNED_STATE *third=CurrentMsi;
+  Gu.release_state=NULL;
+  CHECK(GuMsiMutated() && !GuMsiPlanOwnerToken() && Gu.retained);
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
+  Gu.release_state=third;
+  CHECK(!GuMsiPlanOwnerToken());
+  /* Also detect a changed handle, PCI protocol, boot-services or image. */
+  current=&platforms[3];Gu.handle=&platforms[0];
+  CHECK(!GuMsiPlanOwnerToken() && GuMsiMutated() && Gu.retained);
+  current=&platforms[4];Gu.pci=&pci[0];
+  CHECK(!GuMsiPlanOwnerToken() && GuMsiMutated() && Gu.retained);
+  current=&platforms[5];Gu.image=&pci[0];
+  CHECK(!GuMsiPlanOwnerToken() && GuMsiMutated() && Gu.retained);
+  current=&platforms[6];Gu.bs=&other_bs;
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
+  CHECK(Gu.release_owner_invalid && Gu.retained && !GuMsiPlanOwnerToken());
+  current=&platforms[7];
+  GU_MSI_OWNED_STATE *eighth=CurrentMsi;
+  Gu.release_state_reserved=0;
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
+  CHECK(GuMsiMutated() && !GuMsiPlanOwnerToken() && Gu.retained && Gu.release_state==eighth);
+  current=&platforms[0];
+  CHECK(GuMsiPlanOwnerToken()==first && GuMsiMutated() && !Gu.fault);
   for(size_t i=0;i<count;i++) free(platforms[i].release_state);
   free(platforms);
   return 0;
@@ -323,7 +366,7 @@ int main(void) {
             with self.subTest(name=name):
                 code = function_body(name).lstrip()
                 expected = "FALSE" if name in ("GuMsiReleased", "GuMsiReadyForWindows") else "EFI_NOT_READY"
-                self.assertTrue(code.startswith("if(!CurrentMsi)return " + expected + ";"))
+                self.assertTrue(code.startswith("if(!ReleaseOwnerMatches())return " + expected + ";"))
         self.assertNotIn("LegacyMsi", SOURCE)
         shared = (Path(__file__).resolve().parents[1] / "src/unlock_execution.c").read_text(encoding="utf-8")
         wrapper = shared.split("EFI_STATUS GuExecuteUnlock(", 1)[1]

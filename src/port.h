@@ -127,6 +127,7 @@ typedef struct {
   GU_DMA *allocations;
   /* These resources belong to this platform, not to the active selector. */
   struct GU_MSI_OWNED_STATE *release_state;
+  BOOLEAN release_state_reserved, release_owner_invalid;
   GU_ASSET asset_entries[GU_ASSET_COUNT];
   BOOLEAN asset_entries_reserved, asset_load_attempted;
   BOOLEAN (*display_check)(VOID);

@@ -582,7 +582,7 @@ int main(void) {
         self.assertNotIn("Segment != 0", check)
 
     def test_selected_release_plan_owns_independent_graphs(self):
-        start = MSI_SOURCE.index("EFI_STATUS GuMsiReserveSelectedState(")
+        start = MSI_SOURCE.index("typedef struct GU_MSI_OWNED_STATE {")
         end = MSI_SOURCE.index("\nstatic EFI_GUID PciGuid=", start)
         production = MSI_SOURCE[start:end]
         host = r"""
@@ -594,11 +594,18 @@ int main(void) {
 typedef void VOID;
 typedef int BOOLEAN;
 typedef uintptr_t EFI_STATUS;
+typedef void *EFI_HANDLE;
+typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
+#define TRUE 1
+#define FALSE 0
 typedef struct EFI_BOOT_SERVICES {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
 } EFI_BOOT_SERVICES;
-typedef struct {EFI_BOOT_SERVICES *bs;VOID *handle;
+typedef struct {EFI_BOOT_SERVICES *bs;EFI_HANDLE handle,image;
+  EFI_PCI_IO_PROTOCOL *pci;
   int profile_verified,prom_verified,started,owned,armed,fault,retained;
+  struct GU_MSI_OWNED_STATE *release_state;
+  BOOLEAN release_state_reserved,release_owner_invalid;
 } GU_PLATFORM;
 static GU_PLATFORM Gu;
 typedef struct {VOID *table;int mutated,claimed,ready;} PLAN;
@@ -609,18 +616,6 @@ typedef struct {int edges[4];} GRAPH;
 #define EFI_NOT_READY 2
 #define EFI_ALREADY_STARTED 3
 #define EFI_OUT_OF_RESOURCES 4
-static PLAN InitialPlan;
-static GRAPH InitialOriginal,InitialCurrent;
-static BOOLEAN InitialUsb[MAX_EDGES];
-typedef struct {PLAN plan;GRAPH original,current;BOOLEAN original_usb[MAX_EDGES];} GU_MSI_OWNED_STATE;
-static GU_MSI_OWNED_STATE *SelectedMsi;
-static PLAN *CurrentPlan=&InitialPlan;
-static GRAPH *CurrentOriginal=&InitialOriginal,*CurrentGraph=&InitialCurrent;
-static BOOLEAN (*CurrentOriginalUsb)[MAX_EDGES]=&InitialUsb;
-#define Plan (*CurrentPlan)
-#define Original (*CurrentOriginal)
-#define Current (*CurrentGraph)
-#define OriginalUsb (*CurrentOriginalUsb)
 static int fail_pool,allocations;
 static EFI_STATUS Allocate(int type,size_t n,VOID **out) {
   if(type!=EfiLoaderData||!out)return EFI_NOT_READY;
@@ -633,38 +628,39 @@ static EFI_STATUS Allocate(int type,size_t n,VOID **out) {
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
   EFI_BOOT_SERVICES bs={Allocate};
-  Gu.bs=&bs;Gu.handle=(VOID *)(uintptr_t)1;
+  EFI_PCI_IO_PROTOCOL pci={0};
+  Gu.bs=&bs;Gu.handle=(VOID *)(uintptr_t)1;Gu.image=&bs;Gu.pci=&pci;
   Gu.profile_verified=Gu.prom_verified=1;
   int mode=argc>1?argv[1][0]-'0':-1;
   if(mode==0) {
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
-    CHECK(SelectedMsi && CurrentPlan!=&InitialPlan);
-    CHECK(CurrentOriginal!=&InitialOriginal && CurrentGraph!=&InitialCurrent);
-    CHECK(CurrentOriginalUsb!=&InitialUsb);
-    CHECK(CurrentPlan==&SelectedMsi->plan && CurrentOriginal==&SelectedMsi->original);
+    CHECK(CurrentMsi && Gu.release_state_reserved && ReleaseOwnerMatches());
+    CHECK(&Original!=&Current && !Plan.table && !OriginalUsb[0]);
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED && allocations==1);
   } else if(mode==1) {
     Gu.profile_verified=0;
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
-    CHECK(!SelectedMsi && allocations==0 && CurrentPlan==&InitialPlan);
+    CHECK(!CurrentMsi && !Gu.release_state_reserved && allocations==0);
   } else if(mode==2) {
     fail_pool=1;
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_OUT_OF_RESOURCES);
-    CHECK(!SelectedMsi && CurrentPlan==&InitialPlan);
+    CHECK(!CurrentMsi && !Gu.release_state_reserved);
     fail_pool=0;
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS && allocations==2);
   } else if(mode==3) {
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
     Plan.table=(VOID *)(uintptr_t)1;
-    CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED);
-    CHECK(!SelectedMsi && allocations==0);
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED && allocations==1);
+    CHECK(Plan.table==(VOID *)(uintptr_t)1);
   } else if(mode==4) {
     bs.AllocatePool=NULL;
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
-    CHECK(!SelectedMsi);
+    CHECK(!CurrentMsi && !Gu.release_state_reserved);
   } else if(mode==5) {
     Gu.retained=1;
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY && allocations==0);
   } else return 3;
+  free(Gu.release_state);
   return 0;
 }
 """

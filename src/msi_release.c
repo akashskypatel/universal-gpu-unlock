@@ -53,6 +53,10 @@ typedef struct GU_MSI_OWNED_STATE {
   PLAN plan;
   GRAPH original,current;
   BOOLEAN original_usb[MAX_EDGES];
+  const VOID *owner;
+  EFI_BOOT_SERVICES *owner_bs;
+  EFI_PCI_IO_PROTOCOL *owner_pci;
+  EFI_HANDLE owner_handle,owner_image;
 } GU_MSI_OWNED_STATE;
 #define CurrentMsi (Gu.release_state)
 #define Plan (CurrentMsi->plan)
@@ -60,18 +64,39 @@ typedef struct GU_MSI_OWNED_STATE {
 #define Current (CurrentMsi->current)
 #define OriginalUsb (CurrentMsi->original_usb)
 
+/* A release graph belongs to exactly one platform and boot-local PCI identity.
+ * A lost or substituted context is an unsafe state, not an unused context. */
+static BOOLEAN ReleaseOwnerMatches(VOID) {
+  if(Gu.release_owner_invalid)return FALSE;
+  if(!Gu.release_state_reserved && !CurrentMsi)return FALSE;
+  if(!Gu.release_state_reserved || !CurrentMsi ||
+     CurrentMsi->owner!=&Gu || CurrentMsi->owner_bs!=Gu.bs ||
+     CurrentMsi->owner_pci!=Gu.pci || CurrentMsi->owner_handle!=Gu.handle ||
+     CurrentMsi->owner_image!=Gu.image) {
+    Gu.release_owner_invalid=TRUE;
+    Gu.fault=TRUE;
+    Gu.retained=TRUE;
+    return FALSE;
+  }
+  return TRUE;
+}
+
 EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs) {
-  if(!bs||!bs->AllocatePool||!Gu.handle||Gu.bs!=bs ||
+  if((Gu.release_state_reserved || Gu.release_state) && !ReleaseOwnerMatches())
+    return EFI_NOT_READY;
+  if(!bs||!bs->AllocatePool||!Gu.handle||!Gu.pci||!Gu.image||Gu.bs!=bs ||
      !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||
      Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(Gu.release_state)return EFI_ALREADY_STARTED;
+  if(Gu.release_state_reserved)return EFI_ALREADY_STARTED;
   GU_MSI_OWNED_STATE *state=NULL;
   EFI_STATUS s=bs->AllocatePool(EfiLoaderData,sizeof(*state),(VOID **)&state);
   if(s!=EFI_SUCCESS)return s;
   if(!state)return EFI_OUT_OF_RESOURCES;
   memset(state,0,sizeof(*state));
+  state->owner=&Gu;state->owner_bs=bs;state->owner_pci=Gu.pci;
+  state->owner_handle=Gu.handle;state->owner_image=Gu.image;
   /* Publish only after the complete allocation succeeds. */
-  Gu.release_state=state;
+  Gu.release_state=state;Gu.release_state_reserved=TRUE;
   return EFI_SUCCESS;
 }
 static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID,PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID;
@@ -703,7 +728,7 @@ static EFI_STATUS Consumers(VOID) {
   return EFI_SUCCESS;
 }
 EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
-  if(!CurrentMsi)return EFI_NOT_READY;
+  if(!ReleaseOwnerMatches())return EFI_NOT_READY;
   /* A failed preflight may have observed or modified driver context.
    * Do not erase its saved ownership graph on a later target attempt. */
   if(Plan.table||Plan.mutated||Plan.ready||Plan.claimed)return EFI_ALREADY_STARTED;
@@ -876,7 +901,7 @@ static EFI_STATUS ClaimRestore(VOID) {
   GuLog("MSI exclusive claim/decode result: status=%#llx\n",(unsigned long long)s);return s;
 }
 EFI_STATUS GuMsiRelease(VOID) {
-  if(!CurrentMsi)return EFI_NOT_READY;
+  if(!ReleaseOwnerMatches())return EFI_NOT_READY;
   if(!Plan.ready||Plan.mutated||Gu.started||Gu.owned)return EFI_NOT_READY;
   /* The exact stock AD102/GA102 NVIDIA zero-child Stop path is not safe:
    * it can write BAR0 and enter a poll without a proven local bound.
@@ -939,7 +964,7 @@ EFI_STATUS GuMsiRelease(VOID) {
   return s;
 }
 BOOLEAN GuMsiReleased(VOID) {
-  if(!CurrentMsi)return FALSE;
+  if(!ReleaseOwnerMatches())return FALSE;
   UINT32 c[64];UINT64 attrs=0;const char *failed=NULL;
   UINT64 chk_attrs=0, exp_attrs=Plan.attributes & (EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
   if(!Plan.ready||Plan.stage!=3||!Plan.claimed||!Gu.owned||Gu.fault||
@@ -977,7 +1002,7 @@ static BOOLEAN GuMsiHardwareVerifiedBeforeClose(VOID) {
   return valid;
 }
 EFI_STATUS GuMsiFinish(VOID) {
-  if(!CurrentMsi)return EFI_NOT_READY;
+  if(!ReleaseOwnerMatches())return EFI_NOT_READY;
   Plan.hardware_verified=FALSE;
   if(!GuSafeToReturn()||!Gu.quiesced||Gu.flrs!=1||
      !Plan.master_normalized||!GuMsiReleased()){
@@ -1011,9 +1036,12 @@ EFI_STATUS GuMsiFinish(VOID) {
   }
   return s;
 }
-BOOLEAN GuMsiMutated(VOID){return CurrentMsi && Plan.mutated;}
+BOOLEAN GuMsiMutated(VOID){
+  if(!ReleaseOwnerMatches())return Gu.release_owner_invalid;
+  return Plan.mutated;
+}
 BOOLEAN GuMsiReadyForWindows(VOID) {
-  if(!CurrentMsi)return FALSE;
+  if(!ReleaseOwnerMatches())return FALSE;
   if(!Plan.ready||Plan.stage!=3||Plan.claimed||Gu.owned||Gu.fault||
      !Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn()||!Plan.hardware_verified){
     /* A failed state prerequisite is as final as a failed PCI/GOP check.
@@ -1034,4 +1062,4 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
   return ready;
 }
 
-const VOID *GuMsiPlanOwnerToken(VOID) {return CurrentMsi;}
+const VOID *GuMsiPlanOwnerToken(VOID) {return ReleaseOwnerMatches()?CurrentMsi:NULL;}
