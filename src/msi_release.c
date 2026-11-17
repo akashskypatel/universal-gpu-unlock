@@ -46,33 +46,26 @@ typedef struct {
   UINTN survivor_count;
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized;
 } PLAN;
-static PLAN Plan;
-static GRAPH Original,Current;
-static BOOLEAN OriginalUsb[MAX_EDGES];
-
-/* Keep the legacy one-card backing objects unchanged. A selected active
- * transaction receives a separate, permanent per-target release context
- * before any vendor Stop. Do not free a graph that may describe a partially
- * stopped driver or a retained PCI claim. */
+/* Keep the release plan and its protocol graphs in one ownership context.
+ * Never free a context that may describe a partially stopped driver or a
+ * retained PCI claim. The existing one-shot admission remains unchanged. */
 typedef struct {
   PLAN plan;
   GRAPH original,current;
   BOOLEAN original_usb[MAX_EDGES];
 } GU_MSI_OWNED_STATE;
-static GU_MSI_OWNED_STATE *SelectedMsi;
-static PLAN *CurrentPlan=&Plan;
-static GRAPH *CurrentOriginal=&Original,*CurrentGraph=&Current;
-static BOOLEAN (*CurrentOriginalUsb)[MAX_EDGES]=&OriginalUsb;
-#define Plan (*CurrentPlan)
-#define Original (*CurrentOriginal)
-#define Current (*CurrentGraph)
-#define OriginalUsb (*CurrentOriginalUsb)
+static GU_MSI_OWNED_STATE LegacyMsi;
+static GU_MSI_OWNED_STATE *CurrentMsi=&LegacyMsi;
+#define Plan (CurrentMsi->plan)
+#define Original (CurrentMsi->original)
+#define Current (CurrentMsi->current)
+#define OriginalUsb (CurrentMsi->original_usb)
 
 EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs) {
   if(!bs||!bs->AllocatePool||!Gu.handle||Gu.bs!=bs ||
      !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||
      Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(SelectedMsi||Plan.table||Plan.mutated||Plan.claimed||Plan.ready)
+  if(CurrentMsi!=&LegacyMsi||Plan.table||Plan.mutated||Plan.claimed||Plan.ready)
     return EFI_ALREADY_STARTED;
   GU_MSI_OWNED_STATE *state=NULL;
   EFI_STATUS s=bs->AllocatePool(EfiLoaderData,sizeof(*state),(VOID **)&state);
@@ -80,11 +73,7 @@ EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs) {
   if(!state)return EFI_OUT_OF_RESOURCES;
   memset(state,0,sizeof(*state));
   /* Publish only after the complete allocation succeeds. */
-  SelectedMsi=state;
-  CurrentPlan=&state->plan;
-  CurrentOriginal=&state->original;
-  CurrentGraph=&state->current;
-  CurrentOriginalUsb=&state->original_usb;
+  CurrentMsi=state;
   return EFI_SUCCESS;
 }
 static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID,PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID;
@@ -1042,4 +1031,4 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
   return ready;
 }
 
-const VOID *GuMsiPlanOwnerToken(VOID) {return &Plan;}
+const VOID *GuMsiPlanOwnerToken(VOID) {return CurrentMsi;}
