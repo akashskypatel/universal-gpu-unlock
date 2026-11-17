@@ -6,6 +6,7 @@
 #include <string.h>
 
 static GU_TOPO_CAPTURE snapshot;
+static GU_TOPO_GOP gop_storage[64];
 static GU_TOPO_REPORT report;
 static GU_TOPO_GPU_REPORT report_storage[GU_TOPO_MAX_PCI];
 static unsigned checks;
@@ -62,6 +63,9 @@ static void Baseline(void) {
   GU_GPU_IDENTITY nv_b={0x250310deU,0xabcd10deU,0,4,0,0};
   GU_GPU_IDENTITY other={0x164e1002U,0,0,0,8,0};
   memset(&snapshot,0,sizeof(snapshot));snapshot.pci_count=5;
+  memset(gop_storage,0,sizeof(gop_storage));
+  snapshot.gop=gop_storage;
+  snapshot.gop_capacity=sizeof(gop_storage)/sizeof(gop_storage[0]);
   Pci(0,root_a,Path(-1,0,1,0),0x0604,1,1,1);
   Pci(1,nv_a,Path(1,0,0,0),0x0300,0,0,0);
   Pci(2,root_b,Path(-1,0,3,1),0x0604,1,4,4);
@@ -549,6 +553,17 @@ int main(void) {
   CHECK(GuTopoAssess(&snapshot,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
   Baseline();snapshot.gop_count=GU_TOPO_MAX_GOPS+1;
   CHECK(GuTopoAssess(&snapshot,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
+  Baseline();snapshot.gop_count=snapshot.gop_capacity+1;
+  CHECK(GuTopoAssess(&snapshot,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
+  Baseline();snapshot.gop=NULL;
+  CHECK(GuTopoAssess(&snapshot,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
+  Baseline();snapshot.gop_capacity=GU_TOPO_MAX_GOPS+1;
+  CHECK(GuTopoAssess(&snapshot,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
+  Baseline();
+  for(size_t i=3;i<40;i++)snapshot.gop[i].path=snapshot.gop[1].path;
+  snapshot.gop_count=40;
+  CHECK(GuTopoAssess(&snapshot,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_COMPLETE);
+  CHECK(report.gpu_count==2 && report.gpus[1].gop_count==38);
   Baseline();snapshot.console_count=GU_TOPO_MAX_CONSOLES+1;
   CHECK(GuTopoAssess(&snapshot,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
   CHECK(GuTopoAssess(NULL,&report,report_storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);

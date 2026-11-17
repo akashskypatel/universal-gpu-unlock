@@ -202,7 +202,8 @@ static int HasGopForDisplay(const GU_TOPO_CAPTURE *s, int owner) {
 static int CaptureValid(const GU_TOPO_CAPTURE *s) {
   size_t i,j;
   if(!s || !s->pci_count || s->pci_count>GU_TOPO_MAX_PCI ||
-     s->gop_count>GU_TOPO_MAX_GOPS || s->console_count>GU_TOPO_MAX_CONSOLES ||
+     s->gop_capacity>GU_TOPO_MAX_GOPS || s->gop_count>s->gop_capacity ||
+     (s->gop_count && !s->gop) || s->console_count>GU_TOPO_MAX_CONSOLES ||
      (s->console_count && !s->console_available))return 0;
   for(i=0;i<s->pci_count;i++) {
     const GU_GPU_RECORD *id=&s->pci[i].identity;

@@ -59,8 +59,6 @@ static EFI_GUID LoadedImagePathGuid=EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID;
 #endif
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 static GU_TOPO_CAPTURE Snapshot;
-/* The underlying GOP handles are boot-local: never persist or use for Stop. */
-static EFI_HANDLE GopHandles[GU_TOPO_MAX_GOPS];
 static GU_TOPO_REPORT Report;
 #ifdef GU_TOPO_SELECTION_ENABLED
 static int SelectionOk;
@@ -1573,7 +1571,7 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
         unsigned handle_matches=0;
         if(!EFI_ERROR(gs) && gop)gop_children++;
         for(k=0;k<Snapshot.gop_count;k++)
-          if(GopHandles[k]==e->ControllerHandle)handle_matches++;
+          if(Snapshot.gop[k].handle==e->ControllerHandle)handle_matches++;
         if(handle_matches && path_matches)matched++;
         if((!EFI_ERROR(gs) && gop) && !path_matches)complete=0;
         Say("NVIDIA_PCI_CHILD[%zu,%zu] GOP=%u PATH_ON_CONTROLLER=%u IN_CAPTURED_GOPS=%u GOP_STATUS=%#llx PATH_STATUS=%#llx\r\n",
@@ -1595,9 +1593,9 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
       EFI_STATUS os,freed;
       UINTN n=0,k;
       size_t by_driver_opens=0,unresolved_agents=0;
-      if(!GopHandles[j] ||
+      if(!Snapshot.gop[j].handle ||
          !GuTopoPathOnController(&p->path,&Snapshot.gop[j].path))continue;
-      os=bs->OpenProtocolInformation(GopHandles[j],&GopGuid,&opens,&n);
+      os=bs->OpenProtocolInformation(Snapshot.gop[j].handle,&GopGuid,&opens,&n);
       if(EFI_ERROR(os) || n>256U || (n && !opens)) {
         Say("NVIDIA_GOP_OPENERS[%zu,%zu] STATUS=%#llx COUNT=%zu UNKNOWN_OR_OVERFLOW=1\r\n",
             i,(size_t)j,(unsigned long long)os,(size_t)n);
@@ -1621,7 +1619,7 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
       }
       /* The actual GOP handle and its open-record ControllerHandle are
        * independent candidates; neither is inferred to be a child. */
-      ReportTextOutputOpeners(bs,"NVIDIA",i,j,256U,GopHandles[j],"GOP_HANDLE");
+      ReportTextOutputOpeners(bs,"NVIDIA",i,j,256U,Snapshot.gop[j].handle,"GOP_HANDLE");
       freed=opens?bs->FreePool(opens):EFI_SUCCESS;
       Say("NVIDIA_GOP_OPENERS_SUMMARY[%zu,%zu] BY_DRIVER=%zu UNRESOLVED_AGENT_IMAGES=%zu OPEN_STATUS=%#llx FREE_STATUS=%#llx STATUS=%s\r\n",
           i,(size_t)j,by_driver_opens,unresolved_agents,
@@ -1665,7 +1663,7 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
       else {match++;pci=i;}
     }
     if(!match && foreign)continue; /* NVIDIA GOP handled separately. */
-    if(match!=1 || foreign || !GopHandles[j]) {
+    if(match!=1 || foreign || !Snapshot.gop[j].handle) {
       Say("INDEPENDENT_GOP[%zu] PCI_MATCHES=%zu NVIDIA_MATCHES=%zu STATUS=AMBIGUOUS_OR_MISSING NO_STOP_EVIDENCE=1\r\n",
           j,match,foreign);
       unresolved++;
@@ -1673,8 +1671,8 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
     }
     observed++;
     Say("INDEPENDENT_GOP[%zu] PCI_INDEX=%zu GOP_HANDLE=%p PCI_MATCHES=1 STATUS=PATH_MATCHED_ONLY\r\n",
-        j,pci,GopHandles[j]);
-    status=bs->OpenProtocolInformation(GopHandles[j],&GopGuid,&opens,&count);
+        j,pci,Snapshot.gop[j].handle);
+    status=bs->OpenProtocolInformation(Snapshot.gop[j].handle,&GopGuid,&opens,&count);
     if(EFI_ERROR(status)||count>256U||(count&&!opens)) {
       Say("INDEPENDENT_GOP[%zu] GOP_OPEN_STATUS=%#llx COUNT=%zu STATUS=UNKNOWN_OR_OVERFLOW\r\n",
           j,(unsigned long long)status,(size_t)count);
@@ -1689,8 +1687,8 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
     Say("INDEPENDENT_GOP[%zu] GOP_OPEN_STATUS=0 COUNT=%zu\r\n",
         j,(size_t)count);
     /* Do not report a duplicate TextOut opener graph for identical handles. */
-    seen[seen_count++]=GopHandles[j];
-    ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,256U,GopHandles[j],
+    seen[seen_count++]=Snapshot.gop[j].handle;
+    ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,256U,Snapshot.gop[j].handle,
                             "GOP_HANDLE");
     for(k=0;k<count;k++) {
       const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[k];
@@ -1724,57 +1722,63 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
       unresolved?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
 }
 
-static int CaptureGop(EFI_BOOT_SERVICES *bs) {
+/* Capture one complete boot-local GOP inventory. Publish only after
+ * every identity and path is valid and the handle buffer is released. */
+static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
+                             size_t *out_count) {
   EFI_HANDLE *handles=NULL;
-  UINTN count=0,i,j;
-  EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
+  GU_TOPO_GOP *records=NULL;
+  UINTN count=0,i;
   int okay=1;
-  if(EFI_ERROR(status)||count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
+  *out=NULL;*out_count=0;
+  if(!bs || !bs->LocateHandleBuffer || !bs->HandleProtocol ||
+     !bs->AllocatePool || !bs->FreePool)return 0;
+  EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
+  if(EFI_ERROR(status) || count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
+  if(okay && count) {
+    status=bs->AllocatePool(EfiLoaderData,count*sizeof(*records),(VOID **)&records);
+    if(status!=EFI_SUCCESS || !records)okay=0;
+  }
   if(okay)for(i=0;i<count;i++) {
     EFI_DEVICE_PATH_PROTOCOL *path=NULL;
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+    memset(&records[i],0,sizeof(records[i]));
     if(!handles[i] ||
        EFI_ERROR(bs->HandleProtocol(handles[i],&GopGuid,(VOID **)&gop)) || !gop ||
        EFI_ERROR(bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)) ||
-       !PathCopy(path,&Snapshot.gop[i].path)){okay=0;break;}
-    Snapshot.gop[i].handle=handles[i];
-    Snapshot.gop[i].protocol=gop;
-    GopHandles[Snapshot.gop_count]=handles[i];
-    Snapshot.gop_count++;
+       !PathCopy(path,&records[i].path)){okay=0;break;}
+    records[i].handle=handles[i];
+    records[i].protocol=gop;
   }
-  if(okay)for(i=0;i<Snapshot.gop_count;i++)
-    for(j=0;j<i;j++)
-      if(GopHandles[i]==GopHandles[j])okay=0;
-  if(handles && (!bs->FreePool || EFI_ERROR(bs->FreePool(handles))))okay=0;
-  return okay;
+  if(okay && !GuTopoGopSnapshotsEqual(records,count,records,count))okay=0;
+  if(handles && bs->FreePool(handles)!=EFI_SUCCESS)okay=0;
+  if(!okay) {
+    if(records && bs->FreePool(records)!=EFI_SUCCESS)
+      Say("GOP_CAPTURE_STORAGE_FREE=FAILED\r\n");
+    return 0;
+  }
+  *out=records;*out_count=(size_t)count;
+  return 1;
 }
 
-/* Re-enumerate all GOP handles after the console reads. The source image
- * remains passive; even a stable GOP set cannot establish Stop safety. */
+static int CaptureGop(EFI_BOOT_SERVICES *bs) {
+  if(Snapshot.gop || Snapshot.gop_count || Snapshot.gop_capacity)return 0;
+  if(!CaptureGopRecords(bs,&Snapshot.gop,&Snapshot.gop_count))return 0;
+  Snapshot.gop_capacity=Snapshot.gop_count;
+  return 1;
+}
+
+/* Re-enumerate independently after console reads. Stability is observational
+ * and does not establish safe device release. */
 static int RevalidateGop(EFI_BOOT_SERVICES *bs) {
-  EFI_HANDLE *handles=NULL;
-  UINTN count=0,i;
-  EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
-  static GU_TOPO_GOP current[GU_TOPO_MAX_GOPS];
-  int okay=1;
-  if(EFI_ERROR(status) || count!=Snapshot.gop_count ||
-     count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
-  if(okay)for(i=0;i<count;i++) {
-    EFI_DEVICE_PATH_PROTOCOL *path=NULL;
-    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
-    memset(&current[i],0,sizeof(current[i]));
-    if(!handles[i] ||
-       EFI_ERROR(bs->HandleProtocol(handles[i],&GopGuid,(VOID **)&gop)) || !gop ||
-       EFI_ERROR(bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)) ||
-       !PathCopy(path,&current[i].path)){okay=0;break;}
-    current[i].handle=handles[i];
-    current[i].protocol=gop;
-  }
-  if(okay && !GuTopoGopSnapshotsEqual(Snapshot.gop,Snapshot.gop_count,
-                                      current,(size_t)count))okay=0;
-  if(handles && (!bs->FreePool || EFI_ERROR(bs->FreePool(handles))))okay=0;
-  Say("GOP_CAPTURE_RECHECK STABLE=%u ORIGINAL=%zu CURRENT=%zu NON_ATOMIC=1 NO_STOP_EVIDENCE=1\r\n",
-      (unsigned)okay,Snapshot.gop_count,(size_t)count);
+  GU_TOPO_GOP *current=NULL;
+  size_t count=0;
+  int captured=CaptureGopRecords(bs,&current,&count);
+  int okay=captured && GuTopoGopSnapshotsEqual(Snapshot.gop,Snapshot.gop_count,
+                                                current,count);
+  if(current && bs->FreePool(current)!=EFI_SUCCESS)okay=0;
+  Say("GOP_CAPTURE_RECHECK STABLE=%u ORIGINAL=%zu CURRENT=%zu NON_ATOMIC=1 NO_STOP_EVIDENCE=1 CAPTURE_OK=%u\r\n",
+      (unsigned)okay,Snapshot.gop_count,count,(unsigned)captured);
   return okay;
 }
 
@@ -1999,6 +2003,15 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     Report.gpus=NULL;
     if(EFI_ERROR(released)) {
       Say("TOPOLOGY_REPORT_STORAGE_FREE_STATUS=%#llx\r\n",
+          (unsigned long long)released);
+      result=GU_TOPO_INVALID;
+    }
+  }
+  if(Snapshot.gop) {
+    EFI_STATUS released=bs->FreePool(Snapshot.gop);
+    Snapshot.gop=NULL;Snapshot.gop_count=Snapshot.gop_capacity=0;
+    if(released!=EFI_SUCCESS) {
+      Say("GOP_CAPTURE_STORAGE_FREE_STATUS=%#llx\r\n",
           (unsigned long long)released);
       result=GU_TOPO_INVALID;
     }

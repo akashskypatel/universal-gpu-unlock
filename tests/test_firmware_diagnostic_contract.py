@@ -240,6 +240,114 @@ int main(void) {
                     run=subprocess.run([str(binary)],capture_output=True,text=True)
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
+    def test_gop_capture_owns_runtime_storage(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        capture="static int CaptureGopRecords("+source.split("static int CaptureGopRecords(",1)[1].split("\n#ifdef GU_TOPO_SAVE_LOG",1)[0]
+        program = r"""
+#include "gpu_topology.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef int EFI_STATUS;
+typedef int EFI_GUID;
+typedef GU_TOPO_PATH EFI_DEVICE_PATH_PROTOCOL;
+typedef int EFI_GRAPHICS_OUTPUT_PROTOCOL;
+#define EFI_SUCCESS 0
+#define EFI_ERROR(x) ((x)!=EFI_SUCCESS)
+#define EfiLoaderData 1
+#define ByProtocol 2
+typedef struct {
+  EFI_STATUS (*LocateHandleBuffer)(int,EFI_GUID *,VOID *,UINTN *,EFI_HANDLE **);
+  EFI_STATUS (*HandleProtocol)(EFI_HANDLE,EFI_GUID *,VOID **);
+  EFI_STATUS (*AllocatePool)(int,UINTN,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+static EFI_GUID GopGuid,PathGuid;
+static GU_TOPO_CAPTURE Snapshot;
+static GU_TOPO_PATH paths[40];
+static int protocols[40],allocs,frees,fail_alloc,fail_read,alias,drift,fail_free;
+static UINTN total=40;
+static EFI_STATUS Allocate(int kind,UINTN size,VOID **out) {
+  (void)kind;
+  if(fail_alloc)return 1;
+  *out=calloc(1,size);
+  if(!*out)return 1;
+  allocs++;return EFI_SUCCESS;
+}
+static EFI_STATUS Free(VOID *p) {
+  free(p);frees++;
+  return fail_free?1:EFI_SUCCESS;
+}
+static EFI_STATUS Locate(int kind,EFI_GUID *guid,VOID *key,UINTN *n,EFI_HANDLE **out) {
+  (void)kind;(void)guid;(void)key;
+  *n=total;
+  if(!total)return EFI_SUCCESS;
+  if(total>40)return 1;
+  *out=calloc(total,sizeof(**out));
+  if(!*out)return 1;
+  allocs++;
+  for(size_t i=0;i<total;i++)(*out)[i]=&paths[i];
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Handle(EFI_HANDLE handle,EFI_GUID *guid,VOID **out) {
+  size_t i=(GU_TOPO_PATH *)handle-paths;
+  if(fail_read && i==39)return 1;
+  if(guid==&GopGuid)*out=&protocols[(alias&&i==39)?0:(drift&&i==39)?38:i];
+  else *out=&paths[i];
+  return EFI_SUCCESS;
+}
+static int PathCopy(EFI_DEVICE_PATH_PROTOCOL *path,GU_TOPO_PATH *out) {
+  if(!GuTopoPathValid(path))return 0;
+  *out=*path;return 1;
+}
+static void Say(const char *fmt,...) {(void)fmt;}
+""" + capture + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void) {
+  EFI_BOOT_SERVICES bs={Locate,Handle,Allocate,Free};
+  for(size_t i=0;i<40;i++) {
+    const uint8_t bytes[]={1,1,6,0,0,(uint8_t)i,0x7f,0xff,4,0};
+    memcpy(paths[i].bytes,bytes,sizeof(bytes));paths[i].length=sizeof(bytes);
+  }
+  CHECK(CaptureGop(&bs));
+  CHECK(Snapshot.gop_count==40 && Snapshot.gop_capacity==40 && allocs-frees==1);
+  CHECK(!CaptureGop(&bs) && allocs-frees==1);
+  CHECK(RevalidateGop(&bs) && allocs-frees==1);
+  paths[39].bytes[5]=1;
+  CHECK(!RevalidateGop(&bs) && allocs-frees==1);
+  paths[39].bytes[5]=39;
+  drift=1;
+  CHECK(!RevalidateGop(&bs) && allocs-frees==1);
+  drift=0;free(Snapshot.gop);frees++;
+  memset(&Snapshot,0,sizeof(Snapshot));
+  fail_alloc=1;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
+  fail_alloc=0;fail_read=1;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
+  fail_read=0;alias=1;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
+  alias=0;fail_free=1;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
+  fail_free=0;total=0;
+  CHECK(CaptureGop(&bs) && !Snapshot.gop && !Snapshot.gop_count);
+  CHECK(RevalidateGop(&bs) && allocs==frees);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"capture.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic","-I",str(P),str(c),str(P/"gpu_topology.c"),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)

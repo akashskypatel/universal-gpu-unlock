@@ -5,7 +5,7 @@
 
 #define GU_TOPO_MAX_PCI 128U
 #define GU_TOPO_MAX_HANDLES 4096U
-#define GU_TOPO_MAX_GOPS 32U
+#define GU_TOPO_MAX_GOPS GU_TOPO_MAX_HANDLES
 #define GU_TOPO_MAX_CONSOLES 8U
 #define GU_TOPO_PATH_BYTES 192U
 
@@ -35,7 +35,8 @@ typedef struct {
 typedef struct {
   size_t pci_count, gop_count, console_count;
   GU_TOPO_PCI pci[GU_TOPO_MAX_PCI];
-  GU_TOPO_GOP gop[GU_TOPO_MAX_GOPS];
+  GU_TOPO_GOP *gop; /* Caller-owned capture storage. */
+  size_t gop_capacity;
   GU_TOPO_PATH console[GU_TOPO_MAX_CONSOLES];
   uint8_t console_available;
 } GU_TOPO_CAPTURE;
