@@ -23,12 +23,15 @@ static int Alias(const GU_GPU_RECORD *a,const GU_GPU_RECORD *b) {
      a->device==b->device && a->function==b->function);
 }
 int GuGpuExecInit(GU_GPU_EXEC_SEQUENCE *s,const GU_GPU_EXEC_OBSERVATION *all,
-                  size_t count,const size_t *order,size_t selected_count) {
+                  size_t count,const size_t *order,size_t selected_count,
+                  GU_GPU_EXEC_TARGET *target_storage,size_t *order_storage,
+                  size_t capacity) {
   if(!s)return GU_GPU_EXEC_INVALID;
   memset(s,0,sizeof(*s));
   s->halted=1;
-  s->active_step=GU_INVENTORY_MAX_NVIDIA;
-  if(!all || !order || !count || count>GU_INVENTORY_MAX_NVIDIA ||
+  s->active_step=GU_GPU_EXEC_NO_STEP;
+  if(!all || !order || !target_storage || !order_storage || !capacity ||
+     capacity>GU_INVENTORY_MAX_HANDLES || !count || count>capacity ||
      !selected_count || selected_count>count)return GU_GPU_EXEC_INVALID;
   for(size_t i=0;i<count;i++) {
     if(!Valid(&all[i]))return GU_GPU_EXEC_INVALID;
@@ -40,6 +43,9 @@ int GuGpuExecInit(GU_GPU_EXEC_SEQUENCE *s,const GU_GPU_EXEC_OBSERVATION *all,
     for(size_t j=0;j<i;j++)
       if(order[i]==order[j])return GU_GPU_EXEC_INVALID;
   }
+  s->capacity=capacity;s->targets=target_storage;s->order=order_storage;
+  memset(s->targets,0,capacity*sizeof(*s->targets));
+  memset(s->order,0,capacity*sizeof(*s->order));
   for(size_t i=0;i<count;i++) {
     s->targets[i].identity=all[i].identity;
     memcpy(s->targets[i].expected_config,all[i].config,
@@ -80,17 +86,21 @@ static int SharedOwners(const GU_GPU_EXEC_OWNERS *a,
     if(p[i] && p[i]==q[j])return 1;
   return 0;
 }
+static int StorageValid(const GU_GPU_EXEC_SEQUENCE *s) {
+  return s && s->targets && s->order && s->capacity &&
+         s->capacity<=GU_INVENTORY_MAX_HANDLES;
+}
 static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
-  if(!s || !s->count || s->count>GU_INVENTORY_MAX_NVIDIA ||
+  if(!StorageValid(s) || !s->count || s->count>s->capacity ||
      !s->selected_count || s->selected_count>s->count ||
      s->next_step>s->selected_count ||
      (s->owned_mode!=0 && s->owned_mode!=1) ||
-     (s->active_step!=GU_INVENTORY_MAX_NVIDIA &&
+     (s->active_step!=GU_GPU_EXEC_NO_STEP &&
       (s->active_step!=s->next_step ||
        s->active_step>=s->selected_count)))
     return 0;
   if(s->owned_mode && !s->next_step &&
-     s->active_step==GU_INVENTORY_MAX_NVIDIA)return 0;
+     s->active_step==GU_GPU_EXEC_NO_STEP)return 0;
   for(size_t i=0;i<s->selected_count;i++) {
     size_t target=s->order[i];
     if(target>=s->count)return 0;
@@ -130,23 +140,23 @@ static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
 int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *s,
                        const GU_GPU_EXEC_OBSERVATION *all,size_t count) {
   if(!StateValid(s) || s->halted || s->next_step>=s->selected_count ||
-     s->active_step!=GU_INVENTORY_MAX_NVIDIA)
+     s->active_step!=GU_GPU_EXEC_NO_STEP)
     return GU_GPU_EXEC_BLOCKED;
-  return Verify(s,all,count,GU_INVENTORY_MAX_NVIDIA);
+  return Verify(s,all,count,GU_GPU_EXEC_NO_STEP);
 }
 int GuGpuExecCheckComplete(const GU_GPU_EXEC_SEQUENCE *s,
                            const GU_GPU_EXEC_OBSERVATION *all,size_t count) {
   if(!StateValid(s) || s->halted || s->next_step!=s->selected_count ||
-     s->active_step!=GU_INVENTORY_MAX_NVIDIA)
+     s->active_step!=GU_GPU_EXEC_NO_STEP)
     return GU_GPU_EXEC_BLOCKED;
-  return Verify(s,all,count,GU_INVENTORY_MAX_NVIDIA);
+  return Verify(s,all,count,GU_GPU_EXEC_NO_STEP);
 }
 void GuGpuExecAbort(GU_GPU_EXEC_SEQUENCE *s) {
   if(!s)return;
-  if(s->active_step<s->selected_count &&
-     s->active_step<GU_INVENTORY_MAX_NVIDIA &&
+  if(StorageValid(s) && s->active_step<s->selected_count &&
+     s->active_step<s->capacity &&
      s->order[s->active_step]<s->count &&
-     s->order[s->active_step]<GU_INVENTORY_MAX_NVIDIA)
+     s->order[s->active_step]<s->capacity)
     s->targets[s->order[s->active_step]].phase=GU_GPU_EXEC_FAILED;
   s->halted=1;
 }
@@ -210,7 +220,7 @@ int GuGpuExecFinish(GU_GPU_EXEC_SEQUENCE *s,size_t step,
   memcpy(s->targets[target].expected_config,all[target].config,
          sizeof(all[target].config));
   s->targets[target].phase=GU_GPU_EXEC_COMPLETE;
-  s->active_step=GU_INVENTORY_MAX_NVIDIA;
+  s->active_step=GU_GPU_EXEC_NO_STEP;
   s->next_step++;
   return GU_GPU_EXEC_OK;
 }

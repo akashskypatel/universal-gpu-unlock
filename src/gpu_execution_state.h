@@ -28,16 +28,23 @@ typedef struct {
 typedef struct {
   size_t count, selected_count, next_step, active_step;
   int halted, owned_mode;
-  size_t order[GU_INVENTORY_MAX_NVIDIA];
-  GU_GPU_EXEC_TARGET targets[GU_INVENTORY_MAX_NVIDIA];
+  size_t capacity;
+  size_t *order;
+  GU_GPU_EXEC_TARGET *targets;
 } GU_GPU_EXEC_SEQUENCE;
+#define GU_GPU_EXEC_NO_STEP SIZE_MAX
 enum {
   GU_GPU_EXEC_OK=0, GU_GPU_EXEC_INVALID=1,
   GU_GPU_EXEC_DRIFT=2, GU_GPU_EXEC_BLOCKED=3
 };
+/* The caller supplies two arrays of capacity elements. Their storage must
+ * remain valid and independent of the input arrays for the sequence lifetime.
+ * Do not copy a sequence to create another independent owner. */
 int GuGpuExecInit(GU_GPU_EXEC_SEQUENCE *state,
                   const GU_GPU_EXEC_OBSERVATION *all, size_t count,
-                  const size_t *order, size_t selected_count);
+                  const size_t *order, size_t selected_count,
+                  GU_GPU_EXEC_TARGET *target_storage, size_t *order_storage,
+                  size_t capacity);
 int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *state,
                        const GU_GPU_EXEC_OBSERVATION *all, size_t count);
 /* CPU-only final observation check; does not establish hardware safety. */

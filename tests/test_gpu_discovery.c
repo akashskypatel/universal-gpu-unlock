@@ -268,7 +268,7 @@ int main(void) {
   CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
                                 &release_owner_token,&firmware_owner_token)==EFI_UNSUPPORTED &&
         ActiveSequence.halted);
-  CHECK(ActiveSequence.next_step==0 && ActiveSequence.active_step==GU_INVENTORY_MAX_NVIDIA);
+  CHECK(ActiveSequence.next_step==0 && ActiveSequence.active_step==GU_GPU_EXEC_NO_STEP);
 
   printf("PASS exact single-target active binding and CPU state handover: %u checks\n",checks);
   return 0;

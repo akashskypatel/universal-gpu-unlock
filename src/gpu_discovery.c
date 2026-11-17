@@ -37,6 +37,8 @@ static int ActiveInventoryValid;
  * per-GPU state model used by read-only multi-card preparation. It still
  * cannot bind a second active Gu/MSI/assets context in this EFI image. */
 static GU_GPU_EXEC_SEQUENCE ActiveSequence;
+static GU_GPU_EXEC_TARGET ActiveSequenceTargets[GU_INVENTORY_MAX_NVIDIA];
+static size_t ActiveSequenceOrder[GU_INVENTORY_MAX_NVIDIA];
 static int ActiveSequenceValid;
 #endif
 
@@ -494,6 +496,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     GU_GPU_REFRESHED_SEQUENCE refreshed;
     GU_GPU_EXEC_OBSERVATION observed[GU_INVENTORY_MAX_NVIDIA];
     GU_GPU_EXEC_SEQUENCE sequence;
+    GU_GPU_EXEC_TARGET sequence_targets[GU_INVENTORY_MAX_NVIDIA];
+    size_t sequence_order[GU_INVENTORY_MAX_NVIDIA];
     /* Track every NVIDIA peer, not only the requested targets.
      * Preparation never calls Begin or authorizes hardware mutation. */
     all.selected_count=all.inventory.count;
@@ -511,7 +515,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
              sizeof(observed[i].config));
     }
     if(GuGpuExecInit(&sequence,observed,all.inventory.count,
-                     prepared.selected_indices,prepared.selected_count)!=GU_GPU_EXEC_OK ||
+                     prepared.selected_indices,prepared.selected_count,
+                     sequence_targets,sequence_order,GU_INVENTORY_MAX_NVIDIA)!=GU_GPU_EXEC_OK ||
        GuGpuExecCheckNext(&sequence,observed,all.inventory.count)!=GU_GPU_EXEC_OK) {
       GuLog("ACTIVE_SEQUENCE=REFUSED REASON=STATE_OR_PEER_DRIFT BEFORE_GU_INIT=1\n");
       return EFI_UNSUPPORTED;
@@ -573,6 +578,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
      * Failed binding must not overwrite prior target/peer state. */
     GU_GPU_EXEC_OBSERVATION observations[GU_INVENTORY_MAX_NVIDIA];
     GU_GPU_EXEC_SEQUENCE candidate;
+    GU_GPU_EXEC_TARGET candidate_targets[GU_INVENTORY_MAX_NVIDIA];
+    size_t candidate_order[GU_INVENTORY_MAX_NVIDIA];
     size_t chosen=prepared.selected_indices[0];
     memset(observations,0,sizeof(observations));
     for(size_t i=0;i<all.inventory.count;i++) {
@@ -581,7 +588,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
              sizeof(observations[i].config));
     }
     if(GuGpuExecInit(&candidate,observations,all.inventory.count,
-                     &chosen,1)!=GU_GPU_EXEC_OK ||
+                     &chosen,1,candidate_targets,candidate_order,
+                     GU_INVENTORY_MAX_NVIDIA)!=GU_GPU_EXEC_OK ||
        GuGpuExecCheckNext(&candidate,observations,
                           all.inventory.count)!=GU_GPU_EXEC_OK)
       return EFI_UNSUPPORTED;
@@ -593,7 +601,13 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     ActiveTargetIndex=chosen;
     for(size_t i=0;i<all.selected_count;i++)
       memcpy(ActiveInitialConfig[i],full.targets[i].config,sizeof(config));
+    /* Publish into persistent storage only after the existing bind succeeds.
+     * A copied sequence must never reference a stack candidate. */
+    memcpy(ActiveSequenceTargets,candidate_targets,sizeof(ActiveSequenceTargets));
+    memcpy(ActiveSequenceOrder,candidate_order,sizeof(ActiveSequenceOrder));
     ActiveSequence=candidate;
+    ActiveSequence.targets=ActiveSequenceTargets;
+    ActiveSequence.order=ActiveSequenceOrder;
     ActiveSequenceValid=1;
     ActiveInventoryValid=1;
   }
