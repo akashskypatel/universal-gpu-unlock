@@ -71,7 +71,8 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                    const void *release_plan,
                                    const void *firmware_assets);
 /* CPU context selection after a verified previous transaction.
- * The active boot entrypoints do not yet call this for multiple cards. */
+ * Admission remains independent of this ordered execution mechanism. */
+EFI_STATUS GuSelectedSequenceHasNext(EFI_SYSTEM_TABLE *table,int *more);
 EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table);
 EFI_STATUS GuVerifySelectedSequence(EFI_SYSTEM_TABLE *table);
 void GuAbortSelectedGpuStep(void);

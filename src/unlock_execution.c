@@ -6,6 +6,7 @@
 #include "compat/compat.h"
 #include "vendor/unlock_610.h"
 #include "s3_save.h"
+#include "boot_io.h"
 
 /* The app and the DXE driver must not diverge on the release/firmware
  * order or skip the final selected-target Windows handover validation. */
@@ -88,6 +89,73 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
 #else
   return GuExecuteUnlockCore(table,image,stage);
 #endif
+}
+
+/* Shared preparation of the currently bound GPU. The application runs
+ * this once before operator choice. Each successor runs it after binding. */
+EFI_STATUS GuPrepareBoundGpu(const char **stage) {
+  if(!stage||!Gu.handle||!Gu.pci)return EFI_INVALID_PARAMETER;
+  *stage="assets";
+  EFI_STATUS s=GuBootLoadAssets();
+  if(s!=EFI_SUCCESS||Gu.fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+  *stage="read-only-diagnostic";
+  (VOID)GuDiagnosticScan();
+  if(Gu.fault)return EFI_DEVICE_ERROR;
+  *stage="read-only-cold-profile";
+  s=GuAd104Prepare();
+  return s!=EFI_SUCCESS?s:Gu.fault?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+
+/* The first target is prepared before entry. Only the ordered execution
+ * record can select a successor. No retry, fallback, or hardware admission
+ * is granted by this loop. Preserve required versus optional S3 policy. */
+EFI_STATUS GuExecutePreparedSequence(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
+                                     GU_S3_POLICY policy,const char **stage) {
+  if(!table||!table->BootServices||!image||!stage||
+     (policy!=GU_S3_DISABLED&&policy!=GU_S3_REQUIRED&&policy!=GU_S3_OPTIONAL))
+    return EFI_INVALID_PARAMETER;
+  EFI_STATUS s;
+  for(;;) {
+    *stage="selected-gpu-execution";
+    s=GuExecuteUnlock(table,image,stage);
+    if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+    if(policy!=GU_S3_DISABLED) {
+      *stage="s3-registration";
+      EFI_STATUS s3=GuRegisterS3(table);
+      GuLog("S3 selected GPU registration status=%#llx\n",(unsigned long long)s3);
+      if(Gu.retained||Gu.fault||(policy==GU_S3_REQUIRED&&s3!=EFI_SUCCESS)) {
+        s=s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3;
+        goto failed;
+      }
+    }
+#ifdef GU_ACTIVE_SINGLE_TARGET
+    /* Recheck the current identity after optional resume-script work.
+     * Do not advance on an invalid record or mistake failure for completion. */
+    int more=0;
+    *stage="selected-gpu-next";
+    s=GuSelectedSequenceHasNext(table,&more);
+    if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+    if(more) {
+      s=GuSelectNextGpu(table);
+      if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+      s=GuPrepareBoundGpu(stage);
+      if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+      continue;
+    }
+#endif
+    break;
+  }
+  *stage="final-Windows-verification";
+  if(!GuExecutionReadyForWindows(table)) {
+    s=EFI_NOT_READY;
+    goto failed;
+  }
+  return EFI_SUCCESS;
+failed:
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  GuAbortSelectedGpuStep();
+#endif
+  return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 }
 
 /* Do not classify a later preflight failure as an untouched boot. */

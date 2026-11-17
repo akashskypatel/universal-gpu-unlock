@@ -72,11 +72,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   }
 
-  stage="assets";s=GuBootLoadAssets();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
-
-  stage="read-only-diagnostic";(VOID)GuDiagnosticScan();
-  if(Gu.fault){s=EFI_DEVICE_ERROR;goto failed;}
-  stage="read-only-cold-profile";s=GuAd104Prepare();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  s=GuPrepareBoundGpu(&stage);if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   stage="stage-windows-image";s=GuBootLoadWindows();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
@@ -168,30 +164,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   GuBootSay(
     L"\r\nSelected GPU preparation passed. Driver release and firmware work will now begin.\r\n");
-  GuLog("Operator U/P: one selected physical attempt; no automatic retry\n");
+  GuLog("Operator U/P: ordered selected transactions; no automatic retry\n");
   GuBootSilence();
-  stage="selected-gpu-execution";
-  s=GuExecuteUnlock(t,image,&stage);
+  s=GuExecutePreparedSequence(t,image,enable_s3?GU_S3_REQUIRED:GU_S3_DISABLED,&stage);
   if(s!=EFI_SUCCESS||Gu.fault)goto failed;
-
-  /* The final pre-Windows consistency check has not completed yet. Do not announce success. */
-
-  /* Probe and register S3 Boot Script for standby persistence if operator chose [P] */
-
-  if(enable_s3) {
-    EFI_STATUS s3=GuRegisterS3(t);
-    GuLog("S3 persistence requested: status=%#llx\n",(unsigned long long)s3);
-    if(s3!=EFI_SUCCESS || Gu.retained) {
-      /* Explicit P requires a complete S3 script; a partial write also
-       * retains an unsafe state and must not proceed to Windows. */
-      stage="s3-registration";s=s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3;
-      goto failed;
-    }
-  } else {
-    GuLog("S3 persistence skipped by operator\n");
-  }
-
-  stage="final-Windows-verification";if(!GuExecutionReadyForWindows(t)){s=EFI_NOT_READY;goto failed;}
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");
   GuBootUnsilence();

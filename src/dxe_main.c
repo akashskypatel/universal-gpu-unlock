@@ -46,35 +46,10 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     GuLog("DXE-DRIVER: Ada Lovelace GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
   }
 
-  stage = "dxe-assets";
-  s = GuBootLoadAssets();
-  if (s != EFI_SUCCESS || Gu.fault) goto finish;
-
-  stage = "dxe-read-only-diagnostic";
-  (VOID)GuDiagnosticScan();
-  if(Gu.fault){s=EFI_DEVICE_ERROR;goto finish;}
-  stage = "dxe-cold-profile";
-  s = GuAd104Prepare();
-  if (s != EFI_SUCCESS || Gu.fault) goto finish;
-
-  stage="dxe-shared-execution";
-  s=GuExecuteUnlock(t,image,&stage);
+  s=GuPrepareBoundGpu(&stage);
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
-  GuLog("DXE selected GPU transaction checked; S3 registration optional\n");
-  EFI_STATUS s3=GuRegisterS3(t);
-  GuLog("DXE S3 registration status=%#llx\n",(unsigned long long)s3);
-  if(Gu.retained) {
-    stage="dxe-s3-partial-registration";
-    s=s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3;
-    goto finish;
-  }
-  /* S3 installation must not weaken the final AMD/peer/PCI handover
-   * check. A changed boot-time ownership graph fails closed. */
-  if(!GuExecutionReadyForWindows(t)) {
-    stage="dxe-post-s3-handover";
-    s=EFI_NOT_READY;
-    goto finish;
-  }
+  s=GuExecutePreparedSequence(t,image,GU_S3_OPTIONAL,&stage);
+  if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 
 finish:
   if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;

@@ -570,9 +570,27 @@ EFI_STATUS GuVerifySelectedSequence(EFI_SYSTEM_TABLE *table) {
   return EFI_SUCCESS;
 }
 
+/* Report whether the checked completed binding has a successor. Invalid
+ * state is not the same as successful exhaustion of the sequence. */
+EFI_STATUS GuSelectedSequenceHasNext(EFI_SYSTEM_TABLE *table,int *more) {
+  if(!more)return EFI_INVALID_PARAMETER;
+  *more=0;
+  size_t step,target;
+  if(!table||!table->BootServices||Gu.bs!=table->BootServices||
+     !ResolveSelectedBinding(&step,&target)||
+     ActiveSequence.targets[target].phase!=GU_GPU_EXEC_COMPLETE||
+     step+1!=ActiveSequence.next_step||
+     ActiveSequence.next_step>ActiveSequence.selected_count) {
+    GuAbortSelectedGpuStep();
+    return EFI_NOT_READY;
+  }
+  *more=ActiveSequence.next_step<ActiveSequence.selected_count;
+  return EFI_SUCCESS;
+}
+
 /* Select the next checked context after the previous step completed.
  * This is an intermediate CPU binding, not an unlock or handover grant.
- * The current boot entrypoints still admit only one requested active GPU. */
+ * Production discovery and build admission still permit only one target. */
 EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
   size_t step,target;
   if(!table||!table->BootServices||Gu.bs!=table->BootServices||!Gu.image||

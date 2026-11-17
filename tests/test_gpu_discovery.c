@@ -441,6 +441,9 @@ int main(void) {
     gpu[1].dwords[4]^=0x1000U;
     CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
     CHECK(ActiveSequence.next_step==1 && GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+    int more=0;
+    CHECK(GuSelectedSequenceHasNext(&system_table,&more)==EFI_SUCCESS && more==1);
+    CHECK(GuSelectedSequenceHasNext(&system_table,NULL)==EFI_INVALID_PARAMETER);
     GU_PLATFORM *first=GuPlatformActive;
     if(scenario>=1&&scenario<=3) {
       EFI_STATUS expected=EFI_NOT_READY;
@@ -475,6 +478,8 @@ int main(void) {
     gpu[0].dwords[4]^=0x2000U;
     CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&other_owner_token,Gu.asset_entries)==EFI_SUCCESS);
     CHECK(ActiveSequence.next_step==2 && GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+    more=1;
+    CHECK(GuSelectedSequenceHasNext(&system_table,&more)==EFI_SUCCESS && more==0);
     CHECK(ActiveSequence.targets[ActiveSequence.order[0]].owners.platform==first);
     CHECK(ActiveSequence.targets[ActiveSequence.order[1]].owners.platform==second);
     CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);

@@ -35,6 +35,10 @@ class AssetContract(unittest.TestCase):
         self.assertIn("GuAd104FwsecMatches(&fw)",x)
         self.assertIn("SIGNATURE_AUTHENTICATED=0",x)
     def test_diagnostics_run_before_preparation(self):
+        shared=(R/"unlock_execution.c").read_text(encoding="utf-8")
+        prep=shared.split("EFI_STATUS GuPrepareBoundGpu(",1)[1].split("EFI_STATUS GuExecutePreparedSequence(",1)[0]
+        self.assertLess(prep.index("GuBootLoadAssets()"),prep.index("GuDiagnosticScan()"))
+        self.assertLess(prep.index("GuDiagnosticScan()"),prep.index("GuAd104Prepare()"))
         for src in (A,D):
-            self.assertLess(src.index("GuDiagnosticScan()"),src.index("GuAd104Prepare()"))
+            self.assertLess(src.index("GuPrepareBoundGpu("),src.index("GuExecutePreparedSequence("))
 if __name__=="__main__":unittest.main()

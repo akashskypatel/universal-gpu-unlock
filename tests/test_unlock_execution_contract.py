@@ -69,7 +69,10 @@ class SharedExecutionContract(unittest.TestCase):
         for src,name in [(APP,"UefiMain"),(DXE,"GuDxeRun")]:
             with self.subTest(name=name):
                 code=body(src,name)
-                self.assertEqual(code.count("GuExecuteUnlock("),1)
+                self.assertEqual(code.count("GuExecutePreparedSequence("),1)
+                self.assertLess(code.index("GuPrepareBoundGpu("),code.index("GuExecutePreparedSequence("))
+                self.assertNotIn("GuExecuteUnlock(",code)
+                self.assertNotIn("GuRegisterS3(",code)
                 for old in ("GuMsiRelease(","gpu_unlock_610_unlock(","GuMsiFinish("):
                     self.assertNotIn(old,code)
     def test_actual_s3_source_rejects_unverified_or_partial_script(self):
@@ -200,69 +203,155 @@ int main(int argc,char **argv) {
                         self.assertEqual(result.returncode, 0,
                                          result.stdout + result.stderr)
 
-    def test_explicit_p_s3_result_blocks_windows_on_failure(self):
-        """Run the actual application P/S3 branch with independent outcomes."""
-        main=body(APP,"UefiMain")
-        start=main.index("  if(enable_s3) {")
-        end=main.index('  stage="final-Windows-verification";', start)
-        actual=main[start:end]
-        harness=r"""
-#include <stddef.h>
+    def test_prepared_sequence_preserves_s3_policy_and_stops_on_failure(self):
+        """Compile the real preparation and coordinator with simulated services."""
+        actual = "EFI_STATUS GuPrepareBoundGpu(const char **stage) {\n" + body(SHARED,"GuPrepareBoundGpu") + "\n}\n"
+        actual += "EFI_STATUS GuExecutePreparedSequence(EFI_SYSTEM_TABLE *table, EFI_HANDLE image, GU_S3_POLICY policy,const char **stage) {\n" + body(SHARED,"GuExecutePreparedSequence") + "\n}\n"
+        mock = r"""
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
-typedef int EFI_STATUS;
-typedef struct {int unused;} EFI_SYSTEM_TABLE;
+#include <string.h>
+#define GU_ACTIVE_SINGLE_TARGET 1
+#define VOID void
 #define EFI_SUCCESS 0
 #define EFI_NOT_FOUND 2
 #define EFI_DEVICE_ERROR 3
-static struct {int retained;} Gu;
-static int register_calls,scenario;
-static EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table) {
-  (void)table;register_calls++;
-  return scenario==2||scenario==4?EFI_NOT_FOUND:EFI_SUCCESS;
-}
+#define EFI_NOT_READY 4
+#define EFI_INVALID_PARAMETER 5
+typedef int EFI_STATUS;
+typedef void *EFI_HANDLE;
+typedef struct {void *BootServices;} EFI_SYSTEM_TABLE;
+typedef enum {GU_S3_DISABLED,GU_S3_REQUIRED,GU_S3_OPTIONAL} GU_S3_POLICY;
+typedef struct {
+  void *handle,*pci;
+  unsigned fault,retained,assets,diagnostic,profile,completed,script;
+} PLATFORM;
+static PLATFORM gpus[4],*active;
+#define Gu (*active)
+static int current,count,scenario,failed_at,aborted,violations,final_calls,select_calls;
+static int executions,loads,diagnostics,profiles,script_calls;
 static void GuLog(const char *fmt,...) {(void)fmt;}
-static EFI_STATUS Attempt(int selected_p) {
-  EFI_SYSTEM_TABLE table={0},*t=&table;
-  const char *stage="";
-  int enable_s3=selected_p, s=EFI_SUCCESS;
-""" + actual + r"""
-  (void)stage;
-  return EFI_SUCCESS; /* App's next successful handover stage. */
-failed:
-  (void)stage;
-  return s;
+static void GuAbortSelectedGpuStep(void){aborted=1;}
+static EFI_STATUS GuBootLoadAssets(void){
+  loads++;
+  if(aborted||Gu.assets||Gu.completed||!Gu.pci)violations++;
+  if(current==failed_at&&scenario==1)return EFI_NOT_FOUND;
+  Gu.assets=1;
+  if(current==failed_at&&scenario==2)Gu.fault=1;
+  return EFI_SUCCESS;
 }
-#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d scenario %d: %s\\n",__LINE__,scenario,#x);return 1;}} while(0)
-int main(int argc,char **argv) {
-  scenario=argc>1?atoi(argv[1]):-1;
-  if(scenario<0||scenario>4)return 2;
-  Gu.retained=(scenario==3||scenario==4);
-  EFI_STATUS s=Attempt(scenario!=0);
-  CHECK(register_calls==(scenario!=0));
-  if(scenario==0||scenario==1)CHECK(s==EFI_SUCCESS);
-  else if(scenario==2||scenario==4)CHECK(s==EFI_NOT_FOUND);
-  else CHECK(s==EFI_DEVICE_ERROR);
+static EFI_STATUS GuDiagnosticScan(void){
+  diagnostics++;
+  if(!Gu.assets||Gu.diagnostic||Gu.completed)violations++;
+  Gu.diagnostic=1;
+  if(current==failed_at&&scenario==3)Gu.fault=1;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS GuAd104Prepare(void){
+  profiles++;
+  if(!Gu.diagnostic||Gu.profile||Gu.completed)violations++;
+  if(current==failed_at&&scenario==4)return EFI_NOT_READY;
+  Gu.profile=1;
+  if(current==failed_at&&scenario==5)Gu.fault=1;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,const char **stage){
+  (void)table;(void)image;*stage="transaction";executions++;
+  if(aborted||!Gu.profile||Gu.completed||Gu.fault||Gu.retained)violations++;
+  if(current==failed_at&&scenario==6)return EFI_DEVICE_ERROR;
+  Gu.completed=1;
+  if(current==failed_at&&scenario==7)Gu.fault=1;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table){
+  (void)table;script_calls++;
+  if(!Gu.completed||Gu.script)violations++;
+  if(current==failed_at&&scenario==8)return EFI_NOT_FOUND;
+  if(current==failed_at&&scenario==9){Gu.retained=1;return EFI_DEVICE_ERROR;}
+  if(current==failed_at&&scenario==10){Gu.retained=1;return EFI_SUCCESS;}
+  if(current==failed_at&&scenario==11){Gu.fault=1;return EFI_SUCCESS;}
+  Gu.script=1;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS GuSelectedSequenceHasNext(EFI_SYSTEM_TABLE *table,int *more){
+  (void)table;
+  if(!Gu.completed||Gu.fault||Gu.retained)violations++;
+  if(current==failed_at&&scenario==12)return EFI_NOT_READY;
+  *more=current+1<count;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table){
+  (void)table;select_calls++;
+  if(!Gu.completed||current+1>=count||Gu.retained||Gu.fault)violations++;
+  if(current==failed_at&&scenario==13)return EFI_NOT_READY;
+  active=&gpus[++current];
+  if(Gu.assets||Gu.completed||Gu.profile||Gu.script)violations++;
+  return EFI_SUCCESS;
+}
+static int GuExecutionReadyForWindows(EFI_SYSTEM_TABLE *table){
+  (void)table;final_calls++;
+  if(current!=count-1||aborted)violations++;
+  for(int i=0;i<count;i++)if(!gpus[i].completed||gpus[i].fault||gpus[i].retained)violations++;
+  return scenario!=14;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d count=%d scenario=%d policy=%d: %s\n",__LINE__,count,scenario,policy,#x);return 1;}} while(0)
+int main(void){
+  EFI_SYSTEM_TABLE table={&table};
+  for(count=1;count<=4;count++)for(int policy=0;policy<=2;policy++)for(scenario=0;scenario<=14;scenario++){
+    memset(gpus,0,sizeof(gpus));
+    current=0;active=&gpus[0];aborted=violations=final_calls=select_calls=0;
+    executions=loads=diagnostics=profiles=script_calls=0;
+    /* For a multi-card sequence exercise failures after the first card completed.
+     * Selection failure occurs on the first card, before binding its successor. */
+    failed_at=count>1&&scenario!=13?1:0;
+    for(int i=0;i<count;i++){gpus[i].handle=&gpus[i];gpus[i].pci=&gpus[i].pci;}
+    const char *stage="";
+    EFI_STATUS init=GuPrepareBoundGpu(&stage);
+    if(count==1&&scenario>=1&&scenario<=5){
+      CHECK(init!=EFI_SUCCESS && executions==0 && final_calls==0);
+      continue;
+    }
+    CHECK(init==EFI_SUCCESS);
+    EFI_STATUS status=GuExecutePreparedSequence(&table,&table,(GU_S3_POLICY)policy,&stage);
+    int success=scenario==0||(policy==GU_S3_DISABLED&&scenario>=8&&scenario<=11)||
+       (policy==GU_S3_OPTIONAL&&scenario==8)||(count==1&&scenario==13);
+    CHECK((status==EFI_SUCCESS)==success);
+    CHECK(!violations);
+    CHECK(aborted==!success);
+    if(success){
+      CHECK(loads==count&&diagnostics==count&&profiles==count&&executions==count);
+      CHECK(select_calls==count-1&&final_calls==1);
+      CHECK(script_calls==(policy==GU_S3_DISABLED?0:count));
+      for(int i=0;i<count;i++){
+        CHECK(gpus[i].completed);
+        CHECK(gpus[i].script==(policy!=GU_S3_DISABLED&&!(scenario==8&&i==failed_at)));
+      }
+    }else{
+      CHECK(final_calls==(scenario==14?1:0));
+      CHECK(current==failed_at || scenario==14);
+      if(scenario!=14){
+        for(int i=current+1;i<count;i++)CHECK(!gpus[i].assets&&!gpus[i].completed);
+        if(current>0)CHECK(gpus[0].completed&&gpus[0].profile);
+      }
+      if(scenario>=1&&scenario<=5)CHECK(executions==failed_at);
+      if(scenario>=8&&scenario<=11)CHECK(executions==failed_at+1);
+    }
+  }
   return 0;
 }
 """
         with tempfile.TemporaryDirectory() as directory:
-            src=Path(directory)/"app_s3_decision.c"
-            src.write_text(harness,encoding="utf-8")
+            src=Path(directory)/"sequence.c"
+            src.write_text(mock,encoding="utf-8")
             for compiler in ("gcc","clang"):
-                binary=Path(directory)/("app_s3_"+compiler)
+                binary=Path(directory)/compiler
                 compiled=subprocess.run(
-                    [compiler,"-std=c11","-O2","-Wall","-Wextra",
-                     "-Werror","-pedantic",str(src),"-o",str(binary)],
+                    [compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(src),"-o",str(binary)],
                     capture_output=True,text=True)
                 self.assertEqual(compiled.returncode,0,compiled.stderr)
-                for scenario in range(5):
-                    with self.subTest(compiler=compiler,scenario=scenario):
-                        result=subprocess.run([str(binary),str(scenario)],
-                                              capture_output=True,text=True)
-                        self.assertEqual(result.returncode,0,
-                                         result.stdout+result.stderr)
+                result=subprocess.run([str(binary)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_failure_decision_retains_prior_transaction(self):
         actual = "int GuExecutionNeedsContainment(void) {\n" + body(SHARED,"GuExecutionNeedsContainment") + "\n}"
@@ -314,9 +403,13 @@ int main(void){
                 self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
 
     def test_s3_is_optional_and_after_handover(self):
-        for src,name in [(APP,"UefiMain"),(DXE,"GuDxeRun")]:
-            code=body(src,name)
-            self.assertLess(code.index("GuExecuteUnlock("),code.index("GuRegisterS3("))
+        loop=body(SHARED,"GuExecutePreparedSequence")
+        self.assertLess(loop.index("GuExecuteUnlock("),loop.index("GuRegisterS3("))
+        self.assertLess(loop.index("GuRegisterS3("),loop.index("GuSelectNextGpu("))
+        self.assertLess(loop.index("GuSelectNextGpu("),loop.index("GuPrepareBoundGpu("))
+        self.assertLess(loop.index("GuPrepareBoundGpu("),loop.index("GuExecutionReadyForWindows("))
+        self.assertIn("enable_s3?GU_S3_REQUIRED:GU_S3_DISABLED",APP)
+        self.assertIn("GuExecutePreparedSequence(t,image,GU_S3_OPTIONAL",DXE)
         s3=body(SHARED,"GuRegisterS3")
         self.assertIn("GuSafeToReturn()",s3)
         self.assertIn("GuMsiReadyForWindows()",s3)
@@ -324,17 +417,13 @@ int main(void){
         self.assertIn("Gu.retained=TRUE",s3)
         self.assertLess(s3.index("Gu.s3_script_attempted=TRUE"),s3.index("s3->Write("))
         self.assertLess(s3.index("if(a!=EFI_SUCCESS)"),s3.index("EFI_STATUS b=s3->Write("))
-        self.assertIn("if(s3!=EFI_SUCCESS || Gu.retained)",APP)
-        self.assertIn("if(Gu.retained)",DXE)
-        for source in (APP,DXE):
-            self.assertIn("s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3",source)
-        dxe=body(DXE,"GuDxeRun")
-        after_s3=dxe[dxe.index("GuRegisterS3("):]
-        self.assertIn("!GuExecutionReadyForWindows(t)",after_s3)
-        self.assertIn("!GuExecutionReadyForWindows(t)",body(APP,"UefiMain"))
+        self.assertIn("Gu.retained||Gu.fault||(policy==GU_S3_REQUIRED&&s3!=EFI_SUCCESS)",loop)
+        self.assertIn("s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3",loop)
+        self.assertIn("!GuExecutionReadyForWindows(table)",loop)
+        self.assertIn("s=EFI_NOT_READY;",loop)
+        self.assertIn("GuAbortSelectedGpuStep()",loop)
         final=body(SHARED,"GuExecutionReadyForWindows")
         self.assertIn("GuMsiReadyForWindows()&&GuSafeToReturn()&&!Gu.fault",final)
         self.assertIn("GuVerifySelectedSequence(table)==EFI_SUCCESS",final)
-        self.assertIn("s=EFI_NOT_READY;",after_s3)
 
 if __name__=="__main__":unittest.main()
