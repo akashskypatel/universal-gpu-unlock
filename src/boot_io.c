@@ -32,38 +32,7 @@ static EFI_FILE_PROTOCOL *Root,*Log;
 static CHAR16 ActiveLogPath[]=L"\\AD102-UNLOCK\\RUN0000.TXT";
 
 static BOOLEAN Silent;
-/* One complete asset admission attempt per EFI image. Neither successful
- * buffers nor a partial failure may be replaced by a second target. */
-static BOOLEAN AssetsLoadAttempted;
-static BOOLEAN *SelectedAssetAttempted=&AssetsLoadAttempted;
-#define AssetsLoadAttempted (*SelectedAssetAttempted)
-typedef struct {
-  GU_ASSET entries[GU_ASSET_COUNT];
-  BOOLEAN attempted;
-} GU_OWNED_ASSET_STORE;
-static GU_OWNED_ASSET_STORE *SelectedAssets;
-
-/* Allocate and publish a whole per-selected-card firmware table before
- * any file read. The table is never reloaded, reused or freed on an
- * uncertain GPU return. The legacy single-card table stays unchanged. */
-static EFI_STATUS GuBootReserveSelectedAssets(EFI_BOOT_SERVICES *bs) {
-  if(!bs||!bs->AllocatePool||!bs->FreePool||!Gu.bs||Gu.bs!=bs||
-     Gu.started||Gu.owned||Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(SelectedAssets||AssetsLoadAttempted)return EFI_ALREADY_STARTED;
-  GU_OWNED_ASSET_STORE *owned=NULL;
-  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,sizeof(*owned),(VOID **)&owned);
-  if(s!=EFI_SUCCESS)return s;
-  if(!owned)return EFI_OUT_OF_RESOURCES;
-  memset(owned,0,sizeof(*owned));
-  s=GuAssetSelectEntries(owned->entries);
-  if(s!=EFI_SUCCESS) {
-    (VOID)bs->FreePool(owned);
-    return s;
-  }
-  SelectedAssets=owned;
-  SelectedAssetAttempted=&owned->attempted;
-  return EFI_SUCCESS;
-}
+/* The platform owns the asset table and its one-attempt latch. */
 
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID,FsGuid=EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 
@@ -288,7 +257,7 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
 }
 
 EFI_STATUS GuBootLoadAssets(VOID) {
-  if(!Root||Gu.started||Gu.fault||Gu.retained||AssetsLoadAttempted)
+  if(!Root||Gu.started||Gu.fault||Gu.retained||Gu.asset_load_attempted)
     return EFI_NOT_READY;
   /* Do not overwrite or silently free data published by another owner. */
   for(UINTN i=0;i<GU_ASSET_COUNT;i++)
@@ -298,10 +267,10 @@ EFI_STATUS GuBootLoadAssets(VOID) {
   if(!arch)return EFI_UNSUPPORTED;
 #ifdef GU_ACTIVE_SINGLE_TARGET
   /* Build an independently owned immutable firmware table first. */
-  EFI_STATUS reserved=GuBootReserveSelectedAssets(Gu.bs);
+  EFI_STATUS reserved=GuAssetReserveEntries(Gu.bs);
   if(reserved!=EFI_SUCCESS)return reserved;
 #endif
-  AssetsLoadAttempted=TRUE; /* Latch before the first file operation. */
+  Gu.asset_load_attempted=TRUE; /* Latch before the first file operation. */
   EFI_STATUS status=EFI_SUCCESS;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];

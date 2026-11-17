@@ -120,6 +120,10 @@ typedef struct {
   UINT16 master_last_command;
   UINT32 flrs, mmio_writes, dma_count;
   GU_DMA *allocations;
+  /* These resources belong to this platform, not to the active selector. */
+  struct GU_MSI_OWNED_STATE *release_state;
+  struct GU_ASSET *asset_entries;
+  BOOLEAN asset_load_attempted;
   BOOLEAN (*display_check)(VOID);
 #ifdef GU_ENTRY_LATCHED
   /* Per-physical-GPU selector values, never shared with another adapter. */

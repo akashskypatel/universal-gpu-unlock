@@ -4,6 +4,8 @@ This is an explicit source-order test. It does not emulate EFI firmware.
 """
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 SOURCE = (Path(__file__).resolve().parents[1] / "src/msi_release.c").read_text(encoding="utf-8")
@@ -198,6 +200,93 @@ class HandoverOrderTests(unittest.TestCase):
                               "GuWrite32(", "EfiPciIoAttributeOperationEnable",
                               "SetVariable(", "ResetSystem("):
                 self.assertNotIn(forbidden, text)
+
+    def test_release_context_belongs_to_each_platform(self):
+        # Compile the actual CPU-only reservation code with mocked EFI allocation.
+        left = SOURCE.index("typedef struct GU_MSI_OWNED_STATE {")
+        right = SOURCE.index("static EFI_GUID PciGuid=", left)
+        production = SOURCE[left:right]
+        program = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+typedef void VOID;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 1
+#define EFI_ALREADY_STARTED 2
+#define EFI_OUT_OF_RESOURCES 3
+#define MAX_EDGES 4
+#define EfiLoaderData 7
+typedef struct {void *table; int mutated,claimed,ready;} PLAN;
+typedef struct {size_t count;} GRAPH;
+typedef struct {
+  EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+} EFI_BOOT_SERVICES;
+typedef struct {
+  EFI_BOOT_SERVICES *bs;
+  void *handle;
+  int profile_verified,prom_verified,started,owned,armed,fault,retained;
+  struct GU_MSI_OWNED_STATE *release_state;
+} MOCK_PLATFORM;
+static MOCK_PLATFORM platforms[2],*current=&platforms[0];
+#define Gu (*current)
+static int fail_alloc;
+static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
+  if(kind!=EfiLoaderData || fail_alloc) return EFI_OUT_OF_RESOURCES;
+  *out=calloc(1,size);
+  return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
+""" + production + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  EFI_BOOT_SERVICES bs={Allocate};
+  for(size_t i=0;i<2;i++) {
+    platforms[i].bs=&bs;
+    platforms[i].handle=&platforms[i];
+    platforms[i].profile_verified=platforms[i].prom_verified=1;
+  }
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
+  GU_MSI_OWNED_STATE *first=CurrentMsi;
+  CHECK(first && first!=&LegacyMsi && Gu.release_state==first);
+  Plan.table=&bs;Original.count=11;Current.count=7;OriginalUsb[0]=1;
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED);
+  current=&platforms[1];
+  CHECK(!Gu.release_state);
+  fail_alloc=1;
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_OUT_OF_RESOURCES);
+  CHECK(!Gu.release_state && first->original.count==11);
+  fail_alloc=0;
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
+  GU_MSI_OWNED_STATE *second=CurrentMsi;
+  CHECK(second!=first && second!=&LegacyMsi && Gu.release_state==second);
+  CHECK(!Plan.table && !Original.count && !Current.count && !OriginalUsb[0]);
+  Original.count=2;Current.count=3;
+  current=&platforms[0];
+  CHECK(CurrentMsi==first && Plan.table==&bs && Original.count==11);
+  CHECK(Current.count==7 && OriginalUsb[0]==1);
+  current=&platforms[1];
+  CHECK(CurrentMsi==second && Original.count==2 && Current.count==3);
+  free(first);free(second);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "release_context.c"
+            source.write_text(program, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(directory) / compiler
+                    built = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                        capture_output=True, text=True)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    checked = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
     def test_full_non_target_protocol_ownership_is_preserved(self):
         self.assertIn("GuIsPreparedPeerHandle(h)",function_body("ProtectedHandle"))

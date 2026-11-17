@@ -1,20 +1,22 @@
 #define GU_ASSET_IMPLEMENTATION 1
 #include "compat/compat.h"
 GU_ASSET GuAssets[5];
-static GU_ASSET *ActiveAssets=GuAssets;
-GU_ASSET *GuAssetEntries(VOID) {return ActiveAssets;}
-EFI_STATUS GuAssetSelectEntries(GU_ASSET *entries) {
-  if(!entries)return EFI_INVALID_PARAMETER;
-  if(entries==GuAssets || entries==ActiveAssets)return EFI_ALREADY_STARTED;
-  /* Never silently replace a previously published immutable image. */
-  if(ActiveAssets!=GuAssets)return EFI_ALREADY_STARTED;
-  for(UINTN i=0;i<5;i++)
-    if(ActiveAssets[i].name||ActiveAssets[i].firmware.data||
-       ActiveAssets[i].firmware.size)return EFI_ALREADY_STARTED;
-  for(UINTN i=0;i<5;i++)
-    if(entries[i].name||entries[i].firmware.data||
-       entries[i].firmware.size)return EFI_ACCESS_DENIED;
-  ActiveAssets=entries;
+GU_ASSET *GuAssetEntries(VOID) {
+  return Gu.asset_entries ? Gu.asset_entries : GuAssets;
+}
+EFI_STATUS GuAssetReserveEntries(EFI_BOOT_SERVICES *bs) {
+  if(!bs||!bs->AllocatePool||!bs->FreePool||!Gu.bs||Gu.bs!=bs||
+     Gu.started||Gu.owned||Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
+  if(Gu.asset_entries||Gu.asset_load_attempted)return EFI_ALREADY_STARTED;
+  for(UINTN i=0;i<sizeof(GuAssets)/sizeof(GuAssets[0]);i++)
+    if(GuAssets[i].name||GuAssets[i].firmware.data||
+       GuAssets[i].firmware.size)return EFI_ALREADY_STARTED;
+  GU_ASSET *entries=NULL;
+  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,sizeof(GuAssets),(VOID **)&entries);
+  if(s!=EFI_SUCCESS)return s;
+  if(!entries)return EFI_OUT_OF_RESOURCES;
+  memset(entries,0,sizeof(GuAssets));
+  Gu.asset_entries=entries;
   return EFI_SUCCESS;
 }
 void *devres_open_group(struct device *D,void *Id,int Flags) {
