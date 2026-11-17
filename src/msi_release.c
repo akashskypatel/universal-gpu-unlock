@@ -21,11 +21,13 @@
 #include <Protocol/SimpleTextOut.h>
 #include <IndustryStandard/Acpi10.h>
 
-#define MAX_EDGES 4096
+#define GRAPH_EDGE_LIMIT 16384
+#define GRAPH_INITIAL_CAPACITY 64
 #define MAX_SURVIVOR_GOPS 16
 #define MAX_SURVIVOR_PATH_BYTES 1024
-typedef struct {EFI_HANDLE handle,agent,controller;EFI_GUID protocol;UINT32 attributes,count;} EDGE;
-typedef struct {UINTN count;EDGE edges[MAX_EDGES];} GRAPH;
+/* The limit bounds pool use and the quadratic graph comparisons, not GPU count. */
+typedef struct {EFI_HANDLE handle,agent,controller;EFI_GUID protocol;UINT32 attributes,count;BOOLEAN usb_baseline;} EDGE;
+typedef struct {UINTN count,capacity;EDGE *edges;} GRAPH;
 typedef struct {
   EFI_SYSTEM_TABLE *table;EFI_HANDLE self,pci,gop,out_agent,gfx_agent,nv_agent;
   EFI_HANDLE console,input,error,pointer_agent,key_agent,usb_host,usb_agent,idle[8];
@@ -52,7 +54,6 @@ typedef struct {
 typedef struct GU_MSI_OWNED_STATE {
   PLAN plan;
   GRAPH original,current;
-  BOOLEAN original_usb[MAX_EDGES];
   const VOID *owner;
   EFI_BOOT_SERVICES *owner_bs;
   EFI_PCI_IO_PROTOCOL *owner_pci;
@@ -62,7 +63,6 @@ typedef struct GU_MSI_OWNED_STATE {
 #define Plan (CurrentMsi->plan)
 #define Original (CurrentMsi->original)
 #define Current (CurrentMsi->current)
-#define OriginalUsb (CurrentMsi->original_usb)
 
 /* A release graph belongs to exactly one platform and boot-local PCI identity.
  * A lost or substituted context is an unsafe state, not an unused context. */
@@ -114,6 +114,31 @@ static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *g,VOID **p) {
   *p=NULL;EFI_STATUS s=Plan.table->BootServices->HandleProtocol(h,g,p);
   return s==EFI_SUCCESS&&!*p?EFI_COMPROMISED_DATA:s;
 }
+/* The graph owns CPU-only pool storage. Keep its previous allocation on
+ * growth failure; never publish a replacement before the old pool is released. */
+static EFI_STATUS GraphAppend(EFI_BOOT_SERVICES *b,GRAPH *g,EDGE edge) {
+  if(!b||!b->AllocatePool||!b->FreePool||!g)return EFI_INVALID_PARAMETER;
+  if(g->count>g->capacity||g->capacity>GRAPH_EDGE_LIMIT||
+     !!g->edges!=!!g->capacity)return EFI_COMPROMISED_DATA;
+  if(g->count==GRAPH_EDGE_LIMIT)return EFI_BAD_BUFFER_SIZE;
+  if(g->count==g->capacity) {
+    UINTN capacity=g->capacity?g->capacity*2u:GRAPH_INITIAL_CAPACITY;
+    if(capacity>GRAPH_EDGE_LIMIT)capacity=GRAPH_EDGE_LIMIT;
+    EDGE *grown=NULL;
+    EFI_STATUS s=b->AllocatePool(EfiLoaderData,capacity*sizeof(*grown),(VOID **)&grown);
+    if(s!=EFI_SUCCESS)return s;
+    if(!grown)return EFI_OUT_OF_RESOURCES;
+    if(g->count)memcpy(grown,g->edges,g->count*sizeof(*grown));
+    if(g->edges&&b->FreePool(g->edges)!=EFI_SUCCESS) {
+      /* Refuse the snapshot even if releasing the candidate also fails. */
+      if(b->FreePool(grown)!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
+      return EFI_DEVICE_ERROR;
+    }
+    g->edges=grown;g->capacity=capacity;
+  }
+  g->edges[g->count++]=edge;
+  return EFI_SUCCESS;
+}
 static EFI_STATUS Snapshot(GRAPH *g) {
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_HANDLE *handles=NULL;UINTN count=0;g->count=0;
   EFI_STATUS s=b->LocateHandleBuffer(AllHandles,NULL,NULL,&count,&handles);
@@ -132,14 +157,16 @@ static EFI_STATUS Snapshot(GRAPH *g) {
         if(e->Attributes==1||e->Attributes==2||e->Attributes==4)continue;
         BOOLEAN own=Plan.claimed&&handles[i]==Plan.pci&&e->AgentHandle==Plan.self&&
           !e->ControllerHandle&&e->Attributes==EFI_OPEN_PROTOCOL_EXCLUSIVE&&e->OpenCount==1;
-        if(g->count==MAX_EDGES||!e->AgentHandle||(!e->ControllerHandle&&!own)||!e->OpenCount){s=EFI_COMPROMISED_DATA;break;}
-        g->edges[g->count++]=(EDGE){handles[i],e->AgentHandle,e->ControllerHandle,*protocols[j],e->Attributes,e->OpenCount};
+        if(!e->AgentHandle||(!e->ControllerHandle&&!own)||!e->OpenCount){s=EFI_COMPROMISED_DATA;break;}
+        s=GraphAppend(b,g,(EDGE){handles[i],e->AgentHandle,e->ControllerHandle,*protocols[j],e->Attributes,e->OpenCount,FALSE});
       }
       if(entries&&b->FreePool(entries)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
     }
     if(protocols&&b->FreePool(protocols)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
   }
   if(handles&&b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  /* An incomplete capture must never appear to be a complete graph. */
+  if(s!=EFI_SUCCESS)g->count=0;
   return s;
 }
 static BOOLEAN SameEdge(const EDGE *a,const EDGE *b) {
@@ -241,7 +268,7 @@ static BOOLEAN UsbConsoleChild(const EDGE *e,const GRAPH *g) {
   return splitter&&e->controller==Plan.console&&e->attributes==8&&e->count==1&&PointerOwner(g,e);
 }
 static EFI_STATUS UsbBaseline(VOID) {
-  memset(OriginalUsb,0,sizeof(OriginalUsb));
+  for(UINTN i=0;i<Original.count;i++)Original.edges[i].usb_baseline=FALSE;
   for(UINTN i=0;i<Original.count;i++) {
     const EDGE *e=&Original.edges[i];
     if(!Guid(&e->protocol,&UsbHcGuid)||e->attributes!=0x10||e->controller!=e->handle||
@@ -263,14 +290,14 @@ static EFI_STATUS UsbBaseline(VOID) {
     BOOLEAN device=physical&&((e->attributes==0x10&&e->controller==e->handle)||
       (e->attributes==8&&!ProtectedHandle(e->controller)&&UsbPointerPath(e->controller))||
       UsbConsoleChild(e,&Original));
-    if(child||device){OriginalUsb[i]=TRUE;dynamic++;}
+    if(child||device){Original.edges[i].usb_baseline=TRUE;dynamic++;}
   }
   GuLog("MSI USB baseline: host=%#llx bus_agent=%#llx dynamic_edges=%zu; host ownership pinned\n",
     (unsigned long long)(UINTN)Plan.usb_host,(unsigned long long)(UINTN)Plan.usb_agent,(size_t)dynamic);
   return EFI_SUCCESS;
 }
 static BOOLEAN UsbRemoved(UINTN i) {
-  if(!OriginalUsb[i])return FALSE;
+  if(!Original.edges[i].usb_baseline)return FALSE;
   const EDGE *e=&Original.edges[i];
   for(UINTN j=0;j<Current.count;j++) {
     const EDGE *c=&Current.edges[j];
@@ -737,7 +764,8 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
      !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||Gu.armed)return EFI_INVALID_PARAMETER;
   EFI_BOOT_SERVICES *b=t->BootServices;
   if(!b->DisconnectController||!b->OpenProtocol||!b->CloseProtocol||!b->RaiseTPL||!b->RestoreTPL||
-     !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol)return EFI_UNSUPPORTED;
+     !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol||
+     !b->AllocatePool||!b->FreePool)return EFI_UNSUPPORTED;
   Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
   Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
   if(!Plan.console||!Plan.input||!Plan.error||!Plan.text||!Plan.err||!Plan.keys||

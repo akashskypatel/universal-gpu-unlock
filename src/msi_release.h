@@ -10,6 +10,6 @@ BOOLEAN GuMsiMutated(VOID);
 /* Validated identity of the selected platform's release state, or NULL.
  * An ownership mismatch permanently blocks the affected platform. */
 const VOID *GuMsiPlanOwnerToken(VOID);
-/* Reserve release-plan and graph memory for the current platform.
- * Allocation is CPU-only and does not remove one-shot driver Stop guards. */
+/* Reserve the release context for the current platform. Graph snapshots
+ * allocate their own CPU-only memory without changing driver Stop guards. */
 EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs);

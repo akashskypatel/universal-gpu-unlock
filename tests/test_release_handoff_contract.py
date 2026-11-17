@@ -205,7 +205,12 @@ class HandoverOrderTests(unittest.TestCase):
         # Compile the actual CPU-only reservation code with mocked EFI allocation.
         left = SOURCE.index("typedef struct GU_MSI_OWNED_STATE {")
         right = SOURCE.index("static EFI_GUID PciGuid=", left)
-        production = SOURCE[left:right]
+        graph_start = SOURCE.index("#define GRAPH_EDGE_LIMIT")
+        graph_end = SOURCE.index("\ntypedef struct {\n  EFI_SYSTEM_TABLE", graph_start)
+        append_start = SOURCE.index("static EFI_STATUS GraphAppend(")
+        append_end = SOURCE.index("static EFI_STATUS Snapshot(", append_start)
+        production = (SOURCE[graph_start:graph_end] + "\n" + SOURCE[left:right]
+                      + SOURCE[append_start:append_end])
         # Include the real public state queries, not mock equivalents.
         production += "BOOLEAN GuMsiMutated(VOID) {" + function_body("GuMsiMutated") + "}\n"
         start = SOURCE.index("const VOID *GuMsiPlanOwnerToken(")
@@ -219,6 +224,9 @@ class HandoverOrderTests(unittest.TestCase):
 typedef void VOID;
 typedef int BOOLEAN;
 typedef int EFI_STATUS;
+typedef size_t UINTN;
+typedef uint32_t UINT32;
+typedef struct {uint8_t bytes[16];} EFI_GUID;
 typedef void *EFI_HANDLE;
 typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
 #define TRUE 1
@@ -227,12 +235,15 @@ typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
 #define EFI_NOT_READY 1
 #define EFI_ALREADY_STARTED 2
 #define EFI_OUT_OF_RESOURCES 3
-#define MAX_EDGES 4
+#define EFI_INVALID_PARAMETER 4
+#define EFI_COMPROMISED_DATA 5
+#define EFI_BAD_BUFFER_SIZE 6
+#define EFI_DEVICE_ERROR 7
 #define EfiLoaderData 7
 typedef struct {void *table; int mutated,claimed,ready;} PLAN;
-typedef struct {size_t count;} GRAPH;
 typedef struct {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
 } EFI_BOOT_SERVICES;
 typedef struct {
   EFI_BOOT_SERVICES *bs;
@@ -244,19 +255,24 @@ typedef struct {
 } MOCK_PLATFORM;
 static MOCK_PLATFORM *platforms,*current;
 #define Gu (*current)
-static int fail_alloc;
+static int fail_alloc,fail_free_once;
 static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
   if(kind!=EfiLoaderData || fail_alloc) return EFI_OUT_OF_RESOURCES;
   *out=calloc(1,size);
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
 }
+static EFI_STATUS Free(VOID *p) {
+  if(fail_free_once){fail_free_once=0;return EFI_DEVICE_ERROR;}
+  free(p);return EFI_SUCCESS;
+}
 """ + production + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(void) {
-  EFI_BOOT_SERVICES bs={Allocate};
+  EFI_BOOT_SERVICES bs={Allocate,Free};
   const size_t count=8;
+  const size_t large=4097;
   EFI_PCI_IO_PROTOCOL pci[8]={0};
-  EFI_BOOT_SERVICES other_bs={Allocate};
+  EFI_BOOT_SERVICES other_bs={Allocate,Free};
   platforms=calloc(count,sizeof(*platforms));
   CHECK(platforms);
   current=&platforms[0];
@@ -270,7 +286,26 @@ int main(void) {
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
   GU_MSI_OWNED_STATE *first=CurrentMsi;
   CHECK(first && GuMsiPlanOwnerToken()==first && Gu.release_state==first);
-  Plan.table=&bs;Plan.mutated=1;Original.count=11;Current.count=7;OriginalUsb[0]=1;
+  CHECK(!Original.edges && !Current.edges && !Original.capacity && !Current.capacity);
+  Plan.table=&bs;Plan.mutated=1;
+  EDGE edge={.handle=&pci[0],.usb_baseline=TRUE};
+  CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
+  edge.usb_baseline=FALSE;
+  while(Original.count<Original.capacity)CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
+  EDGE *before=Original.edges;size_t capacity=Original.capacity;
+  fail_alloc=1;
+  CHECK(GraphAppend(&bs,&Original,edge)==EFI_OUT_OF_RESOURCES);
+  CHECK(Original.edges==before && Original.capacity==capacity && Original.count==capacity);
+  CHECK(Original.edges[0].usb_baseline && Original.edges[0].handle==&pci[0]);
+  fail_alloc=0;fail_free_once=1;
+  CHECK(GraphAppend(&bs,&Original,edge)==EFI_DEVICE_ERROR);
+  CHECK(Original.edges==before && Original.capacity==capacity && Original.count==capacity);
+  CHECK(!fail_free_once && Original.edges[0].usb_baseline);
+  while(Original.count<large)CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
+  CHECK(Original.count==large && Original.capacity>=large && Original.edges[0].usb_baseline);
+  CHECK(!Original.edges[large-1].usb_baseline);
+  for(size_t i=0;i<7;i++)CHECK(GraphAppend(&bs,&Current,edge)==EFI_SUCCESS);
+  CHECK(Current.edges!=Original.edges && !Current.edges[0].usb_baseline);
   CHECK(GuMsiMutated());
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED);
   current=&platforms[1];
@@ -278,16 +313,22 @@ int main(void) {
   fail_alloc=1;
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_OUT_OF_RESOURCES);
   CHECK(!Gu.release_state && !GuMsiPlanOwnerToken() && !GuMsiMutated());
-  CHECK(first->original.count==11);
+  CHECK(first->original.count==large);
   fail_alloc=0;
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
   GU_MSI_OWNED_STATE *second=CurrentMsi;
   CHECK(second!=first && GuMsiPlanOwnerToken()==second && Gu.release_state==second);
-  CHECK(!Plan.table && !Original.count && !Current.count && !OriginalUsb[0]);
-  Original.count=2;Current.count=3;
+  CHECK(!Plan.table && !Original.count && !Current.count && !Original.edges && !Current.edges);
+  for(size_t i=0;i<2;i++)CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
+  for(size_t i=0;i<3;i++)CHECK(GraphAppend(&bs,&Current,edge)==EFI_SUCCESS);
+  CHECK(Original.edges!=first->original.edges && Current.edges!=first->current.edges);
   current=&platforms[0];
-  CHECK(CurrentMsi==first && Plan.table==&bs && Original.count==11);
-  CHECK(Current.count==7 && OriginalUsb[0]==1);
+  CHECK(CurrentMsi==first && Plan.table==&bs && Original.count==large);
+  CHECK(Current.count==7 && Original.edges[0].usb_baseline);
+  /* Only the scratch graph may be reused; the original baseline stays intact. */
+  EDGE *scratch=Current.edges;Current.count=0;
+  for(size_t i=0;i<7;i++)CHECK(GraphAppend(&bs,&Current,edge)==EFI_SUCCESS);
+  CHECK(Current.edges==scratch && Original.count==large && Original.edges[0].usb_baseline);
   current=&platforms[1];
   CHECK(CurrentMsi==second && Original.count==2 && Current.count==3);
   for(size_t i=2;i<count;i++) {
@@ -296,10 +337,10 @@ int main(void) {
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
     CHECK(GuMsiPlanOwnerToken()==Gu.release_state && !Plan.table);
     for(size_t j=0;j<i;j++)CHECK(Gu.release_state!=platforms[j].release_state);
-    Original.count=i+10;
+    for(size_t j=0;j<i+10;j++)CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
   }
   current=&platforms[0];
-  CHECK(GuMsiMutated() && Original.count==11 && OriginalUsb[0]);
+  CHECK(GuMsiMutated() && Original.count==large && Original.edges[0].usb_baseline);
   current=&platforms[1];
   CHECK(!GuMsiMutated() && Original.count==2);
   for(size_t i=2;i<count;i++) {
@@ -311,7 +352,7 @@ int main(void) {
   Gu.release_state=first;
   CHECK(!GuMsiPlanOwnerToken() && GuMsiMutated());
   CHECK(Gu.release_owner_invalid && Gu.fault && Gu.retained);
-  CHECK(first->original.count==11 && first->plan.mutated==1);
+  CHECK(first->original.count==large && first->plan.mutated==1);
   Gu.release_state=second;
   CHECK(!GuMsiPlanOwnerToken() && GuMsiMutated());
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY);
@@ -340,7 +381,15 @@ int main(void) {
   CHECK(GuMsiMutated() && !GuMsiPlanOwnerToken() && Gu.retained && Gu.release_state==eighth);
   current=&platforms[0];
   CHECK(GuMsiPlanOwnerToken()==first && GuMsiMutated() && !Gu.fault);
-  for(size_t i=0;i<count;i++) free(platforms[i].release_state);
+  /* Exercise the explicit resource limit without changing the original baseline. */
+  while(Current.count<GRAPH_EDGE_LIMIT)CHECK(GraphAppend(&bs,&Current,edge)==EFI_SUCCESS);
+  CHECK(GraphAppend(&bs,&Current,edge)==EFI_BAD_BUFFER_SIZE);
+  CHECK(Current.count==GRAPH_EDGE_LIMIT && Original.count==large && Original.edges[0].usb_baseline);
+  for(size_t i=0;i<count;i++) {
+    free(platforms[i].release_state->original.edges);
+    free(platforms[i].release_state->current.edges);
+    free(platforms[i].release_state);
+  }
   free(platforms);
   return 0;
 }

@@ -609,8 +609,7 @@ typedef struct {EFI_BOOT_SERVICES *bs;EFI_HANDLE handle,image;
 } GU_PLATFORM;
 static GU_PLATFORM Gu;
 typedef struct {VOID *table;int mutated,claimed,ready;} PLAN;
-typedef struct {int edges[4];} GRAPH;
-#define MAX_EDGES 4
+typedef struct {size_t count,capacity;int *edges;} GRAPH;
 #define EfiLoaderData 1
 #define EFI_SUCCESS 0
 #define EFI_NOT_READY 2
@@ -635,7 +634,8 @@ int main(int argc,char **argv) {
   if(mode==0) {
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
     CHECK(CurrentMsi && Gu.release_state_reserved && ReleaseOwnerMatches());
-    CHECK(&Original!=&Current && !Plan.table && !OriginalUsb[0]);
+    CHECK(&Original!=&Current && !Plan.table && !Original.edges && !Current.edges);
+    CHECK(!Original.count && !Original.capacity && !Current.count && !Current.capacity);
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED && allocations==1);
   } else if(mode==1) {
     Gu.profile_verified=0;
