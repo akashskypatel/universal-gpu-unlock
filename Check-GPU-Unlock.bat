@@ -54,10 +54,11 @@ for ordinal in range(torch.cuda.device_count()):
         torch.cuda.synchronize(device)
         begin = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
-        begin.record()
+        stream = torch.cuda.current_stream(device)
+        begin.record(stream)
         for _ in range(trials):
             c = torch.matmul(a, b)
-        end.record()
+        end.record(stream)
         torch.cuda.synchronize(device)
         avg_ms = begin.elapsed_time(end) / trials
         if avg_ms <= 0:
