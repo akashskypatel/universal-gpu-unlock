@@ -23,7 +23,7 @@
 #if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_INVENTORY_MAX_NVIDIA
 #error Invalid active target count
 #endif
-#if defined(GU_ACTIVE_SINGLE_TARGET) && GU_GPU_SELECTION_COUNT != 1
+#if defined(GU_ACTIVE_SINGLE_TARGET) && GU_GPU_SELECTION_COUNT != 1 && !defined(GU_SYNTHETIC_COMPILE_ONLY)
 #error One-target active execution requires exactly one PCI address
 #endif
 static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
@@ -34,9 +34,8 @@ static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static GU_GPU_PREPARED_SEQUENCE ActiveInventory;
 static int ActiveInventoryValid;
-/* This one-target runtime now publishes its status into the same ordered
- * per-GPU state model used by read-only multi-card preparation. It still
- * cannot bind a second active Gu/MSI/assets context in this EFI image. */
+/* Ordered transaction ownership is independent of admission. Compile-only
+ * images can validate a longer selection; neither EFI entrypoint runs. */
 static GU_GPU_EXEC_SEQUENCE ActiveSequence;
 static GU_GPU_EXEC_TARGET *ActiveSequenceTargets;
 static size_t *ActiveSequenceOrder;
@@ -837,9 +836,12 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       prepared.selected_indices[0] != 0)
     return EFI_UNSUPPORTED;
 #else
-  if(prepared.selected_count!=1 || prepared.inventory.count<1 ||
+  if(!prepared.selected_count || prepared.selected_count>prepared.inventory.count ||
      prepared.selected_indices[0]>=prepared.inventory.count)
     return EFI_UNSUPPORTED;
+#ifndef GU_SYNTHETIC_COMPILE_ONLY
+  if(prepared.selected_count!=1)return EFI_UNSUPPORTED;
+#endif
 #endif
   selected = &prepared.inventory.nvidia[prepared.selected_indices[0]];
   if (!GuIsSupportedPciId(selected->pci_id)) return EFI_UNSUPPORTED;

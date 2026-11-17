@@ -49,9 +49,6 @@ try {
     if ($EnableSingleTargetExecution -and $selection.Count -ne 1) {
         throw "Single-target execution requires exactly one explicit -SelectionBdf"
     }
-    if ($SyntheticCompileProfile -and -not $EnableSingleTargetExecution) {
-        throw 'SyntheticCompileProfile is only valid with EnableSingleTargetExecution'
-    }
 
     $sources = @(
         'app.c',
@@ -88,15 +85,10 @@ try {
     $clFlags = '/nologo /O2 /Oi /GS- /Gs65536 /Zl /c /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild /Icompat /Ivendor /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
 
     if ($selection.Count) {
-        if ($EnableSingleTargetExecution) {
-            # Opt-in source/build validation only. Live hardware activation
-            # still depends on target-specific ownership and recovery evidence.
-            $clFlags += ' /DGU_ACTIVE_SINGLE_TARGET'
-            if ($SyntheticCompileProfile) {
-                # Compile every source path; the EFI entrypoint refuses
-                # before any firmware, console, disk or GPU operation.
-                $clFlags += ' /DGU_HOST_TEST_PROFILE /DGU_SYNTHETIC_COMPILE_ONLY'
-            }
+        if ($SyntheticCompileProfile) {
+            # The selected execution source can compile for any valid order.
+            # Both EFI entrypoints return before any firmware or GPU operation.
+            $clFlags += ' /DGU_ACTIVE_SINGLE_TARGET /DGU_HOST_TEST_PROFILE /DGU_SYNTHETIC_COMPILE_ONLY'
         } else {
             $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY /DGU_HOST_TEST_PROFILE'
         }
@@ -116,7 +108,7 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $binaryName = if ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
+    $binaryName = if ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
     $compileCmds += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
@@ -129,7 +121,7 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $EnableSingleTargetExecution)) SINGLE_TARGET_ACTIVE=$([int][bool]$EnableSingleTargetExecution) MULTI_GPU_MUTATION_ALLOWED=0 SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) NOT_FOR_DEPLOYMENT=$([int][bool]$SyntheticCompileProfile)"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile)) SINGLE_TARGET_ACTIVE=$([int]($SyntheticCompileProfile -and $selection.Count -eq 1)) ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) MULTI_GPU_MUTATION_ALLOWED=0 SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) NOT_FOR_DEPLOYMENT=$([int][bool]$SyntheticCompileProfile)"
 } finally {
     Pop-Location
 }

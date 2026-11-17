@@ -131,6 +131,16 @@ jobs:
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_one_target_active_$compiler"
               "$RUNNER_TEMP/test_one_target_active_$compiler"
             done
+            # Multi-target selected source must compile only with the synthetic guard.
+            printf '#define GU_GPU_SELECTION_COUNT 3U\n#define GU_GPU_SELECTION_LOCATIONS { { 0U,7U,0U,0U }, { 0U,9U,0U,0U }, { 0U,3U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
+            for compiler in gcc clang; do
+              if "$compiler" -std=c11 -DGU_ACTIVE_SINGLE_TARGET -I"$RUNNER_TEMP/active-selected" -Isrc -fsyntax-only tests/test_gpu_discovery.c > "$RUNNER_TEMP/multi-live-refused.log" 2>&1; then
+                echo 'FAIL non-synthetic multi-target source admitted'; exit 1
+              fi
+              grep -F 'One-target active execution requires exactly one PCI address' "$RUNNER_TEMP/multi-live-refused.log"
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -DGU_SYNTHETIC_COMPILE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
+              "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
+            done
             # Also exercise the selected-build guard when the machine has
             # exactly one GPU, not merely a missing second requested target.
             printf '#define GU_GPU_SELECTION_COUNT 1U\n#define GU_GPU_SELECTION_LOCATIONS { { 0U,3U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
@@ -251,6 +261,14 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target DXE compilation failed'}
             if(-not (Test-Path .\src\build_dxe\GPU-ONE-TARGET-COMPILE-ONLY-DXE-0000-09-02-0.efi)){throw 'One-target DXE EFI missing'}
             'ONE_TARGET_COMPILE_EXIT=0 HARDWARE_ACTION=NONE' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Compile a two-target selected sequence, never execute or publish it.
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered app compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-SEQUENCE-COMPILE-ONLY-0000-09-02-0--0001-2A-03-1.EFI)){throw 'Ordered app EFI missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered DXE compilation failed'}
+            if(-not (Test-Path .\src\build_dxe\GPU-SEQUENCE-COMPILE-ONLY-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Ordered DXE EFI missing'}
+            'ORDERED_SEQUENCE_COMPILE_EXIT=0 HARDWARE_ACTION=NONE NOT_FOR_DEPLOYMENT=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # Live-active output must fail before any compiler or USB stage.
             # This negative check must still pass when Visual Studio is present.
             foreach ($builder in @('.\src\Build-Experimental-MSVC.ps1', '.\src\Build-Dxe-Driver.ps1')) {
