@@ -141,6 +141,14 @@ jobs:
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -DGU_SYNTHETIC_COMPILE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
               "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
             done
+            # Exercise the real adapter with 18 requested identities and two protected peers.
+            python3 -c 'from pathlib import Path; import sys; buses=[7,9,3]+list(range(23,38)); Path(sys.argv[1]).write_text("#define GU_GPU_SELECTION_COUNT 18U\n#define GU_GPU_SELECTION_LOCATIONS { "+", ".join("{ 0U,%dU,0U,0U }"%b for b in buses)+" }\n")' "$RUNNER_TEMP/active-selected/gpu-selection.h"
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -DGU_SYNTHETIC_COMPILE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_ordered_18_$compiler"
+              "$RUNNER_TEMP/test_ordered_18_$compiler"
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SEQUENCE_PREPARE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_preparation_18_$compiler"
+              "$RUNNER_TEMP/test_preparation_18_$compiler"
+            done
             # Also exercise the selected-build guard when the machine has
             # exactly one GPU, not merely a missing second requested target.
             printf '#define GU_GPU_SELECTION_COUNT 1U\n#define GU_GPU_SELECTION_LOCATIONS { { 0U,3U,0U,0U } }\n' > "$RUNNER_TEMP/active-selected/gpu-selection.h"
@@ -397,7 +405,87 @@ jobs:
             if(-not (Get-ChildItem .\src\build_diagnostic\GPU-SELECTION-N18-*-DIAGNOSTIC.EFI -ErrorAction SilentlyContinue)){throw '18-target diagnostic EFI missing'}
             'EIGHTEEN_TARGET_EFI_COMPILE=PASS READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             if($more.Count -ne 3 -or $more.Label -notmatch '^N3-[0-9A-F]{12}$') {throw 'N-GPU selection validation failed'}
-            'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=16 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Check the shared parser's existing 128-entry resource bound.
+            $maximum = (1..128 | ForEach-Object { '0000:{0:X2}:00.0' -f $_ }) -join ','
+            $maxSpec = New-GuGpuSelectionSpec -SelectionBdfs $maximum -OutputDirectory $env:RUNNER_TEMP
+            if($maxSpec.Count -ne 128 -or $maxSpec.Locations[127] -ne '0000:80:00.0'){throw '128-target parser boundary failed'}
+            $overRejected = $false
+            try { New-GuGpuSelectionSpec -SelectionBdfs ($maximum+',0000:81:00.0') -OutputDirectory $env:RUNNER_TEMP | Out-Null } catch {
+              $overRejected = $_.Exception.Message -match 'requires 2-128'
+            }
+            if(-not $overRejected){throw '129-target parse must fail'}
+            $largeSpec = New-GuGpuSelectionSpec -SelectionBdfs $large -OutputDirectory $env:RUNNER_TEMP
+            if($largeSpec.Count -ne 18 -or $largeSpec.Label -notmatch '^N18-[0-9A-F]{12} | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'SELECTION_EFI_COMPILE_EXIT=0 ACTIVE_ENTRYPOINTS_COMPILED=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          } catch {
+            "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            throw
+          }
+      - name: Preserve final EFI status
+        if: always()
+        shell: pwsh
+        run: |
+          "final_utc=$((Get-Date).ToUniversalTime().ToString('o'))" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          git status --short 2>&1 | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+          Get-PSDrive -PSProvider FileSystem | Format-Table | Out-String | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gpu-topology-efi-activity-${{ github.run_id }}
+          path: ${{ runner.temp }}/gu-log/efi.log
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gpu-topology-diagnostic-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/GPU-TOPOLOGY-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: msi-b850-fwsec-fuse-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/MSI-B850-FUSE-VERSION-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: passive-windows-handoff-synthetic-build-${{ github.sha }}
+          path: |
+            src/build_diagnostic/GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI
+            src/build_diagnostic/MSI-B850-ROM-VARIABLES-WINDOWS-HANDOFF-DIAGNOSTIC.EFI
+            src/build_diagnostic/MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: msi-b850-rom-variables-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gpu-discovery-selection-unsigned-${{ github.sha }}
+          path: src/build_diagnostic/GPU-SELECTION-*-DIAGNOSTIC.EFI
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: gpu-active-preparation-unsigned-${{ github.sha }}
+          path: |
+            src/build/GPU-ACTIVE-PREP-*.EFI
+            src/build_dxe/GPU-ACTIVE-PREP-DXE-*.efi
+          if-no-files-found: error
+){throw '18-target parser failed'}
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs $large -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw '18-target synthetic application compilation failed'}
+            if(-not (Test-Path (Join-Path '.\src\build' ("GPU-SEQUENCE-COMPILE-ONLY-"+$largeSpec.Label+".EFI")))){throw '18-target synthetic application missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs $large -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw '18-target synthetic firmware driver compilation failed'}
+            if(-not (Test-Path (Join-Path '.\src\build_dxe' ("GPU-SEQUENCE-COMPILE-ONLY-DXE-"+$largeSpec.Label+".efi")))){throw '18-target synthetic firmware driver missing'}
+            'EIGHTEEN_TARGET_SEQUENCE_COMPILE=PASS NOT_FOR_DEPLOYMENT=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=128 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'SELECTION_EFI_COMPILE_EXIT=0 ACTIVE_ENTRYPOINTS_COMPILED=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"

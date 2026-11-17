@@ -213,50 +213,73 @@ static void PrepareMockOwners(void) {
   Gu.asset_entries_reserved=1;
 }
 int main(void) {
-#if defined(GU_SYNTHETIC_COMPILE_ONLY) && GU_GPU_SELECTION_COUNT == 3
+#if defined(GU_SYNTHETIC_COMPILE_ONLY) && GU_GPU_SELECTION_COUNT > 1
   /* Exercise actual discovery admission only in this host/compile profile.
-   * Three selected devices, including a repeated model, and one untouched peer. */
-  ResetActivePair();
-  ExpandInventory(20);
-  gpu[2].bus=9;
-  gpu[3].bus=10;
-  int lease[3]={0};
-  GU_PLATFORM *owners[3]={0};
-  const size_t wanted[3]={1,2,0};
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
-  CHECK(init_calls==1&&ActiveSequence.selected_count==3&&ActiveSequence.count==20);
-  CHECK(ActiveDiscovery.capacity==20&&GuIsPreparedPeerHandle(handles[19]));
-  for(size_t i=0;i<3;i++) {
-    size_t target=wanted[i];
-    CHECK(Gu.handle==handles[target]&&Gu.pci==&gpu[target].protocol);
-    CHECK(ActiveSequence.order[i]==target&&ActiveSequence.next_step==i);
-    CHECK(GuIsPreparedPeerHandle(handles[3]));
-    CHECK(!Gu.profile_verified&&!Gu.prom_verified&&!Gu.release_state&&!Gu.asset_entries_reserved);
-    owners[i]=GuPlatformActive;
-    Gu.profile_verified=Gu.prom_verified=Gu.asset_entries_reserved=1;
-    Gu.release_state=&lease[i];
-    CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&lease[i],Gu.asset_entries)==EFI_SUCCESS);
-    gpu[target].dwords[4]^=(UINT32)(0x1000U*(i+1));
-    CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&lease[i],Gu.asset_entries)==EFI_SUCCESS);
-    int more=0;
-    CHECK(GuSelectedSequenceHasNext(&system_table,&more)==EFI_SUCCESS && more==(i<2));
-    if(more)CHECK(GuSelectNextGpu(&system_table)==EFI_SUCCESS);
+   * The generated selections are [1,2,0,3,...] in a 20-device inventory. */
+  enum { selected_count=GU_GPU_SELECTION_COUNT };
+  for(int fail_late=0;fail_late<2;fail_late++){
+    ResetActivePair();
+    ExpandInventory(20);
+    gpu[2].bus=9;
+    int lease[selected_count]={0};
+    GU_PLATFORM *owners[selected_count]={0};
+    CHECK(selected_count<=18);
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+    CHECK(init_calls==1&&ActiveSequence.selected_count==selected_count&&ActiveSequence.count==20);
+    CHECK(ActiveDiscovery.capacity==20&&GuIsPreparedPeerHandle(handles[19]));
+    size_t completed=0;
+    for(size_t i=0;i<selected_count;i++) {
+      size_t target=i<3?(i+1)%3:i;
+      CHECK(Gu.handle==handles[target]&&Gu.pci==&gpu[target].protocol);
+      CHECK(ActiveSequence.order[i]==target&&ActiveSequence.next_step==i);
+      CHECK(GuIsPreparedPeerHandle(handles[19]));
+      CHECK(!Gu.profile_verified&&!Gu.prom_verified&&!Gu.release_state&&!Gu.asset_entries_reserved);
+      owners[i]=GuPlatformActive;
+      Gu.profile_verified=Gu.prom_verified=Gu.asset_entries_reserved=1;
+      Gu.release_state=&lease[i];
+      CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&lease[i],Gu.asset_entries)==EFI_SUCCESS);
+      gpu[target].dwords[4]^=(UINT32)(0x1000U*(i+1));
+      CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&lease[i],Gu.asset_entries)==EFI_SUCCESS);
+      completed++;
+      int more=0;
+      CHECK(GuSelectedSequenceHasNext(&system_table,&more)==EFI_SUCCESS && more==(i+1<selected_count));
+      if(more){
+        if(fail_late&&i+2==selected_count){
+          fail_state_alloc=state_allocs+1;
+          CHECK(GuSelectNextGpu(&system_table)==EFI_OUT_OF_RESOURCES);
+          CHECK(GuPlatformActive==owners[i]&&ActiveSequence.halted);
+          CHECK(ActiveSequence.next_step==i+1);
+          CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
+          break;
+        }
+        CHECK(GuSelectNextGpu(&system_table)==EFI_SUCCESS);
+      }
+    }
+    CHECK(completed==(size_t)(selected_count-fail_late));
+    CHECK(context_allocs==completed-1 && !context_frees && init_calls==1);
+    for(size_t i=0;i<completed;i++) {
+      size_t target=i<3?(i+1)%3:i;
+      CHECK(ActiveSequence.targets[target].owners.platform==owners[i]);
+      CHECK(owners[i]->release_state==&lease[i]);
+      CHECK(ActiveSequence.targets[target].expected_config[4]==gpu[target].dwords[4]);
+      for(size_t j=0;j<i;j++)CHECK(owners[i]!=owners[j]);
+    }
+    if(fail_late){
+      CHECK(ActiveSequence.targets[ActiveSequence.order[completed]].phase==GU_GPU_EXEC_PENDING);
+      CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY);
+    }else{
+      CHECK(GuVerifySelectedSequence(&system_table)==EFI_SUCCESS);
+      gpu[19].dwords[4]^=0x1000U;
+      CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY && ActiveSequence.halted);
+      CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
+    }
+    GuPlatformActive=owners[0];
+    for(size_t i=1;i<completed;i++)free(owners[i]);
   }
-  CHECK(GuVerifySelectedSequence(&system_table)==EFI_SUCCESS);
-  CHECK(context_allocs==2 && !context_frees && init_calls==1);
-  for(size_t i=0;i<3;i++) {
-    CHECK(ActiveSequence.targets[wanted[i]].owners.platform==owners[i]);
-    CHECK(owners[i]->release_state==&lease[i]);
-    for(size_t j=0;j<i;j++)CHECK(owners[i]!=owners[j]);
-  }
-  gpu[19].dwords[4]^=0x1000U;
-  CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY && ActiveSequence.halted);
-  CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
-  GuPlatformActive=owners[0];free(owners[1]);free(owners[2]);
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
   CHECK(!init_calls&&!ActiveSequenceValid);
-  printf("PASS compile-profile actual ordered discovery: %u checks\n",checks);
+  printf("PASS compile-profile actual ordered discovery: %u checks; selected=%u observed=20\n",checks,(unsigned)selected_count);
   return 0;
 #endif
   EFI_STATUS status;
@@ -591,6 +614,18 @@ int main(void) {
 }
 #elif defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
 int main(void) {
+#if GU_GPU_SELECTION_COUNT == 18
+  ResetPair();ExpandInventory(20);
+  gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;gpu[2].bus=9;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+  CHECK(!init_calls&&prep_markers==1&&prep_refusals==1);
+  CHECK(context_allocs==18&&context_frees==18);
+  CHECK(state_allocs==20&&state_frees==20);
+  CHECK(!PreparedContexts&&!PreparedContextCount);
+  for(size_t i=0;i<count;i++)CHECK(gpu[i].full_reads==2);
+  printf("PASS 18-target read-only preparation: %u checks; GuInit never called\n",checks);
+  return 0;
+#endif
   EFI_STATUS status;
   ResetPair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);

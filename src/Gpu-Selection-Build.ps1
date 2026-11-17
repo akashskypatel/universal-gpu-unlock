@@ -6,7 +6,7 @@ function New-GuGpuSelectionSpec {
         [string]$SelectionBdf,
         [string]$SelectionBdfs,
         [Parameter(Mandatory=$true)][string]$OutputDirectory,
-        [ValidateRange(2,128)][int]$MaximumTargets = 16
+        [ValidateRange(2,128)][int]$MaximumTargets = 128
     )
     if ($SelectionBdf -and $SelectionBdfs) {
         throw '-SelectionBdf and -SelectionBdfs cannot be combined.'
