@@ -188,6 +188,20 @@ int main(void) {
   s.targets[1].owners.firmware_assets=s.targets[1].owners.platform;
   CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_BLOCKED);
   CHECK(s.halted);
+  /* A sequence must not switch from real owner records to ownerless
+   * model transitions, or the reverse, after completing its first step. */
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBegin(&s,1,o,2)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted && s.next_step==1);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBegin(&s,0,o,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,1,o,2,&o[0],&s.targets[0],&o[0].config)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted && s.next_step==1);
   printf("PASS independent ordered GPU execution state: %u checks\n",checks);
   return 0;
 }

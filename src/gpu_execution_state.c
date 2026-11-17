@@ -102,6 +102,10 @@ static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
       return 0;
     if((owner->platform||owner->release_plan||owner->firmware_assets) &&
        !DistinctOwners(owner))return 0;
+    /* Do not accept a mixed owned/unowned sequence. The first started
+     * step determines whether all subsequent steps require ownership. */
+    if(expected!=GU_GPU_EXEC_PENDING && i!=0 &&
+       !!owner->platform!=!!s->targets[s->order[0]].owners.platform)return 0;
     for(size_t j=0;j<i;j++)
       if(SharedOwners(owner,&s->targets[s->order[j]].owners))return 0;
   }
@@ -139,7 +143,8 @@ void GuGpuExecAbort(GU_GPU_EXEC_SEQUENCE *s) {
 int GuGpuExecBegin(GU_GPU_EXEC_SEQUENCE *s,size_t step,
                    const GU_GPU_EXEC_OBSERVATION *all,size_t count) {
   int rc=GuGpuExecCheckNext(s,all,count);
-  if(rc!=GU_GPU_EXEC_OK || !s || step!=s->next_step) {
+  if(rc!=GU_GPU_EXEC_OK || !s || step!=s->next_step ||
+     (step!=0 && s->targets[s->order[0]].owners.platform)) {
     GuGpuExecAbort(s);
     return rc!=GU_GPU_EXEC_OK?rc:GU_GPU_EXEC_BLOCKED;
   }
@@ -154,7 +159,8 @@ int GuGpuExecBeginOwned(GU_GPU_EXEC_SEQUENCE *s,size_t step,
                         const void *platform,const void *release_plan,
                         const void *firmware_assets) {
   int rc=GuGpuExecCheckNext(s,all,count);
-  if(rc!=GU_GPU_EXEC_OK || step!=s->next_step) {
+  if(rc!=GU_GPU_EXEC_OK || step!=s->next_step ||
+     (step!=0 && !s->targets[s->order[0]].owners.platform)) {
     GuGpuExecAbort(s);
     return rc!=GU_GPU_EXEC_OK?rc:GU_GPU_EXEC_BLOCKED;
   }
