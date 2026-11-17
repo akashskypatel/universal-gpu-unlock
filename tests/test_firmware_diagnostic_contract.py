@@ -1,6 +1,8 @@
 """Firmware diagnostic and menu contract checks."""
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 P=Path(__file__).resolve().parents[1]/"src"
 C=(P/"vendor/vbios_610.c").read_text(encoding="utf-8")
@@ -147,6 +149,96 @@ class DiagnosticContract(unittest.TestCase):
         self.assertIn("/DGU_MSI_B850_SEC2_UCODE1",build)
         self.assertIn("MSI-B850-SEC2-UCODE1-DIAGNOSTIC.EFI",build)
         self.assertIn("MSI-B850-SEC2-UCODE1-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",build)
+
+    def test_passive_selection_uses_runtime_inventory(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        reader=source.split("static int SelectionRead(",1)[1].split("\n#endif",1)[0]
+        reader="static int SelectionRead("+reader
+        select=source.split("static int ReportPassiveSelections(",1)[1].split("\n#endif",1)[0]
+        select="static int ReportPassiveSelections("+select
+        program = r"""
+#include "gpu_topology.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+typedef void VOID;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+#define EfiLoaderData 1
+typedef struct {
+  EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+#define GU_GPU_SELECTION_COUNT 18U
+static GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT];
+static GU_TOPO_CAPTURE Snapshot;
+static GU_TOPO_REPORT Report;
+static GU_TOPO_GPU_REPORT gpu_reports[GU_GPU_SELECTION_COUNT];
+static int fail_alloc,fail_free,allocs,frees,steps;
+static EFI_STATUS Allocate(int type,size_t bytes,VOID **out) {
+  if(type!=EfiLoaderData || fail_alloc)return 1;
+  *out=calloc(1,bytes);
+  if(!*out)return 1;
+  allocs++;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Free(VOID *p) {free(p);frees++;return fail_free?1:EFI_SUCCESS;}
+static void Say(const char *fmt,...) {
+  if(strstr(fmt,"=BEGIN BDF="))steps++;
+}
+""" + reader + select + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void) {
+  EFI_BOOT_SERVICES bs={Allocate,Free};
+  Snapshot.pci_count=19;Report.gpu_count=18;Report.gpus=gpu_reports;
+  for(size_t i=0;i<Snapshot.pci_count;i++) {
+    GU_GPU_RECORD *r=&Snapshot.pci[i].identity;
+    r->handle=&Snapshot.pci[i];r->pci=&Snapshot.pci[i].path;
+    r->pci_id=i?0x268410deU:0x164e1002U;
+    r->class_code=0x0300;r->bus=(uint32_t)i;
+    if(i)gpu_reports[i-1].gpu_index=i;
+  }
+  for(size_t i=0;i<18;i++)SelectedLocations[i].bus=(uint32_t)(18-i);
+  CHECK(ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(steps==18 && allocs==1 && frees==1);
+  steps=0;fail_alloc=1;
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==1 && frees==1);
+  fail_alloc=0;fail_free=1;
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==2 && frees==2);
+  fail_free=0;
+  SelectedLocations[17]=SelectedLocations[0];
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==3 && frees==3);
+  SelectedLocations[17].bus=99;
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==4 && frees==4);
+  SelectedLocations[17].bus=1;
+  gpu_reports[0].gpu_index=2;
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==5 && frees==5);
+  gpu_reports[0].gpu_index=1;Report.gpus=NULL;
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==5 && frees==5);
+  Report.gpus=gpu_reports;
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_INVALID));
+  CHECK(!steps && allocs==5 && frees==5);
+  CHECK(!ReportPassiveSelections(&bs,0,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==5 && frees==5);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"selection.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic","-I",str(P),str(c),str(P/"gpu_inventory.c"),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)

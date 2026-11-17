@@ -5,7 +5,8 @@ function New-GuGpuSelectionSpec {
     param(
         [string]$SelectionBdf,
         [string]$SelectionBdfs,
-        [Parameter(Mandatory=$true)][string]$OutputDirectory
+        [Parameter(Mandatory=$true)][string]$OutputDirectory,
+        [ValidateRange(2,128)][int]$MaximumTargets = 16
     )
     if ($SelectionBdf -and $SelectionBdfs) {
         throw '-SelectionBdf and -SelectionBdfs cannot be combined.'
@@ -14,8 +15,8 @@ function New-GuGpuSelectionSpec {
     if ($SelectionBdf) { $requested = @($SelectionBdf) }
     elseif ($SelectionBdfs) {
         $requested = @($SelectionBdfs.Split(','))
-        if ($requested.Count -lt 2 -or $requested.Count -gt 16) {
-            throw '-SelectionBdfs requires 2-16 comma-separated PCI locations.'
+        if ($requested.Count -lt 2 -or $requested.Count -gt $MaximumTargets) {
+            throw "-SelectionBdfs requires 2-$MaximumTargets comma-separated PCI locations."
         }
     }
     $canonical = @()

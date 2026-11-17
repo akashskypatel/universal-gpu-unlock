@@ -26,7 +26,7 @@ try {
     $output = Join-Path $PSScriptRoot 'build_diagnostic'
     New-Item -ItemType Directory -Force -Path $output | Out-Null
     . (Join-Path $PSScriptRoot 'Gpu-Selection-Build.ps1')
-    $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $output
+    $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $output -MaximumTargets 128
     if ($MsiB850RomVariables -and -not $SaveLog) { throw '-MsiB850RomVariables requires -SaveLog.' }
     if ($MsiB850FuseVersion -and -not $SaveLog) { throw '-MsiB850FuseVersion requires -SaveLog.' }
     if ($MsiB850Sec2Ucode1 -and -not $SaveLog) { throw '-MsiB850Sec2Ucode1 requires -SaveLog.' }

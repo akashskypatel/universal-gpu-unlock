@@ -24,7 +24,7 @@
 #error Selection-only diagnostic cannot automatically hand off to Windows
 #endif
 #include "gpu-selection.h" /* Generated from operator-supplied PCI locations. */
-#if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_INVENTORY_MAX_NVIDIA
+#if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_TOPO_MAX_PCI
 #error Invalid number of selected PCI locations
 #endif
 static const GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT] =
@@ -753,10 +753,11 @@ static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
 /* Resolve all requested devices before emitting ordered per-device results.
  * These are sequential CPU-side reports against ONE immutable passive snapshot,
  * never sequential firmware transactions or new GPU hardware reads. */
-static int ReportPassiveSelections(int pci_ok, int topology_result) {
-  GU_GPU_INVENTORY inventory;
+static int ReportPassiveSelections(EFI_BOOT_SERVICES *bs, int pci_ok,
+                                   int topology_result) {
+  GU_GPU_RECORD *inventory=NULL;
   size_t indices[GU_GPU_SELECTION_COUNT], nodes[GU_GPU_SELECTION_COUNT];
-  size_t i;
+  size_t i, inventory_count=0;
   int status=GU_INVENTORY_INVALID;
   Say("SELECTION_SEQUENCE=BEGIN REQUESTED=%u READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
       (unsigned)GU_GPU_SELECTION_COUNT);
@@ -766,16 +767,22 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
         i,(unsigned)p->segment,(unsigned)p->bus,
         (unsigned)p->device,(unsigned)p->function);
   }
-  if(pci_ok) {
-    status=GuCollectGpuInventory(Snapshot.pci_count,SelectionRead,
-                                 &Snapshot,&inventory);
-    if(status==GU_INVENTORY_OK)
-      status=GuFindGpuSequence(&inventory,SelectedLocations,
-                               GU_GPU_SELECTION_COUNT,indices);
-    if(status==GU_INVENTORY_OK && Report.gpu_count!=inventory.count)
+  if(pci_ok && topology_result!=GU_TOPO_INVALID && Report.gpus &&
+     Snapshot.pci_count && Snapshot.pci_count<=GU_TOPO_MAX_PCI &&
+     bs && bs->AllocatePool && bs->FreePool) {
+    EFI_STATUS allocated=bs->AllocatePool(EfiLoaderData,
+        Snapshot.pci_count*sizeof(*inventory),(VOID **)&inventory);
+    if(allocated==EFI_SUCCESS && inventory) {
+      status=GuCollectGpuRecords(Snapshot.pci_count,SelectionRead,&Snapshot,
+                                 inventory,Snapshot.pci_count,&inventory_count);
+      if(status==GU_INVENTORY_OK)
+        status=GuFindGpuRecordSequence(inventory,inventory_count,SelectedLocations,
+                                       GU_GPU_SELECTION_COUNT,indices);
+    }
+    if(status==GU_INVENTORY_OK && Report.gpu_count!=inventory_count)
       status=GU_INVENTORY_NOT_FOUND;
     if(status==GU_INVENTORY_OK)for(i=0;i<GU_GPU_SELECTION_COUNT;i++) {
-      const GU_GPU_RECORD *a=&inventory.nvidia[indices[i]];
+      const GU_GPU_RECORD *a=&inventory[indices[i]];
       size_t node=Report.gpus[indices[i]].gpu_index;
       const GU_GPU_RECORD *b;
       if(node>=Snapshot.pci_count) {status=GU_INVENTORY_NOT_FOUND;break;}
@@ -789,6 +796,8 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
       }
       nodes[i]=node;
     }
+    if(inventory && bs->FreePool(inventory)!=EFI_SUCCESS)
+      status=GU_INVENTORY_INVALID;
   }
   if(status!=GU_INVENTORY_OK) {
     if(GU_GPU_SELECTION_COUNT==1)
@@ -801,8 +810,8 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
     return 0;
   }
   for(i=0;i<GU_GPU_SELECTION_COUNT;i++) {
-    const GU_GPU_RECORD *a=&inventory.nvidia[indices[i]];
     const GU_TOPO_PCI *node=&Snapshot.pci[nodes[i]];
+    const GU_GPU_RECORD *a=&node->identity;
     Say("SELECTION_STEP[%zu]=BEGIN BDF=%04x:%02x:%02x.%u\r\n",
         i,(unsigned)a->segment,(unsigned)a->bus,
         (unsigned)a->device,(unsigned)a->function);
@@ -815,20 +824,20 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
     Say("SELECTION_STEP[%zu]=END STATUS=OBSERVED READ_ONLY=1\r\n",i);
   }
   if(GU_GPU_SELECTION_COUNT==1) {
-    const GU_GPU_RECORD *a=&inventory.nvidia[indices[0]];
+    const GU_GPU_RECORD *a=&Snapshot.pci[nodes[0]].identity;
     Say("PASSIVE_SELECTION=GPU_IDENTIFIED TARGET=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x\r\n",
         (unsigned)a->segment,(unsigned)a->bus,(unsigned)a->device,
         (unsigned)a->function,(unsigned)(a->pci_id&65535U),
         (unsigned)(a->pci_id>>16),(unsigned)(a->subsystem_id&65535U),
         (unsigned)(a->subsystem_id>>16),(unsigned)a->class_code);
-    Say("NON_TARGET_NVIDIA_COUNT=%zu\r\n",inventory.count-1);
+    Say("NON_TARGET_NVIDIA_COUNT=%zu\r\n",inventory_count-1);
     Say("SELECTION_VERDICT=PASSIVE_IDENTIFIED REQUESTED=%04x:%02x:%02x.%u CODE=%d TOPOLOGY_VERDICT=%d READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
         (unsigned)a->segment,(unsigned)a->bus,(unsigned)a->device,
         (unsigned)a->function,GU_INVENTORY_OK,topology_result);
   }
   Say("SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=%u NON_SELECTED_NVIDIA_COUNT=%zu TOPOLOGY_VERDICT=%d CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n",
       (unsigned)GU_GPU_SELECTION_COUNT,
-      inventory.count-GU_GPU_SELECTION_COUNT,topology_result);
+      inventory_count-GU_GPU_SELECTION_COUNT,topology_result);
   return 1;
 }
 #endif
@@ -1983,7 +1992,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     }
   } else Say("NVIDIA_DRIVER_OWNER_INVENTORY=UNAVAILABLE PCI_CAPTURE_FAILED=1\r\n");
 #ifdef GU_TOPO_SELECTION_ENABLED
-  SelectionOk=ReportPassiveSelections(pci_ok,result);
+  SelectionOk=ReportPassiveSelections(bs,pci_ok,result);
 #endif
   if(report_storage) {
     EFI_STATUS released=bs->FreePool(report_storage);

@@ -373,6 +373,11 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC three-target diagnostic build failed: $LASTEXITCODE"}
             if(-not (Get-ChildItem .\src\build_diagnostic\GPU-SELECTION-N3-*-DIAGNOSTIC.EFI -ErrorAction SilentlyContinue)){throw 'Three-target diagnostic EFI missing'}
             'THREE_TARGET_EFI_COMPILE=PASS READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            $large = (1..18 | ForEach-Object { '0000:{0:X2}:00.0' -f $_ }) -join ','
+            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SelectionBdfs $large *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw '18-target diagnostic compilation failed'}
+            if(-not (Get-ChildItem .\src\build_diagnostic\GPU-SELECTION-N18-*-DIAGNOSTIC.EFI -ErrorAction SilentlyContinue)){throw '18-target diagnostic EFI missing'}
+            'EIGHTEEN_TARGET_EFI_COMPILE=PASS READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             if($more.Count -ne 3 -or $more.Label -notmatch '^N3-[0-9A-F]{12}$') {throw 'N-GPU selection validation failed'}
             'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=16 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
