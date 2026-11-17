@@ -513,7 +513,8 @@ int main(void) {
         # Include the real public state queries, not mock equivalents.
         production += "BOOLEAN GuMsiMutated(VOID) {" + function_body("GuMsiMutated") + "}\n"
         start = SOURCE.index("const VOID *GuMsiPlanOwnerToken(")
-        production += SOURCE[start:]
+        production += SOURCE[start:SOURCE.index("#ifdef GU_ACTIVE_SINGLE_TARGET", start)]
+        production += "BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {" + function_body("GuMsiCompletedPlatform") + "}\n"
         program = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -539,7 +540,7 @@ typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
 #define EFI_BAD_BUFFER_SIZE 6
 #define EFI_DEVICE_ERROR 7
 #define EfiLoaderData 7
-typedef struct {void *table; int mutated,claimed,ready;} PLAN;
+typedef struct {void *table,*pci,*self; int mutated,claimed,ready,stage,master_normalized,hardware_verified;} PLAN;
 typedef struct {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
   EFI_STATUS (*FreePool)(VOID *);
@@ -551,7 +552,8 @@ typedef struct {
   int profile_verified,prom_verified,started,owned,armed,fault,retained;
   struct GU_MSI_OWNED_STATE *release_state;
   BOOLEAN release_state_reserved,release_owner_invalid;
-} MOCK_PLATFORM;
+} GU_PLATFORM;
+typedef GU_PLATFORM MOCK_PLATFORM;
 static MOCK_PLATFORM *platforms,*current;
 #define Gu (*current)
 static int fail_alloc,fail_free_once;
@@ -582,6 +584,7 @@ int main(void) {
     platforms[i].profile_verified=platforms[i].prom_verified=1;
   }
   CHECK(!GuMsiPlanOwnerToken() && !GuMsiMutated());
+  CHECK(!GuMsiCompletedPlatform(current,NULL));
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
   GU_MSI_OWNED_STATE *first=CurrentMsi;
   CHECK(first && GuMsiPlanOwnerToken()==first && Gu.release_state==first);
@@ -640,6 +643,32 @@ int main(void) {
   }
   current=&platforms[0];
   CHECK(GuMsiMutated() && Original.count==large && Original.edges[0].usb_baseline);
+  {
+    GU_PLATFORM *saved=current;
+    const VOID *token=saved->release_state;
+    saved->release_state->plan.table=&bs;
+    saved->release_state->plan.pci=saved->handle;
+    saved->release_state->plan.self=saved->image;
+    saved->release_state->plan.ready=1;
+    saved->release_state->plan.stage=3;
+    saved->release_state->plan.master_normalized=1;
+    saved->release_state->plan.hardware_verified=1;
+    current=&platforms[1];
+    CHECK(GuMsiCompletedPlatform(saved,token));
+    CHECK(current==&platforms[1]);
+    saved->release_state->plan.hardware_verified=0;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    saved->release_state->plan.hardware_verified=1;
+    saved->release_state->plan.claimed=1;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    saved->release_state->plan.claimed=0;
+    CHECK(!GuMsiCompletedPlatform(saved,current->release_state));
+    saved->release_state->owner_handle=current->handle;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    saved->release_state->owner_handle=saved->handle;
+    CHECK(GuMsiCompletedPlatform(saved,token));
+    current=saved;
+  }
   current=&platforms[1];
   CHECK(!GuMsiMutated() && Original.count==2);
   for(size_t i=2;i<count;i++) {

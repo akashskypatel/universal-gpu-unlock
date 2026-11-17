@@ -444,7 +444,8 @@ int main(int argc,char **argv) {
         registry = SOURCE[start:end]
         actual = registry + "\n" + "\n".join(
             function(name) for name in ("GuAllocatePlatform", "GuBindAllocatedPlatform",
-            "GuAnyPlatformNeedsContainment", "GuAdvanceAllocatedPlatform", "GuDiscardUnboundPlatform"))
+            "GuVerifyCompletedPlatforms", "GuAnyPlatformNeedsContainment",
+            "GuAdvanceAllocatedPlatform", "GuDiscardUnboundPlatform"))
         host = r"""
 #include <stddef.h>
 #include <stdint.h>
@@ -485,6 +486,10 @@ static GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 static const GU_PLATFORM EmptyPlatform;
 static unsigned ready_calls;
 static int ready=1;
+static const GU_PLATFORM *invalid_proof;
+static int GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token){
+  return platform!=invalid_proof && platform->release_state==token;
+}
 static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
   if(kind!=EfiLoaderData||!out)return EFI_INVALID_PARAMETER;
   *out=calloc(1,bytes);return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
@@ -550,6 +555,9 @@ int main(void) {
     CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_NOT_READY);
     observed[3].config[4]^=1;
     if(step==1) {
+      invalid_proof=saved[1];
+      CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+      invalid_proof=NULL;
       saved[1]->fault=1;
       CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
       saved[1]->fault=0;
@@ -567,9 +575,19 @@ int main(void) {
     CHECK(GuBindAllocatedPlatform(&bs,&pci[3],&owner[3])==EFI_ALREADY_STARTED);
   }
   CHECK(GuGpuExecCheckComplete(&sequence,observed,4)==GU_GPU_EXEC_OK);
+  CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_SUCCESS);
+  invalid_proof=saved[1];
+  CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+  CHECK(GuPlatformActive==saved[2]);
+  invalid_proof=NULL;
+  saved[0]->fault=1;
+  CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+  saved[0]->fault=0;
+  CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_SUCCESS);
   CHECK(GuAnyPlatformNeedsContainment());
   GuPlatformActive=&UnboundPlatform;
   CHECK(GuAnyPlatformNeedsContainment());
+  CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
   GuPlatformActive=saved[2];
   CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[3],&sequence,observed,4)==EFI_NOT_READY);
   CHECK(ready_calls==4);

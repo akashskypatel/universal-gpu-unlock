@@ -1149,3 +1149,21 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
 }
 
 const VOID *GuMsiPlanOwnerToken(VOID) {return ReleaseOwnerMatches()?CurrentMsi:NULL;}
+
+#ifdef GU_ACTIVE_SINGLE_TARGET
+/* Historical proof for a registered, completed context. Do not use its
+ * old live graph after another target has legitimately changed the graph. */
+BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {
+  if(!platform||!token||!platform->release_state_reserved||
+     platform->release_owner_invalid||platform->release_state!=token)
+    return FALSE;
+  const GU_MSI_OWNED_STATE *state=platform->release_state;
+  const PLAN *plan=&state->plan;
+  return state->owner==platform && state->owner_bs==platform->bs &&
+    state->owner_pci==platform->pci && state->owner_handle==platform->handle &&
+    state->owner_image==platform->image &&
+    plan->table && plan->pci==platform->handle && plan->self==platform->image &&
+    plan->ready && plan->mutated && plan->stage==3 &&
+    !plan->claimed && plan->master_normalized && plan->hardware_verified;
+}
+#endif

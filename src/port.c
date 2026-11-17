@@ -141,6 +141,54 @@ EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *P
 }
 
 #ifdef GU_ACTIVE_SINGLE_TARGET
+/* Shared by advance and final handover. Validate the record before reading
+ * its order, and every completed context without changing GuPlatformActive. */
+EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
+                                      const GU_GPU_EXEC_SEQUENCE *sequence,
+                                      const GU_GPU_EXEC_OBSERVATION *observations,
+                                      size_t count) {
+  if(!bs||!sequence||!observations||!sequence->next_step||!sequence->owned_mode)
+    return EFI_NOT_READY;
+  if(GuGpuExecCheckNext(sequence,observations,count)!=GU_GPU_EXEC_OK &&
+     GuGpuExecCheckComplete(sequence,observations,count)!=GU_GPU_EXEC_OK)
+    return EFI_NOT_READY;
+  GU_PLATFORM_ALLOCATION *current=NULL;
+  size_t published=0;
+  for(GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;entry;entry=entry->next) {
+    if(entry->published||entry->retired)published++;
+    if(&entry->platform==GuPlatformActive)current=entry;
+  }
+  if(!current||!current->published||current->retired||
+     published!=sequence->next_step)return EFI_ACCESS_DENIED;
+  /* Never trust an owner token until the registry resolves its address.
+   * All earlier contexts must remain complete, clean and independently
+   * allocated. A fault on a retained peer must block the next selection. */
+  for(size_t i=0;i<sequence->next_step;i++) {
+    const GU_GPU_EXEC_TARGET *record=&sequence->targets[sequence->order[i]];
+    GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;
+    while(entry && &entry->platform!=record->owners.platform)entry=entry->next;
+    if(!entry||!entry->published||entry->bs!=bs||
+       entry->pci!=record->identity.pci||
+       record->phase!=GU_GPU_EXEC_COMPLETE||
+       (i+1==sequence->next_step?(entry!=current||entry->retired):(entry==current||!entry->retired)))
+      return EFI_ACCESS_DENIED;
+    const GU_PLATFORM *platform=&entry->platform;
+    if(platform->bs!=bs||platform->pci!=entry->pci||
+       platform->handle!=record->identity.handle||!platform->image||
+       platform->image!=Gu.image||
+       !platform->profile_verified||!platform->prom_verified||
+       !platform->release_state_reserved||platform->release_owner_invalid||
+       !platform->release_state||platform->release_state!=record->owners.release_plan||
+       !platform->asset_entries_reserved||platform->asset_entries!=record->owners.firmware_assets||
+       platform->fault||platform->retained||platform->owned||
+       platform->allocations||platform->dma_count||platform->master_attributes_pending||
+       !platform->quiesced||platform->flrs!=1||
+       !GuMsiCompletedPlatform(platform,record->owners.release_plan))
+      return EFI_ACCESS_DENIED;
+  }
+  return EFI_SUCCESS;
+}
+
 /* Retirement is permanent evidence of earlier hardware work. A failure
  * on a fresh context must not hide that work or allow stock handover. */
 BOOLEAN GuAnyPlatformNeedsContainment(VOID) {
@@ -177,31 +225,8 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
      candidate->pci!=sequence->targets[next].identity.pci||
      published!=sequence->next_step)
     return EFI_ACCESS_DENIED;
-  /* Never trust an owner token until the registry resolves its address.
-   * All earlier contexts must remain complete, clean and independently
-   * allocated. A fault on a retained peer must block the next selection. */
-  for(size_t i=0;i<sequence->next_step;i++) {
-    const GU_GPU_EXEC_TARGET *record=&sequence->targets[sequence->order[i]];
-    GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;
-    while(entry && &entry->platform!=record->owners.platform)entry=entry->next;
-    if(!entry||!entry->published||entry->bs!=bs||
-       entry->pci!=record->identity.pci||
-       record->phase!=GU_GPU_EXEC_COMPLETE||
-       (i+1==sequence->next_step?(entry!=current):(entry==current||!entry->retired)))
-      return EFI_ACCESS_DENIED;
-    const GU_PLATFORM *platform=&entry->platform;
-    if(platform->bs!=bs||platform->pci!=entry->pci||
-       platform->handle!=record->identity.handle||!platform->image||
-       platform->image!=Gu.image||
-       !platform->profile_verified||!platform->prom_verified||
-       !platform->release_state_reserved||platform->release_owner_invalid||
-       !platform->release_state||platform->release_state!=record->owners.release_plan||
-       !platform->asset_entries_reserved||platform->asset_entries!=record->owners.firmware_assets||
-       platform->fault||platform->retained||platform->owned||
-       platform->allocations||platform->dma_count||platform->master_attributes_pending||
-       !platform->quiesced||platform->flrs!=1)
-      return EFI_ACCESS_DENIED;
-  }
+  if(GuVerifyCompletedPlatforms(bs,sequence,observations,count)!=EFI_SUCCESS)
+    return EFI_ACCESS_DENIED;
   /* This is the serialized boot entry path. The previous GPU's live
    * post-close proof must pass before the active pointer can change. */
   const VOID *release=sequence->targets[sequence->order[sequence->next_step-1]].owners.release_plan;
