@@ -73,12 +73,6 @@ static int SameBdf(const GU_GPU_RECORD *a, const GU_GPU_RECORD *b) {
     a->device == b->device && a->function == b->function;
 }
 
-static int Record(void *opaque,size_t index,GU_GPU_RECORD *out) {
-  const GU_TOPO_CAPTURE *capture=(const GU_TOPO_CAPTURE *)opaque;
-  *out=capture->pci[index].identity;
-  return 0;
-}
-
 /* Only a complete PCI device path prefix identifies an ancestor. A nearest
  * parent must be exactly one PCI node (six bytes) earlier; missing bridges
  * never get silently skipped. */
@@ -203,13 +197,37 @@ static int HasGopForDisplay(const GU_TOPO_CAPTURE *s, int owner) {
   return 0;
 }
 
+/* Structural validation is shared by both topology and console reports.
+ * It does not allocate or depend on the number of NVIDIA devices. */
+static int CaptureValid(const GU_TOPO_CAPTURE *s) {
+  size_t i,j;
+  if(!s || !s->pci_count || s->pci_count>GU_TOPO_MAX_PCI ||
+     s->gop_count>GU_TOPO_MAX_GOPS || s->console_count>GU_TOPO_MAX_CONSOLES ||
+     (s->console_count && !s->console_available))return 0;
+  for(i=0;i<s->pci_count;i++) {
+    const GU_GPU_RECORD *id=&s->pci[i].identity;
+    if(!id->handle || !id->pci || id->segment>65535 || id->bus>255 ||
+       id->device>31 || id->function>7 || !GuTopoPathValid(&s->pci[i].path) ||
+       !EndpointMatches(&s->pci[i]))
+      return 0;
+    for(j=0;j<i;j++)
+      if(SameBdf(id,&s->pci[j].identity) ||
+         id->handle==s->pci[j].identity.handle ||
+         id->pci==s->pci[j].identity.pci)return 0;
+  }
+  for(i=0;i<s->gop_count;i++)
+    if(!GuTopoPathValid(&s->gop[i].path))return 0;
+  for(i=0;i<s->console_count;i++)
+    if(!GuTopoPathValid(&s->console[i]))return 0;
+  return 1;
+}
+
 /* Match a separately read firmware console variable against the captured
  * display endpoints. Unknown or ambiguous ownership remains explicit. */
 int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *paths,
                         size_t count, GU_TOPO_CONSOLE_OWNERS *owners) {
   size_t i;
   GU_TOPO_CONSOLE_OWNERS result = {0};
-  GU_TOPO_REPORT validated;
   if (owners) *owners = result;
   if(!capture || !paths || !owners || !capture->pci_count ||
      capture->pci_count>GU_TOPO_MAX_PCI || count>GU_TOPO_MAX_CONSOLES)
@@ -219,7 +237,7 @@ int GuTopoConsoleOwners(const GU_TOPO_CAPTURE *capture, const GU_TOPO_PATH *path
    * the strict topology verdict. Incomplete/CONFLICT are still observable;
    * structurally INVALID PCI/console/GOP captures cannot claim independent
    * ErrOut ownership. This never establishes safe GPU release. */
-  if (GuTopoAssess(capture, &validated) == GU_TOPO_INVALID) return 0;
+  if (!CaptureValid(capture)) return 0;
   for(i=0;i<count;i++) {
     int owner;
     if(!GuTopoPathValid(&paths[i])) return 0;
@@ -258,53 +276,39 @@ int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
 
 /* Topology is derived from the captured device paths, not a selected board,
  * GPU model, PCI slot ordering or assumption that root ports are distinct. */
-int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
-  GU_GPU_INVENTORY inventory;
-  size_t i,j;
-  int result,bad=0,incomplete=0;
+int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r,
+                 GU_TOPO_GPU_REPORT *storage, size_t capacity) {
+  size_t i,j,count=0;
+  int bad=0,incomplete=0;
   if(!r)return GU_TOPO_INVALID;
   memset(r,0,sizeof(*r));r->status=GU_TOPO_INVALID;
-  for(i=0;i<GU_INVENTORY_MAX_NVIDIA;i++)
-    r->gpu_index[i]=r->parent_index[i]=r->root_index[i]=GU_TOPO_MAX_PCI;
-  if(!s || !s->pci_count || s->pci_count>GU_TOPO_MAX_PCI ||
-     s->gop_count>GU_TOPO_MAX_GOPS || s->console_count>GU_TOPO_MAX_CONSOLES ||
-     (s->console_count && !s->console_available))return r->status;
+  if(!CaptureValid(s) || capacity>GU_TOPO_MAX_PCI ||
+     (capacity && !storage))return r->status;
   for(i=0;i<s->pci_count;i++) {
     const GU_GPU_RECORD *id=&s->pci[i].identity;
-    if(!id->handle || !id->pci || id->segment>65535 || id->bus>255 ||
-       id->device>31 || id->function>7 || !GuTopoPathValid(&s->pci[i].path) ||
-       !EndpointMatches(&s->pci[i]))
-      return r->status;
-    for(j=0;j<i;j++)
-      if(SameBdf(id,&s->pci[j].identity) ||
-         id->handle==s->pci[j].identity.handle ||
-         id->pci==s->pci[j].identity.pci)return r->status;
+    if((id->pci_id&0xffffU)==0x10deU && (id->class_code&0xff00U)==0x0300U)
+      count++;
   }
-  for(i=0;i<s->gop_count;i++)
-    if(!GuTopoPathValid(&s->gop[i].path))return r->status;
-  for(i=0;i<s->console_count;i++)
-    if(!GuTopoPathValid(&s->console[i]))return r->status;
-  result=GuCollectGpuInventory(s->pci_count,Record,(void *)s,&inventory);
-  if(result!=GU_INVENTORY_OK)return r->status;
-  r->gpu_count=inventory.count;
-  if(!r->gpu_count) {
+  if(count>capacity)return r->status;
+  r->gpus=storage;
+  if(capacity)memset(storage,0,capacity*sizeof(*storage));
+  if(!count) {
     r->status=GU_TOPO_INCOMPLETE;
     return r->status;
   }
-  /* Map every NVIDIA record back to the same captured PCI handle. */
-  for(j=0;j<r->gpu_count;j++) {
-    const GU_GPU_RECORD *gpu=&inventory.nvidia[j];
-    for(i=0;i<s->pci_count;i++) {
-      if(s->pci[i].identity.handle!=gpu->handle)continue;
-      if(r->gpu_index[j]!=GU_TOPO_MAX_PCI)return r->status;
-      r->gpu_index[j]=i;
-    }
-    if(r->gpu_index[j]==GU_TOPO_MAX_PCI)return r->status;
+  /* Preserve PCI enumeration order. CaptureValid already excludes duplicate
+   * handles, PCI interfaces and locations across the entire captured set. */
+  for(i=0;i<s->pci_count;i++) {
+    const GU_GPU_RECORD *id=&s->pci[i].identity;
+    GU_TOPO_GPU_REPORT *gpu;
+    if((id->pci_id&0xffffU)!=0x10deU || (id->class_code&0xff00U)!=0x0300U)
+      continue;
+    gpu=&storage[r->gpu_count++];
+    gpu->gpu_index=i;
     {
-      int found=Root(s,r->gpu_index[j],&r->parent_index[j],
-                     &r->root_index[j],&r->depth[j]);
+      int found=Root(s,i,&gpu->parent_index,&gpu->root_index,&gpu->depth);
       if(found<0)bad=1;
-      else if(found>0)r->ancestry_verified[j]=r->root_port_verified[j]=1;
+      else if(found>0)gpu->ancestry_verified=gpu->root_port_verified=1;
       else incomplete=1;
     }
   }
@@ -318,13 +322,13 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
     }
     if((s->pci[owner].identity.pci_id&0xffffU)==0x10deU) {
       for(j=0;j<r->gpu_count;j++)
-        if((size_t)owner==r->gpu_index[j])r->gop_count[j]++;
+        if((size_t)owner==r->gpus[j].gpu_index)r->gpus[j].gop_count++;
     } else r->independent_gop_count++;
   }
   r->gop_relationships_observed=1;
   for(j=0;j<r->gpu_count;j++) {
-    const GU_TOPO_PCI *node=&s->pci[r->gpu_index[j]];
-    if(!r->gop_count[j]) {
+    const GU_TOPO_PCI *node=&s->pci[r->gpus[j].gpu_index];
+    if(!r->gpus[j].gop_count) {
       incomplete=1;
       r->gop_relationships_observed=0;
     }

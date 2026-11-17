@@ -44,14 +44,14 @@ typedef struct {
  * independent console candidates. Topology completeness is observational,
  * never an authorization to disconnect or write hardware. */
 typedef struct {
+  size_t gpu_index, parent_index, root_index;
+  unsigned depth, gop_count;
+  uint8_t ancestry_verified, root_port_verified;
+} GU_TOPO_GPU_REPORT;
+
+typedef struct {
   size_t gpu_count;
-  size_t gpu_index[GU_INVENTORY_MAX_NVIDIA];
-  size_t parent_index[GU_INVENTORY_MAX_NVIDIA];
-  size_t root_index[GU_INVENTORY_MAX_NVIDIA];
-  unsigned depth[GU_INVENTORY_MAX_NVIDIA];
-  unsigned gop_count[GU_INVENTORY_MAX_NVIDIA];
-  uint8_t ancestry_verified[GU_INVENTORY_MAX_NVIDIA];
-  uint8_t root_port_verified[GU_INVENTORY_MAX_NVIDIA];
+  GU_TOPO_GPU_REPORT *gpus; /* Caller-owned storage, valid for report lifetime. */
   unsigned nvidia_console_count;
   unsigned independent_gop_count, independent_console_count, unmatched_gops;
   unsigned independent_console_without_gop;
@@ -101,7 +101,10 @@ int GuTopoGopSnapshotsEqual(const GU_TOPO_GOP *before, size_t before_count,
 /* Complete PCI device-path prefix only; no root-port-only ownership inference. */
 int GuTopoPathOnController(const GU_TOPO_PATH *controller,
                            const GU_TOPO_PATH *candidate);
-int GuTopoAssess(const GU_TOPO_CAPTURE *capture, GU_TOPO_REPORT *report);
+/* Storage capacity is measured in GPU records, not PCI nodes. It must
+ * remain valid until the caller finishes using the report. */
+int GuTopoAssess(const GU_TOPO_CAPTURE *capture, GU_TOPO_REPORT *report,
+                 GU_TOPO_GPU_REPORT *storage, size_t capacity);
 /* Classify ConOut/ErrOut paths against a structurally valid, already
  * captured PCI/GOP/console graph; refuse INVALID topology and clear output on
  * every failure. INCOMPLETE/CONFLICT remain observational categories only.

@@ -776,7 +776,7 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
       status=GU_INVENTORY_NOT_FOUND;
     if(status==GU_INVENTORY_OK)for(i=0;i<GU_GPU_SELECTION_COUNT;i++) {
       const GU_GPU_RECORD *a=&inventory.nvidia[indices[i]];
-      size_t node=Report.gpu_index[indices[i]];
+      size_t node=Report.gpus[indices[i]].gpu_index;
       const GU_GPU_RECORD *b;
       if(node>=Snapshot.pci_count) {status=GU_INVENTORY_NOT_FOUND;break;}
       b=&Snapshot.pci[node].identity;
@@ -809,8 +809,8 @@ static int ReportPassiveSelections(int pci_ok, int topology_result) {
     Say("SELECTION_STEP[%zu]=PASSIVE_IDENTIFIED ID=%04x:%04x SUB=%04x:%04x CLASS=%04x ROOT_INDEX=%zu DEPTH=%u GOP_COUNT=%u BY_DRIVER=%u OPENERS_KNOWN=%u\r\n",
         i,(unsigned)(a->pci_id&65535U),(unsigned)(a->pci_id>>16),
         (unsigned)(a->subsystem_id&65535U),(unsigned)(a->subsystem_id>>16),
-        (unsigned)a->class_code,Report.root_index[indices[i]],
-        Report.depth[indices[i]],Report.gop_count[indices[i]],
+        (unsigned)a->class_code,Report.gpus[indices[i]].root_index,
+        Report.gpus[indices[i]].depth,Report.gpus[indices[i]].gop_count,
         node->by_driver,(unsigned)node->openers_known);
     Say("SELECTION_STEP[%zu]=END STATUS=OBSERVED READ_ONLY=1\r\n",i);
   }
@@ -1832,6 +1832,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   int pci_ok,gop_ok,console_ok,error_ok,error_classified,result;
   int console_stable=0,error_stable=0;
   GU_TOPO_CONSOLE_OWNERS error_owners={0};
+  GU_TOPO_GPU_REPORT *report_storage=NULL;
   static GU_TOPO_PATH error_paths[GU_TOPO_MAX_CONSOLES];
   static GU_TOPO_PATH final_console[GU_TOPO_MAX_CONSOLES];
   static GU_TOPO_PATH final_error[GU_TOPO_MAX_CONSOLES];
@@ -1900,7 +1901,18 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     Say("ERROUT[%zu] PATH_LEN=%zu\r\n",i,error_paths[i].length);
     SayPath("ERROUT",i,&error_paths[i]);
   }
-  result=(pci_ok && gop_ok)?GuTopoAssess(&Snapshot,&Report):GU_TOPO_INVALID;
+  result=GU_TOPO_INVALID;
+  memset(&Report,0,sizeof(Report));
+  if(pci_ok && gop_ok) {
+    EFI_STATUS allocated=bs->AllocatePool?
+        bs->AllocatePool(EfiLoaderData,Snapshot.pci_count*sizeof(*report_storage),
+                         (VOID **)&report_storage):EFI_UNSUPPORTED;
+    if(allocated==EFI_SUCCESS && report_storage)
+      result=GuTopoAssess(&Snapshot,&Report,report_storage,Snapshot.pci_count);
+    else
+      Say("TOPOLOGY_REPORT_STORAGE=UNAVAILABLE STATUS=%#llx\r\n",
+          (unsigned long long)allocated);
+  }
   /* Preserve the graph-only result as separately inspectable evidence.
    * The final verdict must also be vetoed by unsafe/unknown ErrOut. */
   Say("GRAPH_ONLY_TOPOLOGY_VERDICT=%s ERROUT_INCLUDED_IN_FINAL=1\r\n",
@@ -1933,15 +1945,15 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   }
   if(pci_ok && gop_ok) {
     for(i=0;i<Report.gpu_count;i++) {
-      const GU_GPU_RECORD *gpu=&Snapshot.pci[Report.gpu_index[i]].identity;
+      const GU_GPU_RECORD *gpu=&Snapshot.pci[Report.gpus[i].gpu_index].identity;
       Say("GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x PCI_INDEX=%zu PARENT=%zu ROOT_PORT=%zu DEPTH=%u ANCESTRY=%u ROOT_VALID=%u GOP_COUNT=%u\r\n",
           i,(unsigned)gpu->segment,(unsigned)gpu->bus,
           (unsigned)gpu->device,(unsigned)gpu->function,
           (unsigned)(gpu->pci_id&65535U),(unsigned)(gpu->pci_id>>16),
           (unsigned)(gpu->subsystem_id&65535U),(unsigned)(gpu->subsystem_id>>16),
-          Report.gpu_index[i],Report.parent_index[i],Report.root_index[i],
-          Report.depth[i],(unsigned)Report.ancestry_verified[i],
-          (unsigned)Report.root_port_verified[i],Report.gop_count[i]);
+          Report.gpus[i].gpu_index,Report.gpus[i].parent_index,Report.gpus[i].root_index,
+          Report.gpus[i].depth,(unsigned)Report.gpus[i].ancestry_verified,
+          (unsigned)Report.gpus[i].root_port_verified,Report.gpus[i].gop_count);
     }
     Say("NVIDIA_GPU_COUNT=%zu INDEPENDENT_GOP_COUNT=%u INDEPENDENT_CONOUT_MATCH=%u NVIDIA_CONOUT_MATCH=%u GOP_UNMATCHED=%u INDEPENDENT_CONSOLE_ASSOCIATION=%u CONOUT_WITHOUT_GOP=%u CONOUT_UNMATCHED=%u CONOUT_AMBIGUOUS=%u\r\n",
         Report.gpu_count,Report.independent_gop_count,
@@ -1973,6 +1985,15 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #ifdef GU_TOPO_SELECTION_ENABLED
   SelectionOk=ReportPassiveSelections(pci_ok,result);
 #endif
+  if(report_storage) {
+    EFI_STATUS released=bs->FreePool(report_storage);
+    Report.gpus=NULL;
+    if(EFI_ERROR(released)) {
+      Say("TOPOLOGY_REPORT_STORAGE_FREE_STATUS=%#llx\r\n",
+          (unsigned long long)released);
+      result=GU_TOPO_INVALID;
+    }
+  }
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
 #ifdef GU_TOPO_WINDOWS_HANDOFF
   Say("WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write\r\n");
