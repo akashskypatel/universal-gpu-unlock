@@ -146,8 +146,8 @@ typedef struct {
 extern GU_PLATFORM *GuPlatformActive;
 #define Gu (*GuPlatformActive)
 
-/* One checked bind per image. Rebinding requires a future verified
- * per-card teardown protocol, not a raw zero of Gu's global state. */
+/* One checked bind per image. The registry retains published platforms.
+ * Rebinding requires a verified per-card teardown and handover protocol. */
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
 /* Allocate independent CPU-only state into an empty caller-owned output.
  * Reject a PCI protocol that already has an allocated platform.
@@ -159,9 +159,9 @@ EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
  * permit a second bind or authorize hardware operations. */
 EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                                    GU_PLATFORM **Owner);
-/* Release only a registered, unpublished, unchanged allocation.
+/* Release only a registered, never-published, unchanged allocation.
  * The caller must own the reference exclusively. Clear it only on success.
- * Never use this operation for a bound or previously used platform. */
+ * A lost active pointer cannot make a published platform disposable. */
 EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out);
 #ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These

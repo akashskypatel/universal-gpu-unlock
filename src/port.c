@@ -4,9 +4,9 @@ VOID *memcpy(VOID *, const VOID *, size_t);
 int memcmp(const VOID *, const VOID *, size_t);
 static GU_PLATFORM UnboundPlatform;
 GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
-/* A second bind must never erase DMA/selector/fault evidence from a prior
- * card. A verified per-card context release API does not exist yet. */
-static BOOLEAN TargetBound;
+/* The allocation registry retains every published platform. The current
+ * one-shot admission checks that registry, not a mutable active pointer. */
+static BOOLEAN AnyPublishedPlatform(VOID);
 static const GU_PLATFORM EmptyPlatform;
 #ifdef GU_ENTRY_LATCHED
 BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1) {
@@ -47,7 +47,7 @@ BOOLEAN GuSelectorPhase(UINT32 Phase) {
 #endif
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
   if(!Bs || !Pci)return EFI_INVALID_PARAMETER;
-  if(TargetBound)return EFI_ALREADY_STARTED;
+  if(AnyPublishedPlatform())return EFI_ALREADY_STARTED;
   /* Do not discard any state recorded before the first bind. */
   if(memcmp(&Gu,&EmptyPlatform,sizeof(Gu))!=0)return EFI_ACCESS_DENIED;
   GU_PLATFORM *selected=NULL;
@@ -68,11 +68,21 @@ typedef struct GU_PLATFORM_ALLOCATION {
   GU_PLATFORM platform;
   EFI_BOOT_SERVICES *bs;
   EFI_PCI_IO_PROTOCOL *pci;
+  BOOLEAN published;
   struct GU_PLATFORM_ALLOCATION *next;
 } GU_PLATFORM_ALLOCATION;
 static GU_PLATFORM_ALLOCATION *PlatformAllocations;
 
+/* Publication is irreversible for this boot image. A context that has
+ * ever owned the active slot cannot be disposed as an unused candidate. */
+static BOOLEAN AnyPublishedPlatform(VOID) {
+  for(const GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;entry;entry=entry->next)
+    if(entry->published)return TRUE;
+  return FALSE;
+}
+
 static BOOLEAN PlatformPristine(const GU_PLATFORM_ALLOCATION *entry) {
+  if(entry->published)return FALSE;
   GU_PLATFORM pristine;
   memset(&pristine,0,sizeof(pristine));
   pristine.bs=entry->bs;pristine.pci=entry->pci;
@@ -114,14 +124,14 @@ EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
 EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                                    GU_PLATFORM **Owner) {
   if(!Bs || !Pci || !Owner || !*Owner)return EFI_INVALID_PARAMETER;
-  if(TargetBound)return EFI_ALREADY_STARTED;
+  if(AnyPublishedPlatform())return EFI_ALREADY_STARTED;
   if(GuPlatformActive!=&UnboundPlatform ||
      memcmp(&Gu,&EmptyPlatform,sizeof(Gu))!=0)return EFI_ACCESS_DENIED;
   GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;
   while(entry && &entry->platform!=*Owner)entry=entry->next;
   if(!entry || entry->bs!=Bs || entry->pci!=Pci ||
      !PlatformPristine(entry))return EFI_ACCESS_DENIED;
-  TargetBound=TRUE; /* Spend before publishing the bound platform. */
+  entry->published=TRUE; /* Spend before publishing the bound platform. */
   GuPlatformActive=&entry->platform;
   *Owner=NULL;
   return EFI_SUCCESS;

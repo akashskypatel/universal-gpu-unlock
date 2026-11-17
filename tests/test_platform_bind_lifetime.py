@@ -227,7 +227,6 @@ typedef struct {
 static GU_PLATFORM UnboundPlatform;
 GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 #define Gu (*GuPlatformActive)
-static BOOLEAN TargetBound;
 static const GU_PLATFORM EmptyPlatform;
 static unsigned allocations,fail_alloc,empty_alloc,frees,fail_free;
 static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
@@ -258,7 +257,7 @@ int main(int argc,char **argv) {
   } else if(mode==1) {
     fail_alloc=1;
     CHECK(GuInit(&bs,&first)==EFI_OUT_OF_RESOURCES);
-    CHECK(GuPlatformActive==&UnboundPlatform && !TargetBound);
+    CHECK(GuPlatformActive==&UnboundPlatform && !AnyPublishedPlatform());
     fail_alloc=0;
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
     CHECK(GuPlatformActive!=&UnboundPlatform && allocations==2);
@@ -271,13 +270,13 @@ int main(int argc,char **argv) {
   } else if(mode==3) {
     empty_alloc=1;
     CHECK(GuInit(&bs,&first)==EFI_OUT_OF_RESOURCES);
-    CHECK(!TargetBound && GuPlatformActive==&UnboundPlatform);
+    CHECK(!AnyPublishedPlatform() && GuPlatformActive==&UnboundPlatform);
     empty_alloc=0;
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
   } else if(mode==4) {
     bs.AllocatePool=NULL;
     CHECK(GuInit(&bs,&first)==EFI_UNSUPPORTED);
-    CHECK(!TargetBound && allocations==0);
+    CHECK(!AnyPublishedPlatform() && allocations==0);
     bs.AllocatePool=Allocate;
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
     memset(&Gu,0,sizeof(Gu));
@@ -288,7 +287,7 @@ int main(int argc,char **argv) {
     for(size_t i=0;i<4;i++) {
       CHECK(GuAllocatePlatform(&bs,&cards[i],&contexts[i])==EFI_SUCCESS);
       CHECK(contexts[i]->bs==&bs && contexts[i]->pci==&cards[i]);
-      CHECK(GuPlatformActive==&UnboundPlatform && !TargetBound);
+      CHECK(GuPlatformActive==&UnboundPlatform && !AnyPublishedPlatform());
       for(size_t j=0;j<i;j++)CHECK(contexts[j]!=contexts[i]);
       contexts[i]->fault=(int)i;
     }
@@ -336,7 +335,7 @@ int main(int argc,char **argv) {
     CHECK(GuAllocatePlatform(&bs,&second,&b)==EFI_SUCCESS);
     CHECK(GuAllocatePlatform(&bs,&first,&duplicate)==EFI_ALREADY_STARTED);
     CHECK(!duplicate && allocations==2);
-    CHECK(GuInit(&bs,&first)==EFI_ALREADY_STARTED && !TargetBound);
+    CHECK(GuInit(&bs,&first)==EFI_ALREADY_STARTED && !AnyPublishedPlatform());
     CHECK(GuPlatformActive==&UnboundPlatform);
     /* The original PCI and allocator identities remain authoritative. */
     a->pci=&second;
@@ -386,16 +385,33 @@ int main(int argc,char **argv) {
     Gu.fault=1;
     CHECK(GuBindAllocatedPlatform(&bs,&first,&a)==EFI_ACCESS_DENIED);
     Gu.fault=0;
-    CHECK(a==saved && !TargetBound && GuPlatformActive==&UnboundPlatform);
+    CHECK(a==saved && !AnyPublishedPlatform() && GuPlatformActive==&UnboundPlatform);
     b->fault=1;
     CHECK(GuBindAllocatedPlatform(&bs,&first,&a)==EFI_SUCCESS);
-    CHECK(!a && GuPlatformActive==saved && TargetBound && allocations==2);
+    CHECK(!a && GuPlatformActive==saved && AnyPublishedPlatform() && allocations==2);
     CHECK(b->fault && b->pci==&second);
     Gu.retained=1;
     CHECK(GuBindAllocatedPlatform(&bs,&second,&b)==EFI_ALREADY_STARTED);
     CHECK(b && b->fault && GuPlatformActive==saved && Gu.retained);
     CHECK(GuDiscardUnboundPlatform(&saved)==EFI_ACCESS_DENIED && saved==GuPlatformActive);
     CHECK(GuInit(&bs,&second)==EFI_ALREADY_STARTED);
+  } else if(mode==9) {
+    GU_PLATFORM *first_owner=NULL,*second_owner=NULL;
+    CHECK(GuAllocatePlatform(&bs,&first,&first_owner)==EFI_SUCCESS);
+    CHECK(GuAllocatePlatform(&bs,&second,&second_owner)==EFI_SUCCESS);
+    GU_PLATFORM *published=first_owner;
+    CHECK(GuBindAllocatedPlatform(&bs,&first,&first_owner)==EFI_SUCCESS && !first_owner);
+    CHECK(AnyPublishedPlatform() && GuPlatformActive==published);
+    /* Simulate accidental loss of the active reference while the old
+     * platform still looks pristine. No production code performs this. */
+    GuPlatformActive=&UnboundPlatform;
+    CHECK(AnyPublishedPlatform());
+    CHECK(GuDiscardUnboundPlatform(&published)==EFI_ACCESS_DENIED && published && !frees);
+    CHECK(GuBindAllocatedPlatform(&bs,&second,&second_owner)==EFI_ALREADY_STARTED);
+    CHECK(second_owner && GuPlatformActive==&UnboundPlatform);
+    CHECK(GuInit(&bs,&second)==EFI_ALREADY_STARTED);
+    CHECK(GuDiscardUnboundPlatform(&second_owner)==EFI_SUCCESS && !second_owner);
+    CHECK(AnyPublishedPlatform() && frees==1);
   } else return 3;
   /* Test process termination only. Do not use as a production unbind. */
   while(PlatformAllocations) {
@@ -415,7 +431,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(executable)],
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            for mode in range(9):
+            for mode in range(10):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(executable), str(mode)],
                                             capture_output=True, text=True)
@@ -424,15 +440,15 @@ int main(int argc,char **argv) {
 
     def test_original_platform_rebind_guard(self):
         body = function("GuInit")
-        declaration = "static BOOLEAN TargetBound;"
-        self.assertIn(declaration, SOURCE)
+        self.assertIn("BOOLEAN published;", SOURCE)
+        self.assertNotIn("static BOOLEAN TargetBound;", SOURCE)
         self.assertIn("static const GU_PLATFORM EmptyPlatform;", SOURCE)
         binding = function("GuBindAllocatedPlatform")
-        self.assertIn("TargetBound=TRUE;", binding)
-        self.assertLess(binding.index("TargetBound=TRUE;"), binding.index("GuPlatformActive=&entry->platform;"))
+        self.assertIn("entry->published=TRUE;", binding)
+        self.assertLess(binding.index("entry->published=TRUE;"), binding.index("GuPlatformActive=&entry->platform;"))
         self.assertLess(body.index("GuAllocatePlatform("), body.index("GuBindAllocatedPlatform("))
-        self.assertIn("if(TargetBound)return EFI_ALREADY_STARTED;", body)
-        self.assertIn("if(TargetBound)return EFI_ALREADY_STARTED;", binding)
+        self.assertIn("if(AnyPublishedPlatform())return EFI_ALREADY_STARTED;", body)
+        self.assertIn("if(AnyPublishedPlatform())return EFI_ALREADY_STARTED;", binding)
         start = SOURCE.index("typedef struct GU_PLATFORM_ALLOCATION {")
         end = SOURCE.index("\n/* Allocate CPU-only state", start)
         registry = SOURCE[start:end]
@@ -456,6 +472,7 @@ typedef struct {
   uint32_t flrs, dma_count;
 } GU_PLATFORM;
 #define TRUE 1
+#define FALSE 0
 #define EFI_SUCCESS 0
 #define EFI_INVALID_PARAMETER 2
 #define EFI_ACCESS_DENIED 3
@@ -472,7 +489,6 @@ static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
 }
 static EFI_STATUS Free(VOID *p) {free(p);return EFI_SUCCESS;}
-static BOOLEAN TargetBound;
 static const GU_PLATFORM EmptyPlatform;
 """ + body + r"""
 #define CHECK(x) do {if(!(x)) {fprintf(stderr,"FAIL line %d: %s\\n",__LINE__,#x);return 1;}} while(0)
