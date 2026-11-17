@@ -20,7 +20,7 @@
 #endif
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 #include "gpu-selection.h" /* Generated operator-supplied PCI addresses. */
-#if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_INVENTORY_MAX_NVIDIA
+#if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_INVENTORY_MAX_HANDLES
 #error Invalid active target count
 #endif
 #if defined(GU_ACTIVE_SINGLE_TARGET) && GU_GPU_SELECTION_COUNT != 1 && !defined(GU_SYNTHETIC_COMPILE_ONLY)
@@ -31,8 +31,100 @@ static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
 #endif
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
+/* Caller-owned view of a runtime-sized record set. The selected order is
+ * separate from enumeration order and never rewritten for full-set reads. */
+typedef struct {
+  struct {size_t count,capacity;GU_GPU_RECORD *nvidia;} inventory;
+  size_t selected_count;
+  size_t *selected_indices;
+} GU_GPU_PREPARED_VIEW;
+
+typedef struct {
+  VOID *allocation;
+  size_t capacity;
+  GU_GPU_RECORD *records,*live;
+  size_t *indices;
+  GU_GPU_REFRESHED_TARGET *scanned;
+  GU_GPU_EXEC_OBSERVATION *observed;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  GU_GPU_EXEC_TARGET *targets;
+  size_t *order;
+#endif
+} GU_GPU_DISCOVERY_STORAGE;
+
+/* One pool block, partitioned at multiples of a union size so every view
+ * is suitably aligned. Bound total pool use by firmware handle count. */
+typedef union {
+  GU_GPU_RECORD record;
+  GU_GPU_REFRESHED_TARGET snapshot;
+  GU_GPU_EXEC_OBSERVATION observation;
+  GU_GPU_EXEC_TARGET target;
+  size_t index;
+} GU_DISCOVERY_ALIGNMENT;
+static VOID *UnreleasedDiscoveryAllocation;
+
+static EFI_STATUS AllocateDiscoveryStorage(EFI_BOOT_SERVICES *bs,size_t capacity,
+                                           GU_GPU_DISCOVERY_STORAGE *storage) {
+  if(!bs||!bs->AllocatePool||!bs->FreePool||!storage||storage->allocation||
+     !capacity||capacity>GU_INVENTORY_MAX_HANDLES)return EFI_INVALID_PARAMETER;
+  const size_t types[]={
+    sizeof(GU_GPU_RECORD),sizeof(GU_GPU_RECORD),sizeof(size_t),
+    sizeof(GU_GPU_REFRESHED_TARGET),sizeof(GU_GPU_EXEC_OBSERVATION),
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+    sizeof(GU_GPU_EXEC_TARGET),sizeof(size_t),
+#endif
+  };
+  size_t offsets[sizeof(types)/sizeof(types[0])],total=0;
+  const size_t quantum=sizeof(GU_DISCOVERY_ALIGNMENT);
+  for(size_t i=0;i<sizeof(types)/sizeof(types[0]);i++){
+    if(capacity>(SIZE_MAX-quantum+1)/types[i])return EFI_OUT_OF_RESOURCES;
+    size_t bytes=((capacity*types[i]+quantum-1)/quantum)*quantum;
+    if(bytes>SIZE_MAX-total)return EFI_OUT_OF_RESOURCES;
+    offsets[i]=total;total+=bytes;
+  }
+  VOID *allocation=NULL;
+  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,total,&allocation);
+  if(s!=EFI_SUCCESS)return s;
+  if(!allocation)return EFI_OUT_OF_RESOURCES;
+  memset(allocation,0,total);
+  unsigned char *base=(unsigned char *)allocation;
+  storage->allocation=allocation;storage->capacity=capacity;
+  storage->records=(GU_GPU_RECORD *)(base+offsets[0]);
+  storage->live=(GU_GPU_RECORD *)(base+offsets[1]);
+  storage->indices=(size_t *)(base+offsets[2]);
+  storage->scanned=(GU_GPU_REFRESHED_TARGET *)(base+offsets[3]);
+  storage->observed=(GU_GPU_EXEC_OBSERVATION *)(base+offsets[4]);
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  storage->targets=(GU_GPU_EXEC_TARGET *)(base+offsets[5]);
+  storage->order=(size_t *)(base+offsets[6]);
+#endif
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS FreeDiscoveryStorage(EFI_BOOT_SERVICES *bs,
+                                       GU_GPU_DISCOVERY_STORAGE *storage) {
+  if(!storage->allocation)return EFI_SUCCESS;
+  EFI_STATUS s=bs->FreePool(storage->allocation);
+  if(s!=EFI_SUCCESS) {
+    /* Never retry an uncertain release or lose its reference. */
+    UnreleasedDiscoveryAllocation=storage->allocation;
+    GuLog("DISCOVERY_STORAGE_FREE_STATUS=%#llx RETAINED=1\n",(unsigned long long)s);
+  }
+  memset(storage,0,sizeof(*storage));
+  return s;
+}
+
+static GU_GPU_PREPARED_VIEW DiscoveryView(const GU_GPU_DISCOVERY_STORAGE *storage) {
+  GU_GPU_PREPARED_VIEW view={0};
+  view.inventory.capacity=storage->capacity;
+  view.inventory.nvidia=storage->records;
+  view.selected_indices=storage->indices;
+  return view;
+}
+
 #ifdef GU_ACTIVE_SINGLE_TARGET
-static GU_GPU_PREPARED_SEQUENCE ActiveInventory;
+static GU_GPU_PREPARED_VIEW ActiveInventory;
+static GU_GPU_DISCOVERY_STORAGE ActiveDiscovery;
 static int ActiveInventoryValid;
 /* Ordered transaction ownership is independent of admission. Compile-only
  * images can validate a longer selection; neither EFI entrypoint runs. */
@@ -82,248 +174,245 @@ static int ReadPciIdentity(void *opaque, size_t index, GU_GPU_RECORD *record) {
   return 0;
 }
 
-/* Shared active/DXE read-only preparation. In the absence of an explicit
- * request, multiple NVIDIA GPUs are enumerated but not implicitly selected.
- * There is intentionally no call to GuInit, no PCI configuration writes,
- * no driver binding changes, no BAR access and no GPU reset here. */
+/* The firmware owns the handle buffer until its matching FreePool call.
+ * All inventory buffers below belong to the caller. */
+static EFI_STATUS LocatePciHandles(EFI_SYSTEM_TABLE *table,EFI_HANDLE **handles,UINTN *count){
+  if(!table||!table->BootServices||!table->BootServices->LocateHandleBuffer||
+     !table->BootServices->HandleProtocol||!table->BootServices->FreePool)
+    return EFI_INVALID_PARAMETER;
+  *handles=NULL;*count=0;
+  EFI_STATUS s=table->BootServices->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,count,handles);
+  if(s!=EFI_SUCCESS)return EFI_UNSUPPORTED;
+  if(!*handles||!*count||*count>GU_INVENTORY_MAX_HANDLES){
+    if(*handles)(VOID)table->BootServices->FreePool(*handles);
+    *handles=NULL;*count=0;
+    return EFI_UNSUPPORTED;
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS CollectLocatedGpuRecords(EFI_SYSTEM_TABLE *table,EFI_HANDLE *handles,
+                                            UINTN handle_count,GU_GPU_RECORD *records,
+                                            size_t capacity,size_t *count) {
+  GU_PCI_READER_CONTEXT context={table->BootServices,handles};
+  int result=GuCollectGpuRecords((size_t)handle_count,ReadPciIdentity,&context,
+                                 records,capacity,count);
+  EFI_STATUS released=table->BootServices->FreePool(handles);
+  if(result!=GU_INVENTORY_OK||released!=EFI_SUCCESS) {
+    *count=0;
+    GuLog("ACTIVE_PREPARE=REFUSED INVENTORY_CODE=%d FREE=%#llx\n",
+          result,(unsigned long long)released);
+    return EFI_UNSUPPORTED;
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS ReadGpuRecords(EFI_SYSTEM_TABLE *table,GU_GPU_RECORD *records,
+                                  size_t capacity,size_t *count) {
+  EFI_HANDLE *handles=NULL;UINTN handle_count=0;
+  *count=0;
+  EFI_STATUS s=LocatePciHandles(table,&handles,&handle_count);
+  if(s!=EFI_SUCCESS)return s;
+  return CollectLocatedGpuRecords(table,handles,handle_count,records,capacity,count);
+}
+
+static EFI_STATUS SelectPreparedRecords(GU_GPU_PREPARED_VIEW *prepared,
+                                         const GU_GPU_LOCATION *requested,
+                                         size_t requested_count) {
+  size_t count=prepared->inventory.count;
+  prepared->selected_count=0;
+  GuLog("ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1\n",
+        count,requested_count);
+  for(size_t i=0;i<count;i++){
+    const GU_GPU_RECORD *p=&prepared->inventory.nvidia[i];
+    GuLog("ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x LEGACY_UNLOCK_DEVICE_ID=%u\n",
+          i,(unsigned)p->segment,(unsigned)p->bus,(unsigned)p->device,
+          (unsigned)p->function,(unsigned)(p->pci_id&65535U),(unsigned)(p->pci_id>>16),
+          (unsigned)(p->subsystem_id&65535U),(unsigned)(p->subsystem_id>>16),
+          (unsigned)p->class_code,(unsigned)GuIsSupportedPciId(p->pci_id));
+  }
+  if(requested_count){
+    if(requested_count>count)return EFI_UNSUPPORTED;
+    int result=GuFindGpuRecordSequence(prepared->inventory.nvidia,count,requested,
+                                       requested_count,prepared->selected_indices);
+    if(result!=GU_INVENTORY_OK){
+      GuLog("ACTIVE_PREPARE=REFUSED SELECTION_CODE=%d REQUESTED=%zu\n",result,requested_count);
+      return EFI_UNSUPPORTED;
+    }
+    prepared->selected_count=requested_count;
+  }else if(count==1){
+    prepared->selected_count=1;prepared->selected_indices[0]=0;
+  }
+  for(size_t i=0;i<prepared->selected_count;i++){
+    const GU_GPU_RECORD *p=&prepared->inventory.nvidia[prepared->selected_indices[i]];
+    GuLog("ACTIVE_PREPARED_STEP[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x LEGACY_UNLOCK_DEVICE_ID=%u READ_ONLY=1\n",
+          i,(unsigned)p->segment,(unsigned)p->bus,(unsigned)p->device,
+          (unsigned)p->function,(unsigned)(p->pci_id&65535U),(unsigned)(p->pci_id>>16),
+          (unsigned)(p->subsystem_id&65535U),(unsigned)(p->subsystem_id>>16),
+          (unsigned)GuIsSupportedPciId(p->pci_id));
+  }
+  GuLog("ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0\n",
+        prepared->selected_count,count);
+  return EFI_SUCCESS;
+}
+
+/* Compatibility adapter for existing bounded callers. The actual boot
+ * entrypoint uses the same collection and selection logic with pool views. */
 EFI_STATUS GuPrepareGpuSequence(EFI_SYSTEM_TABLE *table,
                                 const GU_GPU_LOCATION *requested,
                                 size_t requested_count,
                                 GU_GPU_PREPARED_SEQUENCE *prepared) {
-  EFI_HANDLE *handles = NULL;
-  UINTN count = 0;
-  GU_PCI_READER_CONTEXT context;
-  GU_GPU_INVENTORY inventory;
-  size_t i;
-  EFI_STATUS status, released;
-  int result;
-  if (!prepared) return EFI_INVALID_PARAMETER;
-  memset(prepared, 0, sizeof(*prepared));
-  if (!table || !table->BootServices ||
-      !table->BootServices->LocateHandleBuffer ||
-      !table->BootServices->HandleProtocol ||
-      !table->BootServices->FreePool ||
-      requested_count > GU_INVENTORY_MAX_NVIDIA ||
-      ((requested_count != 0) != (requested != NULL)))
-    return EFI_INVALID_PARAMETER;
-
-  status = table->BootServices->LocateHandleBuffer(ByProtocol, &PciGuid,
-                                                    NULL, &count, &handles);
-  if (EFI_ERROR(status)) return EFI_UNSUPPORTED;
-  if (!handles || !count || count > GU_INVENTORY_MAX_HANDLES) {
-    if (handles) (VOID)table->BootServices->FreePool(handles);
-    return EFI_UNSUPPORTED;
-  }
-  context.services = table->BootServices;
-  context.handles = handles;
-  result = GuCollectGpuInventory((size_t)count, ReadPciIdentity, &context,
-                                 &inventory);
-  released = table->BootServices->FreePool(handles);
-  if (result != GU_INVENTORY_OK || EFI_ERROR(released)) {
-    GuLog("ACTIVE_PREPARE=REFUSED INVENTORY_CODE=%d FREE=%#llx\n",
-          result, (unsigned long long)released);
-    return EFI_UNSUPPORTED;
-  }
-
-  GuLog("ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1\n",
-        inventory.count, requested_count);
-  for (i = 0; i < inventory.count; i++) {
-    const GU_GPU_RECORD *p = &inventory.nvidia[i];
-    GuLog("ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x LEGACY_UNLOCK_DEVICE_ID=%u\n",
-          i, (unsigned)p->segment, (unsigned)p->bus, (unsigned)p->device,
-          (unsigned)p->function, (unsigned)(p->pci_id & 65535U),
-          (unsigned)(p->pci_id >> 16), (unsigned)(p->subsystem_id & 65535U),
-          (unsigned)(p->subsystem_id >> 16), (unsigned)p->class_code,
-          (unsigned)GuIsSupportedPciId(p->pci_id));
-  }
-  if (requested_count != 0) {
-    result = GuFindGpuSequence(&inventory, requested, requested_count,
-                               prepared->selected_indices);
-    if (result != GU_INVENTORY_OK) {
-      GuLog("ACTIVE_PREPARE=REFUSED SELECTION_CODE=%d REQUESTED=%zu\n",
-            result, requested_count);
-      return EFI_UNSUPPORTED;
-    }
-    prepared->selected_count = requested_count;
-  } else if (inventory.count == 1) {
-    prepared->selected_count = 1;
-    prepared->selected_indices[0] = 0;
-  }
-  prepared->inventory = inventory;
-  for (i = 0; i < prepared->selected_count; i++) {
-    const GU_GPU_RECORD *p = &prepared->inventory.nvidia[prepared->selected_indices[i]];
-    GuLog("ACTIVE_PREPARED_STEP[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x LEGACY_UNLOCK_DEVICE_ID=%u READ_ONLY=1\n",
-          i, (unsigned)p->segment, (unsigned)p->bus, (unsigned)p->device,
-          (unsigned)p->function, (unsigned)(p->pci_id & 65535U),
-          (unsigned)(p->pci_id >> 16), (unsigned)(p->subsystem_id & 65535U),
-          (unsigned)(p->subsystem_id >> 16), (unsigned)GuIsSupportedPciId(p->pci_id));
-  }
-  GuLog("ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0\n",
-        prepared->selected_count, prepared->inventory.count);
+  if(!prepared)return EFI_INVALID_PARAMETER;
+  memset(prepared,0,sizeof(*prepared));
+  if(requested_count>GU_INVENTORY_MAX_NVIDIA||
+     ((requested_count!=0)!=(requested!=NULL)))return EFI_INVALID_PARAMETER;
+  GU_GPU_PREPARED_VIEW view={{0,GU_INVENTORY_MAX_NVIDIA,prepared->inventory.nvidia},
+                              0,prepared->selected_indices};
+  EFI_STATUS s=ReadGpuRecords(table,view.inventory.nvidia,view.inventory.capacity,
+                             &view.inventory.count);
+  if(s==EFI_SUCCESS)s=SelectPreparedRecords(&view,requested,requested_count);
+  if(s!=EFI_SUCCESS){memset(prepared,0,sizeof(*prepared));return s;}
+  prepared->inventory.count=view.inventory.count;
+  prepared->selected_count=view.selected_count;
   return EFI_SUCCESS;
 }
 
-/* Refresh a prepared target's complete PCI identity without touching Gu or
- * authorizing mutation. A saved EFI handle is only an observation from the
- * current boot: it must still resolve to the same PCI_IO instance and BDF.
- * The complete 256-byte config snapshot is returned only on success. */
+/* Revalidate the exact saved record with no write or ownership change. */
+static EFI_STATUS RefreshGpuRecord(EFI_SYSTEM_TABLE *table,const GU_GPU_RECORD *expected,
+                                    UINT32 config[64],EFI_PCI_IO_PROTOCOL **pci) {
+  EFI_PCI_IO_PROTOCOL *current=NULL;
+  UINT32 snapshot[64];
+  UINTN segment,bus,device,function;
+  if(pci)*pci=NULL;
+  if(config)memset(config,0,sizeof(snapshot));
+  if(!table||!table->BootServices||!table->BootServices->HandleProtocol||
+     !expected||!config||!pci)return EFI_INVALID_PARAMETER;
+  if(!expected->handle||!expected->pci||expected->segment>0xffffU||
+     expected->bus>255U||expected->device>31U||expected->function>7U)
+    return EFI_UNSUPPORTED;
+  EFI_STATUS s=table->BootServices->HandleProtocol((EFI_HANDLE)expected->handle,
+                                                   &PciGuid,(VOID **)&current);
+  if(s!=EFI_SUCCESS||!current||current!=expected->pci||
+     !current->GetLocation||!current->Pci.Read)return EFI_UNSUPPORTED;
+  s=current->GetLocation(current,&segment,&bus,&device,&function);
+  if(s!=EFI_SUCCESS||segment!=expected->segment||bus!=expected->bus||
+     device!=expected->device||function!=expected->function)return EFI_UNSUPPORTED;
+  s=current->Pci.Read(current,EfiPciIoWidthUint32,0,64,snapshot);
+  if(s!=EFI_SUCCESS||snapshot[0]!=expected->pci_id||
+     (UINT16)(snapshot[2]>>16)!=expected->class_code||
+     snapshot[0x2c/4]!=expected->subsystem_id)return EFI_UNSUPPORTED;
+  memcpy(config,snapshot,sizeof(snapshot));*pci=current;
+  return EFI_SUCCESS;
+}
+
 EFI_STATUS GuRefreshPreparedGpu(EFI_SYSTEM_TABLE *table,
                                 const GU_GPU_PREPARED_SEQUENCE *prepared,
                                 size_t step, UINT32 config[64],
                                 EFI_PCI_IO_PROTOCOL **pci) {
-  EFI_PCI_IO_PROTOCOL *current = NULL;
-  const GU_GPU_RECORD *expected;
-  UINT32 snapshot[64];
-  UINTN segment, bus, device, function;
-  EFI_STATUS status;
-  if (pci) *pci = NULL;
-  if (config) memset(config, 0, sizeof(snapshot));
-  if (!table || !table->BootServices ||
-      !table->BootServices->HandleProtocol || !prepared || !config || !pci ||
-      prepared->inventory.count == 0 ||
-      prepared->inventory.count > GU_INVENTORY_MAX_NVIDIA ||
-      prepared->selected_count > prepared->inventory.count ||
-      step >= prepared->selected_count ||
-      prepared->selected_indices[step] >= prepared->inventory.count)
+  if(!prepared||!prepared->inventory.count||
+     prepared->inventory.count>GU_INVENTORY_MAX_NVIDIA||
+     prepared->selected_count>prepared->inventory.count||
+     step>=prepared->selected_count||prepared->selected_indices[step]>=prepared->inventory.count){
+    if(pci)*pci=NULL;
+    if(config)memset(config,0,64*sizeof(*config));
     return EFI_INVALID_PARAMETER;
+  }
+  return RefreshGpuRecord(table,&prepared->inventory.nvidia[prepared->selected_indices[step]],config,pci);
+}
 
-  expected = &prepared->inventory.nvidia[prepared->selected_indices[step]];
-  if (!expected->handle || !expected->pci ||
-      expected->segment > 0xffffU || expected->bus > 255U ||
-      expected->device > 31U || expected->function > 7U)
-    return EFI_UNSUPPORTED;
-  status = table->BootServices->HandleProtocol((EFI_HANDLE)expected->handle,
-                                                &PciGuid, (VOID **)&current);
-  if (EFI_ERROR(status) || !current || current != expected->pci ||
-      !current->GetLocation || !current->Pci.Read)
-    return EFI_UNSUPPORTED;
-  status = current->GetLocation(current, &segment, &bus, &device, &function);
-  if (EFI_ERROR(status) || segment != expected->segment ||
-      bus != expected->bus || device != expected->device ||
-      function != expected->function)
-    return EFI_UNSUPPORTED;
-  status = current->Pci.Read(current, EfiPciIoWidthUint32, 0, 64, snapshot);
-  if (EFI_ERROR(status) || snapshot[0] != expected->pci_id ||
-      (UINT16)(snapshot[2] >> 16) != expected->class_code ||
-      snapshot[0x2c / 4] != expected->subsystem_id)
-    return EFI_UNSUPPORTED;
-  memcpy(config, snapshot, sizeof(snapshot));
-  *pci = current;
+/* Check all saved identities and the complete live set. The live scratch
+ * buffer has no ownership role and is never published as a saved record. */
+static EFI_STATUS VerifyLiveGpuRecords(EFI_SYSTEM_TABLE *table,const GU_GPU_PREPARED_VIEW *prepared,
+                                       GU_GPU_RECORD *live,size_t capacity) {
+  if(!table||!table->BootServices||!prepared||!live||
+     !prepared->inventory.nvidia||!prepared->selected_indices||
+     !prepared->inventory.count||prepared->inventory.count>prepared->inventory.capacity||
+     prepared->inventory.capacity>GU_INVENTORY_MAX_HANDLES||
+     prepared->inventory.count>capacity||capacity>GU_INVENTORY_MAX_HANDLES||
+     !prepared->selected_count||prepared->selected_count>prepared->inventory.count)
+    return EFI_INVALID_PARAMETER;
+  size_t count=prepared->inventory.count;
+  const GU_GPU_RECORD *records=prepared->inventory.nvidia;
+  for(size_t i=0;i<count;i++){
+    const GU_GPU_RECORD *r=&records[i];
+    if(!r->handle||!r->pci||(r->pci_id&0xffffU)!=0x10deU||
+       (r->class_code&0xff00U)!=0x0300U||r->segment>0xffffU||
+       r->bus>255U||r->device>31U||r->function>7U)return EFI_INVALID_PARAMETER;
+    for(size_t j=0;j<i;j++){
+      const GU_GPU_RECORD *p=&records[j];
+      if(r->handle==p->handle||r->pci==p->pci||
+         (r->segment==p->segment&&r->bus==p->bus&&
+          r->device==p->device&&r->function==p->function))return EFI_INVALID_PARAMETER;
+    }
+  }
+  for(size_t i=0;i<prepared->selected_count;i++){
+    if(prepared->selected_indices[i]>=count)return EFI_INVALID_PARAMETER;
+    for(size_t j=0;j<i;j++)
+      if(prepared->selected_indices[i]==prepared->selected_indices[j])return EFI_INVALID_PARAMETER;
+  }
+  size_t live_count=0;
+  EFI_STATUS s=ReadGpuRecords(table,live,capacity,&live_count);
+  if(s!=EFI_SUCCESS||live_count!=count)return EFI_UNSUPPORTED;
+  for(size_t i=0;i<count;i++){
+    const GU_GPU_RECORD *expected=&records[i];
+    size_t matches=0;
+    for(size_t j=0;j<live_count;j++){
+      const GU_GPU_RECORD *r=&live[j];
+      if(r->segment!=expected->segment||r->bus!=expected->bus||
+         r->device!=expected->device||r->function!=expected->function)continue;
+      if(r->handle!=expected->handle||r->pci!=expected->pci||
+         r->pci_id!=expected->pci_id||r->subsystem_id!=expected->subsystem_id||
+         r->class_code!=expected->class_code)return EFI_UNSUPPORTED;
+      matches++;
+    }
+    if(matches!=1)return EFI_UNSUPPORTED;
+  }
   return EFI_SUCCESS;
 }
 
-/* Publish only requested targets in order after read-only full-set
- * NVIDIA re-enumeration and two PCI snapshot passes on every present target
- * and non-target. Refuse added/missing/rebound cards and saved aliases.
- * No atomic hardware snapshot, ownership release or GPU mutation is implied
- * by a successful observation. */
+/* Snapshot all records in inventory order, then confirm all snapshots.
+ * The caller may publish their contents only after both passes succeed. */
+static EFI_STATUS RefreshGpuRecords(EFI_SYSTEM_TABLE *table,const GU_GPU_PREPARED_VIEW *prepared,
+                                    GU_GPU_RECORD *live,GU_GPU_REFRESHED_TARGET *scanned,
+                                    size_t capacity) {
+  if(!scanned)return EFI_INVALID_PARAMETER;
+  EFI_STATUS s=VerifyLiveGpuRecords(table,prepared,live,capacity);
+  if(s!=EFI_SUCCESS)return s;
+  for(size_t i=0;i<prepared->inventory.count;i++){
+    s=RefreshGpuRecord(table,&prepared->inventory.nvidia[i],scanned[i].config,&scanned[i].pci);
+    if(s!=EFI_SUCCESS)return s;
+  }
+  for(size_t i=0;i<prepared->inventory.count;i++){
+    UINT32 confirm[64];EFI_PCI_IO_PROTOCOL *io=NULL;
+    s=RefreshGpuRecord(table,&prepared->inventory.nvidia[i],confirm,&io);
+    if(s!=EFI_SUCCESS||io!=scanned[i].pci||
+       memcmp(confirm,scanned[i].config,sizeof(confirm))!=0)return EFI_UNSUPPORTED;
+  }
+  return EFI_SUCCESS;
+}
+
+/* Existing bounded API: its caller-owned output is blank on any failure.
+ * Active discovery does not allocate these fixed compatibility buffers. */
 EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
                                      const GU_GPU_PREPARED_SEQUENCE *prepared,
                                      GU_GPU_REFRESHED_SEQUENCE *refreshed) {
-  GU_GPU_PREPARED_SEQUENCE all, live;
+  if(!refreshed)return EFI_INVALID_PARAMETER;
+  memset(refreshed,0,sizeof(*refreshed));
+  if(!prepared)return EFI_INVALID_PARAMETER;
+  GU_GPU_PREPARED_VIEW view={{prepared->inventory.count,GU_INVENTORY_MAX_NVIDIA,
+                              (GU_GPU_RECORD *)prepared->inventory.nvidia},
+                             prepared->selected_count,(size_t *)prepared->selected_indices};
+  GU_GPU_RECORD live[GU_INVENTORY_MAX_NVIDIA];
   GU_GPU_REFRESHED_TARGET scanned[GU_INVENTORY_MAX_NVIDIA];
-  size_t i, j;
-  EFI_STATUS status;
-  if (!refreshed) return EFI_INVALID_PARAMETER;
-  memset(refreshed, 0, sizeof(*refreshed));
-  if (!table || !table->BootServices ||
-      !table->BootServices->LocateHandleBuffer ||
-      !table->BootServices->HandleProtocol ||
-      !table->BootServices->FreePool ||
-      !prepared || !prepared->inventory.count ||
-      prepared->inventory.count > GU_INVENTORY_MAX_NVIDIA ||
-      !prepared->selected_count ||
-      prepared->selected_count > prepared->inventory.count)
-    return EFI_INVALID_PARAMETER;
-
-  /* Validate identity independence across the FULL saved inventory,
-   * not just selected records. A stale/corrupted non-target must fail closed. */
-  for (i = 0; i < prepared->inventory.count; ++i) {
-    const GU_GPU_RECORD *record = &prepared->inventory.nvidia[i];
-    if (!record->handle || !record->pci ||
-        (record->pci_id & 0xffffU) != 0x10deU ||
-        (record->class_code & 0xff00U) != 0x0300U ||
-        record->segment > 0xffffU || record->bus > 255U ||
-        record->device > 31U || record->function > 7U)
-      return EFI_INVALID_PARAMETER;
-    for (j = 0; j < i; ++j) {
-      const GU_GPU_RECORD *prior = &prepared->inventory.nvidia[j];
-      if (record->handle == prior->handle || record->pci == prior->pci ||
-          (record->segment == prior->segment && record->bus == prior->bus &&
-           record->device == prior->device &&
-           record->function == prior->function))
-        return EFI_INVALID_PARAMETER;
-    }
-  }
-  for (i = 0; i < prepared->selected_count; ++i) {
-    if (prepared->selected_indices[i] >= prepared->inventory.count)
-      return EFI_INVALID_PARAMETER;
-    for (j = 0; j < i; ++j)
-      if (prepared->selected_indices[i] == prepared->selected_indices[j])
-        return EFI_INVALID_PARAMETER;
-  }
-
-  /* A previously saved inventory must still enumerate the same complete
-   * NVIDIA set. Matching by BDF permits UEFI handle enumeration reorder but
-   * not an added, missing, replaced or re-bound NVIDIA controller.
-   * This is a new read-only enumeration; it cannot eliminate later races. */
-  status = GuPrepareGpuSequence(table, NULL, 0, &live);
-  if (status != EFI_SUCCESS ||
-      live.inventory.count != prepared->inventory.count)
-    return EFI_UNSUPPORTED;
-  for (i = 0; i < prepared->inventory.count; ++i) {
-    const GU_GPU_RECORD *expected = &prepared->inventory.nvidia[i];
-    size_t matches = 0;
-    for (j = 0; j < live.inventory.count; ++j) {
-      const GU_GPU_RECORD *observed = &live.inventory.nvidia[j];
-      if (observed->segment != expected->segment ||
-          observed->bus != expected->bus ||
-          observed->device != expected->device ||
-          observed->function != expected->function)
-        continue;
-      if (observed->handle != expected->handle ||
-          observed->pci != expected->pci ||
-          observed->pci_id != expected->pci_id ||
-          observed->class_code != expected->class_code ||
-          observed->subsystem_id != expected->subsystem_id)
-        return EFI_UNSUPPORTED;
-      ++matches;
-    }
-    if (matches != 1) return EFI_UNSUPPORTED;
-  }
-  /* Reuse the source-level single-record identity and PCI read contract. */
-  all = *prepared;
-  all.selected_count = all.inventory.count;
-  for (i = 0; i < all.selected_count; ++i) all.selected_indices[i] = i;
-  memset(scanned, 0, sizeof(scanned));
-  for (i = 0; i < all.selected_count; ++i) {
-    status = GuRefreshPreparedGpu(table, &all, i, scanned[i].config,
-                                  &scanned[i].pci);
-    if (status != EFI_SUCCESS) return status;
-  }
-  /* The second read also guards against changes to a non-target GPU after
-   * its first snapshot. These observations remain non-atomic. */
-  for (i = 0; i < all.selected_count; ++i) {
-    UINT32 confirm[64];
-    EFI_PCI_IO_PROTOCOL *io = NULL;
-    status = GuRefreshPreparedGpu(table, &all, i, confirm, &io);
-    if (status != EFI_SUCCESS || io != scanned[i].pci ||
-        memcmp(confirm, scanned[i].config, sizeof(confirm)) != 0)
-      return EFI_UNSUPPORTED;
-  }
-  /* No fallible steps remain after both reads; publish only now, without
-   * a redundant 4-KiB EFI stack buffer. */
-  for (i = 0; i < prepared->selected_count; ++i)
-    refreshed->targets[i] = scanned[prepared->selected_indices[i]];
-  refreshed->count = prepared->selected_count;
+  EFI_STATUS s=RefreshGpuRecords(table,&view,live,scanned,GU_INVENTORY_MAX_NVIDIA);
+  if(s!=EFI_SUCCESS)return s;
+  for(size_t i=0;i<view.selected_count;i++)
+    refreshed->targets[i]=scanned[view.selected_indices[i]];
+  refreshed->count=view.selected_count;
   return EFI_SUCCESS;
 }
 
-/* Revalidate the complete saved NVIDIA PCI set. The selected card may have
- * expected configuration changes during its own transaction. Every peer
- * must match the expected configuration in its ordered execution record.
- * A completed selected card must also retain its recorded post-state.
- * This function has no GPU writes, driver detach, DMA, or reset actions. */
+/* Verify the live PCI set and its expected per-device state. */
 #ifdef GU_ACTIVE_SINGLE_TARGET
 /* One source of target and step identity: the ordered execution record.
  * Check the retained backing and current PCI binding before trusting it. */
@@ -332,8 +421,14 @@ static int ResolveSelectedBinding(size_t *step,size_t *target) {
      !ActiveSequenceTargets || !ActiveSequenceOrder || !ActiveObservations ||
      ActiveSequence.targets!=ActiveSequenceTargets ||
      ActiveSequence.order!=ActiveSequenceOrder ||
+     !ActiveDiscovery.allocation ||
+     ActiveInventory.inventory.nvidia!=ActiveDiscovery.records ||
+     ActiveInventory.selected_indices!=ActiveDiscovery.indices ||
+     ActiveInventory.inventory.capacity!=ActiveDiscovery.capacity ||
+     ActiveObservations!=ActiveDiscovery.observed ||
      !ActiveInventory.inventory.count ||
-     ActiveInventory.inventory.count>GU_INVENTORY_MAX_NVIDIA ||
+     ActiveInventory.inventory.count>ActiveDiscovery.capacity ||
+     ActiveDiscovery.capacity>GU_INVENTORY_MAX_HANDLES ||
      ActiveSequence.count!=ActiveInventory.inventory.count ||
      ActiveSequence.count!=ActiveSequence.capacity ||
      GuGpuExecResolveBound(&ActiveSequence,Gu.handle,Gu.pci,step,target)
@@ -364,8 +459,7 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
   (VOID)table;
   return EFI_SUCCESS;
 #else
-  GU_GPU_PREPARED_SEQUENCE live, all;
-  size_t i,j,step,target;
+  size_t i,step,target;
   EFI_STATUS s;
   if(!table || !table->BootServices || Gu.bs!=table->BootServices ||
      !ResolveSelectedBinding(&step,&target))
@@ -377,36 +471,14 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
       !Gu.asset_entries_reserved ||
       bound->owners.firmware_assets!=Gu.asset_entries))
     return EFI_UNSUPPORTED;
-  s=GuPrepareGpuSequence(table,NULL,0,&live);
-  if(s!=EFI_SUCCESS || live.inventory.count!=ActiveInventory.inventory.count)
-    return EFI_UNSUPPORTED;
-  for(i=0;i<ActiveInventory.inventory.count;i++) {
-    const GU_GPU_RECORD *expected=&ActiveInventory.inventory.nvidia[i];
-    size_t matches=0;
-    for(j=0;j<live.inventory.count;j++) {
-      const GU_GPU_RECORD *observed=&live.inventory.nvidia[j];
-      if(observed->segment!=expected->segment ||
-         observed->bus!=expected->bus ||
-         observed->device!=expected->device ||
-         observed->function!=expected->function)continue;
-      if(observed->handle!=expected->handle ||
-         observed->pci!=expected->pci ||
-         observed->pci_id!=expected->pci_id ||
-         observed->class_code!=expected->class_code ||
-         observed->subsystem_id!=expected->subsystem_id)return EFI_UNSUPPORTED;
-      matches++;
-    }
-    if(matches!=1)return EFI_UNSUPPORTED;
-  }
-  all=ActiveInventory;
-  all.selected_count=all.inventory.count;
-  for(i=0;i<all.selected_count;i++)all.selected_indices[i]=i;
+  s=VerifyLiveGpuRecords(table,&ActiveInventory,ActiveDiscovery.live,ActiveDiscovery.capacity);
+  if(s!=EFI_SUCCESS)return EFI_UNSUPPORTED;
   for(unsigned pass=0;pass<2;pass++) {
-    for(i=0;i<all.selected_count;i++) {
+    for(i=0;i<ActiveInventory.inventory.count;i++) {
       UINT32 now[64];
       EFI_PCI_IO_PROTOCOL *io=NULL;
-      s=GuRefreshPreparedGpu(table,&all,i,now,&io);
-      if(s!=EFI_SUCCESS || io!=all.inventory.nvidia[i].pci)return EFI_UNSUPPORTED;
+      s=RefreshGpuRecord(table,&ActiveInventory.inventory.nvidia[i],now,&io);
+      if(s!=EFI_SUCCESS || io!=ActiveInventory.inventory.nvidia[i].pci)return EFI_UNSUPPORTED;
       /* The execution record is the single source of expected PCI state.
        * Pending peers retain their initial state. Completed cards retain
        * the state recorded by the successful Finish transition. */
@@ -443,21 +515,16 @@ static void ConfigureBoundPlatform(EFI_HANDLE image,const GU_GPU_RECORD *selecte
 /* Re-enumerate and read the COMPLETE NVIDIA inventory twice. A later
  * selected-card step must not trust a previous firmware/PCI snapshot. */
 static EFI_STATUS ActiveStepObservations(EFI_SYSTEM_TABLE *table) {
-  GU_GPU_EXEC_OBSERVATION *observed=ActiveObservations;
-  GU_GPU_PREPARED_SEQUENCE all;
-  GU_GPU_REFRESHED_SEQUENCE refreshed;
-  if(!ActiveInventoryValid || !ActiveSequenceValid || !table ||
-     !table->BootServices || !observed)return EFI_INVALID_PARAMETER;
-  all=ActiveInventory;
-  all.selected_count=all.inventory.count;
-  for(size_t i=0;i<all.selected_count;i++)all.selected_indices[i]=i;
-  EFI_STATUS s=GuRefreshPreparedSequence(table,&all,&refreshed);
-  if(s!=EFI_SUCCESS || refreshed.count!=all.inventory.count)
-    return EFI_UNSUPPORTED;
-  for(size_t i=0;i<all.inventory.count;i++) {
-    observed[i].identity=all.inventory.nvidia[i];
-    memcpy(observed[i].config,refreshed.targets[i].config,
-           sizeof(observed[i].config));
+  if(!ActiveInventoryValid||!ActiveSequenceValid||!table||!table->BootServices||
+     !ActiveObservations||ActiveObservations!=ActiveDiscovery.observed)
+    return EFI_INVALID_PARAMETER;
+  EFI_STATUS s=RefreshGpuRecords(table,&ActiveInventory,ActiveDiscovery.live,
+                                  ActiveDiscovery.scanned,ActiveDiscovery.capacity);
+  if(s!=EFI_SUCCESS)return EFI_UNSUPPORTED;
+  for(size_t i=0;i<ActiveInventory.inventory.count;i++){
+    ActiveObservations[i].identity=ActiveInventory.inventory.nvidia[i];
+    memcpy(ActiveObservations[i].config,ActiveDiscovery.scanned[i].config,
+           sizeof(ActiveObservations[i].config));
   }
   return EFI_SUCCESS;
 }
@@ -643,10 +710,15 @@ EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
  * for the remaining boot: completion and handover consume these records. */
 static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
                                        EFI_PCI_IO_PROTOCOL *io,
-                                       const GU_GPU_PREPARED_SEQUENCE *prepared,
-                                       const GU_GPU_EXEC_OBSERVATION *observations) {
-  if(!table || !table->BootServices || !io || !prepared || !observations ||
-     !prepared->inventory.count || prepared->inventory.count>GU_INVENTORY_MAX_NVIDIA ||
+                                       const GU_GPU_PREPARED_VIEW *prepared,
+                                       GU_GPU_DISCOVERY_STORAGE *storage) {
+  if(!table || !table->BootServices || !io || !prepared || !storage ||
+     !storage->allocation || !storage->observed ||
+     prepared->inventory.nvidia!=storage->records ||
+     prepared->selected_indices!=storage->indices ||
+     prepared->inventory.capacity!=storage->capacity ||
+     storage->capacity>GU_INVENTORY_MAX_HANDLES ||
+     !prepared->inventory.count || prepared->inventory.count>storage->capacity ||
      !prepared->selected_count || prepared->selected_count>prepared->inventory.count ||
      prepared->selected_indices[0]>=prepared->inventory.count ||
      prepared->inventory.nvidia[prepared->selected_indices[0]].pci!=io)
@@ -658,16 +730,12 @@ static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
   GU_GPU_EXEC_SEQUENCE candidate;
   GU_GPU_EXEC_TARGET *targets=NULL;
   size_t *order=NULL;
-  GU_GPU_EXEC_OBSERVATION *workspace=NULL;
+  const GU_GPU_EXEC_OBSERVATION *observations=storage->observed;
   EFI_STATUS s=bs->AllocatePool(EfiLoaderData,count*sizeof(*targets),(VOID **)&targets);
   if(s==EFI_SUCCESS && !targets)s=EFI_OUT_OF_RESOURCES;
   if(s==EFI_SUCCESS) {
     s=bs->AllocatePool(EfiLoaderData,count*sizeof(*order),(VOID **)&order);
     if(s==EFI_SUCCESS && !order)s=EFI_OUT_OF_RESOURCES;
-  }
-  if(s==EFI_SUCCESS) {
-    s=bs->AllocatePool(EfiLoaderData,count*sizeof(*workspace),(VOID **)&workspace);
-    if(s==EFI_SUCCESS && !workspace)s=EFI_OUT_OF_RESOURCES;
   }
   if(s==EFI_SUCCESS &&
      (GuGpuExecInit(&candidate,observations,count,prepared->selected_indices,
@@ -677,10 +745,6 @@ static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
   if(s==EFI_SUCCESS)s=GuInit(table->BootServices,io);
   if(s!=EFI_SUCCESS) {
     EFI_STATUS released=EFI_SUCCESS;
-    if(workspace) {
-      EFI_STATUS r=bs->FreePool(workspace);
-      if(r!=EFI_SUCCESS)released=r;
-    }
     if(order) {
       EFI_STATUS r=bs->FreePool(order);
       if(r!=EFI_SUCCESS)released=r;
@@ -698,7 +762,9 @@ static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
   ActiveInventory=*prepared;
   ActiveSequenceTargets=targets;
   ActiveSequenceOrder=order;
-  ActiveObservations=workspace;
+  ActiveDiscovery=*storage;
+  memset(storage,0,sizeof(*storage)); /* Transfer pool ownership once. */
+  ActiveObservations=ActiveDiscovery.observed;
   ActiveSequence=candidate;
   ActiveSequenceValid=1;
   ActiveInventoryValid=1;
@@ -718,7 +784,7 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
   if(!bs || !bs->AllocatePool || !bs->FreePool || !sequence ||
      !sequence->targets || !sequence->order || !sequence->count ||
      sequence->count>sequence->capacity ||
-     sequence->capacity>GU_INVENTORY_MAX_NVIDIA ||
+     sequence->capacity>GU_INVENTORY_MAX_HANDLES ||
      !sequence->selected_count || sequence->selected_count>sequence->count)
     return EFI_INVALID_PARAMETER;
   if(PreparedContexts)return EFI_ALREADY_STARTED;
@@ -775,129 +841,121 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
 #endif
 
 EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
-  GU_GPU_PREPARED_SEQUENCE prepared;
-  const GU_GPU_RECORD *selected;
-  EFI_PCI_IO_PROTOCOL *io;
+  GU_GPU_DISCOVERY_STORAGE storage={0};
+  EFI_HANDLE *handles=NULL;UINTN handle_count=0;
+  EFI_PCI_IO_PROTOCOL *io=NULL;
   UINT32 config[64];
   GU_CAPS caps;
-  EFI_STATUS s;
-  if (!image || !table) return EFI_INVALID_PARAMETER;
+  if(!image||!table||!table->BootServices)return EFI_INVALID_PARAMETER;
+  if(UnreleasedDiscoveryAllocation)return EFI_ALREADY_STARTED;
+  EFI_STATUS s=LocatePciHandles(table,&handles,&handle_count);
+  if(s!=EFI_SUCCESS)return s;
+  s=AllocateDiscoveryStorage(table->BootServices,(size_t)handle_count,&storage);
+  if(s!=EFI_SUCCESS){
+    EFI_STATUS released=table->BootServices->FreePool(handles);
+    return released==EFI_SUCCESS?s:released;
+  }
+  GU_GPU_PREPARED_VIEW prepared=DiscoveryView(&storage);
+  s=CollectLocatedGpuRecords(table,handles,handle_count,prepared.inventory.nvidia,
+                             prepared.inventory.capacity,&prepared.inventory.count);
+  if(s!=EFI_SUCCESS)goto done;
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
-  s = GuPrepareGpuSequence(table, ActiveRequested, GU_GPU_SELECTION_COUNT,
-                           &prepared);
+  s=SelectPreparedRecords(&prepared,ActiveRequested,GU_GPU_SELECTION_COUNT);
 #else
-  s = GuPrepareGpuSequence(table, NULL, 0, &prepared);
+  s=SelectPreparedRecords(&prepared,NULL,0);
 #endif
-  if (s != EFI_SUCCESS) return s;
+  if(s!=EFI_SUCCESS)goto done;
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
   {
-    GU_GPU_PREPARED_SEQUENCE all=prepared;
-    GU_GPU_REFRESHED_SEQUENCE refreshed;
-    GU_GPU_EXEC_OBSERVATION observed[GU_INVENTORY_MAX_NVIDIA];
     GU_GPU_EXEC_SEQUENCE sequence;
-    GU_GPU_EXEC_TARGET sequence_targets[GU_INVENTORY_MAX_NVIDIA];
-    size_t sequence_order[GU_INVENTORY_MAX_NVIDIA];
-    /* Track every NVIDIA peer, not only the requested targets.
-     * Preparation never calls Begin or authorizes hardware mutation. */
-    all.selected_count=all.inventory.count;
-    for(size_t i=0;i<all.selected_count;i++)all.selected_indices[i]=i;
-    s=GuRefreshPreparedSequence(table,&all,&refreshed);
-    if(s!=EFI_SUCCESS || refreshed.count!=all.selected_count) {
-      GuLog("ACTIVE_REFRESH=REFUSED STATUS=%#llx BEFORE_GU_INIT=1\n",
-            (unsigned long long)s);
-      return EFI_UNSUPPORTED;
+    s=RefreshGpuRecords(table,&prepared,storage.live,storage.scanned,storage.capacity);
+    if(s!=EFI_SUCCESS){
+      GuLog("ACTIVE_REFRESH=REFUSED STATUS=%#llx BEFORE_GU_INIT=1\n",(unsigned long long)s);
+      s=EFI_UNSUPPORTED;goto done;
     }
-    memset(observed,0,sizeof(observed));
-    for(size_t i=0;i<all.inventory.count;i++) {
-      observed[i].identity=all.inventory.nvidia[i];
-      memcpy(observed[i].config,refreshed.targets[i].config,
-             sizeof(observed[i].config));
+    for(size_t i=0;i<prepared.inventory.count;i++){
+      storage.observed[i].identity=prepared.inventory.nvidia[i];
+      memcpy(storage.observed[i].config,storage.scanned[i].config,
+             sizeof(storage.observed[i].config));
     }
-    if(GuGpuExecInit(&sequence,observed,all.inventory.count,
+    if(GuGpuExecInit(&sequence,storage.observed,prepared.inventory.count,
                      prepared.selected_indices,prepared.selected_count,
-                     sequence_targets,sequence_order,GU_INVENTORY_MAX_NVIDIA)!=GU_GPU_EXEC_OK ||
-       GuGpuExecCheckNext(&sequence,observed,all.inventory.count)!=GU_GPU_EXEC_OK) {
+                     storage.targets,storage.order,storage.capacity)!=GU_GPU_EXEC_OK||
+       GuGpuExecCheckNext(&sequence,storage.observed,prepared.inventory.count)!=GU_GPU_EXEC_OK){
       GuLog("ACTIVE_SEQUENCE=REFUSED REASON=STATE_OR_PEER_DRIFT BEFORE_GU_INIT=1\n");
-      return EFI_UNSUPPORTED;
+      s=EFI_UNSUPPORTED;goto done;
     }
     s=PreparePlatformContexts(table->BootServices,&sequence);
-    if(s!=EFI_SUCCESS) {
-      GuLog("ACTIVE_CONTEXTS=REFUSED STATUS=%#llx BEFORE_GU_INIT=1\n",
-            (unsigned long long)s);
-      return s;
+    if(s!=EFI_SUCCESS){
+      GuLog("ACTIVE_CONTEXTS=REFUSED STATUS=%#llx BEFORE_GU_INIT=1\n",(unsigned long long)s);
+      goto done;
     }
     GuLog("ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=%zu TRACKED=%zu NEXT=0 MUTATION_AUTHORIZED=0\n",
           sequence.selected_count,sequence.count);
-    GuLog("ACTIVE_REFRESH=PASSIVE_REVALIDATED TARGETS=%zu MUTATION_AUTHORIZED=0\n",
-          refreshed.count);
+    GuLog("ACTIVE_REFRESH=PASSIVE_REVALIDATED TARGETS=%zu MUTATION_AUTHORIZED=0\n",prepared.inventory.count);
   }
-#endif
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
-  /* Successful read-only preparation must not fall through to the legacy
-   * single-card global-state refusal or spend GuInit on a dual-card host. */
   GuLog("ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\n");
-  return EFI_UNSUPPORTED;
+  s=EFI_UNSUPPORTED;goto done;
 #endif
 #ifndef GU_ACTIVE_SINGLE_TARGET
-  if (prepared.inventory.count > 1) {
+  if(prepared.inventory.count>1){
     GuLog("ACTIVE_EXECUTION=REFUSED REASON=MULTI_NVIDIA_GLOBAL_STATE NVIDIA_COUNT=%zu SELECTED=%zu BEFORE_GU_INIT=1\n",
-          prepared.inventory.count, prepared.selected_count);
-    return EFI_UNSUPPORTED; /* Legacy unselected execution must remain single-card. */
+          prepared.inventory.count,prepared.selected_count);
+    s=EFI_UNSUPPORTED;goto done;
   }
-  if (prepared.inventory.count != 1 || prepared.selected_count != 1 ||
-      prepared.selected_indices[0] != 0)
-    return EFI_UNSUPPORTED;
+  if(prepared.inventory.count!=1||prepared.selected_count!=1||prepared.selected_indices[0]!=0){
+    s=EFI_UNSUPPORTED;goto done;
+  }
 #else
-  if(!prepared.selected_count || prepared.selected_count>prepared.inventory.count ||
-     prepared.selected_indices[0]>=prepared.inventory.count)
-    return EFI_UNSUPPORTED;
+  if(!prepared.selected_count||prepared.selected_count>prepared.inventory.count||
+     prepared.selected_indices[0]>=prepared.inventory.count){
+    s=EFI_UNSUPPORTED;goto done;
+  }
 #ifndef GU_SYNTHETIC_COMPILE_ONLY
-  if(prepared.selected_count!=1)return EFI_UNSUPPORTED;
+  if(prepared.selected_count!=1){s=EFI_UNSUPPORTED;goto done;}
 #endif
 #endif
-  selected = &prepared.inventory.nvidia[prepared.selected_indices[0]];
-  if (!GuIsSupportedPciId(selected->pci_id)) return EFI_UNSUPPORTED;
-  s = GuRefreshPreparedGpu(table, &prepared, 0, config, &io);
-  if (s != EFI_SUCCESS)return EFI_UNSUPPORTED;
+  /* Copy the selected identity: non-active discovery releases scratch
+   * before GuInit and the active path transfers its backing on success. */
+  GU_GPU_RECORD selected=prepared.inventory.nvidia[prepared.selected_indices[0]];
+  if(!GuIsSupportedPciId(selected.pci_id)){s=EFI_UNSUPPORTED;goto done;}
+  s=RefreshGpuRecord(table,&selected,config,&io);
+  if(s!=EFI_SUCCESS){s=EFI_UNSUPPORTED;goto done;}
 #ifdef GU_ACTIVE_SINGLE_TARGET
-  if(!GuCheckConfigInitialMaster(config,selected->segment,selected->bus,
-                                  selected->device,selected->function,&caps))
-    return EFI_UNSUPPORTED;
-#else
-  if(!GuCheckConfig(config,selected->segment,selected->bus,
-                    selected->device,selected->function,&caps))
-    return EFI_UNSUPPORTED;
-#endif
-
-#ifdef GU_ACTIVE_SINGLE_TARGET
-  /* The full inventory is re-enumerated, then read twice before publication.
-   * Store original non-target configuration for later stage validation. */
-  {
-    GU_GPU_PREPARED_SEQUENCE all=prepared;
-    GU_GPU_REFRESHED_SEQUENCE full;
-    all.selected_count=all.inventory.count;
-    for(size_t i=0;i<all.selected_count;i++)all.selected_indices[i]=i;
-    s=GuRefreshPreparedSequence(table,&all,&full);
-    if(s!=EFI_SUCCESS || full.count!=all.selected_count ||
-       full.targets[prepared.selected_indices[0]].pci!=io ||
-       memcmp(full.targets[prepared.selected_indices[0]].config,
-              config,sizeof(config))!=0)return EFI_UNSUPPORTED;
-    /* Build the checked one-target execution state BEFORE spending GuInit.
-     * Failed binding must not overwrite prior target/peer state. */
-    GU_GPU_EXEC_OBSERVATION observations[GU_INVENTORY_MAX_NVIDIA];
-    memset(observations,0,sizeof(observations));
-    for(size_t i=0;i<all.inventory.count;i++) {
-      observations[i].identity=all.inventory.nvidia[i];
-      memcpy(observations[i].config,full.targets[i].config,
-             sizeof(observations[i].config));
-    }
-    s=BindPreparedSequence(table,io,&prepared,observations);
-    if(s!=EFI_SUCCESS)return s;
+  if(!GuCheckConfigInitialMaster(config,selected.segment,selected.bus,
+                                  selected.device,selected.function,&caps)){
+    s=EFI_UNSUPPORTED;goto done;
   }
 #else
+  if(!GuCheckConfig(config,selected.segment,selected.bus,selected.device,selected.function,&caps)){
+    s=EFI_UNSUPPORTED;goto done;
+  }
+#endif
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  s=RefreshGpuRecords(table,&prepared,storage.live,storage.scanned,storage.capacity);
+  size_t chosen=prepared.selected_indices[0];
+  if(s!=EFI_SUCCESS||storage.scanned[chosen].pci!=io||
+     memcmp(storage.scanned[chosen].config,config,sizeof(config))!=0){
+    s=EFI_UNSUPPORTED;goto done;
+  }
+  for(size_t i=0;i<prepared.inventory.count;i++){
+    storage.observed[i].identity=prepared.inventory.nvidia[i];
+    memcpy(storage.observed[i].config,storage.scanned[i].config,
+           sizeof(storage.observed[i].config));
+  }
+  s=BindPreparedSequence(table,io,&prepared,&storage);
+  if(s!=EFI_SUCCESS)goto done;
+#else
+  s=FreeDiscoveryStorage(table->BootServices,&storage);
+  if(s!=EFI_SUCCESS)return s;
   s=GuInit(table->BootServices,io);
   if(s!=EFI_SUCCESS)return s;
 #endif
-  ConfigureBoundPlatform(image,selected,config,&caps);
+  ConfigureBoundPlatform(image,&selected,config,&caps);
   return EFI_SUCCESS;
+done:
+  {
+    EFI_STATUS released=FreeDiscoveryStorage(table->BootServices,&storage);
+    return released==EFI_SUCCESS?s:released;
+  }
 }

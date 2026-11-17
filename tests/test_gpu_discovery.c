@@ -13,9 +13,7 @@ static unsigned checks;
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static int release_owner_token,other_owner_token;
 #endif
-#if defined(GU_ACTIVE_SINGLE_TARGET) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
-static unsigned state_allocs,state_frees,fail_state_alloc;
-#endif
+static unsigned state_allocs,state_frees,fail_state_alloc,fail_state_free;
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 static unsigned context_allocs,context_frees,fail_context_free;
 #endif
@@ -32,8 +30,8 @@ typedef struct {
   int drift_nonselected_on_full_read;
   unsigned full_reads;
 } MOCK_DEVICE;
-static MOCK_DEVICE gpu[4];
-static EFI_HANDLE handles[4];
+static MOCK_DEVICE gpu[24];
+static EFI_HANDLE handles[24];
 static size_t count;
 static unsigned init_calls, free_calls, log_calls, resolve_calls;
 static unsigned prep_markers, prep_refusals, global_refusals;
@@ -108,23 +106,19 @@ static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
   return EFI_SUCCESS;
 }
 static EFI_STATUS Free(VOID *p) {
-#if defined(GU_ACTIVE_SINGLE_TARGET) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
-  if(p && p!=handles) {free(p);state_frees++;return EFI_SUCCESS;}
-#endif
+  if(p && p!=handles) {
+    if(fail_state_free){fail_state_free=0;return EFI_NOT_READY;}
+    free(p);state_frees++;return EFI_SUCCESS;
+  }
   free_calls++; if (p != handles || fail_pool_free) return 3;
   return EFI_SUCCESS;
 }
 static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
-#if defined(GU_ACTIVE_SINGLE_TARGET) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
   if(kind!=EfiLoaderData || !out || !bytes)return EFI_INVALID_PARAMETER;
   state_allocs++;
   if(fail_state_alloc==state_allocs)return EFI_OUT_OF_RESOURCES;
   *out=calloc(1,bytes);
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
-#else
-  (void)kind;(void)bytes;(void)out;
-  return EFI_UNSUPPORTED;
-#endif
 }
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,GU_PLATFORM **out) {
@@ -186,17 +180,27 @@ static void ResetPair(void) {
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
   prep_markers = prep_refusals = global_refusals = 0;
   fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
+  state_allocs=state_frees=fail_state_alloc=fail_state_free=0;
   Populate(0, Primary); Populate(1, Secondary);
 }
 #include "../src/gpu_discovery.c"
+
+static void ExpandInventory(size_t n) {
+  count=n;
+  for(size_t i=2;i<n;i++){Populate(i,Primary);gpu[i].bus=20+i;}
+}
 
 #if defined(GU_ACTIVE_SINGLE_TARGET)
 /* The production single-target path supports the user's segment-0 PCI cards.
  * Earlier mock Segment=1 is intentionally not accepted by GuCheckConfig. */
 static void ResetActivePair(void) {
   /* A test reset models a new boot, not a production unbind. */
-  free(ActiveSequenceTargets);free(ActiveSequenceOrder);free(ActiveObservations);
+  free(ActiveSequenceTargets);free(ActiveSequenceOrder);free(ActiveDiscovery.allocation);
+  memset(&ActiveDiscovery,0,sizeof(ActiveDiscovery));
+  memset(&ActiveInventory,0,sizeof(ActiveInventory));
   ActiveSequenceTargets=NULL;ActiveSequenceOrder=NULL;ActiveObservations=NULL;
+  /* Test reset represents a new boot, not production disposal/retry. */
+  free(UnreleasedDiscoveryAllocation);UnreleasedDiscoveryAllocation=NULL;
   memset(&ActiveSequence,0,sizeof(ActiveSequence));
   ActiveSequenceValid=ActiveInventoryValid=0;
   state_allocs=state_frees=fail_state_alloc=0;
@@ -213,14 +217,15 @@ int main(void) {
   /* Exercise actual discovery admission only in this host/compile profile.
    * Three selected devices, including a repeated model, and one untouched peer. */
   ResetActivePair();
-  count=4;
-  Populate(2,Primary);gpu[2].bus=9;
-  Populate(3,Primary);gpu[3].bus=10;
+  ExpandInventory(20);
+  gpu[2].bus=9;
+  gpu[3].bus=10;
   int lease[3]={0};
   GU_PLATFORM *owners[3]={0};
   const size_t wanted[3]={1,2,0};
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
-  CHECK(init_calls==1&&ActiveSequence.selected_count==3&&ActiveSequence.count==4);
+  CHECK(init_calls==1&&ActiveSequence.selected_count==3&&ActiveSequence.count==20);
+  CHECK(ActiveDiscovery.capacity==20&&GuIsPreparedPeerHandle(handles[19]));
   for(size_t i=0;i<3;i++) {
     size_t target=wanted[i];
     CHECK(Gu.handle==handles[target]&&Gu.pci==&gpu[target].protocol);
@@ -244,7 +249,7 @@ int main(void) {
     CHECK(owners[i]->release_state==&lease[i]);
     for(size_t j=0;j<i;j++)CHECK(owners[i]!=owners[j]);
   }
-  gpu[3].dwords[4]^=0x1000U;
+  gpu[19].dwords[4]^=0x1000U;
   CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY && ActiveSequence.halted);
   CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
   GuPlatformActive=owners[0];free(owners[1]);free(owners[2]);
@@ -275,7 +280,7 @@ int main(void) {
     CHECK(Gu.handle==old && ActiveInventoryValid);
     CHECK(ActiveSequence.targets[0].expected_config[4]==original_peer);
     CHECK(ActiveSequence.targets==original_targets && ActiveSequence.order==original_order && ActiveObservations==original_observations);
-    CHECK(state_allocs==3 && state_frees==0 && init_calls==1);
+    CHECK(state_allocs==4 && state_frees==1 && init_calls==1);
     refuse_init=0;
   }
   /* Independent allocation failures must not spend GuInit or publish storage. */
@@ -299,7 +304,9 @@ int main(void) {
   gpu[1].dwords[1]=4u; /* initial selected UEFI driver Bus Master enabled */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
-  CHECK(ActiveObservations && ActiveSequence.capacity==2);
+  CHECK(ActiveObservations && ActiveSequence.capacity==2 &&
+        ActiveObservations==ActiveDiscovery.observed &&
+        ActiveInventory.inventory.nvidia==ActiveDiscovery.records);
   /* The selected GPU may change its own BAR after the active transaction. */
   gpu[1].dwords[4]^=0x1000U;
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
@@ -468,21 +475,20 @@ int main(void) {
    * Direct pointer changes below are negative fault injection only. */
   for(int scenario=0;scenario<8;scenario++) {
     ResetActivePair();
-    GU_GPU_PREPARED_SEQUENCE prepared,all;
-    GU_GPU_REFRESHED_SEQUENCE refreshed;
-    GU_GPU_EXEC_OBSERVATION observations[2];
+    GU_GPU_DISCOVERY_STORAGE storage={0};
+    CHECK(AllocateDiscoveryStorage(&services,2,&storage)==EFI_SUCCESS);
+    GU_GPU_PREPARED_VIEW prepared=DiscoveryView(&storage);
     GU_GPU_LOCATION requested[2]={{0,7,0,0},{0,3,0,0}};
     GU_PLATFORM *second=NULL;
-    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&prepared)==EFI_SUCCESS);
-    all=prepared;
-    all.selected_count=all.inventory.count;
-    for(size_t i=0;i<all.selected_count;i++)all.selected_indices[i]=i;
-    CHECK(GuRefreshPreparedSequence(&system_table,&all,&refreshed)==EFI_SUCCESS);
+    CHECK(ReadGpuRecords(&system_table,prepared.inventory.nvidia,storage.capacity,&prepared.inventory.count)==EFI_SUCCESS);
+    CHECK(SelectPreparedRecords(&prepared,requested,2)==EFI_SUCCESS);
+    CHECK(RefreshGpuRecords(&system_table,&prepared,storage.live,storage.scanned,storage.capacity)==EFI_SUCCESS);
     for(size_t i=0;i<2;i++){
-      observations[i].identity=all.inventory.nvidia[i];
-      memcpy(observations[i].config,refreshed.targets[i].config,sizeof(observations[i].config));
+      storage.observed[i].identity=prepared.inventory.nvidia[i];
+      memcpy(storage.observed[i].config,storage.scanned[i].config,sizeof(storage.observed[i].config));
     }
-    CHECK(BindPreparedSequence(&system_table,&gpu[1].protocol,&prepared,observations)==EFI_SUCCESS);
+    CHECK(BindPreparedSequence(&system_table,&gpu[1].protocol,&prepared,&storage)==EFI_SUCCESS);
+    CHECK(!storage.allocation&&ActiveDiscovery.allocation);
     Gu.image=(EFI_HANDLE)1;Gu.handle=handles[1];
     Gu.profile_verified=Gu.prom_verified=1;PrepareMockOwners();
     CHECK(GuIsPreparedPeerHandle(handles[0]) && !GuIsPreparedPeerHandle(handles[1]));
@@ -558,6 +564,28 @@ int main(void) {
     CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
     free(second); /* simulated boot termination only */
   }
+  /* The real selected adapter observes every NVIDIA GPU, not just sixteen.
+   * One target is selected; repeated peer model IDs are intentional. */
+  ResetActivePair();ExpandInventory(20);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  CHECK(ActiveInventory.inventory.count==20&&ActiveDiscovery.capacity==20&&
+        ActiveSequence.count==20&&ActiveSequence.selected_count==1);
+  CHECK(ActiveDiscovery.records!=ActiveDiscovery.live&&ActiveObservations==ActiveDiscovery.observed);
+  CHECK(GuIsPreparedPeerHandle(handles[19])&&GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+  Gu.profile_verified=Gu.prom_verified=1;PrepareMockOwners();
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+  CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+  CHECK(GuVerifySelectedSequence(&system_table)==EFI_SUCCESS);
+  gpu[19].dwords[4]^=0x1000U;
+  CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY&&ActiveSequence.halted);
+  CHECK(state_allocs==3&&state_frees==0); /* No new pool workspace during checks. */
+  ResetActivePair();
+  fail_state_free=1;count=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_NOT_READY);
+  CHECK(!init_calls&&UnreleasedDiscoveryAllocation&&state_allocs==1&&!state_frees);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(state_allocs==1);
+  ResetActivePair();
   printf("PASS exact single-target active binding and CPU state handover: %u checks\n",checks);
   return 0;
 }
@@ -569,7 +597,7 @@ int main(void) {
   CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==2);
   CHECK(prep_markers==1 && prep_refusals==1 && global_refusals==0);
   CHECK(context_allocs==GU_GPU_SELECTION_COUNT && context_frees==context_allocs);
-  CHECK(state_allocs==GU_GPU_SELECTION_COUNT+1 && state_frees==state_allocs);
+  CHECK(state_allocs==GU_GPU_SELECTION_COUNT+2 && state_frees==state_allocs);
   CHECK(!PreparedContexts && !PreparedContextCount && !Gu.pci && !Gu.bs);
   /* Full-set re-enumeration precedes two PCI reads of all NVIDIA devices. */
   CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 2);
@@ -591,7 +619,7 @@ int main(void) {
   CHECK(prep_markers==0 && prep_refusals==0 && global_refusals==0);
   /* The registry must release earlier contexts after a later allocation fails. */
   ResetPair();state_allocs=state_frees=context_allocs=context_frees=0;
-  fail_state_alloc=GU_GPU_SELECTION_COUNT+1;
+  fail_state_alloc=GU_GPU_SELECTION_COUNT+2;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
   CHECK(init_calls==0 && !PreparedContexts && !PreparedContextCount);
   CHECK(context_allocs==GU_GPU_SELECTION_COUNT-1 && context_frees==context_allocs);
@@ -615,6 +643,11 @@ int main(void) {
   for(size_t i=0;i<PreparedContextCount;i++)free(PreparedContexts[i]);
   free(PreparedContexts);PreparedContexts=NULL;PreparedContextCount=0;
 #endif
+  ResetPair();ExpandInventory(20);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+  CHECK(!init_calls&&prep_markers==1&&prep_refusals==1);
+  CHECK(state_allocs==GU_GPU_SELECTION_COUNT+2&&state_frees==state_allocs);
+  CHECK(gpu[19].full_reads==2);
   printf("PASS active selected-entrypoint refusal: %u checks; GuInit never called\n",checks);
   return 0;
 }
@@ -872,6 +905,10 @@ int main(void) {
   ResetPair(); count = 2; gpu[1].dwords[0] = 0x164e1002U;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1, &system_table) == EFI_SUCCESS && init_calls == 1);
   CHECK(Gu.handle == handles[0]);
+
+  ResetPair();ExpandInventory(20);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+  CHECK(!init_calls&&global_refusals==1&&state_allocs==1&&state_frees==1);
 
   printf("PASS UEFI discovery adapter: %u checks; mocked protocols only\n", checks);
   return 0;

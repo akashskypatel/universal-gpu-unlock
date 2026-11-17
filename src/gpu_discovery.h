@@ -9,8 +9,9 @@
 #endif
 #include "gpu_inventory.h"
 
-/* Identity/handle references are valid only within the current boot and are
- * revalidated immediately before any later use. No mutation is authorized. */
+/* Bounded compatibility API for existing callers and host fixtures. The
+ * actual boot discovery path uses runtime-sized pool-backed views instead.
+ * Identity references are valid only within the current boot. */
 typedef struct {
   GU_GPU_INVENTORY inventory;
   size_t selected_count;
