@@ -62,6 +62,7 @@ typedef union {
   size_t index;
 } GU_DISCOVERY_ALIGNMENT;
 static VOID *UnreleasedDiscoveryAllocation;
+static EFI_HANDLE *UnreleasedPciHandles;
 
 static EFI_STATUS AllocateDiscoveryStorage(EFI_BOOT_SERVICES *bs,size_t capacity,
                                            GU_GPU_DISCOVERY_STORAGE *storage) {
@@ -170,18 +171,33 @@ static int ReadPciIdentity(void *opaque, size_t index, GU_GPU_RECORD *record) {
   return 0;
 }
 
-/* The firmware owns the handle buffer until its matching FreePool call.
- * All inventory buffers below belong to the caller. */
+/* A successful LocateHandleBuffer transfers one pool buffer to the caller.
+ * If its release is uncertain, retain the address and refuse later census
+ * operations. Never retry FreePool or read a buffer after its release attempt. */
+static EFI_STATUS ReleasePciHandles(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handles) {
+  if(!handles||!*handles)return EFI_SUCCESS;
+  EFI_HANDLE *buffer=*handles;
+  *handles=NULL;
+  EFI_STATUS s=bs->FreePool(buffer);
+  if(s!=EFI_SUCCESS) {
+    UnreleasedPciHandles=buffer;
+    GuLog("PCI_HANDLE_BUFFER_FREE_STATUS=%#llx RETAINED=1\n",(unsigned long long)s);
+  }
+  return s;
+}
+
+/* All inventory buffers below belong to the caller. */
 static EFI_STATUS LocatePciHandles(EFI_SYSTEM_TABLE *table,EFI_HANDLE **handles,UINTN *count){
   if(!table||!table->BootServices||!table->BootServices->LocateHandleBuffer||
      !table->BootServices->HandleProtocol||!table->BootServices->FreePool)
     return EFI_INVALID_PARAMETER;
   *handles=NULL;*count=0;
+  if(UnreleasedPciHandles)return EFI_ALREADY_STARTED;
   EFI_STATUS s=table->BootServices->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,count,handles);
   if(s!=EFI_SUCCESS)return EFI_UNSUPPORTED;
   if(!*handles||!*count||*count>GU_INVENTORY_MAX_HANDLES){
-    if(*handles)(VOID)table->BootServices->FreePool(*handles);
-    *handles=NULL;*count=0;
+    (VOID)ReleasePciHandles(table->BootServices,handles);
+    *count=0;
     return EFI_UNSUPPORTED;
   }
   return EFI_SUCCESS;
@@ -193,7 +209,7 @@ static EFI_STATUS CollectLocatedGpuRecords(EFI_SYSTEM_TABLE *table,EFI_HANDLE *h
   GU_PCI_READER_CONTEXT context={table->BootServices,handles};
   int result=GuCollectGpuRecords((size_t)handle_count,ReadPciIdentity,&context,
                                  records,capacity,count);
-  EFI_STATUS released=table->BootServices->FreePool(handles);
+  EFI_STATUS released=ReleasePciHandles(table->BootServices,&handles);
   if(result!=GU_INVENTORY_OK||released!=EFI_SUCCESS) {
     *count=0;
     GuLog("ACTIVE_PREPARE=REFUSED INVENTORY_CODE=%d FREE=%#llx\n",
@@ -413,7 +429,7 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
 /* One source of target and step identity: the ordered execution record.
  * Check the retained backing and current PCI binding before trusting it. */
 static int ResolveSelectedBinding(size_t *step,size_t *target) {
-  if(!ActiveInventoryValid || !ActiveSequenceValid ||
+  if(UnreleasedPciHandles || !ActiveInventoryValid || !ActiveSequenceValid ||
      !ActiveDiscovery.allocation || !ActiveDiscovery.targets ||
      !ActiveDiscovery.order || !ActiveDiscovery.observed ||
      ActiveSequence.targets!=ActiveDiscovery.targets ||
@@ -816,12 +832,12 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   UINT32 config[64];
   GU_CAPS caps;
   if(!image||!table||!table->BootServices)return EFI_INVALID_PARAMETER;
-  if(UnreleasedDiscoveryAllocation)return EFI_ALREADY_STARTED;
+  if(UnreleasedDiscoveryAllocation||UnreleasedPciHandles)return EFI_ALREADY_STARTED;
   EFI_STATUS s=LocatePciHandles(table,&handles,&handle_count);
   if(s!=EFI_SUCCESS)return s;
   s=AllocateDiscoveryStorage(table->BootServices,(size_t)handle_count,&storage);
   if(s!=EFI_SUCCESS){
-    EFI_STATUS released=table->BootServices->FreePool(handles);
+    EFI_STATUS released=ReleasePciHandles(table->BootServices,&handles);
     return released==EFI_SUCCESS?s:released;
   }
   GU_GPU_PREPARED_VIEW prepared=DiscoveryView(&storage);

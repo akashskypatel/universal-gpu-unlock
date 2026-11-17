@@ -34,7 +34,8 @@ typedef struct {
 static MOCK_DEVICE gpu[24];
 static EFI_HANDLE handles[24];
 static size_t count;
-static unsigned init_calls, free_calls, log_calls, resolve_calls;
+static unsigned init_calls, free_calls, log_calls, resolve_calls, locate_calls;
+static void *failed_handle_buffer;
 static unsigned prep_markers, prep_refusals, global_refusals;
 static int fail_pool_free, redirect_on_refresh, refuse_init;
 
@@ -99,6 +100,7 @@ static EFI_STATUS GetLocation(EFI_PCI_IO_PROTOCOL *io, UINTN *seg, UINTN *bus, U
 }
 static EFI_STATUS Locate(int type, EFI_GUID *guid, VOID *key, UINTN *outCount, EFI_HANDLE **outHandles) {
   (void)type; (void)guid; (void)key;
+  locate_calls++;
   *outCount = count; *outHandles = handles; return EFI_SUCCESS;
 }
 static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
@@ -111,7 +113,9 @@ static EFI_STATUS Free(VOID *p) {
     if(fail_state_free){fail_state_free=0;last_failed_free=p;return EFI_NOT_READY;}
     free(p);state_frees++;return EFI_SUCCESS;
   }
-  free_calls++; if (p != handles || fail_pool_free) return 3;
+  free_calls++;
+  if(p!=handles)return EFI_INVALID_PARAMETER;
+  if(fail_pool_free){failed_handle_buffer=p;return EFI_UNSUPPORTED;}
   return EFI_SUCCESS;
 }
 static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
@@ -176,6 +180,8 @@ static void Populate(size_t i, GU_GPU_IDENTITY id) {
   m->device = id.device; m->function = id.function;
   handles[i] = &m->protocol;
 }
+#include "../src/gpu_discovery.c"
+
 static void ResetPair(void) {
   GuPlatformActive=&MockPrimaryPlatform;
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
@@ -183,9 +189,38 @@ static void ResetPair(void) {
   fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
   state_allocs=state_frees=fail_state_alloc=fail_state_free=0;
   last_failed_free=NULL;
+  /* Test-only boot reset. The production path never retries release. */
+  UnreleasedPciHandles=NULL;
+  failed_handle_buffer=NULL;locate_calls=0;
   Populate(0, Primary); Populate(1, Secondary);
 }
-#include "../src/gpu_discovery.c"
+
+static int CheckHandleBufferLifetime(void) {
+  /* Invalid census size still transfers a successful Locate buffer, and
+   * the release must be attempted exactly once, even on refusal. */
+  for(int scenario=0;scenario<4;scenario++){
+    ResetPair();
+    if(scenario==0)count=0;
+    if(scenario==1)count=GU_INVENTORY_MAX_HANDLES+1;
+    if(scenario==2)fail_state_alloc=1;
+    if(scenario==3)gpu[0].read_fail=1;
+    fail_pool_free=1;
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+    CHECK(!init_calls&&locate_calls==1&&free_calls==1);
+    CHECK(UnreleasedPciHandles==handles&&UnreleasedPciHandles==failed_handle_buffer);
+    CHECK(state_allocs==(unsigned)(scenario>=2));
+    CHECK(state_frees==(unsigned)(scenario==3));
+    fail_pool_free=0;
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+    CHECK(locate_calls==1&&free_calls==1&&!init_calls);
+    GU_GPU_PREPARED_SEQUENCE prepared;
+    CHECK(GuPrepareGpuSequence(&system_table,NULL,0,&prepared)==EFI_ALREADY_STARTED);
+    CHECK(!prepared.inventory.count&&!prepared.selected_count);
+    CHECK(locate_calls==1&&free_calls==1);
+  }
+  ResetPair();
+  return 0;
+}
 
 static void ExpandInventory(size_t n) {
   count=n;
@@ -214,6 +249,7 @@ static void PrepareMockOwners(void) {
   Gu.asset_entries_reserved=1;
 }
 int main(void) {
+  CHECK(CheckHandleBufferLifetime()==0);
 #if defined(GU_SYNTHETIC_COMPILE_ONLY) && GU_GPU_SELECTION_COUNT > 1
   /* Exercise actual discovery admission only in this host/compile profile.
    * The generated selections are [1,2,0,3,...] in a 20-device inventory. */
@@ -604,7 +640,30 @@ int main(void) {
     CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
     free(second); /* simulated boot termination only */
   }
-  /* The real selected adapter observes every NVIDIA GPU, not just sixteen.
+  /* A failed handle-buffer release after a completed step must prevent
+   * all later census and selection without changing the saved record. */
+  ResetActivePair();
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  Gu.profile_verified=Gu.prom_verified=1;PrepareMockOwners();
+  CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+  CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+  {
+    GU_PLATFORM *saved=GuPlatformActive;
+    UINT32 prior=ActiveSequence.targets[ActiveSequence.order[0]].expected_config[4];
+    fail_pool_free=1;
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+    CHECK(UnreleasedPciHandles==handles&&UnreleasedPciHandles==failed_handle_buffer);
+    unsigned located=locate_calls,released=free_calls;
+    fail_pool_free=0;
+    CHECK(GuIsPreparedPeerHandle(handles[0])&&GuIsPreparedPeerHandle(handles[1]));
+    CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY&&ActiveSequence.halted);
+    CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
+    CHECK(GuPlatformActive==saved&&ActiveSequence.next_step==1);
+    CHECK(ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_COMPLETE);
+    CHECK(ActiveSequence.targets[ActiveSequence.order[0]].expected_config[4]==prior);
+    CHECK(locate_calls==located&&free_calls==released);
+  }
+  /* The real selected adapter observes every NVIDIA GPU, not just sixteen. 
    * One target is selected; repeated peer model IDs are intentional. */
   ResetActivePair();ExpandInventory(20);
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
@@ -631,6 +690,7 @@ int main(void) {
 }
 #elif defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
 int main(void) {
+  CHECK(CheckHandleBufferLifetime()==0);
 #if GU_GPU_SELECTION_COUNT == 18
   ResetPair();ExpandInventory(20);
   gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;gpu[2].bus=9;
@@ -705,6 +765,7 @@ int main(void) {
 }
 #else
 int main(void) {
+  CHECK(CheckHandleBufferLifetime()==0);
   EFI_STATUS status;
   /* Prepare requested targets without any active GuInit; preserve operator
    * order even when UEFI enumerates devices in the opposite order. */
