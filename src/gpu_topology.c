@@ -10,6 +10,16 @@ int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]) {
   return first && second && first[0] == second[0] && first[2] == second[2];
 }
 
+int GuTopoDriverOwnerStable(const GU_TOPO_PCI *before, size_t driver_count,
+                            const void *first_agent) {
+  if (!before || !before->openers_known || before->by_driver != driver_count)
+    return 0;
+  if (driver_count == 0)
+    return !before->first_owner_agent && !first_agent;
+  return driver_count == 1 && before->first_owner_agent &&
+         before->first_owner_agent == first_agent;
+}
+
 static size_t Body(const GU_TOPO_PATH *p) { return p->length - 4U; }
 
 int GuTopoPathValid(const GU_TOPO_PATH *p) {
@@ -318,7 +328,8 @@ int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r) {
       incomplete=1;
       r->gop_relationships_observed=0;
     }
-    if(!node->openers_known || !node->by_driver)incomplete=1;
+    if(!node->openers_known || !node->by_driver ||
+       !node->first_owner_agent)incomplete=1;
     if(node->by_driver>1)bad=1;
   }
   for(i=0;i<s->console_count;i++) {

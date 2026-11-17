@@ -52,6 +52,7 @@ static void Pci(size_t i,GU_GPU_IDENTITY id,GU_TOPO_PATH path,
   p->path=path;p->bridge=(cls==0x0604);p->root_port=(uint8_t)root;
   p->primary=(uint8_t)id.bus;p->secondary=secondary;p->subordinate=subordinate;
   p->openers_known=1;p->by_driver=(cls==0x0300);
+  if(p->by_driver)p->first_owner_agent=(void *)(uintptr_t)0x1000;
 }
 static void Baseline(void) {
   GU_GPU_IDENTITY root_a={0x12341022U,0,0,0,1,0};
@@ -110,6 +111,33 @@ int main(void) {
   CHECK(!GuTopoClassifierStable(cls1,cls2));
   CHECK(!GuTopoClassifierStable(NULL,cls2));
   CHECK(!GuTopoClassifierStable(cls1,NULL));
+  /* Independent controllers can share the same driver agent. A different
+   * agent on either controller must still fail its own comparison. */
+  {
+    GU_TOPO_PCI a={0},b={0};
+    void *agent=(void *)(uintptr_t)0x1000U;
+    void *other=(void *)(uintptr_t)0x2000U;
+    a.openers_known=b.openers_known=1;
+    a.by_driver=b.by_driver=1;
+    a.first_owner_agent=b.first_owner_agent=agent;
+    CHECK(GuTopoDriverOwnerStable(&a,1,agent));
+    CHECK(GuTopoDriverOwnerStable(&b,1,agent));
+    CHECK(!GuTopoDriverOwnerStable(&a,1,other));
+    CHECK(GuTopoDriverOwnerStable(&b,1,agent));
+    CHECK(!GuTopoDriverOwnerStable(&a,0,NULL));
+    CHECK(!GuTopoDriverOwnerStable(&a,2,agent));
+    CHECK(!GuTopoDriverOwnerStable(&a,1,NULL));
+    a.first_owner_agent=NULL;
+    CHECK(!GuTopoDriverOwnerStable(&a,1,NULL));
+    a.by_driver=0;
+    CHECK(GuTopoDriverOwnerStable(&a,0,NULL));
+    CHECK(!GuTopoDriverOwnerStable(&a,0,agent));
+    a.openers_known=0;
+    CHECK(!GuTopoDriverOwnerStable(&a,0,NULL));
+    a.openers_known=1;a.by_driver=2;a.first_owner_agent=agent;
+    CHECK(!GuTopoDriverOwnerStable(&a,2,agent));
+    CHECK(!GuTopoDriverOwnerStable(NULL,1,agent));
+  }
   /* Revalidation must bind each boot-local handle to the same GOP
    * protocol and entire path, allowing harmless enumeration reorder. */
   {
@@ -501,6 +529,8 @@ int main(void) {
   Baseline();snapshot.pci[1].openers_known=0;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.pci[1].by_driver=0;
+  CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
+  Baseline();snapshot.pci[1].first_owner_agent=NULL;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_INCOMPLETE);
   Baseline();snapshot.pci[1].by_driver=2;
   CHECK(GuTopoAssess(&snapshot,&report)==GU_TOPO_CONFLICT);

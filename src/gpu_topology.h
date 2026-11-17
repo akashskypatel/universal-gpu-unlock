@@ -86,6 +86,11 @@ int GuTopoClassRelevant(uint16_t class_code);
  * not a classification field. Selected topology devices still get two full
  * 256-byte reads and a strict bytewise comparison. */
 int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]);
+/* Compare a single controller's read-only driver ownership summary.
+ * A driver agent may legitimately own several distinct controllers.
+ * A summary with multiple driver records cannot establish stability. */
+int GuTopoDriverOwnerStable(const GU_TOPO_PCI *before, size_t driver_count,
+                            const void *first_agent);
 int GuTopoPathValid(const GU_TOPO_PATH *p);
 /* Compare bounded configured-console path captures; no atomicity claim. */
 int GuTopoConsolePathsEqual(const GU_TOPO_PATH *first, size_t first_count,

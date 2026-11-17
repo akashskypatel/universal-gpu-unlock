@@ -1520,7 +1520,8 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
     EFI_STATUS status,release;
     UINTN count=0,j;
     size_t by_driver=0,by_child=0,gop_children=0,matched=0;
-    int complete=1;
+    EFI_HANDLE first_driver_agent=NULL;
+    int complete=1,owner_stable;
     if((id->pci_id&0xffffU)!=0x10deU ||
        (id->class_code&0xff00U)!=0x0300U)continue;
     status=bs->OpenProtocolInformation(id->handle,&PciGuid,&edges,&count);
@@ -1542,7 +1543,10 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
       unsigned is_child=(unsigned)!!(e->Attributes&EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER);
       unsigned same_agent=(unsigned)(e->AgentHandle==p->first_owner_agent);
       size_t k;
-      if(is_driver)by_driver++;
+      if(is_driver) {
+        if(!by_driver)first_driver_agent=e->AgentHandle;
+        by_driver++;
+      }
       if(is_child)by_child++;
       Say("NVIDIA_PCI_EDGE[%zu,%zu] ATTR=%#x OPEN_COUNT=%u AGENT=%p CHILD=%p DRIVER=%u CHILD_EDGE=%u SAME_AGENT=%u\r\n",
           i,(size_t)j,(unsigned)e->Attributes,(unsigned)e->OpenCount,
@@ -1570,9 +1574,10 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
     }
     release=edges?bs->FreePool(edges):EFI_SUCCESS;
     if(EFI_ERROR(release))complete=0;
-    if(by_driver!=p->by_driver)complete=0;
-    Say("NVIDIA_GOP_GRAPH[%zu] PCI_DRIVER_OPENS=%zu EXPECTED=%u CHILD_EDGES=%zu GOP_CHILDREN=%zu MATCHED_GOP_CHILDREN=%zu FREE_STATUS=%#llx GRAPH_STATUS=%s\r\n",
-        i,by_driver,p->by_driver,by_child,gop_children,matched,
+    owner_stable=GuTopoDriverOwnerStable(p,by_driver,first_driver_agent);
+    if(!owner_stable)complete=0;
+    Say("NVIDIA_GOP_GRAPH[%zu] PCI_DRIVER_OPENS=%zu EXPECTED=%u CHILD_EDGES=%zu GOP_CHILDREN=%zu MATCHED_GOP_CHILDREN=%zu OWNER_SUMMARY_STABLE=%u FREE_STATUS=%#llx GRAPH_STATUS=%s\r\n",
+        i,by_driver,p->by_driver,by_child,gop_children,matched,(unsigned)owner_stable,
         (unsigned long long)release,complete?"OBSERVED_ONLY":"PARTIAL_OR_DRIFT");
     /* Enumerate each mapped GOP handle's own protocol openers; empty lists
      * are valid observations, not evidence that NVIDIA Stop is reversible. */
