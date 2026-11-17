@@ -7,8 +7,8 @@ BOOLEAN GuMsiReleased(VOID);
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);
 BOOLEAN GuMsiMutated(VOID);
-/* Stable identity of this image's one-shot MSI release state. */
+/* Stable identity of the selected platform's release state, or NULL. */
 const VOID *GuMsiPlanOwnerToken(VOID);
-/* Reserve distinct real release-plan/graph memory for the selected card.
+/* Reserve release-plan and graph memory for the current platform.
  * Allocation is CPU-only and does not remove one-shot driver Stop guards. */
 EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs);

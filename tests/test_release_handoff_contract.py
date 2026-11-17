@@ -206,6 +206,10 @@ class HandoverOrderTests(unittest.TestCase):
         left = SOURCE.index("typedef struct GU_MSI_OWNED_STATE {")
         right = SOURCE.index("static EFI_GUID PciGuid=", left)
         production = SOURCE[left:right]
+        # Include the real public state queries, not mock equivalents.
+        production += "BOOLEAN GuMsiMutated(VOID) {" + function_body("GuMsiMutated") + "}\n"
+        start = SOURCE.index("const VOID *GuMsiPlanOwnerToken(")
+        production += SOURCE[start:]
         program = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -232,7 +236,7 @@ typedef struct {
   int profile_verified,prom_verified,started,owned,armed,fault,retained;
   struct GU_MSI_OWNED_STATE *release_state;
 } MOCK_PLATFORM;
-static MOCK_PLATFORM platforms[2],*current=&platforms[0];
+static MOCK_PLATFORM *platforms,*current;
 #define Gu (*current)
 static int fail_alloc;
 static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
@@ -244,25 +248,32 @@ static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(void) {
   EFI_BOOT_SERVICES bs={Allocate};
-  for(size_t i=0;i<2;i++) {
+  const size_t count=4;
+  platforms=calloc(count,sizeof(*platforms));
+  CHECK(platforms);
+  current=&platforms[0];
+  for(size_t i=0;i<count;i++) {
     platforms[i].bs=&bs;
     platforms[i].handle=&platforms[i];
     platforms[i].profile_verified=platforms[i].prom_verified=1;
   }
+  CHECK(!GuMsiPlanOwnerToken() && !GuMsiMutated());
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
   GU_MSI_OWNED_STATE *first=CurrentMsi;
-  CHECK(first && first!=&LegacyMsi && Gu.release_state==first);
-  Plan.table=&bs;Original.count=11;Current.count=7;OriginalUsb[0]=1;
+  CHECK(first && GuMsiPlanOwnerToken()==first && Gu.release_state==first);
+  Plan.table=&bs;Plan.mutated=1;Original.count=11;Current.count=7;OriginalUsb[0]=1;
+  CHECK(GuMsiMutated());
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_ALREADY_STARTED);
   current=&platforms[1];
-  CHECK(!Gu.release_state);
+  CHECK(!Gu.release_state && !GuMsiPlanOwnerToken() && !GuMsiMutated());
   fail_alloc=1;
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_OUT_OF_RESOURCES);
-  CHECK(!Gu.release_state && first->original.count==11);
+  CHECK(!Gu.release_state && !GuMsiPlanOwnerToken() && !GuMsiMutated());
+  CHECK(first->original.count==11);
   fail_alloc=0;
   CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
   GU_MSI_OWNED_STATE *second=CurrentMsi;
-  CHECK(second!=first && second!=&LegacyMsi && Gu.release_state==second);
+  CHECK(second!=first && GuMsiPlanOwnerToken()==second && Gu.release_state==second);
   CHECK(!Plan.table && !Original.count && !Current.count && !OriginalUsb[0]);
   Original.count=2;Current.count=3;
   current=&platforms[0];
@@ -270,7 +281,24 @@ int main(void) {
   CHECK(Current.count==7 && OriginalUsb[0]==1);
   current=&platforms[1];
   CHECK(CurrentMsi==second && Original.count==2 && Current.count==3);
-  free(first);free(second);
+  for(size_t i=2;i<count;i++) {
+    current=&platforms[i];
+    CHECK(!GuMsiPlanOwnerToken() && !GuMsiMutated());
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
+    CHECK(GuMsiPlanOwnerToken()==Gu.release_state && !Plan.table);
+    for(size_t j=0;j<i;j++)CHECK(Gu.release_state!=platforms[j].release_state);
+    Original.count=i+10;
+  }
+  current=&platforms[0];
+  CHECK(GuMsiMutated() && Original.count==11 && OriginalUsb[0]);
+  current=&platforms[1];
+  CHECK(!GuMsiMutated() && Original.count==2);
+  for(size_t i=2;i<count;i++) {
+    current=&platforms[i];
+    CHECK(!GuMsiMutated() && Original.count==i+10);
+  }
+  for(size_t i=0;i<count;i++) free(platforms[i].release_state);
+  free(platforms);
   return 0;
 }
 """
@@ -287,6 +315,20 @@ int main(void) {
                     self.assertEqual(built.returncode, 0, built.stderr)
                     checked = subprocess.run([str(binary)], capture_output=True, text=True)
                     self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+    def test_missing_release_context_refuses_before_access(self):
+        # The guard must precede the first dereference in all public users.
+        for name in ("GuMsiPreflight", "GuMsiRelease", "GuMsiReleased",
+                     "GuMsiFinish", "GuMsiReadyForWindows"):
+            with self.subTest(name=name):
+                code = function_body(name).lstrip()
+                expected = "FALSE" if name in ("GuMsiReleased", "GuMsiReadyForWindows") else "EFI_NOT_READY"
+                self.assertTrue(code.startswith("if(!CurrentMsi)return " + expected + ";"))
+        self.assertNotIn("LegacyMsi", SOURCE)
+        shared = (Path(__file__).resolve().parents[1] / "src/unlock_execution.c").read_text(encoding="utf-8")
+        wrapper = shared.split("EFI_STATUS GuExecuteUnlock(", 1)[1]
+        self.assertLess(wrapper.index("GuMsiReserveSelectedState("),
+                        wrapper.index("#ifdef GU_ACTIVE_SINGLE_TARGET"))
 
     def test_full_non_target_protocol_ownership_is_preserved(self):
         self.assertIn("GuIsPreparedPeerHandle(h)",function_body("ProtectedHandle"))

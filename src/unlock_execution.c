@@ -63,12 +63,12 @@ static EFI_STATUS GuExecuteUnlockCore(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
  * this CPU-only record must never be used as their replacement. */
 EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
                            const char **stage) {
-#ifdef GU_ACTIVE_SINGLE_TARGET
   if(!table || !table->BootServices || !image || !stage)
     return EFI_INVALID_PARAMETER;
   *stage="selected-gpu-resource-reserve";
   EFI_STATUS s=GuMsiReserveSelectedState(table->BootServices);
   if(s!=EFI_SUCCESS)return s;
+#ifdef GU_ACTIVE_SINGLE_TARGET
   *stage="selected-gpu-state-begin";
   s=GuBeginSelectedGpuStep(table,&Gu,
                            GuMsiPlanOwnerToken(),GuAssets);
