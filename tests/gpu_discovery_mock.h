@@ -65,6 +65,9 @@ EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **);
 #include "../src/gpu_execution_state.h"
 EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *,GU_PLATFORM **,
     const GU_GPU_EXEC_SEQUENCE *,const GU_GPU_EXEC_OBSERVATION *,size_t);
+EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *,
+    const GU_GPU_EXEC_SEQUENCE *,const GU_GPU_EXEC_OBSERVATION *,size_t);
+int GuMsiVerifyFinalGraph(void);
 #endif
 void GuLog(const char *, ...);
 int GuIsSupportedPciId(UINT32);

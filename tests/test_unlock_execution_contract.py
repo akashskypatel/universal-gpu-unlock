@@ -330,7 +330,11 @@ int main(void){
             self.assertIn("s3==EFI_SUCCESS?EFI_DEVICE_ERROR:s3",source)
         dxe=body(DXE,"GuDxeRun")
         after_s3=dxe[dxe.index("GuRegisterS3("):]
-        self.assertIn("!GuMsiReadyForWindows() || !GuSafeToReturn()",after_s3)
+        self.assertIn("!GuExecutionReadyForWindows(t)",after_s3)
+        self.assertIn("!GuExecutionReadyForWindows(t)",body(APP,"UefiMain"))
+        final=body(SHARED,"GuExecutionReadyForWindows")
+        self.assertIn("GuMsiReadyForWindows()&&GuSafeToReturn()&&!Gu.fault",final)
+        self.assertIn("GuVerifySelectedSequence(table)==EFI_SUCCESS",final)
         self.assertIn("s=EFI_NOT_READY;",after_s3)
 
 if __name__=="__main__":unittest.main()

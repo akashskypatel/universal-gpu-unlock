@@ -7,5 +7,6 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
                            const char **stage);
 /* Failure decision includes earlier published contexts. */
 BOOLEAN GuExecutionNeedsContainment(VOID);
+BOOLEAN GuExecutionReadyForWindows(EFI_SYSTEM_TABLE *table);
 /* Optional persistence; never a substitute for verified active handover. */
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table);

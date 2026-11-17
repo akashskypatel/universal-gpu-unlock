@@ -13,6 +13,7 @@ const VOID *GuMsiPlanOwnerToken(VOID);
 #ifdef GU_ACTIVE_SINGLE_TARGET
 /* Read saved proof for the exact registered context, without rebinding. */
 BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *,const VOID *token);
+BOOLEAN GuMsiVerifyFinalGraph(VOID);
 #endif
 /* Reserve the release context for the current platform. Graph snapshots
  * allocate their own CPU-only memory without changing driver Stop guards. */

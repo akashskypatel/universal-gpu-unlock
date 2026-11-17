@@ -500,6 +500,47 @@ int main(void) {
                               "SetVariable(", "ResetSystem("):
                 self.assertNotIn(forbidden, text)
 
+    def test_final_graph_observation_revokes_failed_proof(self):
+        actual = "static int GuMsiVerifyFinalGraph(void) {" + function_body("GuMsiVerifyFinalGraph") + "}\n"
+        program = r"""
+#include <stdio.h>
+#define FALSE 0
+#define TRUE 1
+#define EFI_SUCCESS 0
+static struct {int hardware_verified;} Plan;
+static int Current,ready,snapshot,expected,console,checks;
+static int GuMsiReadyForWindows(void){return ready&&Plan.hardware_verified;}
+static int Snapshot(int *graph){(void)graph;checks++;return snapshot;}
+static int Expected(int stage,int claimed){checks++;return stage==3&&!claimed&&expected;}
+static int ReadOnlyAmdConsoleGraph(const int *g){(void)g;checks++;return console;}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void){
+  ready=expected=1;Plan.hardware_verified=1;
+  CHECK(GuMsiVerifyFinalGraph()&&checks==3);
+  for(int scenario=0;scenario<3;scenario++){
+    Plan.hardware_verified=1;checks=0;
+    snapshot=scenario==0;
+    expected=scenario!=1;
+    console=scenario==2;
+    CHECK(!GuMsiVerifyFinalGraph()&&!Plan.hardware_verified);
+    CHECK(checks==scenario+1);
+    snapshot=console=0;expected=1;
+    CHECK(!GuMsiVerifyFinalGraph()&&checks==scenario+1);
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"final_graph.c"
+            source.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                binary=Path(directory)/compiler
+                built=subprocess.run([compiler,"-std=c11","-Wall","-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],capture_output=True,text=True)
+                self.assertEqual(built.returncode,0,built.stderr)
+                ran=subprocess.run([str(binary)],capture_output=True,text=True)
+                self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
+
     def test_release_context_belongs_to_each_platform(self):
         # Compile the actual CPU-only reservation code with mocked EFI allocation.
         left = SOURCE.index("typedef struct GU_MSI_OWNED_STATE {")

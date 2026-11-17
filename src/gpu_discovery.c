@@ -5,6 +5,9 @@
 #ifndef GU_DISCOVERY_HOST_TEST
 #include "port.h"
 #include "checks.h"
+#ifdef GU_ACTIVE_SINGLE_TARGET
+#include "msi_release.h"
+#endif
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) && GU_PREFLIGHT_ONLY != 1
 #error Preparation-only active EFI must also prohibit GPU writes, DMA and FLR
 #endif
@@ -531,6 +534,39 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
   }
   GuLog("SELECTED_GPU_STEP=COMPLETE NEXT=%zu PEERS_VERIFIED=%zu\n",
         ActiveSequence.next_step,ActiveInventory.inventory.count);
+  return EFI_SUCCESS;
+}
+
+/* All selected targets must have completed. Check the registry and fresh
+ * full PCI snapshots on both sides of the latest live graph observation.
+ * No post-close MMIO or new claim is permitted. */
+EFI_STATUS GuVerifySelectedSequence(EFI_SYSTEM_TABLE *table) {
+  size_t step,target;
+  if(!table||!table->BootServices||Gu.bs!=table->BootServices||
+     !ResolveSelectedBinding(&step,&target)||
+     ActiveSequence.next_step!=ActiveSequence.selected_count||
+     step+1!=ActiveSequence.selected_count) {
+    GuAbortSelectedGpuStep();
+    return EFI_NOT_READY;
+  }
+  GU_GPU_EXEC_OBSERVATION observed[GU_INVENTORY_MAX_NVIDIA];
+  EFI_STATUS s=ActiveStepObservations(table,observed);
+  if(s!=EFI_SUCCESS||
+     GuGpuExecCheckComplete(&ActiveSequence,observed,ActiveInventory.inventory.count)!=GU_GPU_EXEC_OK||
+     GuVerifyCompletedPlatforms(table->BootServices,&ActiveSequence,observed,
+                                ActiveInventory.inventory.count)!=EFI_SUCCESS||
+     !GuMsiVerifyFinalGraph()) {
+    GuAbortSelectedGpuStep();
+    return EFI_NOT_READY;
+  }
+  s=ActiveStepObservations(table,observed);
+  if(s!=EFI_SUCCESS||
+     GuGpuExecCheckComplete(&ActiveSequence,observed,ActiveInventory.inventory.count)!=GU_GPU_EXEC_OK||
+     GuVerifyCompletedPlatforms(table->BootServices,&ActiveSequence,observed,
+                                ActiveInventory.inventory.count)!=EFI_SUCCESS) {
+    GuAbortSelectedGpuStep();
+    return EFI_NOT_READY;
+  }
   return EFI_SUCCESS;
 }
 

@@ -191,7 +191,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     GuLog("S3 persistence skipped by operator\n");
   }
 
-  stage="final-Windows-verification";if(!GuMsiReadyForWindows()){s=EFI_NOT_READY;goto failed;}
+  stage="final-Windows-verification";if(!GuExecutionReadyForWindows(t)){s=EFI_NOT_READY;goto failed;}
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");
   GuBootUnsilence();

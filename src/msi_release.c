@@ -1166,4 +1166,17 @@ BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {
     plan->ready && plan->mutated && plan->stage==3 &&
     !plan->claimed && plan->master_normalized && plan->hardware_verified;
 }
+
+/* Check the live graph against the last target's baseline, which already
+ * includes the earlier completed transactions. Never rebind an old context
+ * or read device registers after the exclusive claim has closed. */
+BOOLEAN GuMsiVerifyFinalGraph(VOID) {
+  if(!GuMsiReadyForWindows())return FALSE;
+  if(Snapshot(&Current)!=EFI_SUCCESS||!Expected(3,FALSE)||
+     ReadOnlyAmdConsoleGraph(&Current)!=EFI_SUCCESS) {
+    Plan.hardware_verified=FALSE;
+    return FALSE;
+  }
+  return TRUE;
+}
 #endif

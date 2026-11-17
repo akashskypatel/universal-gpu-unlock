@@ -70,7 +70,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   }
   /* S3 installation must not weaken the final AMD/peer/PCI handover
    * check. A changed boot-time ownership graph fails closed. */
-  if(!GuMsiReadyForWindows() || !GuSafeToReturn()) {
+  if(!GuExecutionReadyForWindows(t)) {
     stage="dxe-post-s3-handover";
     s=EFI_NOT_READY;
     goto finish;

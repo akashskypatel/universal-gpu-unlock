@@ -20,7 +20,7 @@ static unsigned state_allocs,state_frees,fail_state_alloc;
 static unsigned context_allocs,context_frees,fail_context_free;
 #endif
 #ifdef GU_ACTIVE_SINGLE_TARGET
-static int refuse_advance;
+static int refuse_advance,refuse_completed,refuse_final_graph,drift_after_graph;
 #endif
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -155,6 +155,17 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
   GuPlatformActive=*owner;*owner=NULL;
   return EFI_SUCCESS;
 }
+EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
+    const GU_GPU_EXEC_SEQUENCE *sequence,const GU_GPU_EXEC_OBSERVATION *observed,size_t n) {
+  (void)bs;
+  if(refuse_completed||GuGpuExecCheckComplete(sequence,observed,n)!=GU_GPU_EXEC_OK)
+    return EFI_NOT_READY;
+  return EFI_SUCCESS;
+}
+int GuMsiVerifyFinalGraph(void){
+  if(drift_after_graph)gpu[1].dwords[4]^=0x4000U;
+  return !refuse_final_graph;
+}
 #endif
 static EFI_BOOT_SERVICES services = { Locate, Resolve, Free, Allocate };
 static EFI_SYSTEM_TABLE system_table = { &services };
@@ -190,7 +201,7 @@ static void ResetActivePair(void) {
   ActiveSequenceValid=ActiveInventoryValid=0;
   state_allocs=state_frees=fail_state_alloc=0;
   context_allocs=context_frees=fail_context_free=0;
-  refuse_advance=0;
+  refuse_advance=refuse_completed=refuse_final_graph=drift_after_graph=0;
   ResetPair();gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;
 }
 static void PrepareMockOwners(void) {
@@ -404,7 +415,7 @@ int main(void) {
 
   /* Exercise actual adapter selection and the registry mock boundary.
    * Direct pointer changes below are negative fault injection only. */
-  for(int scenario=0;scenario<4;scenario++) {
+  for(int scenario=0;scenario<8;scenario++) {
     ResetActivePair();
     GU_GPU_PREPARED_SEQUENCE prepared,all;
     GU_GPU_REFRESHED_SEQUENCE refreshed;
@@ -431,7 +442,7 @@ int main(void) {
     CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
     CHECK(ActiveSequence.next_step==1 && GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
     GU_PLATFORM *first=GuPlatformActive;
-    if(scenario) {
+    if(scenario>=1&&scenario<=3) {
       EFI_STATUS expected=EFI_NOT_READY;
       if(scenario==1)refuse_advance=1;
       if(scenario==2){fail_state_alloc=state_allocs+1;expected=EFI_OUT_OF_RESOURCES;}
@@ -467,6 +478,20 @@ int main(void) {
     CHECK(ActiveSequence.targets[ActiveSequence.order[0]].owners.platform==first);
     CHECK(ActiveSequence.targets[ActiveSequence.order[1]].owners.platform==second);
     CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
+    if(scenario>=4) {
+      if(scenario==4)refuse_completed=1;
+      if(scenario==5)refuse_final_graph=1;
+      if(scenario==6)gpu[1].dwords[4]^=0x4000U;
+      if(scenario==7)drift_after_graph=1;
+      CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY);
+      CHECK(ActiveSequence.halted);
+      refuse_completed=refuse_final_graph=drift_after_graph=0;
+      if(scenario>=6)gpu[1].dwords[4]^=0x4000U;
+      CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY);
+      GuPlatformActive=first;free(second);
+      continue;
+    }
+    CHECK(GuVerifySelectedSequence(&system_table)==EFI_SUCCESS);
     gpu[1].dwords[4]^=0x4000U;
     CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
     gpu[1].dwords[4]^=0x4000U;

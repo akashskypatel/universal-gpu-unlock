@@ -100,6 +100,16 @@ BOOLEAN GuExecutionNeedsContainment(VOID) {
     Gu.s3_script_attempted||Gu.flrs||Gu.mmio_writes||Gu.release_owner_invalid;
 }
 
+/* The selected path requires aggregate proof, not just the active GPU. */
+BOOLEAN GuExecutionReadyForWindows(EFI_SYSTEM_TABLE *table) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  return GuVerifySelectedSequence(table)==EFI_SUCCESS;
+#else
+  (VOID)table;
+  return GuMsiReadyForWindows()&&GuSafeToReturn()&&!Gu.fault;
+#endif
+}
+
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table)
 {
   static EFI_GUID save_guid=EFI_S3_SAVE_STATE_PROTOCOL_GUID;
