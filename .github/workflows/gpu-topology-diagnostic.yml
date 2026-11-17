@@ -415,7 +415,15 @@ jobs:
             }
             if(-not $overRejected){throw '129-target parse must fail'}
             $largeSpec = New-GuGpuSelectionSpec -SelectionBdfs $large -OutputDirectory $env:RUNNER_TEMP
-            if($largeSpec.Count -ne 18 -or $largeSpec.Label -notmatch '^N18-[0-9A-F]{12} | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            if($largeSpec.Count -ne 18 -or $largeSpec.Label -notmatch '^N18-[0-9A-F]{12}$'){throw '18-target parser failed'}
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs $large -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw '18-target synthetic application compilation failed'}
+            if(-not (Test-Path (Join-Path '.\src\build' ("GPU-SEQUENCE-COMPILE-ONLY-"+$largeSpec.Label+".EFI")))){throw '18-target synthetic application missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs $large -SyntheticCompileProfile *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw '18-target synthetic firmware driver compilation failed'}
+            if(-not (Test-Path (Join-Path '.\src\build_dxe' ("GPU-SEQUENCE-COMPILE-ONLY-DXE-"+$largeSpec.Label+".efi")))){throw '18-target synthetic firmware driver missing'}
+            'EIGHTEEN_TARGET_SEQUENCE_COMPILE=PASS NOT_FOR_DEPLOYMENT=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=128 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'SELECTION_EFI_COMPILE_EXIT=0 ACTIVE_ENTRYPOINTS_COMPILED=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
