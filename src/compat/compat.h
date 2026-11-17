@@ -64,17 +64,11 @@ struct device {u64 *dma_mask;u64 coherent_dma_mask;struct list_head devres_head;
 
 #define PCI_UNKNOWN -1
 struct pci_dev {u16 vendor,device;struct device dev;int current_state,pm_cap,refs;unsigned int dev_flags;};
-struct firmware {size_t size;const u8 *data;};
-typedef struct GU_ASSET {const char *name;struct firmware firmware;} GU_ASSET;
-extern GU_ASSET GuAssets[5];
-/* The selected card uses a private table. The legacy export remains for
- * the one-card profile, and consumers always resolve the active table. */
+/* The table always belongs to the current platform, even before reservation. */
 GU_ASSET *GuAssetEntries(VOID);
-/* Allocate a private table for the current platform. No caller-supplied table. */
+/* Reserve the current platform's empty table once. */
 EFI_STATUS GuAssetReserveEntries(EFI_BOOT_SERVICES *bs);
-#ifndef GU_ASSET_IMPLEMENTATION
 #define GuAssets (GuAssetEntries())
-#endif
 void *memcpy(void *,const void *,size_t);
 void *memset(void *,int,size_t);
 int memcmp(const void *,const void *,size_t);

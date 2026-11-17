@@ -85,6 +85,11 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #define GU_SELECTOR_PHASE_SS0_WRITTEN 1U
 #define GU_SELECTOR_PHASE_SS1_WRITE 2U
 #define GU_SELECTOR_PHASE_TARGET 3U
+/* The manifest contains a fixed number of files per GPU. Each platform
+ * owns its own table, including before asset reservation. */
+#define GU_ASSET_COUNT 5U
+struct firmware {size_t size;const UINT8 *data;};
+typedef struct GU_ASSET {const char *name;struct firmware firmware;} GU_ASSET;
 typedef struct GU_DMA GU_DMA;
 struct GU_DMA {
   GU_DMA *next;
@@ -122,8 +127,8 @@ typedef struct {
   GU_DMA *allocations;
   /* These resources belong to this platform, not to the active selector. */
   struct GU_MSI_OWNED_STATE *release_state;
-  struct GU_ASSET *asset_entries;
-  BOOLEAN asset_load_attempted;
+  GU_ASSET asset_entries[GU_ASSET_COUNT];
+  BOOLEAN asset_entries_reserved, asset_load_attempted;
   BOOLEAN (*display_check)(VOID);
 #ifdef GU_ENTRY_LATCHED
   /* Per-physical-GPU selector values, never shared with another adapter. */

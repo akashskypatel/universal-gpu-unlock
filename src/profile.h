@@ -2,7 +2,6 @@
 #pragma once
 #include "port.h"
 #include "vendor/vbios_610.h"
-#define GU_ASSET_COUNT 5U
 typedef struct {
   const CHAR16 *path;
   const char *name;

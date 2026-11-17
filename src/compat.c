@@ -1,22 +1,15 @@
-#define GU_ASSET_IMPLEMENTATION 1
 #include "compat/compat.h"
-GU_ASSET GuAssets[5];
 GU_ASSET *GuAssetEntries(VOID) {
-  return Gu.asset_entries ? Gu.asset_entries : GuAssets;
+  return Gu.asset_entries;
 }
 EFI_STATUS GuAssetReserveEntries(EFI_BOOT_SERVICES *bs) {
   if(!bs||!bs->AllocatePool||!bs->FreePool||!Gu.bs||Gu.bs!=bs||
      Gu.started||Gu.owned||Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(Gu.asset_entries||Gu.asset_load_attempted)return EFI_ALREADY_STARTED;
-  for(UINTN i=0;i<sizeof(GuAssets)/sizeof(GuAssets[0]);i++)
-    if(GuAssets[i].name||GuAssets[i].firmware.data||
-       GuAssets[i].firmware.size)return EFI_ALREADY_STARTED;
-  GU_ASSET *entries=NULL;
-  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,sizeof(GuAssets),(VOID **)&entries);
-  if(s!=EFI_SUCCESS)return s;
-  if(!entries)return EFI_OUT_OF_RESOURCES;
-  memset(entries,0,sizeof(GuAssets));
-  Gu.asset_entries=entries;
+  if(Gu.asset_entries_reserved||Gu.asset_load_attempted)return EFI_ALREADY_STARTED;
+  for(UINTN i=0;i<GU_ASSET_COUNT;i++)
+    if(Gu.asset_entries[i].name||Gu.asset_entries[i].firmware.data||
+       Gu.asset_entries[i].firmware.size)return EFI_ALREADY_STARTED;
+  Gu.asset_entries_reserved=TRUE;
   return EFI_SUCCESS;
 }
 void *devres_open_group(struct device *D,void *Id,int Flags) {
@@ -76,7 +69,7 @@ void *kvcalloc(size_t N,size_t S,int Flags) {
 }
 int request_firmware(const struct firmware **Out,const char *Name,struct device *D) {
   UINTN I;(void)D;*Out=NULL;
-  for(I=0;I<5;I++)if(GuAssetEntries()[I].name && !strcmp(Name,GuAssetEntries()[I].name) &&
+  for(I=0;I<GU_ASSET_COUNT;I++)if(GuAssetEntries()[I].name && !strcmp(Name,GuAssetEntries()[I].name) &&
       GuAssetEntries()[I].firmware.data && GuAssetEntries()[I].firmware.size) {
     *Out=&GuAssetEntries()[I].firmware;return 0;
   }
