@@ -21,10 +21,20 @@
 #include <Protocol/SimpleTextOut.h>
 #include <IndustryStandard/Acpi10.h>
 
+#define MAX_SURVIVOR_PATH_BYTES 1024
+/* One boot-local record per surviving graphics output protocol (GOP). */
+typedef struct {
+  EFI_HANDLE handle;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *interface;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
+  UINT8 path[MAX_SURVIVOR_PATH_BYTES];
+  UINTN path_bytes;
+  BOOLEAN seen;
+} SURVIVOR_GOP;
+
 #define GRAPH_EDGE_LIMIT 16384
 #define GRAPH_INITIAL_CAPACITY 64
-#define MAX_SURVIVOR_GOPS 16
-#define MAX_SURVIVOR_PATH_BYTES 1024
 /* The limit bounds pool use and the quadratic graph comparisons, not GPU count. */
 typedef struct {EFI_HANDLE handle,agent,controller;EFI_GUID protocol;UINT32 attributes,count;BOOLEAN usb_baseline;} EDGE;
 typedef struct {UINTN count,capacity;EDGE *edges;} GRAPH;
@@ -38,14 +48,11 @@ typedef struct {
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
   UINT32 config[64];UINT64 attributes;
-  EFI_HANDLE survivors[MAX_SURVIVOR_GOPS];
-  EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE survivor_modes[MAX_SURVIVOR_GOPS];
-  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION survivor_info[MAX_SURVIVOR_GOPS];
-  /* Immutable pre-Stop path bytes. Reject retargeted GOPs with stable
-   * handles and modes but changed underlying PCI device paths. */
-  UINT8 survivor_paths[MAX_SURVIVOR_GOPS][MAX_SURVIVOR_PATH_BYTES];
-  UINTN survivor_path_bytes[MAX_SURVIVOR_GOPS];
-  UINTN survivor_count;
+  /* Immutable identity and path bytes survive for the context lifetime.
+   * Only the per-observation seen flag can change after capture. */
+  SURVIVOR_GOP *survivors;
+  UINTN survivor_count,survivor_capacity;
+  BOOLEAN survivor_baseline_valid;
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized;
 } PLAN;
 /* Keep the release plan and its protocol graphs in one ownership context.
@@ -193,7 +200,7 @@ static BOOLEAN ProtectedHandle(EFI_HANDLE h) {
      h==Plan.console||h==Plan.input||h==Plan.error)return TRUE;
   for(UINTN k=0;k<8;k++){if(Plan.idle[k]&&h==Plan.idle[k])return TRUE;}
   for(UINTN k=0;k<Plan.survivor_count;k++)
-    if(Plan.survivors[k]==h)return TRUE;
+    if(Plan.survivors[k].handle==h)return TRUE;
   return FALSE;
 }
 static BOOLEAN ProtectedEdge(const EDGE *e) {
@@ -421,22 +428,38 @@ static EFI_STATUS Gops(BOOLEAN first) {
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   EFI_HANDLE *handles=NULL;
   UINTN count=0,physical=0,target_count=0;
-  BOOLEAN seen[MAX_SURVIVOR_GOPS]={FALSE};
+  if(!b||!b->LocateHandleBuffer||!b->AllocatePool||!b->FreePool)
+    return EFI_UNSUPPORTED;
+  if(first && (Plan.survivors||Plan.survivor_capacity||
+               Plan.survivor_count||Plan.survivor_baseline_valid))
+    return EFI_ALREADY_STARTED;
+  if(!first && (!Plan.survivor_baseline_valid||
+                !Plan.survivors||Plan.survivor_count>Plan.survivor_capacity||
+                !Plan.survivor_capacity||Plan.survivor_capacity>4096u))
+    return EFI_NOT_READY;
   EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
-  if(s==EFI_NOT_FOUND && !first && Plan.stage>=3 && !Plan.survivor_count)
+  if(s==EFI_NOT_FOUND && !handles && !first && Plan.stage>=3 && !Plan.survivor_count)
     return EFI_SUCCESS;
-  if(s!=EFI_SUCCESS)return s;
-  if((count&&!handles)||count>4096u)s=EFI_BAD_BUFFER_SIZE;
-  if(first) {
+  if(s==EFI_SUCCESS&&(!count||!handles||count>4096u))s=EFI_BAD_BUFFER_SIZE;
+  if(s==EFI_SUCCESS && first) {
+    SURVIVOR_GOP *records=NULL;
+    s=b->AllocatePool(EfiLoaderData,count*sizeof(*records),(VOID **)&records);
+    if(s==EFI_SUCCESS&&!records)s=EFI_OUT_OF_RESOURCES;
+    if(s==EFI_SUCCESS) {
+      memset(records,0,count*sizeof(*records));
+      Plan.survivors=records;
+      Plan.survivor_capacity=count;
+    }
     Plan.gop=NULL;
-    Plan.survivor_count=0;
     Plan.headless=FALSE;
+  } else if(s==EFI_SUCCESS) {
+    for(UINTN k=0;k<Plan.survivor_count;k++)Plan.survivors[k].seen=FALSE;
   }
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
     EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;
     BOOLEAN on_target=FALSE;
     s=Interface(handles[i],&GopGuid,(VOID **)&g);
-    if(s!=EFI_SUCCESS)break;
+    if(s!=EFI_SUCCESS||!g){if(s==EFI_SUCCESS)s=EFI_COMPROMISED_DATA;break;}
     if(!g->Mode||!g->Mode->Info||
        g->Mode->SizeOfInfo<sizeof(*g->Mode->Info)||
        !g->Mode->FrameBufferBase||!g->Mode->FrameBufferSize)
@@ -448,11 +471,15 @@ static EFI_STATUS Gops(BOOLEAN first) {
       target_count++;
       if(first) {
         if(Plan.gop){s=EFI_UNSUPPORTED;break;}
+        for(UINTN k=0;k<Plan.survivor_count;k++)
+          if(Plan.survivors[k].interface==g){s=EFI_COMPROMISED_DATA;break;}
+        if(s!=EFI_SUCCESS)break;
         Plan.gop=handles[i];
         Plan.gop_interface=g;
         Plan.mode=*g->Mode;
         Plan.info=*g->Mode->Info;
       } else if(Plan.stage>=3 || Plan.headless || handles[i]!=Plan.gop ||
+                g!=Plan.gop_interface||
                 !Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||
                 !Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))) {
         s=EFI_NOT_READY;break;
@@ -462,30 +489,39 @@ static EFI_STATUS Gops(BOOLEAN first) {
       s=Interface(handles[i],&PathGuid,(VOID **)&live_path);
       if(s!=EFI_SUCCESS||!live_path){s=EFI_NOT_READY;break;}
       if(first) {
-        if(Plan.survivor_count==MAX_SURVIVOR_GOPS){s=EFI_BAD_BUFFER_SIZE;break;}
+        if(Plan.survivor_count==Plan.survivor_capacity){s=EFI_BAD_BUFFER_SIZE;break;}
+        if(g==Plan.gop_interface){s=EFI_COMPROMISED_DATA;break;}
+        for(UINTN k=0;k<Plan.survivor_count;k++)
+          if(Plan.survivors[k].handle==handles[i]||Plan.survivors[k].interface==g){
+            s=EFI_COMPROMISED_DATA;break;
+          }
+        if(s!=EFI_SUCCESS)break;
         UINTN path_bytes=(UINTN)GuDevicePathLength(
             (const unsigned char *)live_path,4096u);
         if(!path_bytes||path_bytes>MAX_SURVIVOR_PATH_BYTES){
           s=EFI_BAD_BUFFER_SIZE;break;
         }
-        UINTN k=Plan.survivor_count++;
-        Plan.survivors[k]=handles[i];
-        Plan.survivor_modes[k]=*g->Mode;
-        Plan.survivor_info[k]=*g->Mode->Info;
-        Plan.survivor_path_bytes[k]=path_bytes;
-        memcpy(Plan.survivor_paths[k],live_path,path_bytes);
+        SURVIVOR_GOP *record=&Plan.survivors[Plan.survivor_count++];
+        record->handle=handles[i];
+        record->interface=g;
+        record->mode=*g->Mode;
+        record->info=*g->Mode->Info;
+        record->path_bytes=path_bytes;
+        memcpy(record->path,live_path,path_bytes);
       } else {
         UINTN k=0;
-        while(k<Plan.survivor_count && Plan.survivors[k]!=handles[i])k++;
-        if(k==Plan.survivor_count||seen[k]||
-           !GuDevicePathUnchanged(Plan.survivor_paths[k],
-              (size_t)Plan.survivor_path_bytes[k],
+        while(k<Plan.survivor_count && Plan.survivors[k].handle!=handles[i])k++;
+        if(k==Plan.survivor_count){s=EFI_NOT_READY;break;}
+        SURVIVOR_GOP *record=&Plan.survivors[k];
+        if(record->seen||g!=record->interface||
+           !GuDevicePathUnchanged(record->path,
+              (size_t)record->path_bytes,
               (const unsigned char *)live_path,4096u)||
-           !Equal(g->Mode,&Plan.survivor_modes[k],sizeof(*g->Mode))||
-           !Equal(g->Mode->Info,&Plan.survivor_info[k],sizeof(*g->Mode->Info))){
+           !Equal(g->Mode,&record->mode,sizeof(*g->Mode))||
+           !Equal(g->Mode->Info,&record->info,sizeof(*g->Mode->Info))){
           s=EFI_NOT_READY;break;
         }
-        seen[k]=TRUE;
+        record->seen=TRUE;
       }
     }
   }
@@ -494,12 +530,13 @@ static EFI_STATUS Gops(BOOLEAN first) {
   if(first){
     Plan.headless=target_count==0;
     if(Plan.headless && !Plan.survivor_count)return EFI_NOT_READY;
+    Plan.survivor_baseline_valid=TRUE;
     GuLog("TARGET_GOP=%zu SURVIVOR_GOPS=%zu HEADLESS=%u PHYSICAL=%zu\n",
           (size_t)target_count,(size_t)Plan.survivor_count,
           (unsigned)Plan.headless,(size_t)physical);
   } else {
     for(UINTN k=0;k<Plan.survivor_count;k++)
-      if(!seen[k])return EFI_NOT_READY;
+      if(!Plan.survivors[k].seen)return EFI_NOT_READY;
     if(Plan.headless && target_count)return EFI_NOT_READY;
     if(!Plan.headless && Plan.stage<3 && target_count!=1)return EFI_NOT_READY;
   }
@@ -537,7 +574,7 @@ static EFI_STATUS AmdConsoleVariable(
       UINTN matching_gops=0;
       for(UINTN k=0;k<Plan.survivor_count;k++) {
         EFI_DEVICE_PATH_PROTOCOL *gop_path=NULL;
-        if(Interface(Plan.survivors[k],&PathGuid,(VOID **)&gop_path)!=EFI_SUCCESS)
+        if(Interface(Plan.survivors[k].handle,&PathGuid,(VOID **)&gop_path)!=EFI_SUCCESS)
           return EFI_NOT_READY;
         int match=GuDevicePathHasPrefix(
             (const unsigned char *)gop_path,4096u,
@@ -558,13 +595,17 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
 {
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   EFI_HANDLE *handles=NULL;UINTN count=0,display_count=0,amd_count=0;
-  GU_DEVICE_PATH_DISPLAY_OWNER owners[GU_DISPLAY_OWNER_MAX];
+  GU_DEVICE_PATH_DISPLAY_OWNER *owners=NULL;
   EFI_STATUS s;
-  if(!Plan.survivor_count||!b||!b->LocateHandleBuffer||!b->FreePool)
+  if(!Plan.survivor_baseline_valid||!Plan.survivor_count||!b||
+     !b->LocateHandleBuffer||!b->AllocatePool||!b->FreePool)
     return EFI_NOT_READY;
   s=b->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
-  if(s!=EFI_SUCCESS)return s;
-  if(!handles||!count||count>4096u)s=EFI_BAD_BUFFER_SIZE;
+  if(s==EFI_SUCCESS&&(!handles||!count||count>GU_DISPLAY_OWNER_MAX))s=EFI_BAD_BUFFER_SIZE;
+  if(s==EFI_SUCCESS) {
+    s=b->AllocatePool(EfiLoaderData,count*sizeof(*owners),(VOID **)&owners);
+    if(s==EFI_SUCCESS&&!owners)s=EFI_OUT_OF_RESOURCES;
+  }
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
     EFI_PCI_IO_PROTOCOL *io=NULL;
     EFI_DEVICE_PATH_PROTOCOL *p=NULL;
@@ -585,7 +626,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
     }
     UINT16 cls=(UINT16)((h[2]>>16)&0xffffu);
     if((cls&0xff00u)!=0x0300u)continue;
-    if(display_count==GU_DISPLAY_OWNER_MAX){s=EFI_BAD_BUFFER_SIZE;break;}
+    if(display_count==count){s=EFI_BAD_BUFFER_SIZE;break;}
     s=Interface(handles[i],&PathGuid,(VOID **)&p);
     if(s!=EFI_SUCCESS||!p){s=EFI_NOT_READY;break;}
     owners[display_count++]=(GU_DEVICE_PATH_DISPLAY_OWNER){
@@ -595,7 +636,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   if(s==EFI_SUCCESS&&(!amd_count||!display_count))s=EFI_ACCESS_DENIED;
   for(UINTN k=0;s==EFI_SUCCESS&&k<Plan.survivor_count;k++) {
     EFI_DEVICE_PATH_PROTOCOL *p=NULL;
-    s=Interface(Plan.survivors[k],&PathGuid,(VOID **)&p);
+    s=Interface(Plan.survivors[k].handle,&PathGuid,(VOID **)&p);
     if(s!=EFI_SUCCESS)break;
     if(GuDevicePathAmdDisplayOwner(
           (const unsigned char *)p,4096u,owners,(size_t)display_count)!=1)
@@ -603,6 +644,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   }
   if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ConOut",owners,display_count);
   if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ErrOut",owners,display_count);
+  if(owners&&b->FreePool(owners)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
   if(handles&&b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
   return s;
 }
@@ -621,7 +663,7 @@ static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
       continue;
     BOOLEAN survivor=FALSE;
     for(UINTN k=0;k<Plan.survivor_count;k++)
-      if(e->handle==Plan.survivors[k])survivor=TRUE;
+      if(e->handle==Plan.survivors[k].handle)survivor=TRUE;
     if(!survivor||e->count!=1)return EFI_ACCESS_DENIED;
     if(e->controller==Plan.console)out=TRUE;
     if(e->controller==Plan.error)err=TRUE;

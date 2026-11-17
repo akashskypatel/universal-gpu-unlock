@@ -175,14 +175,196 @@ class HandoverOrderTests(unittest.TestCase):
         gops = function_body("Gops")
         release = function_body("GuMsiRelease")
         self.assertIn("GuDevicePathLength(", gops)
-        self.assertIn("Plan.survivor_path_bytes[k]=path_bytes;", gops)
-        self.assertIn("memcpy(Plan.survivor_paths[k],live_path,path_bytes);", gops)
+        self.assertIn("record->path_bytes=path_bytes;", gops)
+        self.assertIn("memcpy(record->path,live_path,path_bytes);", gops)
         self.assertIn("GuDevicePathUnchanged(", gops)
         self.assertLess(gops.index("if(first) {", gops.index("EFI_DEVICE_PATH_PROTOCOL *live_path")),
                         gops.index("GuDevicePathUnchanged("))
         self.assertLess(release.index("Gops(FALSE)"),release.index("DisconnectController("))
         self.assertIn("Gops(FALSE)",release[release.index("DisconnectController("):])
         self.assertIn("Gops(FALSE)",function_body("GuMsiReadyForWindows"))
+
+    def test_dynamic_survivor_capture_and_recheck(self):
+        # Exercise the actual Gops function, not a second implementation.
+        start = SOURCE.index("#define MAX_SURVIVOR_PATH_BYTES")
+        end = SOURCE.index("#define GRAPH_EDGE_LIMIT", start)
+        records = SOURCE[start:end]
+        body = ("static EFI_STATUS GopOnTarget(EFI_HANDLE gop,BOOLEAN *target) {" +
+                function_body("GopOnTarget") + "}\n" +
+                "static EFI_STATUS Gops(BOOLEAN first) {" +
+                function_body("Gops") + "}\n")
+        program = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "gpu_device_path.h"
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef uint8_t UINT8;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+typedef int EFI_GUID;
+typedef unsigned char EFI_DEVICE_PATH_PROTOCOL;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_NOT_FOUND 1
+#define EFI_UNSUPPORTED 2
+#define EFI_ALREADY_STARTED 3
+#define EFI_NOT_READY 4
+#define EFI_BAD_BUFFER_SIZE 5
+#define EFI_OUT_OF_RESOURCES 6
+#define EFI_COMPROMISED_DATA 7
+#define EFI_DEVICE_ERROR 8
+#define EFI_INVALID_PARAMETER 9
+#define EfiLoaderData 1
+#define ByProtocol 2
+typedef struct { unsigned value; } EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+typedef struct {
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
+  UINTN SizeOfInfo,FrameBufferBase,FrameBufferSize;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+typedef struct { EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode; } EFI_GRAPHICS_OUTPUT_PROTOCOL;
+typedef struct {
+  EFI_STATUS (*LocateHandleBuffer)(int,EFI_GUID *,VOID *,UINTN *,EFI_HANDLE **);
+  EFI_STATUS (*AllocatePool)(int,UINTN,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+typedef struct { EFI_BOOT_SERVICES *BootServices; } EFI_SYSTEM_TABLE;
+""" + records + r"""
+typedef struct {
+  EFI_SYSTEM_TABLE *table;
+  EFI_HANDLE pci,gop;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *gop_interface;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
+  SURVIVOR_GOP *survivors;
+  UINTN survivor_count,survivor_capacity,stage;
+  BOOLEAN headless,survivor_baseline_valid;
+} PLAN;
+static PLAN first_plan,second_plan,failed_plan,duplicate_plan;
+static PLAN *active=&first_plan;
+#define Plan (*active)
+enum { N=21 };
+typedef struct {
+  unsigned char path[10];
+  EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL gop,alias;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *interface;
+} NODE;
+static NODE nodes[N];
+static EFI_HANDLE order[N];
+static UINTN visible=N,allocations;
+static int fail_alloc;
+static EFI_GUID GopGuid=1,PathGuid=2;
+static EFI_STATUS Locate(int kind,EFI_GUID *guid,VOID *key,UINTN *count,EFI_HANDLE **out) {
+  (void)key;
+  if(kind!=ByProtocol||guid!=&GopGuid)return EFI_INVALID_PARAMETER;
+  *count=visible;
+  *out=malloc(visible*sizeof(**out));
+  if(!*out)return EFI_OUT_OF_RESOURCES;
+  memcpy(*out,order,visible*sizeof(**out));
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Allocate(int kind,UINTN size,VOID **out) {
+  if(kind!=EfiLoaderData||fail_alloc)return EFI_OUT_OF_RESOURCES;
+  *out=calloc(1,size);
+  if(!*out)return EFI_OUT_OF_RESOURCES;
+  allocations++;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Free(VOID *p) {free(p);return EFI_SUCCESS;}
+static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *guid,VOID **out) {
+  NODE *node=h;
+  if(!node)return EFI_NOT_FOUND;
+  *out=guid==&GopGuid?(VOID *)node->interface:(VOID *)node->path;
+  return EFI_SUCCESS;
+}
+static BOOLEAN Equal(const VOID *a,const VOID *b,UINTN n){return !memcmp(a,b,n);}
+static void GuLog(const char *format,...){(void)format;}
+""" + body + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void){
+  EFI_BOOT_SERVICES bs={Locate,Allocate,Free};
+  EFI_SYSTEM_TABLE table={&bs};
+  for(UINTN i=0;i<N;i++){
+    unsigned char path[]={1,1,6,0,(unsigned char)i,0,0x7f,0xff,4,0};
+    memcpy(nodes[i].path,path,sizeof(path));
+    nodes[i].info.value=(unsigned)i;
+    nodes[i].mode.Info=&nodes[i].info;
+    nodes[i].mode.SizeOfInfo=sizeof(nodes[i].info);
+    nodes[i].mode.FrameBufferBase=1+i;
+    nodes[i].mode.FrameBufferSize=4096;
+    nodes[i].gop.Mode=&nodes[i].mode;
+    nodes[i].alias.Mode=&nodes[i].mode;
+    nodes[i].interface=&nodes[i].gop;
+    order[i]=&nodes[i];
+  }
+  Plan.table=&table;Plan.pci=&nodes[0];
+  CHECK(Gops(TRUE)==EFI_SUCCESS);
+  CHECK(Plan.survivor_count==20 && Plan.survivor_capacity==N);
+  CHECK(Plan.survivor_baseline_valid && allocations==1);
+  CHECK(Plan.survivors[0].handle==&nodes[1]);
+  CHECK(Gops(TRUE)==EFI_ALREADY_STARTED);
+  EFI_HANDLE saved=order[1];order[1]=order[20];order[20]=saved;
+  CHECK(Gops(FALSE)==EFI_SUCCESS && allocations==1);
+  order[20]=order[1];
+  CHECK(Gops(FALSE)==EFI_NOT_READY);
+  order[20]=saved;
+  CHECK(Gops(FALSE)==EFI_SUCCESS);
+  visible=N-1;
+  CHECK(Gops(FALSE)==EFI_NOT_READY);
+  visible=N;
+  nodes[1].path[4]=99;
+  CHECK(Gops(FALSE)==EFI_NOT_READY && Plan.survivors[0].path[4]==1);
+  nodes[1].path[4]=1;
+  nodes[1].interface=&nodes[1].alias;
+  CHECK(Gops(FALSE)==EFI_NOT_READY);
+  nodes[1].interface=&nodes[1].gop;
+  nodes[1].info.value=99;
+  CHECK(Gops(FALSE)==EFI_NOT_READY);
+  nodes[1].info.value=1;
+  CHECK(Gops(FALSE)==EFI_SUCCESS);
+  active=&second_plan;Plan.table=&table;Plan.pci=&nodes[1];
+  CHECK(Gops(TRUE)==EFI_SUCCESS && allocations==2);
+  CHECK(Plan.survivors!=first_plan.survivors && Plan.survivor_count==20);
+  CHECK(Plan.gop==&nodes[1] && first_plan.gop==&nodes[0]);
+  CHECK(Gops(FALSE)==EFI_SUCCESS);
+  active=&first_plan;
+  CHECK(Gops(FALSE)==EFI_SUCCESS && first_plan.survivors[0].handle==&nodes[1]);
+  active=&failed_plan;Plan.table=&table;Plan.pci=&nodes[0];
+  fail_alloc=1;
+  CHECK(Gops(TRUE)==EFI_OUT_OF_RESOURCES && !Plan.survivors);
+  CHECK(!Plan.survivor_baseline_valid && Gops(FALSE)==EFI_NOT_READY);
+  fail_alloc=0;
+  active=&duplicate_plan;Plan.table=&table;Plan.pci=&nodes[0];
+  nodes[1].interface=&nodes[20].gop;
+  CHECK(Gops(TRUE)==EFI_COMPROMISED_DATA && !Plan.survivor_baseline_valid);
+  CHECK(Gops(FALSE)==EFI_NOT_READY);
+  free(first_plan.survivors);free(second_plan.survivors);
+  free(duplicate_plan.survivors);
+  return 0;
+}
+"""
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "survivors.c"
+            source.write_text(program, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(directory) / compiler
+                    compiled = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", "-I", str(root / "src"),
+                         str(source), "-o", str(binary)],
+                        capture_output=True, text=True)
+                    self.assertEqual(compiled.returncode, 0, compiled.stderr)
+                    result = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_amd_owner_validation_is_read_only(self):
         owner = function_body("ReadOnlyAmdConsoleOwnership")

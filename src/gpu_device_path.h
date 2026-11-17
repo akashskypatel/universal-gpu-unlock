@@ -79,7 +79,8 @@ static inline int GuDevicePathHasPrefix(const unsigned char *parent,
  * Return 1 for exactly one AMD display owner, 0 for no AMD owner or a
  * different display vendor, -1 for invalid input or ambiguous ancestry.
  * A root-port-only prefix and a GOP count do not identify the owner. */
-#define GU_DISPLAY_OWNER_MAX 32u
+/* Same resource bound as the PCI handle enumeration, not a GPU count. */
+#define GU_DISPLAY_OWNER_MAX 4096u
 typedef struct {
   const unsigned char *path;
   size_t path_bytes;

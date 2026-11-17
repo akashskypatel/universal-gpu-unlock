@@ -171,6 +171,22 @@ int main(void) {
             original,sizeof(original)-1)==0);
     assert(GuDevicePathLength(NULL,sizeof(original))==0);
   }
+  /* The caller supplies a complete array, sized to the observed inventory. */
+  {
+    unsigned char paths[40][10];
+    GU_DEVICE_PATH_DISPLAY_OWNER owners[40];
+    for(size_t i=0;i<40;i++){
+      const unsigned char path[]={1,1,6,0,(unsigned char)i,0,0x7f,0xff,4,0};
+      memcpy(paths[i],path,sizeof(path));
+      owners[i]=(GU_DEVICE_PATH_DISPLAY_OWNER){paths[i],sizeof(paths[i]),0x10de,0x0300};
+    }
+    owners[39].vendor=0x1002;
+    assert(GuDevicePathAmdDisplayOwner(paths[39],sizeof(paths[39]),owners,40)==1);
+    assert(GuDevicePathAmdDisplayOwner(paths[0],sizeof(paths[0]),owners,40)==0);
+    owners[38]=owners[39];
+    assert(GuDevicePathAmdDisplayOwner(paths[39],sizeof(paths[39]),owners,40)==-1);
+    assert(GuDevicePathAmdDisplayOwner(paths[39],sizeof(paths[39]),owners,GU_DISPLAY_OWNER_MAX+1u)==-1);
+  }
   puts("STATUS=COMPLETE DEVICE_PATH_AMD_OWNERSHIP_AND_BOUNDS");
   return 0;
 }
