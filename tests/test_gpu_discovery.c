@@ -14,6 +14,7 @@ static unsigned checks;
 static int release_owner_token,other_owner_token;
 #endif
 static unsigned state_allocs,state_frees,fail_state_alloc,fail_state_free;
+static void *last_failed_free;
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 static unsigned context_allocs,context_frees,fail_context_free;
 #endif
@@ -107,7 +108,7 @@ static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
 }
 static EFI_STATUS Free(VOID *p) {
   if(p && p!=handles) {
-    if(fail_state_free){fail_state_free=0;return EFI_NOT_READY;}
+    if(fail_state_free){fail_state_free=0;last_failed_free=p;return EFI_NOT_READY;}
     free(p);state_frees++;return EFI_SUCCESS;
   }
   free_calls++; if (p != handles || fail_pool_free) return 3;
@@ -181,6 +182,7 @@ static void ResetPair(void) {
   prep_markers = prep_refusals = global_refusals = 0;
   fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
   state_allocs=state_frees=fail_state_alloc=fail_state_free=0;
+  last_failed_free=NULL;
   Populate(0, Primary); Populate(1, Secondary);
 }
 #include "../src/gpu_discovery.c"
@@ -195,10 +197,9 @@ static void ExpandInventory(size_t n) {
  * Earlier mock Segment=1 is intentionally not accepted by GuCheckConfig. */
 static void ResetActivePair(void) {
   /* A test reset models a new boot, not a production unbind. */
-  free(ActiveSequenceTargets);free(ActiveSequenceOrder);free(ActiveDiscovery.allocation);
+  free(ActiveDiscovery.allocation);
   memset(&ActiveDiscovery,0,sizeof(ActiveDiscovery));
   memset(&ActiveInventory,0,sizeof(ActiveInventory));
-  ActiveSequenceTargets=NULL;ActiveSequenceOrder=NULL;ActiveObservations=NULL;
   /* Test reset represents a new boot, not production disposal/retry. */
   free(UnreleasedDiscoveryAllocation);UnreleasedDiscoveryAllocation=NULL;
   memset(&ActiveSequence,0,sizeof(ActiveSequence));
@@ -286,7 +287,7 @@ int main(void) {
   ResetActivePair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_SUCCESS && init_calls==1);
-  CHECK(state_allocs==3 && state_frees==0 && ActiveSequence.capacity==2);
+  CHECK(state_allocs==1 && state_frees==0 && ActiveSequence.capacity==2);
   CHECK(Gu.handle==handles[1] && Gu.device_id==0x2503U);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
   /* A refused rebind must not replace the previous target or saved peer
@@ -296,39 +297,55 @@ int main(void) {
     UINT32 original_peer=ActiveSequence.targets[0].expected_config[4];
     GU_GPU_EXEC_TARGET *original_targets=ActiveSequence.targets;
     size_t *original_order=ActiveSequence.order;
-    GU_GPU_EXEC_OBSERVATION *original_observations=ActiveObservations;
+    GU_GPU_EXEC_OBSERVATION *original_observations=ActiveDiscovery.observed;
     refuse_init=1;
     gpu[0].dwords[4]^=0x1000U;
     CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
     CHECK(Gu.handle==old && ActiveInventoryValid);
     CHECK(ActiveSequence.targets[0].expected_config[4]==original_peer);
-    CHECK(ActiveSequence.targets==original_targets && ActiveSequence.order==original_order && ActiveObservations==original_observations);
-    CHECK(state_allocs==4 && state_frees==1 && init_calls==1);
+    CHECK(ActiveSequence.targets==original_targets && ActiveSequence.order==original_order && ActiveDiscovery.observed==original_observations);
+    CHECK(state_allocs==2 && state_frees==1 && init_calls==1);
     refuse_init=0;
   }
-  /* Independent allocation failures must not spend GuInit or publish storage. */
+  /* One allocation contains every sequence backing region. No partial
+   * owner may be published, even when firmware rejects a release. */
   ResetActivePair();fail_state_alloc=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
-  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
+  CHECK(!ActiveSequenceValid && !ActiveDiscovery.allocation && !ActiveDiscovery.targets &&
         init_calls==0 && state_allocs==1 && state_frees==0);
-  ResetActivePair();fail_state_alloc=2;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
-  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
-        init_calls==0 && state_allocs==2 && state_frees==1);
-  ResetActivePair();fail_state_alloc=3;
-  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
-  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
-        !ActiveObservations && init_calls==0 && state_allocs==3 && state_frees==2);
   ResetActivePair();refuse_init=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
-  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
-        !ActiveObservations && init_calls==1 && state_allocs==3 && state_frees==3);
+  CHECK(!ActiveSequenceValid && !ActiveDiscovery.allocation && !ActiveDiscovery.order &&
+        !ActiveDiscovery.observed && init_calls==1 && state_allocs==1 && state_frees==1);
+  ResetActivePair();refuse_init=1;fail_state_free=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_NOT_READY);
+  CHECK(!ActiveSequenceValid&&!ActiveDiscovery.allocation&&UnreleasedDiscoveryAllocation);
+  CHECK(UnreleasedDiscoveryAllocation==last_failed_free&&state_allocs==1&&!state_frees);
+  refuse_init=0;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(state_allocs==1&&init_calls==1&&!state_frees);
+  /* A failed second candidate release must not replace the published owner. */
+  ResetActivePair();
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+  {
+    void *saved=ActiveDiscovery.allocation;
+    GU_GPU_EXEC_TARGET *targets=ActiveSequence.targets;
+    size_t *order=ActiveSequence.order;
+    fail_state_free=1;
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_NOT_READY);
+    CHECK(UnreleasedDiscoveryAllocation==last_failed_free&&UnreleasedDiscoveryAllocation!=saved);
+    CHECK(ActiveDiscovery.allocation==saved&&ActiveSequence.targets==targets&&ActiveSequence.order==order);
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+    CHECK(state_allocs==2&&init_calls==1&&!state_frees);
+  }
   ResetActivePair();
   gpu[1].dwords[1]=4u; /* initial selected UEFI driver Bus Master enabled */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
-  CHECK(ActiveObservations && ActiveSequence.capacity==2 &&
-        ActiveObservations==ActiveDiscovery.observed &&
+  CHECK(ActiveDiscovery.observed && ActiveSequence.capacity==2 &&
+        ActiveSequence.targets==ActiveDiscovery.targets &&
+        ActiveSequence.order==ActiveDiscovery.order &&
         ActiveInventory.inventory.nvidia==ActiveDiscovery.records);
   /* The selected GPU may change its own BAR after the active transaction. */
   gpu[1].dwords[4]^=0x1000U;
@@ -593,7 +610,7 @@ int main(void) {
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   CHECK(ActiveInventory.inventory.count==20&&ActiveDiscovery.capacity==20&&
         ActiveSequence.count==20&&ActiveSequence.selected_count==1);
-  CHECK(ActiveDiscovery.records!=ActiveDiscovery.live&&ActiveObservations==ActiveDiscovery.observed);
+  CHECK(ActiveDiscovery.records!=ActiveDiscovery.live&&ActiveSequence.targets==ActiveDiscovery.targets&&ActiveSequence.order==ActiveDiscovery.order);
   CHECK(GuIsPreparedPeerHandle(handles[19])&&GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
   Gu.profile_verified=Gu.prom_verified=1;PrepareMockOwners();
   CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
@@ -601,7 +618,7 @@ int main(void) {
   CHECK(GuVerifySelectedSequence(&system_table)==EFI_SUCCESS);
   gpu[19].dwords[4]^=0x1000U;
   CHECK(GuVerifySelectedSequence(&system_table)==EFI_NOT_READY&&ActiveSequence.halted);
-  CHECK(state_allocs==3&&state_frees==0); /* No new pool workspace during checks. */
+  CHECK(state_allocs==1&&state_frees==0); /* No new pool workspace during checks. */
   ResetActivePair();
   fail_state_free=1;count=1;
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_NOT_READY);

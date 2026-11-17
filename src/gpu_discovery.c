@@ -46,7 +46,7 @@ typedef struct {
   size_t *indices;
   GU_GPU_REFRESHED_TARGET *scanned;
   GU_GPU_EXEC_OBSERVATION *observed;
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
   GU_GPU_EXEC_TARGET *targets;
   size_t *order;
 #endif
@@ -70,7 +70,7 @@ static EFI_STATUS AllocateDiscoveryStorage(EFI_BOOT_SERVICES *bs,size_t capacity
   const size_t types[]={
     sizeof(GU_GPU_RECORD),sizeof(GU_GPU_RECORD),sizeof(size_t),
     sizeof(GU_GPU_REFRESHED_TARGET),sizeof(GU_GPU_EXEC_OBSERVATION),
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
     sizeof(GU_GPU_EXEC_TARGET),sizeof(size_t),
 #endif
   };
@@ -94,7 +94,7 @@ static EFI_STATUS AllocateDiscoveryStorage(EFI_BOOT_SERVICES *bs,size_t capacity
   storage->indices=(size_t *)(base+offsets[2]);
   storage->scanned=(GU_GPU_REFRESHED_TARGET *)(base+offsets[3]);
   storage->observed=(GU_GPU_EXEC_OBSERVATION *)(base+offsets[4]);
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
   storage->targets=(GU_GPU_EXEC_TARGET *)(base+offsets[5]);
   storage->order=(size_t *)(base+offsets[6]);
 #endif
@@ -129,10 +129,6 @@ static int ActiveInventoryValid;
 /* Ordered transaction ownership is independent of admission. Compile-only
  * images can validate a longer selection; neither EFI entrypoint runs. */
 static GU_GPU_EXEC_SEQUENCE ActiveSequence;
-static GU_GPU_EXEC_TARGET *ActiveSequenceTargets;
-static size_t *ActiveSequenceOrder;
-/* Observation workspace belongs to the published ordered record. */
-static GU_GPU_EXEC_OBSERVATION *ActiveObservations;
 static int ActiveSequenceValid;
 #endif
 
@@ -418,14 +414,13 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
  * Check the retained backing and current PCI binding before trusting it. */
 static int ResolveSelectedBinding(size_t *step,size_t *target) {
   if(!ActiveInventoryValid || !ActiveSequenceValid ||
-     !ActiveSequenceTargets || !ActiveSequenceOrder || !ActiveObservations ||
-     ActiveSequence.targets!=ActiveSequenceTargets ||
-     ActiveSequence.order!=ActiveSequenceOrder ||
-     !ActiveDiscovery.allocation ||
+     !ActiveDiscovery.allocation || !ActiveDiscovery.targets ||
+     !ActiveDiscovery.order || !ActiveDiscovery.observed ||
+     ActiveSequence.targets!=ActiveDiscovery.targets ||
+     ActiveSequence.order!=ActiveDiscovery.order ||
      ActiveInventory.inventory.nvidia!=ActiveDiscovery.records ||
      ActiveInventory.selected_indices!=ActiveDiscovery.indices ||
      ActiveInventory.inventory.capacity!=ActiveDiscovery.capacity ||
-     ActiveObservations!=ActiveDiscovery.observed ||
      !ActiveInventory.inventory.count ||
      ActiveInventory.inventory.count>ActiveDiscovery.capacity ||
      ActiveDiscovery.capacity>GU_INVENTORY_MAX_HANDLES ||
@@ -516,15 +511,15 @@ static void ConfigureBoundPlatform(EFI_HANDLE image,const GU_GPU_RECORD *selecte
  * selected-card step must not trust a previous firmware/PCI snapshot. */
 static EFI_STATUS ActiveStepObservations(EFI_SYSTEM_TABLE *table) {
   if(!ActiveInventoryValid||!ActiveSequenceValid||!table||!table->BootServices||
-     !ActiveObservations||ActiveObservations!=ActiveDiscovery.observed)
+     !ActiveDiscovery.allocation||!ActiveDiscovery.observed)
     return EFI_INVALID_PARAMETER;
   EFI_STATUS s=RefreshGpuRecords(table,&ActiveInventory,ActiveDiscovery.live,
                                   ActiveDiscovery.scanned,ActiveDiscovery.capacity);
   if(s!=EFI_SUCCESS)return EFI_UNSUPPORTED;
   for(size_t i=0;i<ActiveInventory.inventory.count;i++){
-    ActiveObservations[i].identity=ActiveInventory.inventory.nvidia[i];
-    memcpy(ActiveObservations[i].config,ActiveDiscovery.scanned[i].config,
-           sizeof(ActiveObservations[i].config));
+    ActiveDiscovery.observed[i].identity=ActiveInventory.inventory.nvidia[i];
+    memcpy(ActiveDiscovery.observed[i].config,ActiveDiscovery.scanned[i].config,
+           sizeof(ActiveDiscovery.observed[i].config));
   }
   return EFI_SUCCESS;
 }
@@ -558,7 +553,7 @@ EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
     GuAbortSelectedGpuStep();
     return EFI_UNSUPPORTED;
   }
-  GU_GPU_EXEC_OBSERVATION *observed=ActiveObservations;
+  GU_GPU_EXEC_OBSERVATION *observed=ActiveDiscovery.observed;
   EFI_STATUS s=ActiveStepObservations(table);
   if(s!=EFI_SUCCESS ||
      GuGpuExecBeginOwned(&ActiveSequence,step,observed,
@@ -592,7 +587,7 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
     GuAbortSelectedGpuStep();
     return EFI_NOT_READY;
   }
-  GU_GPU_EXEC_OBSERVATION *observed=ActiveObservations;
+  GU_GPU_EXEC_OBSERVATION *observed=ActiveDiscovery.observed;
   EFI_STATUS s=ActiveStepObservations(table);
   if(s!=EFI_SUCCESS ||
      GuGpuExecFinish(&ActiveSequence,step,observed,
@@ -617,7 +612,7 @@ EFI_STATUS GuVerifySelectedSequence(EFI_SYSTEM_TABLE *table) {
     GuAbortSelectedGpuStep();
     return EFI_NOT_READY;
   }
-  GU_GPU_EXEC_OBSERVATION *observed=ActiveObservations;
+  GU_GPU_EXEC_OBSERVATION *observed=ActiveDiscovery.observed;
   EFI_STATUS s=ActiveStepObservations(table);
   if(s!=EFI_SUCCESS||
      GuGpuExecCheckComplete(&ActiveSequence,observed,ActiveInventory.inventory.count)!=GU_GPU_EXEC_OK||
@@ -667,7 +662,7 @@ EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
      step+1!=ActiveSequence.next_step||
      ActiveSequence.next_step>=ActiveSequence.selected_count)
     return EFI_NOT_READY;
-  GU_GPU_EXEC_OBSERVATION *observed=ActiveObservations;
+  GU_GPU_EXEC_OBSERVATION *observed=ActiveDiscovery.observed;
   GU_CAPS caps;
   EFI_STATUS s=ActiveStepObservations(table);
   if(s!=EFI_SUCCESS ||
@@ -713,7 +708,7 @@ static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
                                        const GU_GPU_PREPARED_VIEW *prepared,
                                        GU_GPU_DISCOVERY_STORAGE *storage) {
   if(!table || !table->BootServices || !io || !prepared || !storage ||
-     !storage->allocation || !storage->observed ||
+     !storage->allocation || !storage->observed || !storage->targets || !storage->order ||
      prepared->inventory.nvidia!=storage->records ||
      prepared->selected_indices!=storage->indices ||
      prepared->inventory.capacity!=storage->capacity ||
@@ -723,48 +718,22 @@ static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
      prepared->selected_indices[0]>=prepared->inventory.count ||
      prepared->inventory.nvidia[prepared->selected_indices[0]].pci!=io)
     return EFI_INVALID_PARAMETER;
-  EFI_BOOT_SERVICES *bs=table->BootServices;
-  if(!bs->AllocatePool || !bs->FreePool)return EFI_UNSUPPORTED;
-  if(ActiveSequenceValid || ActiveInventoryValid)return EFI_ALREADY_STARTED;
+  if(ActiveSequenceValid || ActiveInventoryValid || UnreleasedDiscoveryAllocation)
+    return EFI_ALREADY_STARTED;
   size_t count=prepared->inventory.count;
   GU_GPU_EXEC_SEQUENCE candidate;
-  GU_GPU_EXEC_TARGET *targets=NULL;
-  size_t *order=NULL;
-  const GU_GPU_EXEC_OBSERVATION *observations=storage->observed;
-  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,count*sizeof(*targets),(VOID **)&targets);
-  if(s==EFI_SUCCESS && !targets)s=EFI_OUT_OF_RESOURCES;
-  if(s==EFI_SUCCESS) {
-    s=bs->AllocatePool(EfiLoaderData,count*sizeof(*order),(VOID **)&order);
-    if(s==EFI_SUCCESS && !order)s=EFI_OUT_OF_RESOURCES;
-  }
-  if(s==EFI_SUCCESS &&
-     (GuGpuExecInit(&candidate,observations,count,prepared->selected_indices,
-                   prepared->selected_count,targets,order,count)!=GU_GPU_EXEC_OK ||
-      GuGpuExecCheckNext(&candidate,observations,count)!=GU_GPU_EXEC_OK))
-    s=EFI_UNSUPPORTED;
-  if(s==EFI_SUCCESS)s=GuInit(table->BootServices,io);
-  if(s!=EFI_SUCCESS) {
-    EFI_STATUS released=EFI_SUCCESS;
-    if(order) {
-      EFI_STATUS r=bs->FreePool(order);
-      if(r!=EFI_SUCCESS)released=r;
-    }
-    if(targets) {
-      EFI_STATUS r=bs->FreePool(targets);
-      if(r!=EFI_SUCCESS)released=r;
-    }
-    if(released!=EFI_SUCCESS) {
-      GuLog("ACTIVE_SEQUENCE_STORAGE_FREE_STATUS=%#llx\n",(unsigned long long)released);
-      return released;
-    }
-    return s;
-  }
+  /* All backing arrays share the candidate allocation. On refusal the
+   * caller owns it and releases it once, or retains it if FreePool fails. */
+  if(GuGpuExecInit(&candidate,storage->observed,count,prepared->selected_indices,
+                   prepared->selected_count,storage->targets,storage->order,count)!=GU_GPU_EXEC_OK ||
+     GuGpuExecCheckNext(&candidate,storage->observed,count)!=GU_GPU_EXEC_OK)
+    return EFI_UNSUPPORTED;
+  EFI_STATUS s;
+  s=GuInit(table->BootServices,io);
+  if(s!=EFI_SUCCESS)return s;
   ActiveInventory=*prepared;
-  ActiveSequenceTargets=targets;
-  ActiveSequenceOrder=order;
   ActiveDiscovery=*storage;
   memset(storage,0,sizeof(*storage)); /* Transfer pool ownership once. */
-  ActiveObservations=ActiveDiscovery.observed;
   ActiveSequence=candidate;
   ActiveSequenceValid=1;
   ActiveInventoryValid=1;
