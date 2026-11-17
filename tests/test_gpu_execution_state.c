@@ -35,6 +35,10 @@ int main(void) {
   Reset();
   CHECK(Init(&s,o,2,order,2)==GU_GPU_EXEC_OK);
   CHECK(s.order[0]==1 && s.order[1]==0);
+  size_t step=99,target=99;
+  CHECK(GuGpuExecResolveBound(&s,o[1].identity.handle,o[1].identity.pci,&step,&target)==GU_GPU_EXEC_OK && step==0 && target==1);
+  CHECK(GuGpuExecResolveBound(&s,o[0].identity.handle,o[0].identity.pci,&step,&target)==GU_GPU_EXEC_BLOCKED && step==GU_GPU_EXEC_NO_STEP && target==GU_GPU_EXEC_NO_STEP);
+  CHECK(GuGpuExecResolveBound(&s,o[1].identity.handle,o[0].identity.pci,&step,&target)==GU_GPU_EXEC_BLOCKED);
   CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_OK);
   CHECK(GuGpuExecBegin(&s,0,o,2)==GU_GPU_EXEC_OK);
   CHECK(s.targets[1].phase==GU_GPU_EXEC_ACTIVE);
@@ -43,11 +47,15 @@ int main(void) {
   CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
   CHECK(s.targets[1].phase==GU_GPU_EXEC_COMPLETE);
   CHECK(s.targets[0].phase==GU_GPU_EXEC_PENDING);
+  CHECK(GuGpuExecResolveBound(&s,o[1].identity.handle,o[1].identity.pci,&step,&target)==GU_GPU_EXEC_OK && step==0 && target==1);
+  CHECK(GuGpuExecResolveBound(&s,o[0].identity.handle,o[0].identity.pci,&step,&target)==GU_GPU_EXEC_OK && step==1 && target==0);
   CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_OK);
   CHECK(GuGpuExecBegin(&s,1,o,2)==GU_GPU_EXEC_OK);
   o[0].config[4]^=0x2000U;
   CHECK(GuGpuExecFinish(&s,1,o,2,1)==GU_GPU_EXEC_OK);
   CHECK(s.next_step==2 && !s.halted);
+  CHECK(GuGpuExecResolveBound(&s,o[0].identity.handle,o[0].identity.pci,&step,&target)==GU_GPU_EXEC_OK && step==1 && target==0);
+  CHECK(GuGpuExecResolveBound(&s,o[1].identity.handle,o[1].identity.pci,&step,&target)==GU_GPU_EXEC_BLOCKED);
   CHECK(s.targets[0].phase==GU_GPU_EXEC_COMPLETE);
   CHECK(GuGpuExecCheckNext(&s,o,2)==GU_GPU_EXEC_BLOCKED);
 

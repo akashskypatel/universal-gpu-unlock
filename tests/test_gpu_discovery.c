@@ -36,7 +36,8 @@ static unsigned init_calls, free_calls, log_calls, resolve_calls;
 static unsigned prep_markers, prep_refusals, global_refusals;
 static int fail_pool_free, redirect_on_refresh, refuse_init;
 
-GU_PLATFORM Gu;
+static GU_PLATFORM MockPrimaryPlatform;
+GU_PLATFORM *GuPlatformActive=&MockPrimaryPlatform;
 
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *bs, EFI_PCI_IO_PROTOCOL *pci) {
   init_calls++;
@@ -154,6 +155,7 @@ static void Populate(size_t i, GU_GPU_IDENTITY id) {
   handles[i] = &m->protocol;
 }
 static void ResetPair(void) {
+  GuPlatformActive=&MockPrimaryPlatform;
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
   prep_markers = prep_refusals = global_refusals = 0;
   fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
@@ -248,7 +250,7 @@ int main(void) {
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
   CHECK(ActiveInventoryValid && ActiveSequenceValid &&
         ActiveSequence.selected_count==1 && ActiveSequence.next_step==0);
-  CHECK(ActiveSequence.order[0]==ActiveTargetIndex);
+  CHECK(ActiveSequence.targets[ActiveSequence.order[0]].identity.pci==Gu.pci);
   PrepareMockOwners();
   CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_NOT_READY);
@@ -274,15 +276,15 @@ int main(void) {
   CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
   CHECK(ActiveSequence.active_step==0 &&
-        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_ACTIVE);
-  CHECK(ActiveSequence.targets[ActiveTargetIndex].owners.platform==&Gu &&
-        ActiveSequence.targets[ActiveTargetIndex].owners.release_plan==&release_owner_token &&
-        ActiveSequence.targets[ActiveTargetIndex].owners.firmware_assets==Gu.asset_entries);
+        ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_ACTIVE);
+  CHECK(ActiveSequence.targets[ActiveSequence.order[0]].owners.platform==&Gu &&
+        ActiveSequence.targets[ActiveSequence.order[0]].owners.release_plan==&release_owner_token &&
+        ActiveSequence.targets[ActiveSequence.order[0]].owners.firmware_assets==Gu.asset_entries);
   /* A failed cleanup verdict cannot publish a completed GPU. */
   CHECK(GuFinishSelectedGpuStep(&system_table,0,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_NOT_READY);
   CHECK(ActiveSequence.halted &&
-        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
+        ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_FAILED);
   CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_UNSUPPORTED);
 
@@ -297,8 +299,8 @@ int main(void) {
   CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
   CHECK(ActiveSequence.next_step==1 &&
-        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_COMPLETE &&
-        ActiveSequence.targets[ActiveTargetIndex].expected_config[4]==gpu[1].dwords[4]);
+        ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_COMPLETE &&
+        ActiveSequence.targets[ActiveSequence.order[0]].expected_config[4]==gpu[1].dwords[4]);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
   gpu[1].dwords[4]^=0x2000U;
   CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
@@ -322,7 +324,7 @@ int main(void) {
   CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_UNSUPPORTED &&
         ActiveSequence.halted);
-  CHECK(ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
+  CHECK(ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_FAILED);
 
   /* Reject a changed live owner even if PCI and handover are unchanged. */
   ResetActivePair();
@@ -334,7 +336,7 @@ int main(void) {
   CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,
                                 Gu.asset_entries,&release_owner_token)==EFI_NOT_READY);
   CHECK(ActiveSequence.halted &&
-        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
+        ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_FAILED);
 
   /* A caller can retain the old token even after the live context changes. */
   ResetActivePair();
@@ -347,7 +349,7 @@ int main(void) {
   CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_NOT_READY);
   CHECK(ActiveSequence.halted &&
-        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
+        ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_FAILED);
 
   /* Reject a changed saved owner, not only a changed input. */
   ResetActivePair();
@@ -356,11 +358,11 @@ int main(void) {
   PrepareMockOwners();
   CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
-  ActiveSequence.targets[ActiveTargetIndex].owners.firmware_assets=&release_owner_token;
+  ActiveSequence.targets[ActiveSequence.order[0]].owners.firmware_assets=&release_owner_token;
   CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_NOT_READY);
   CHECK(ActiveSequence.halted &&
-        ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_FAILED);
+        ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_FAILED);
 
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
@@ -382,6 +384,59 @@ int main(void) {
         ActiveSequence.halted);
   CHECK(ActiveSequence.next_step==0 && ActiveSequence.active_step==GU_GPU_EXEC_NO_STEP);
 
+  /* Use the real adapter and ordered record with two independent mock
+   * contexts. Switching the mock pointer is NOT a production bind API. */
+  ResetActivePair();
+  {
+    GU_GPU_PREPARED_SEQUENCE prepared,all;
+    GU_GPU_REFRESHED_SEQUENCE refreshed;
+    GU_GPU_EXEC_OBSERVATION observations[2];
+    GU_GPU_LOCATION requested[2]={{0,7,0,0},{0,3,0,0}};
+    GU_PLATFORM second={0};
+    CHECK(GuPrepareGpuSequence(&system_table,requested,2,&prepared)==EFI_SUCCESS);
+    all=prepared;
+    all.selected_count=all.inventory.count;
+    for(size_t i=0;i<all.selected_count;i++)all.selected_indices[i]=i;
+    CHECK(GuRefreshPreparedSequence(&system_table,&all,&refreshed)==EFI_SUCCESS);
+    for(size_t i=0;i<2;i++){
+      observations[i].identity=all.inventory.nvidia[i];
+      memcpy(observations[i].config,refreshed.targets[i].config,sizeof(observations[i].config));
+    }
+    CHECK(BindPreparedSequence(&system_table,&gpu[1].protocol,&prepared,observations)==EFI_SUCCESS);
+    Gu.handle=handles[1];Gu.profile_verified=Gu.prom_verified=1;PrepareMockOwners();
+    CHECK(GuIsPreparedPeerHandle(handles[0]) && !GuIsPreparedPeerHandle(handles[1]));
+    CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+    CHECK(ActiveSequence.active_step==0);
+    gpu[1].dwords[4]^=0x1000U;
+    CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+    CHECK(ActiveSequence.next_step==1 && GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+    GU_PLATFORM *first=GuPlatformActive;
+    second.bs=&services;second.pci=&gpu[0].protocol;second.handle=handles[0];
+    second.profile_verified=second.prom_verified=second.asset_entries_reserved=1;
+    second.release_state=&other_owner_token;
+    GuPlatformActive=&second;
+    CHECK(GuIsPreparedPeerHandle(handles[1]) && !GuIsPreparedPeerHandle(handles[0]));
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+    CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&other_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+    CHECK(ActiveSequence.active_step==1);
+    GuPlatformActive=first;
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+    CHECK(GuIsPreparedPeerHandle(handles[0]) && GuIsPreparedPeerHandle(handles[1]));
+    GuPlatformActive=&second;
+    gpu[0].dwords[4]^=0x2000U;
+    CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&other_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+    CHECK(ActiveSequence.next_step==2 && GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+    CHECK(ActiveSequence.targets[ActiveSequence.order[0]].owners.platform==first);
+    CHECK(ActiveSequence.targets[ActiveSequence.order[1]].owners.platform==&second);
+    gpu[1].dwords[4]^=0x4000U;
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+    gpu[1].dwords[4]^=0x4000U;
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+    Gu.release_state=&release_owner_token;
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+    GuPlatformActive=first;
+    CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+  }
   printf("PASS exact single-target active binding and CPU state handover: %u checks\n",checks);
   return 0;
 }

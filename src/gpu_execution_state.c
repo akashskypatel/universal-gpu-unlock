@@ -137,6 +137,29 @@ static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
   }
   return 1;
 }
+int GuGpuExecResolveBound(const GU_GPU_EXEC_SEQUENCE *s,
+                         const void *handle,const void *pci,
+                         size_t *step,size_t *target) {
+  if(!step||!target||step==target)return GU_GPU_EXEC_INVALID;
+  *step=GU_GPU_EXEC_NO_STEP;*target=GU_GPU_EXEC_NO_STEP;
+  if(!handle||!pci)return GU_GPU_EXEC_INVALID;
+  if(!StateValid(s)||s->halted)return GU_GPU_EXEC_BLOCKED;
+  /* During execution, only the active step can own the binding. Between
+   * steps, the previous completed context may still be bound for its
+   * final local observation, or the next pending context may be bound. */
+  size_t first=s->active_step!=GU_GPU_EXEC_NO_STEP?s->active_step:
+    (s->next_step?s->next_step-1:0);
+  size_t end=s->active_step!=GU_GPU_EXEC_NO_STEP?s->active_step+1:
+    (s->next_step<s->selected_count?s->next_step+1:s->selected_count);
+  for(size_t i=first;i<end;i++) {
+    size_t index=s->order[i];
+    const GU_GPU_RECORD *r=&s->targets[index].identity;
+    if(r->handle==handle && r->pci==pci) {
+      *step=i;*target=index;return GU_GPU_EXEC_OK;
+    }
+  }
+  return GU_GPU_EXEC_BLOCKED;
+}
 int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *s,
                        const GU_GPU_EXEC_OBSERVATION *all,size_t count) {
   if(!StateValid(s) || s->halted || s->next_step>=s->selected_count ||

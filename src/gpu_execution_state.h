@@ -45,6 +45,12 @@ int GuGpuExecInit(GU_GPU_EXEC_SEQUENCE *state,
                   const size_t *order, size_t selected_count,
                   GU_GPU_EXEC_TARGET *target_storage, size_t *order_storage,
                   size_t capacity);
+/* Resolve the binding to the pending next step, the active step, or the
+ * most recently completed step (while its context remains bound).
+ * Match both immutable boot-local references. No hardware authorization. */
+int GuGpuExecResolveBound(const GU_GPU_EXEC_SEQUENCE *state,
+                         const void *handle,const void *pci,
+                         size_t *step,size_t *target);
 int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *state,
                        const GU_GPU_EXEC_OBSERVATION *all, size_t count);
 /* CPU-only final observation check; does not establish hardware safety. */
