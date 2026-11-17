@@ -196,6 +196,7 @@ typedef struct {const char *name;struct firmware firmware;} LOADED;
 static LOADED GuAssets[GU_ASSET_COUNT];
 static struct {int started,fault,retained,asset_load_attempted;} Gu;
 static VOID *Root=(VOID *)(uintptr_t)1;
+static VOID *UnreleasedFilesystemHandles;
 static int read_calls,freed,fail_at,corrupt_at,available=1;
 static const GU_ARCH_ASSETS bundle={{
   {L"a","A","1",8},{L"b","B","2",8},{L"c","C","3",8},
@@ -266,11 +267,14 @@ int main(int argc,char **argv) {
     CHECK(GuBootLoadAssets()==EFI_ALREADY_STARTED && read_calls==0);
   } else if(mode==10) {
     Root=NULL;CHECK(GuBootLoadAssets()==EFI_NOT_READY && read_calls==0);
+  } else if(mode==11) {
+    UnreleasedFilesystemHandles=(VOID *)(uintptr_t)0x1234;
+    CHECK(GuBootLoadAssets()==EFI_NOT_READY && read_calls==0 && !Gu.asset_load_attempted);
   } else return 3;
   return 0;
 }
 '''
-        self.compile_run(source, range(11))
+        self.compile_run(source, range(12))
 
     def test_parent_supported_reference_manifests(self):
         source = r'''

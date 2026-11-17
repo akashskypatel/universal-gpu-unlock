@@ -39,6 +39,102 @@ class BootBinding(unittest.TestCase):
         self.assertIn("ReadPinnedAssetFromConfiguredEsp(",loader)
         self.assertIn("GuFree((VOID *)GuAssets[i].firmware.data)",loader)
 
+    def test_shared_filesystem_census_refuses_uncertain_release(self):
+        """Compile the real enumeration/release helpers with simulated services."""
+        production = BOOT.split("static EFI_STATUS ReleaseBootFilesystemHandles(",1)[1].split(
+            "/* Only the explicitly configured Windows GPT ESP",1)[0]
+        production = "static EFI_STATUS ReleaseBootFilesystemHandles(" + production
+        host = r"""
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#define VOID void
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+#define EFI_DEVICE_ERROR 1
+#define EFI_NOT_READY 2
+#define EFI_UNSUPPORTED 3
+#define EFI_INVALID_PARAMETER 4
+#define EFI_NOT_FOUND 5
+#define ByProtocol 2
+typedef struct {
+  EFI_STATUS (*LocateHandleBuffer)(int,void *,void *,UINTN *,EFI_HANDLE **);
+  EFI_STATUS (*FreePool)(void *);
+} EFI_BOOT_SERVICES;
+static EFI_HANDLE fixture[129];
+static EFI_HANDLE *UnreleasedFilesystemHandles;
+static int FsGuid,locates,frees,fail_free,fail_locate,null_buffer;
+static UINTN supplied=2;
+static void *released;
+static void GuLog(const char *fmt,...){(void)fmt;}
+static EFI_STATUS Locate(int kind,void *guid,void *key,UINTN *count,EFI_HANDLE **out){
+  (void)key;
+  if(kind!=ByProtocol||guid!=&FsGuid)return EFI_INVALID_PARAMETER;
+  locates++;
+  if(fail_locate)return EFI_NOT_FOUND;
+  *count=supplied;*out=null_buffer?NULL:fixture;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Free(void *p){
+  frees++;released=p;
+  /* Even an unexpected NOT_FOUND must not enable the asset fallback. */
+  return fail_free?EFI_NOT_FOUND:EFI_SUCCESS;
+}
+""" + production + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void){
+  EFI_BOOT_SERVICES bs={Locate,Free};
+  EFI_HANDLE *h=NULL;UINTN n=0;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_SUCCESS && h==fixture && n==2);
+  CHECK(ReleaseBootFilesystemHandles(&bs,&h)==EFI_SUCCESS && !h && frees==1);
+  CHECK(ReleaseBootFilesystemHandles(&bs,&h)==EFI_SUCCESS && frees==1);
+  fail_locate=1;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_NOT_FOUND && !h && !n && frees==1);
+  fail_locate=0;null_buffer=1;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_UNSUPPORTED && !h && !n && frees==1);
+  null_buffer=0;supplied=0;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_UNSUPPORTED && !h && !n && frees==2);
+  supplied=129;fail_free=1;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_DEVICE_ERROR && !h && !n && frees==3);
+  CHECK(UnreleasedFilesystemHandles==fixture && released==fixture);
+  fail_free=0;supplied=2;
+  int saved_locates=locates;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_NOT_READY && !h && !n);
+  CHECK(frees==3&&locates==saved_locates);
+  /* New boot fixture: a valid census fails release after use. */
+  UnreleasedFilesystemHandles=NULL;fail_free=1;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_SUCCESS);
+  CHECK(ReleaseBootFilesystemHandles(&bs,&h)==EFI_DEVICE_ERROR&&!h);
+  CHECK(UnreleasedFilesystemHandles==fixture&&released==fixture&&frees==4);
+  CHECK(ReleaseBootFilesystemHandles(&bs,&h)==EFI_SUCCESS&&frees==4);
+  saved_locates=locates;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_NOT_READY&&locates==saved_locates);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"fs_census.c"
+            path.write_text(host,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                binary=Path(directory)/compiler
+                built=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(path),"-o",str(binary)],capture_output=True,text=True)
+                self.assertEqual(built.returncode,0,built.stderr)
+                result=subprocess.run([str(binary)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+        assets=BOOT.split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[1].split("EFI_STATUS GuBootLoadAssets(",1)[0]
+        self.assertIn("LocateBootFilesystems(b,&handles,&count)",assets)
+        self.assertLess(assets.index("if(freed!=EFI_SUCCESS)return freed;"),assets.index("fs->OpenVolume("))
+        windows=BOOT.split("EFI_STATUS GuBootLoadWindows(",1)[1].split("EFI_STATUS GuBootChoose(",1)[0]
+        self.assertIn("UnreleasedFilesystemHandles",windows)
+        self.assertIn("LocateBootFilesystems(b,&h,&count)",windows)
+        release=windows.index("s=ReleaseBootFilesystemHandles(b,&h);")
+        refusal=windows.index("return s==EFI_SUCCESS?EFI_NOT_FOUND:s;",release)
+        self.assertLess(refusal,windows.index("ReadWindowsBinary("))
+        self.assertLess(refusal,windows.index("b->LoadImage("))
+
     def test_preparation_only_usb_log_preserves_uefi_watchdog(self):
         """Verify the original boot-open path keeps active watchdog behavior isolated."""
         begin = BOOT.index("EFI_STATUS GuBootOpen(")

@@ -29,6 +29,7 @@ static EFI_SYSTEM_TABLE *Table;
 static EFI_HANDLE Self,Windows,OwnVolume,TargetEspVolume;
 
 static EFI_FILE_PROTOCOL *Root,*Log;
+static EFI_HANDLE *UnreleasedFilesystemHandles;
 static CHAR16 ActiveLogPath[]=L"\\AD102-UNLOCK\\RUN0000.TXT";
 
 static BOOLEAN Silent;
@@ -211,6 +212,36 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
 
 }
 
+/* Both asset fallback and Windows staging use the same boot-local census.
+ * A failed release is not a missing file and must never trigger a fallback. */
+static EFI_STATUS ReleaseBootFilesystemHandles(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handles) {
+  if(!handles||!*handles)return EFI_SUCCESS;
+  EFI_HANDLE *buffer=*handles;
+  *handles=NULL;
+  EFI_STATUS s=bs->FreePool(buffer);
+  if(s!=EFI_SUCCESS) {
+    UnreleasedFilesystemHandles=buffer;
+    GuLog("FILESYSTEM_HANDLE_BUFFER_FREE_STATUS=%#llx RETAINED=1\n",(unsigned long long)s);
+    return EFI_DEVICE_ERROR;
+  }
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS LocateBootFilesystems(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handles,UINTN *count) {
+  if(!handles||!count)return EFI_INVALID_PARAMETER;
+  *handles=NULL;*count=0;
+  if(UnreleasedFilesystemHandles)return EFI_NOT_READY;
+  if(!bs||!bs->LocateHandleBuffer||!bs->FreePool)return EFI_UNSUPPORTED;
+  EFI_STATUS s=bs->LocateHandleBuffer(ByProtocol,&FsGuid,NULL,count,handles);
+  if(s!=EFI_SUCCESS){*handles=NULL;*count=0;return s;}
+  if(!*handles||!*count||*count>128U) {
+    s=ReleaseBootFilesystemHandles(bs,handles);
+    *count=0;
+    return s==EFI_SUCCESS?EFI_UNSUPPORTED:s;
+  }
+  return EFI_SUCCESS;
+}
+
 /* Only the explicitly configured Windows GPT ESP may supply a missing
  * firmware file. Never search arbitrary partitions or write to this ESP. */
 static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
@@ -220,12 +251,8 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
   EFI_BOOT_SERVICES *b=Table->BootServices;
   EFI_HANDLE *handles=NULL,matched=NULL;
   UINTN count=0,matches=0;
-  EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&FsGuid,NULL,&count,&handles);
+  EFI_STATUS s=LocateBootFilesystems(b,&handles,&count);
   if(s!=EFI_SUCCESS)return s;
-  if(!handles||!count||count>128U) {
-    if(handles)b->FreePool(handles);
-    return EFI_UNSUPPORTED;
-  }
   for(UINTN i=0;i<count;i++) {
     if(handles[i]==OwnVolume)continue;
     EFI_DEVICE_PATH_PROTOCOL *dp=NULL;
@@ -238,7 +265,7 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
       matched=handles[i];
     }
   }
-  EFI_STATUS freed=b->FreePool(handles);
+  EFI_STATUS freed=ReleaseBootFilesystemHandles(b,&handles);
   if(freed!=EFI_SUCCESS)return freed;
   if(matches!=1U)return matches?EFI_UNSUPPORTED:EFI_NOT_FOUND;
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
@@ -257,7 +284,7 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
 }
 
 EFI_STATUS GuBootLoadAssets(VOID) {
-  if(!Root||Gu.started||Gu.fault||Gu.retained||Gu.asset_load_attempted)
+  if(!Root||UnreleasedFilesystemHandles||Gu.started||Gu.fault||Gu.retained||Gu.asset_load_attempted)
     return EFI_NOT_READY;
   /* Do not overwrite or silently free data published by another owner. */
   for(UINTN i=0;i<GU_ASSET_COUNT;i++)
@@ -352,12 +379,12 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
 }
 
 EFI_STATUS GuBootLoadWindows(VOID) {
-  if(Windows||!Table||Gu.started||TargetEspVolume)return EFI_NOT_READY;
+  if(Windows||!Table||UnreleasedFilesystemHandles||Gu.started||TargetEspVolume)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Table->BootServices;EFI_HANDLE *h=NULL,volume=NULL;UINTN count=0,matches=0,path_bytes=0;
   EFI_DEVICE_PATH_PROTOCOL *base=NULL;
   const CHAR16 *selected_name=NULL;
-  EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&FsGuid,NULL,&count,&h);
-  if(s==EFI_SUCCESS&&(!h||!count||count>128))s=EFI_UNSUPPORTED;
+  EFI_STATUS s=LocateBootFilesystems(b,&h,&count);
+  if(s!=EFI_SUCCESS)return s;
   EFI_FILE_PROTOCOL *matched_root=NULL;
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
     if(h[i]==OwnVolume) continue;
@@ -388,11 +415,11 @@ EFI_STATUS GuBootLoadWindows(VOID) {
       }
     }
   }
-  if(h)b->FreePool(h);
+  s=ReleaseBootFilesystemHandles(b,&h);
   if(s!=EFI_SUCCESS||matches<1||!volume||!matched_root||!selected_name) {
     if(matched_root) matched_root->Close(matched_root);
     GuLog("GuBootLoadWindows failed: matches=%zu volume=%p s=%#llx\n", (size_t)matches, (void *)volume, (unsigned long long)s);
-    return EFI_NOT_FOUND;
+    return s==EFI_SUCCESS?EFI_NOT_FOUND:s;
   }
   if(matches!=1) {
     GuLog("GuBootLoadWindows refused: pinned partition maps to %zu distinct filesystem handles\n",(size_t)matches);
