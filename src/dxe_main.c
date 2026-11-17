@@ -81,8 +81,8 @@ finish:
   if (s != EFI_SUCCESS) {
     GuLog("DXE-DRIVER: STOP stage=%s status=%#llx mutated=%u retained=%u started=%u fault=%u\n",
           stage, (unsigned long long)s, GuMsiMutated(), Gu.retained, Gu.started, Gu.fault);
-    if (Gu.started || Gu.master_attributes_pending) (VOID)GuClearMaster();
-    if (GuMsiMutated() || Gu.started || Gu.retained || Gu.master_attributes_pending) {
+    if (GuExecutionNeedsContainment()) {
+      if ((Gu.started && Gu.owned) || Gu.master_attributes_pending) (VOID)GuClearMaster();
       /* A partially released or live-DMA GPU cannot be handed to the OS. */
       (VOID)GuBootClose();
       GuBootUnsilence();

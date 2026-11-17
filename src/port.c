@@ -141,6 +141,18 @@ EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *P
 }
 
 #ifdef GU_ACTIVE_SINGLE_TARGET
+/* Retirement is permanent evidence of earlier hardware work. A failure
+ * on a fresh context must not hide that work or allow stock handover. */
+BOOLEAN GuAnyPlatformNeedsContainment(VOID) {
+  BOOLEAN found=FALSE;
+  for(const GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;entry;entry=entry->next) {
+    if(!entry->published&&!entry->retired)continue;
+    if(entry->retired||&entry->platform!=GuPlatformActive)return TRUE;
+    found=TRUE;
+  }
+  return !found&&GuPlatformActive!=&UnboundPlatform;
+}
+
 /* A completed platform remains registered for the entire boot. Transfer
  * the active CPU binding only after independent MSI handover verification
  * and a checked next step. No hardware ownership is acquired here. */

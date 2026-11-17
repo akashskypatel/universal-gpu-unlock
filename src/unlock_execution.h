@@ -5,5 +5,7 @@
  * The caller must run exact-card discovery, pinned asset load and cold profile. */
 EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
                            const char **stage);
+/* Failure decision includes earlier published contexts. */
+BOOLEAN GuExecutionNeedsContainment(VOID);
 /* Optional persistence; never a substitute for verified active handover. */
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table);

@@ -14,7 +14,7 @@ APP=(ROOT/"app.c").read_text(encoding="utf-8")
 DXE=(ROOT/"dxe_main.c").read_text(encoding="utf-8")
 
 def body(source,name):
-    m=re.search(r"\b(?:EFI_STATUS|VOID)\s+(?:EFIAPI\s+)?"+name+r"\s*\([^;]*?\)\s*\{",source,re.S)
+    m=re.search(r"\b(?:EFI_STATUS|VOID|BOOLEAN)\s+(?:EFIAPI\s+)?"+name+r"\s*\([^;]*?\)\s*\{",source,re.S)
     if not m:raise AssertionError("missing function "+name)
     start=m.end();pos=start;depth=1
     while depth and pos<len(source):
@@ -263,6 +263,55 @@ int main(int argc,char **argv) {
                                               capture_output=True,text=True)
                         self.assertEqual(result.returncode,0,
                                          result.stdout+result.stderr)
+
+    def test_failure_decision_retains_prior_transaction(self):
+        actual = "int GuExecutionNeedsContainment(void) {\n" + body(SHARED,"GuExecutionNeedsContainment") + "\n}"
+        mock = r"""
+#include <stdio.h>
+#include <string.h>
+#define GU_ACTIVE_SINGLE_TARGET 1
+#define TRUE 1
+#define VOID void
+static struct {
+  int started,retained,owned,master_attributes_pending,allocations,dma_count;
+  int s3_script_attempted,flrs,mmio_writes,release_owner_invalid;
+} Gu;
+static int previous,mutated;
+static int GuAnyPlatformNeedsContainment(void){return previous;}
+static int GuMsiMutated(void){return mutated;}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void){
+  CHECK(!GuExecutionNeedsContainment());
+  previous=1;CHECK(GuExecutionNeedsContainment());previous=0;
+  mutated=1;CHECK(GuExecutionNeedsContainment());mutated=0;
+  Gu.started=1;CHECK(GuExecutionNeedsContainment());Gu.started=0;
+  Gu.retained=1;CHECK(GuExecutionNeedsContainment());Gu.retained=0;
+  Gu.owned=1;CHECK(GuExecutionNeedsContainment());Gu.owned=0;
+  Gu.master_attributes_pending=1;CHECK(GuExecutionNeedsContainment());Gu.master_attributes_pending=0;
+  Gu.allocations=1;CHECK(GuExecutionNeedsContainment());Gu.allocations=0;
+  Gu.dma_count=1;CHECK(GuExecutionNeedsContainment());Gu.dma_count=0;
+  Gu.s3_script_attempted=1;CHECK(GuExecutionNeedsContainment());Gu.s3_script_attempted=0;
+  Gu.flrs=1;CHECK(GuExecutionNeedsContainment());Gu.flrs=0;
+  Gu.mmio_writes=1;CHECK(GuExecutionNeedsContainment());Gu.mmio_writes=0;
+  Gu.release_owner_invalid=1;CHECK(GuExecutionNeedsContainment());Gu.release_owner_invalid=0;
+  CHECK(!GuExecutionNeedsContainment());
+  return 0;
+}
+"""
+        for src,name in [(APP,"UefiMain"),(DXE,"GuDxeRun")]:
+            code=body(src,name)
+            self.assertIn("GuExecutionNeedsContainment()",code)
+            self.assertIn("Gu.started&&Gu.owned",code.replace(" ",""))
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"failure.c"
+            source.write_text(mock,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                binary=Path(directory)/compiler
+                built=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],capture_output=True,text=True)
+                self.assertEqual(built.returncode,0,built.stderr)
+                ran=subprocess.run([str(binary)],capture_output=True,text=True)
+                self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
 
     def test_s3_is_optional_and_after_handover(self):
         for src,name in [(APP,"UefiMain"),(DXE,"GuDxeRun")]:

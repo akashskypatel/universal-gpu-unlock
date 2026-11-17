@@ -16,7 +16,7 @@ MSI_SOURCE = (ROOT / "src/msi_release.c").read_text(encoding="utf-8")
 
 def function(name):
     import re
-    found = re.search(r"\bEFI_STATUS\s+" + name + r"\s*\([^;]*?\)\s*\{", SOURCE)
+    found = re.search(r"\b(?:EFI_STATUS|BOOLEAN)\s+" + name + r"\s*\([^;]*?\)\s*\{", SOURCE)
     if not found:
         raise AssertionError(f"missing {name}")
     start = found.start()
@@ -444,7 +444,7 @@ int main(int argc,char **argv) {
         registry = SOURCE[start:end]
         actual = registry + "\n" + "\n".join(
             function(name) for name in ("GuAllocatePlatform", "GuBindAllocatedPlatform",
-            "GuAdvanceAllocatedPlatform", "GuDiscardUnboundPlatform"))
+            "GuAnyPlatformNeedsContainment", "GuAdvanceAllocatedPlatform", "GuDiscardUnboundPlatform"))
         host = r"""
 #include <stddef.h>
 #include <stdint.h>
@@ -518,7 +518,9 @@ int main(void) {
   CHECK(GuGpuExecInit(&sequence,observed,4,requested,3,records,order,4)==GU_GPU_EXEC_OK);
   CHECK(GuBindAllocatedPlatform(&bs,&pci[1],&owner[1])==EFI_SUCCESS);
   CHECK(!owner[1]&&GuPlatformActive==saved[1]);
+  CHECK(!GuAnyPlatformNeedsContainment());
   for(size_t step=0;step<3;step++) {
+    CHECK(GuAnyPlatformNeedsContainment()==(step!=0));
     size_t i=requested[step];
     CHECK(GuPlatformActive==saved[i]&&Gu.pci==&pci[i]);
     Gu.handle=&handles[i];Gu.image=&image;
@@ -565,6 +567,10 @@ int main(void) {
     CHECK(GuBindAllocatedPlatform(&bs,&pci[3],&owner[3])==EFI_ALREADY_STARTED);
   }
   CHECK(GuGpuExecCheckComplete(&sequence,observed,4)==GU_GPU_EXEC_OK);
+  CHECK(GuAnyPlatformNeedsContainment());
+  GuPlatformActive=&UnboundPlatform;
+  CHECK(GuAnyPlatformNeedsContainment());
+  GuPlatformActive=saved[2];
   CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[3],&sequence,observed,4)==EFI_NOT_READY);
   CHECK(ready_calls==4);
   CHECK(saved[1]->release_state==&release[1]&&saved[0]->release_state==&release[0]);

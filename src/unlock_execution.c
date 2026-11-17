@@ -90,6 +90,16 @@ EFI_STATUS GuExecuteUnlock(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
 #endif
 }
 
+/* Do not classify a later preflight failure as an untouched boot. */
+BOOLEAN GuExecutionNeedsContainment(VOID) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(GuAnyPlatformNeedsContainment())return TRUE;
+#endif
+  return GuMsiMutated()||Gu.started||Gu.retained||Gu.owned||
+    Gu.master_attributes_pending||Gu.allocations||Gu.dma_count||
+    Gu.s3_script_attempted||Gu.flrs||Gu.mmio_writes||Gu.release_owner_invalid;
+}
+
 EFI_STATUS GuRegisterS3(EFI_SYSTEM_TABLE *table)
 {
   static EFI_GUID save_guid=EFI_S3_SAVE_STATE_PROTOCOL_GUID;

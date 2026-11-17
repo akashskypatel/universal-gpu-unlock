@@ -165,6 +165,7 @@ EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *P
 EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out);
 #ifdef GU_ACTIVE_SINGLE_TARGET
 #include "gpu_execution_state.h"
+BOOLEAN GuAnyPlatformNeedsContainment(VOID);
 /* Retain the verified completed context and publish a distinct registered
  * next context. This changes only the CPU binding, not hardware ownership.
  * The existing one-target admission in the boot entrypoints is unchanged. */

@@ -216,11 +216,11 @@ failed:
 
   GuLog("STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",stage,(unsigned long long)s,GuMsiMutated(),Gu.retained,Gu.fault);
 
-  if(GuMsiMutated()||Gu.started||Gu.retained) {
+  if(GuExecutionNeedsContainment()) {
 
     /* Fault-independent containment, no freeing of unverified live mappings. */
 
-    if(Gu.started||Gu.master_attributes_pending)(VOID)GuClearMaster();
+    if((Gu.started&&Gu.owned)||Gu.master_attributes_pending)(VOID)GuClearMaster();
 
     (VOID)GuBootClose();GuBootHalt();return EFI_ABORTED;
 
