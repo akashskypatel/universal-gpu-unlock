@@ -2,8 +2,8 @@
 VOID *memset(VOID *, int, size_t);
 VOID *memcpy(VOID *, const VOID *, size_t);
 int memcmp(const VOID *, const VOID *, size_t);
-static GU_PLATFORM LegacyPlatform;
-GU_PLATFORM *GuPlatformActive=&LegacyPlatform;
+static GU_PLATFORM UnboundPlatform;
+GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 /* A second bind must never erase DMA/selector/fault evidence from a prior
  * card. A verified per-card context release API does not exist yet. */
 static BOOLEAN TargetBound;
@@ -48,31 +48,36 @@ BOOLEAN GuSelectorPhase(UINT32 Phase) {
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
   if(!Bs || !Pci)return EFI_INVALID_PARAMETER;
   if(TargetBound)return EFI_ALREADY_STARTED;
-  /* Inspect every byte of the old platform, not just the safety flags.
-   * Rebind may not discard saved hardware state, mappings, or errors. */
+  /* Do not discard any state recorded before the first bind. */
   if(memcmp(&Gu,&EmptyPlatform,sizeof(Gu))!=0)return EFI_ACCESS_DENIED;
-#ifdef GU_ACTIVE_SINGLE_TARGET
-  /* Each selected active image receives a distinct platform object. This
-   * happens once, before any DMA, PCI claim or firmware transaction. */
-  if(!Bs->AllocatePool)return EFI_UNSUPPORTED;
   GU_PLATFORM *selected=NULL;
-  EFI_STATUS status=Bs->AllocatePool(EfiLoaderData,sizeof(*selected),
-                                      (VOID **)&selected);
+  EFI_STATUS status=GuAllocatePlatform(Bs,Pci,&selected);
   if(status!=EFI_SUCCESS)return status;
-  if(!selected)return EFI_OUT_OF_RESOURCES;
-  memset(selected,0,sizeof(*selected));
+  TargetBound=TRUE; /* Spend before publishing the bound platform. */
   GuPlatformActive=selected;
-#endif
-  TargetBound=TRUE; /* Spend before any state is changed. */
-  memset(&Gu,0,sizeof(Gu)); Gu.bs=Bs; Gu.pci=Pci;
-#ifdef GU_ENTRY_LATCHED
-  Gu.entry_latched=FALSE;Gu.entry_ss0=Gu.entry_ss1=0;
-#endif
-#ifdef GU_ENTRY_LATCHED_SS1_FULL
-  Gu.selector_phase=GU_SELECTOR_PHASE_ENTRY;Gu.ss1_write_consumed=FALSE;
-#endif
   return EFI_SUCCESS;
 }
+
+/* Allocate CPU-only state without publishing or changing the active card. */
+EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
+                              GU_PLATFORM **Out) {
+  if(!Bs || !Pci || !Out)return EFI_INVALID_PARAMETER;
+  if(*Out)return EFI_ALREADY_STARTED;
+  if(!Bs->AllocatePool)return EFI_UNSUPPORTED;
+  GU_PLATFORM *platform=NULL;
+  EFI_STATUS status=Bs->AllocatePool(EfiLoaderData,sizeof(*platform),
+                                    (VOID **)&platform);
+  if(status!=EFI_SUCCESS)return status;
+  if(!platform)return EFI_OUT_OF_RESOURCES;
+  memset(platform,0,sizeof(*platform));
+  platform->bs=Bs;platform->pci=Pci;
+#ifdef GU_ENTRY_LATCHED_SS1_FULL
+  platform->selector_phase=GU_SELECTOR_PHASE_ENTRY;
+#endif
+  *Out=platform;
+  return EFI_SUCCESS;
+}
+
 BOOLEAN GuTargetConfig(const UINT32 *C, UINTN S, UINTN B, UINTN D, UINTN F) {
   return C && S <= 0xffffU && B < 256 && D < 32 && F < 8 &&
     GuIsSupportedPciId(C[0]) &&

@@ -190,7 +190,7 @@ int main(void) {
                              executed.stdout + executed.stderr)
 
     def test_selected_platform_uses_new_backing_and_retains_one_shot(self):
-        original = function("GuInit")
+        original = function("GuAllocatePlatform") + "\n" + function("GuInit")
         host = r"""
 #define GU_ACTIVE_SINGLE_TARGET 1
 #include <stddef.h>
@@ -220,8 +220,8 @@ typedef struct {
 #define EFI_ALREADY_STARTED 4
 #define EFI_UNSUPPORTED 5
 #define EFI_OUT_OF_RESOURCES 6
-static GU_PLATFORM LegacyPlatform;
-GU_PLATFORM *GuPlatformActive=&LegacyPlatform;
+static GU_PLATFORM UnboundPlatform;
+GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 #define Gu (*GuPlatformActive)
 static BOOLEAN TargetBound;
 static const GU_PLATFORM EmptyPlatform;
@@ -241,7 +241,7 @@ int main(int argc,char **argv) {
   EFI_PCI_IO_PROTOCOL first={1},second={2};
   if(mode==0) {
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
-    CHECK(GuPlatformActive!=&LegacyPlatform && allocations==1);
+    CHECK(GuPlatformActive!=&UnboundPlatform && allocations==1);
     CHECK(Gu.bs==&bs && Gu.pci==&first);
     Gu.retained=1;Gu.allocations=(VOID *)(uintptr_t)0x1234U;
     GU_PLATFORM *saved=GuPlatformActive;
@@ -250,20 +250,20 @@ int main(int argc,char **argv) {
   } else if(mode==1) {
     fail_alloc=1;
     CHECK(GuInit(&bs,&first)==EFI_OUT_OF_RESOURCES);
-    CHECK(GuPlatformActive==&LegacyPlatform && !TargetBound);
+    CHECK(GuPlatformActive==&UnboundPlatform && !TargetBound);
     fail_alloc=0;
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
-    CHECK(GuPlatformActive!=&LegacyPlatform && allocations==2);
+    CHECK(GuPlatformActive!=&UnboundPlatform && allocations==2);
   } else if(mode==2) {
     Gu.fault=1;
     CHECK(GuInit(&bs,&first)==EFI_ACCESS_DENIED);
-    CHECK(allocations==0 && GuPlatformActive==&LegacyPlatform);
+    CHECK(allocations==0 && GuPlatformActive==&UnboundPlatform);
     Gu.fault=0;
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
   } else if(mode==3) {
     empty_alloc=1;
     CHECK(GuInit(&bs,&first)==EFI_OUT_OF_RESOURCES);
-    CHECK(!TargetBound && GuPlatformActive==&LegacyPlatform);
+    CHECK(!TargetBound && GuPlatformActive==&UnboundPlatform);
     empty_alloc=0;
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
   } else if(mode==4) {
@@ -274,7 +274,32 @@ int main(int argc,char **argv) {
     CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
     memset(&Gu,0,sizeof(Gu));
     CHECK(GuInit(&bs,&second)==EFI_ALREADY_STARTED);
+  } else if(mode==5) {
+    GU_PLATFORM *contexts[4]={0};
+    EFI_PCI_IO_PROTOCOL cards[4]={{1},{2},{3},{4}};
+    for(size_t i=0;i<4;i++) {
+      CHECK(GuAllocatePlatform(&bs,&cards[i],&contexts[i])==EFI_SUCCESS);
+      CHECK(contexts[i]->bs==&bs && contexts[i]->pci==&cards[i]);
+      CHECK(GuPlatformActive==&UnboundPlatform && !TargetBound);
+      for(size_t j=0;j<i;j++)CHECK(contexts[j]!=contexts[i]);
+      contexts[i]->fault=(int)i;
+    }
+    CHECK(GuAllocatePlatform(&bs,&first,&contexts[0])==EFI_ALREADY_STARTED);
+    CHECK(allocations==4 && contexts[0]->pci==&cards[0]);
+    GU_PLATFORM *failed=NULL;
+    fail_alloc=1;
+    CHECK(GuAllocatePlatform(&bs,&first,&failed)==EFI_OUT_OF_RESOURCES && !failed);
+    fail_alloc=0;
+    CHECK(GuAllocatePlatform(&bs,&first,NULL)==EFI_INVALID_PARAMETER);
+    CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
+    CHECK(GuPlatformActive!=contexts[0] && Gu.pci==&first);
+    for(size_t i=0;i<4;i++) {
+      CHECK(contexts[i]->fault==(int)i && contexts[i]->pci==&cards[i]);
+      free(contexts[i]);
+    }
+    CHECK(GuInit(&bs,&second)==EFI_ALREADY_STARTED);
   } else return 3;
+  if(GuPlatformActive!=&UnboundPlatform)free(GuPlatformActive);
   return 0;
 }
 """
@@ -288,7 +313,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(executable)],
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            for mode in range(5):
+            for mode in range(6):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(executable), str(mode)],
                                             capture_output=True, text=True)
@@ -301,16 +326,19 @@ int main(int argc,char **argv) {
         self.assertIn(declaration, SOURCE)
         self.assertIn("static const GU_PLATFORM EmptyPlatform;", SOURCE)
         self.assertIn("TargetBound=TRUE;", body)
-        self.assertLess(body.index("TargetBound=TRUE;"), body.index("memset(&Gu"))
+        self.assertLess(body.index("TargetBound=TRUE;"), body.index("GuPlatformActive=selected;"))
+        self.assertLess(body.index("GuAllocatePlatform("), body.index("TargetBound=TRUE;"))
+        body = function("GuAllocatePlatform") + "\n" + body
         host = r"""
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 typedef void VOID;
 typedef int BOOLEAN;
 typedef uintptr_t EFI_STATUS;
-typedef struct { int a; } EFI_BOOT_SERVICES;
+typedef struct { EFI_STATUS (*AllocatePool)(int,size_t,VOID **); } EFI_BOOT_SERVICES;
 typedef struct { int a; } EFI_PCI_IO_PROTOCOL;
 typedef struct {
   EFI_BOOT_SERVICES *bs;
@@ -324,13 +352,23 @@ typedef struct {
 #define EFI_INVALID_PARAMETER 2
 #define EFI_ACCESS_DENIED 3
 #define EFI_ALREADY_STARTED 4
-GU_PLATFORM Gu;
+#define EFI_UNSUPPORTED 5
+#define EFI_OUT_OF_RESOURCES 6
+#define EfiLoaderData 7
+static GU_PLATFORM UnboundPlatform;
+static GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
+#define Gu (*GuPlatformActive)
+static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
+  if(kind!=EfiLoaderData || !out)return EFI_INVALID_PARAMETER;
+  *out=calloc(1,bytes);
+  return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
 static BOOLEAN TargetBound;
 static const GU_PLATFORM EmptyPlatform;
 """ + body + r"""
 #define CHECK(x) do {if(!(x)) {fprintf(stderr,"FAIL line %d: %s\\n",__LINE__,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
-  EFI_BOOT_SERVICES boot={1};
+  EFI_BOOT_SERVICES boot={Allocate};
   EFI_PCI_IO_PROTOCOL first={1}, second={2};
   int scenario=argc>1?argv[1][0]-'0':-1;
   if(scenario==0) {
@@ -338,6 +376,7 @@ int main(int argc,char **argv) {
     CHECK(GuInit(&boot,NULL)==EFI_INVALID_PARAMETER);
     CHECK(GuInit(&boot,&first)==EFI_SUCCESS);
     CHECK(Gu.pci==&first && Gu.bs==&boot);
+    CHECK(GuPlatformActive!=&UnboundPlatform);
     Gu.started=1;Gu.retained=1;Gu.flrs=1;
     GU_PLATFORM old=Gu;
     CHECK(GuInit(&boot,&second)==EFI_ALREADY_STARTED);
@@ -356,6 +395,7 @@ int main(int argc,char **argv) {
     CHECK(GuInit(&boot,&second)==EFI_ALREADY_STARTED);
     CHECK(Gu.pci==NULL);
   } else return 3;
+  if(GuPlatformActive!=&UnboundPlatform)free(GuPlatformActive);
   return 0;
 }
 """

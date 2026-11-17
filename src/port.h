@@ -141,13 +141,17 @@ typedef struct {
 #endif
 } GU_PLATFORM;
 /* All source modules resolve the selected card's concrete platform object.
- * The legacy single-target image uses the original static slot. */
+ * The initial static object is only the unbound state. */
 extern GU_PLATFORM *GuPlatformActive;
 #define Gu (*GuPlatformActive)
 
 /* One checked bind per image. Rebinding requires a future verified
  * per-card teardown protocol, not a raw zero of Gu's global state. */
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
+/* Allocate independent CPU-only state into an empty caller-owned output.
+ * Does not select a GPU, claim a protocol, or authorize hardware access. */
+EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
+                              GU_PLATFORM **Out);
 #ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These
    values are private to port.c; the vendor core can only read/compare them. */
