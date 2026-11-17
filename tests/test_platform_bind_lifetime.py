@@ -190,7 +190,10 @@ int main(void) {
                              executed.stdout + executed.stderr)
 
     def test_selected_platform_uses_new_backing_and_retains_one_shot(self):
-        original = function("GuAllocatePlatform") + "\n" + function("GuDiscardUnboundPlatform") + "\n" + function("GuInit")
+        start = SOURCE.index("typedef struct GU_PLATFORM_ALLOCATION {")
+        end = SOURCE.index("\n/* Allocate CPU-only state", start)
+        registry = SOURCE[start:end]
+        original = registry + "\n" + function("GuAllocatePlatform") + "\n" + function("GuDiscardUnboundPlatform") + "\n" + function("GuInit")
         host = r"""
 #define GU_ACTIVE_SINGLE_TARGET 1
 #include <stddef.h>
@@ -327,6 +330,39 @@ int main(int argc,char **argv) {
           active==GuPlatformActive && frees==2);
     active=&UnboundPlatform;
     CHECK(GuDiscardUnboundPlatform(&active)==EFI_ACCESS_DENIED && frees==2);
+  } else if(mode==7) {
+    EFI_BOOT_SERVICES other={Allocate,Free};
+    GU_PLATFORM *a=NULL,*b=NULL,*duplicate=NULL;
+    CHECK(GuAllocatePlatform(&bs,&first,&a)==EFI_SUCCESS);
+    CHECK(GuAllocatePlatform(&bs,&second,&b)==EFI_SUCCESS);
+    CHECK(GuAllocatePlatform(&bs,&first,&duplicate)==EFI_ALREADY_STARTED);
+    CHECK(!duplicate && allocations==2);
+    CHECK(GuInit(&bs,&first)==EFI_ALREADY_STARTED && !TargetBound);
+    CHECK(GuPlatformActive==&UnboundPlatform);
+    /* The original PCI and allocator identities remain authoritative. */
+    a->pci=&second;
+    CHECK(GuDiscardUnboundPlatform(&a)==EFI_ACCESS_DENIED && a && !frees);
+    CHECK(GuAllocatePlatform(&bs,&first,&duplicate)==EFI_ALREADY_STARTED && !duplicate);
+    a->pci=&first;a->bs=&other;
+    CHECK(GuDiscardUnboundPlatform(&a)==EFI_ACCESS_DENIED && a && !frees);
+    a->bs=&bs;
+    GU_PLATFORM foreign={0};
+    foreign.bs=&bs;foreign.pci=&first;
+    GU_PLATFORM *unknown=&foreign;
+    CHECK(GuDiscardUnboundPlatform(&unknown)==EFI_ACCESS_DENIED && unknown==&foreign);
+    fail_free=1;
+    CHECK(GuDiscardUnboundPlatform(&a)==EFI_ACCESS_DENIED && a);
+    CHECK(GuAllocatePlatform(&bs,&first,&duplicate)==EFI_ALREADY_STARTED && !duplicate);
+    fail_free=0;
+    /* Remove an interior node, then reuse only its original PCI identity. */
+    CHECK(GuDiscardUnboundPlatform(&a)==EFI_SUCCESS && !a);
+    CHECK(GuAllocatePlatform(&bs,&first,&a)==EFI_SUCCESS && a);
+    CHECK(GuAllocatePlatform(&bs,&second,&duplicate)==EFI_ALREADY_STARTED && !duplicate);
+    CHECK(GuDiscardUnboundPlatform(&a)==EFI_SUCCESS && !a);
+    CHECK(GuDiscardUnboundPlatform(&b)==EFI_SUCCESS && !b);
+    CHECK(!PlatformAllocations && frees==3);
+    CHECK(GuInit(&bs,&first)==EFI_SUCCESS);
+    CHECK(GuAllocatePlatform(&bs,&first,&duplicate)==EFI_ALREADY_STARTED && !duplicate);
   } else return 3;
   if(GuPlatformActive!=&UnboundPlatform)free(GuPlatformActive);
   return 0;
@@ -342,7 +378,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(executable)],
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            for mode in range(7):
+            for mode in range(8):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(executable), str(mode)],
                                             capture_output=True, text=True)
@@ -357,7 +393,10 @@ int main(int argc,char **argv) {
         self.assertIn("TargetBound=TRUE;", body)
         self.assertLess(body.index("TargetBound=TRUE;"), body.index("GuPlatformActive=selected;"))
         self.assertLess(body.index("GuAllocatePlatform("), body.index("TargetBound=TRUE;"))
-        body = function("GuAllocatePlatform") + "\n" + body
+        start = SOURCE.index("typedef struct GU_PLATFORM_ALLOCATION {")
+        end = SOURCE.index("\n/* Allocate CPU-only state", start)
+        registry = SOURCE[start:end]
+        body = registry + "\n" + function("GuAllocatePlatform") + "\n" + body
         host = r"""
 #include <stddef.h>
 #include <stdint.h>

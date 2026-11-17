@@ -149,10 +149,11 @@ extern GU_PLATFORM *GuPlatformActive;
  * per-card teardown protocol, not a raw zero of Gu's global state. */
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
 /* Allocate independent CPU-only state into an empty caller-owned output.
+ * Reject a PCI protocol that already has an allocated platform.
  * Does not select a GPU, claim a protocol, or authorize hardware access. */
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                               GU_PLATFORM **Out);
-/* Release only an unpublished, unchanged object from GuAllocatePlatform.
+/* Release only a registered, unpublished, unchanged allocation.
  * The caller must own the reference exclusively. Clear it only on success.
  * Never use this operation for a bound or previously used platform. */
 EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out);

@@ -58,22 +58,39 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci) {
   return EFI_SUCCESS;
 }
 
+/* Each PCI protocol has at most one allocated platform in this image.
+ * Only the boot entry path changes this list. Preserve immutable allocation
+ * identity separately from the mutable platform state. */
+typedef struct GU_PLATFORM_ALLOCATION {
+  GU_PLATFORM platform;
+  EFI_BOOT_SERVICES *bs;
+  EFI_PCI_IO_PROTOCOL *pci;
+  struct GU_PLATFORM_ALLOCATION *next;
+} GU_PLATFORM_ALLOCATION;
+static GU_PLATFORM_ALLOCATION *PlatformAllocations;
+
 /* Allocate CPU-only state without publishing or changing the active card. */
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                               GU_PLATFORM **Out) {
   if(!Bs || !Pci || !Out)return EFI_INVALID_PARAMETER;
   if(*Out)return EFI_ALREADY_STARTED;
   if(!Bs->AllocatePool)return EFI_UNSUPPORTED;
-  GU_PLATFORM *platform=NULL;
-  EFI_STATUS status=Bs->AllocatePool(EfiLoaderData,sizeof(*platform),
-                                    (VOID **)&platform);
+  for(GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;entry;entry=entry->next)
+    if(entry->pci==Pci)return EFI_ALREADY_STARTED;
+  GU_PLATFORM_ALLOCATION *entry=NULL;
+  EFI_STATUS status=Bs->AllocatePool(EfiLoaderData,sizeof(*entry),
+                                    (VOID **)&entry);
   if(status!=EFI_SUCCESS)return status;
-  if(!platform)return EFI_OUT_OF_RESOURCES;
-  memset(platform,0,sizeof(*platform));
+  if(!entry)return EFI_OUT_OF_RESOURCES;
+  memset(entry,0,sizeof(*entry));
+  GU_PLATFORM *platform=&entry->platform;
+  entry->bs=Bs;entry->pci=Pci;
   platform->bs=Bs;platform->pci=Pci;
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
   platform->selector_phase=GU_SELECTOR_PHASE_ENTRY;
 #endif
+  entry->next=PlatformAllocations;
+  PlatformAllocations=entry;
   *Out=platform;
   return EFI_SUCCESS;
 }
@@ -83,21 +100,28 @@ EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out) {
   GU_PLATFORM *platform=*Out;
   if(platform==GuPlatformActive || platform==&UnboundPlatform)
     return EFI_ACCESS_DENIED;
-  if(!platform->bs || !platform->pci || !platform->bs->FreePool)
-    return EFI_UNSUPPORTED;
+  GU_PLATFORM_ALLOCATION **link=&PlatformAllocations;
+  while(*link && &(*link)->platform!=platform)link=&(*link)->next;
+  if(!*link)return EFI_ACCESS_DENIED;
+  GU_PLATFORM_ALLOCATION *entry=*link;
+  if(!entry->bs->FreePool)return EFI_UNSUPPORTED;
   /* Only a pristine object from GuAllocatePlatform is disposable.
    * No saved configuration, allocations, protocol state or errors may
    * be discarded. This is not an active-platform teardown operation. */
   GU_PLATFORM pristine;
   memset(&pristine,0,sizeof(pristine));
-  pristine.bs=platform->bs;pristine.pci=platform->pci;
+  pristine.bs=entry->bs;pristine.pci=entry->pci;
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
   pristine.selector_phase=GU_SELECTOR_PHASE_ENTRY;
 #endif
   if(memcmp(platform,&pristine,sizeof(pristine))!=0)
     return EFI_ACCESS_DENIED;
-  EFI_STATUS status=platform->bs->FreePool(platform);
-  if(status==EFI_SUCCESS)*Out=NULL;
+  GU_PLATFORM_ALLOCATION *next=entry->next;
+  EFI_STATUS status=entry->bs->FreePool(entry);
+  if(status==EFI_SUCCESS) {
+    *link=next;
+    *Out=NULL;
+  }
   return status;
 }
 
