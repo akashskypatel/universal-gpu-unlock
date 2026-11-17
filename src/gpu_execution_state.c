@@ -84,10 +84,13 @@ static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
   if(!s || !s->count || s->count>GU_INVENTORY_MAX_NVIDIA ||
      !s->selected_count || s->selected_count>s->count ||
      s->next_step>s->selected_count ||
+     (s->owned_mode!=0 && s->owned_mode!=1) ||
      (s->active_step!=GU_INVENTORY_MAX_NVIDIA &&
       (s->active_step!=s->next_step ||
        s->active_step>=s->selected_count)))
     return 0;
+  if(s->owned_mode && !s->next_step &&
+     s->active_step==GU_INVENTORY_MAX_NVIDIA)return 0;
   for(size_t i=0;i<s->selected_count;i++) {
     size_t target=s->order[i];
     if(target>=s->count)return 0;
@@ -102,10 +105,10 @@ static int StateValid(const GU_GPU_EXEC_SEQUENCE *s) {
       return 0;
     if((owner->platform||owner->release_plan||owner->firmware_assets) &&
        !DistinctOwners(owner))return 0;
-    /* Do not accept a mixed owned/unowned sequence. The first started
-     * step determines whether all subsequent steps require ownership. */
-    if(expected!=GU_GPU_EXEC_PENDING && i!=0 &&
-       !!owner->platform!=!!s->targets[s->order[0]].owners.platform)return 0;
+    /* The mode is independent of the owner references. Losing all of
+     * the references must not convert an owned step into a model step. */
+    if(expected!=GU_GPU_EXEC_PENDING &&
+       !!owner->platform!=s->owned_mode)return 0;
     for(size_t j=0;j<i;j++)
       if(SharedOwners(owner,&s->targets[s->order[j]].owners))return 0;
   }
@@ -131,6 +134,13 @@ int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *s,
     return GU_GPU_EXEC_BLOCKED;
   return Verify(s,all,count,GU_INVENTORY_MAX_NVIDIA);
 }
+int GuGpuExecCheckComplete(const GU_GPU_EXEC_SEQUENCE *s,
+                           const GU_GPU_EXEC_OBSERVATION *all,size_t count) {
+  if(!StateValid(s) || s->halted || s->next_step!=s->selected_count ||
+     s->active_step!=GU_INVENTORY_MAX_NVIDIA)
+    return GU_GPU_EXEC_BLOCKED;
+  return Verify(s,all,count,GU_INVENTORY_MAX_NVIDIA);
+}
 void GuGpuExecAbort(GU_GPU_EXEC_SEQUENCE *s) {
   if(!s)return;
   if(s->active_step<s->selected_count &&
@@ -144,7 +154,7 @@ int GuGpuExecBegin(GU_GPU_EXEC_SEQUENCE *s,size_t step,
                    const GU_GPU_EXEC_OBSERVATION *all,size_t count) {
   int rc=GuGpuExecCheckNext(s,all,count);
   if(rc!=GU_GPU_EXEC_OK || !s || step!=s->next_step ||
-     (step!=0 && s->targets[s->order[0]].owners.platform)) {
+     s->owned_mode) {
     GuGpuExecAbort(s);
     return rc!=GU_GPU_EXEC_OK?rc:GU_GPU_EXEC_BLOCKED;
   }
@@ -160,7 +170,7 @@ int GuGpuExecBeginOwned(GU_GPU_EXEC_SEQUENCE *s,size_t step,
                         const void *firmware_assets) {
   int rc=GuGpuExecCheckNext(s,all,count);
   if(rc!=GU_GPU_EXEC_OK || step!=s->next_step ||
-     (step!=0 && !s->targets[s->order[0]].owners.platform)) {
+     (step!=0 && !s->owned_mode)) {
     GuGpuExecAbort(s);
     return rc!=GU_GPU_EXEC_OK?rc:GU_GPU_EXEC_BLOCKED;
   }
@@ -175,6 +185,7 @@ int GuGpuExecBeginOwned(GU_GPU_EXEC_SEQUENCE *s,size_t step,
       GuGpuExecAbort(s);return GU_GPU_EXEC_BLOCKED;
     }
   *owner=next;
+  s->owned_mode=1;
   /* The claim is spent. Commit the already checked transition directly.
    * Calling GuGpuExecBegin here repeats CheckNext while this owner is still
    * pending, which correctly fails the new pending-owner invariant. */

@@ -27,7 +27,7 @@ typedef struct {
 } GU_GPU_EXEC_TARGET;
 typedef struct {
   size_t count, selected_count, next_step, active_step;
-  int halted;
+  int halted, owned_mode;
   size_t order[GU_INVENTORY_MAX_NVIDIA];
   GU_GPU_EXEC_TARGET targets[GU_INVENTORY_MAX_NVIDIA];
 } GU_GPU_EXEC_SEQUENCE;
@@ -40,6 +40,9 @@ int GuGpuExecInit(GU_GPU_EXEC_SEQUENCE *state,
                   const size_t *order, size_t selected_count);
 int GuGpuExecCheckNext(const GU_GPU_EXEC_SEQUENCE *state,
                        const GU_GPU_EXEC_OBSERVATION *all, size_t count);
+/* CPU-only final observation check; does not establish hardware safety. */
+int GuGpuExecCheckComplete(const GU_GPU_EXEC_SEQUENCE *state,
+                           const GU_GPU_EXEC_OBSERVATION *all, size_t count);
 int GuGpuExecBegin(GU_GPU_EXEC_SEQUENCE *state, size_t step,
                    const GU_GPU_EXEC_OBSERVATION *all, size_t count);
 /* Live active entrypoints must pass distinct genuine backing-object tokens. */

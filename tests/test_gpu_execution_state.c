@@ -202,6 +202,56 @@ int main(void) {
   CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
   CHECK(GuGpuExecBeginOwned(&s,1,o,2,&o[0],&s.targets[0],&o[0].config)==GU_GPU_EXEC_BLOCKED);
   CHECK(s.halted && s.next_step==1);
+  /* Final observations must include both selected devices and every peer.
+   * This is a CPU model check, not a physical handover or firmware test. */
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,3,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,3,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+  o[1].config[4]^=0x1000U;
+  CHECK(GuGpuExecFinish(&s,0,o,3,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+  CHECK(GuGpuExecBeginOwned(&s,1,o,3,&o[0],&s.targets[0],&o[0].config)==GU_GPU_EXEC_OK);
+  o[0].config[4]^=0x2000U;
+  CHECK(GuGpuExecFinish(&s,1,o,3,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_OK);
+  for(size_t i=0;i<3;i++) {
+    o[i].config[4]^=0x4000U;
+    CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_DRIFT);
+    o[i].config[4]^=0x4000U;
+  }
+  CHECK(GuGpuExecCheckComplete(&s,o,2)==GU_GPU_EXEC_INVALID);
+  o[0].identity.pci=(void *)(uintptr_t)0x3333U;
+  CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_DRIFT);
+  o[0].identity.pci=s.targets[0].identity.pci;
+  CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_OK);
+  memset(&s.targets[0].owners,0,sizeof(s.targets[0].owners));
+  memset(&s.targets[1].owners,0,sizeof(s.targets[1].owners));
+  CHECK(GuGpuExecCheckComplete(&s,o,3)==GU_GPU_EXEC_BLOCKED);
+
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  memset(&s.targets[1].owners,0,sizeof(s.targets[1].owners));
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBeginOwned(&s,0,o,2,&o[1],&s.targets[1],&o[1].config)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
+  memset(&s.targets[1].owners,0,sizeof(s.targets[1].owners));
+  CHECK(GuGpuExecBegin(&s,1,o,2)==GU_GPU_EXEC_BLOCKED);
+  CHECK(s.halted);
+  Reset();
+  CHECK(GuGpuExecInit(&s,o,2,order,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBegin(&s,0,o,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,0,o,2,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecBegin(&s,1,o,2)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecFinish(&s,1,o,2,1)==GU_GPU_EXEC_OK);
+  CHECK(GuGpuExecCheckComplete(&s,o,2)==GU_GPU_EXEC_OK);
+  GuGpuExecAbort(&s);
+  CHECK(GuGpuExecCheckComplete(&s,o,2)==GU_GPU_EXEC_BLOCKED);
   printf("PASS independent ordered GPU execution state: %u checks\n",checks);
   return 0;
 }
