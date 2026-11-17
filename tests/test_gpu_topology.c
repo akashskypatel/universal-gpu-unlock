@@ -124,6 +124,14 @@ int main(void) {
     CHECK(GuTopoGopSnapshotsEqual(saved,2,current,2));
     current[0]=saved[1];current[1]=saved[0];
     CHECK(GuTopoGopSnapshotsEqual(saved,2,current,2));
+    /* A stable alias is not an independently observed GOP interface.
+     * Keep both distinct handles and paths, but share the protocol pointer. */
+    saved[1].protocol=saved[0].protocol;
+    current[0]=saved[1];current[1]=saved[0];
+    CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));
+    saved[1].protocol=(void *)(uintptr_t)0x22;
+    current[0]=saved[1];current[1]=saved[0];
+    CHECK(GuTopoGopSnapshotsEqual(saved,2,current,2));
     CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,1));
     current[1].handle=current[0].handle;
     CHECK(!GuTopoGopSnapshotsEqual(saved,2,current,2));

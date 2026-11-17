@@ -168,7 +168,8 @@ int GuTopoGopSnapshotsEqual(const GU_TOPO_GOP *before, size_t before_count,
     if (!after[i].handle || !after[i].protocol ||
         !GuTopoPathValid(&after[i].path)) return 0;
     for (j=0; j<i; ++j)
-      if (after[j].handle == after[i].handle) return 0;
+      if (after[j].handle == after[i].handle ||
+          after[j].protocol == after[i].protocol) return 0;
     for (j=0; j<before_count; ++j) {
       if (before[j].handle != after[i].handle) continue;
       ++matches;
