@@ -36,11 +36,11 @@ typedef struct {
 #define GRAPH_EDGE_LIMIT 16384
 #define GRAPH_INITIAL_CAPACITY 64
 /* The limit bounds pool use and the quadratic graph comparisons, not GPU count. */
-typedef struct {EFI_HANDLE handle,agent,controller;EFI_GUID protocol;UINT32 attributes,count;BOOLEAN usb_baseline;} EDGE;
+typedef struct {EFI_HANDLE handle,agent,controller;EFI_GUID protocol;UINT32 attributes,count;BOOLEAN usb_baseline,idle_output;} EDGE;
 typedef struct {UINTN count,capacity;EDGE *edges;} GRAPH;
 typedef struct {
   EFI_SYSTEM_TABLE *table;EFI_HANDLE self,pci,gop,out_agent,gfx_agent,nv_agent;
-  EFI_HANDLE console,input,error,pointer_agent,key_agent,usb_host,usb_agent,idle[8];
+  EFI_HANDLE console,input,error,pointer_agent,key_agent,usb_host,usb_agent;
   EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text,*err;
   EFI_SIMPLE_TEXT_INPUT_PROTOCOL *keys;
   UINTN key_reset,key_read;EFI_EVENT key_wait;
@@ -165,7 +165,7 @@ static EFI_STATUS Snapshot(GRAPH *g) {
         BOOLEAN own=Plan.claimed&&handles[i]==Plan.pci&&e->AgentHandle==Plan.self&&
           !e->ControllerHandle&&e->Attributes==EFI_OPEN_PROTOCOL_EXCLUSIVE&&e->OpenCount==1;
         if(!e->AgentHandle||(!e->ControllerHandle&&!own)||!e->OpenCount){s=EFI_COMPROMISED_DATA;break;}
-        s=GraphAppend(b,g,(EDGE){handles[i],e->AgentHandle,e->ControllerHandle,*protocols[j],e->Attributes,e->OpenCount,FALSE});
+        s=GraphAppend(b,g,(EDGE){handles[i],e->AgentHandle,e->ControllerHandle,*protocols[j],e->Attributes,e->OpenCount,FALSE,FALSE});
       }
       if(entries&&b->FreePool(entries)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
     }
@@ -185,9 +185,8 @@ static BOOLEAN Removed(const EDGE *e,UINTN stage) {
   if(stage>=2&&Plan.gop&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.gfx_agent||Guid(&e->protocol,&GopGuid)))return TRUE;
   if(stage>=3&&(e->handle==Plan.pci||(Plan.gop&&e->handle==Plan.gop)||e->controller==Plan.pci||(Plan.gop&&e->controller==Plan.gop))&&e->agent==Plan.nv_agent)return TRUE;
   if(stage>=3&&Plan.gop&&e->handle==Plan.gop)return TRUE;
-  for(UINTN k=0;k<8;k++) {
-    if(stage>=3&&Plan.idle[k]&&e->handle==Plan.idle[k])return TRUE;
-  }
+  /* An idle child may lose only its verified parent relationship above.
+   * A matching child handle alone cannot authorize removal of other edges. */
   return FALSE;
 }
 /* Original unrelated relationships must remain present. New relationships can
@@ -198,7 +197,8 @@ static BOOLEAN ProtectedHandle(EFI_HANDLE h) {
   if(h==Plan.pci||h==Plan.gop||h==Plan.self||
      GuIsPreparedPeerHandle(h)||
      h==Plan.console||h==Plan.input||h==Plan.error)return TRUE;
-  for(UINTN k=0;k<8;k++){if(Plan.idle[k]&&h==Plan.idle[k])return TRUE;}
+  for(UINTN k=0;k<Original.count;k++)
+    if(Original.edges[k].idle_output&&h==Original.edges[k].controller)return TRUE;
   for(UINTN k=0;k<Plan.survivor_count;k++)
     if(Plan.survivors[k].handle==h)return TRUE;
   return FALSE;
@@ -716,15 +716,27 @@ static EFI_STATUS Bar(VOID) {
   if(d&&Plan.table->BootServices->FreePool(d)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
   return s;
 }
-/* An idle output: exact pinned path, distinct, and its only relationship is the
- * single NVIDIA child edge that names it. Anything else refuses the run. */
-static BOOLEAN IdleOutput(EFI_HANDLE h) {
-  if(ProtectedHandle(h)||h==Plan.gop)return FALSE;
-  for(UINTN k=0;k<8;k++) {
-    if(!Plan.idle[k]){Plan.idle[k]=h;return TRUE;}
-    if(Plan.idle[k]==h)return TRUE;
+/* The immutable original graph is the child inventory. An idle output
+ * must belong to this controller and have exactly one relationship.
+ * Never classify a protected peer, console or other agent as removable. */
+static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
+  if(!e||e->handle!=Plan.pci||!Guid(&e->protocol,&PathGuid)||
+     e->attributes!=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER||
+     !Plan.nv_agent||e->agent!=Plan.nv_agent||e->count!=1||
+     !e->controller||ProtectedHandle(e->controller))
+    return EFI_ACCESS_DENIED;
+  EFI_HANDLE h=e->controller;
+  for(UINTN k=0;k<Original.count;k++) {
+    const EDGE *other=&Original.edges[k];
+    if(other!=e&&(other->handle==h||other->agent==h||other->controller==h))
+      return EFI_ACCESS_DENIED;
   }
-  return FALSE;
+  BOOLEAN on_target=FALSE;
+  EFI_STATUS s=GopOnTarget(h,&on_target);
+  if(s!=EFI_SUCCESS)return s;
+  if(!on_target)return EFI_ACCESS_DENIED;
+  e->idle_output=TRUE;
+  return EFI_SUCCESS;
 }
 static EFI_STATUS Consumers(VOID) {
   UINTN pci=0,child=0,idle=0,text=0,virtual=0,gfx=0;
@@ -738,15 +750,8 @@ static EFI_STATUS Consumers(VOID) {
       else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8&&e->controller==Plan.gop){
         child++;
       }
-      else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8&&IdleOutput(e->controller)){
-        idle++;
-      }
       else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8){
-        for(UINTN k=0;k<8;k++) {
-          if(!Plan.idle[k]){Plan.idle[k]=e->controller;break;}
-          if(Plan.idle[k]==e->controller)break;
-        }
-        child++;
+        idle++;
       }
     } else if(e->handle==Plan.gop) {
       if(Guid(&e->protocol,&TextGuid)&&(e->attributes&EFI_OPEN_PROTOCOL_BY_DRIVER)&&e->controller==Plan.gop){
@@ -786,6 +791,17 @@ static EFI_STATUS Consumers(VOID) {
     GuLog("Consumers check: pci=%zu child=%zu idle=%zu text=%zu virtual=%zu gfx=%zu\n",
       pci, child, idle, text, virtual, gfx);
     return EFI_ACCESS_DENIED;
+  }
+  /* The driver agent is now known, irrespective of enumeration order.
+   * The headless path above still refuses every child. */
+  if(idle&&pci!=1)return EFI_ACCESS_DENIED;
+  for(UINTN i=0;i<Original.count;i++) {
+    EDGE *e=&Original.edges[i];
+    if(e->handle==Plan.pci&&Guid(&e->protocol,&PathGuid)&&
+       e->attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER&&e->controller!=Plan.gop) {
+      EFI_STATUS s=ClassifyIdleOutput(e);
+      if(s!=EFI_SUCCESS)return s;
+    }
   }
   for(UINTN i=0;i<3;i++){
     EFI_STATUS s=Driver(i);

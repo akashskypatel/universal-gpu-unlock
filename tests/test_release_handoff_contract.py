@@ -366,6 +366,123 @@ int main(void){
                     result = subprocess.run([str(binary)], capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_idle_output_isolated_from_protected_endpoints(self):
+        # The original graph owns the child records. Test the actual
+        # classification and removal rules with no firmware callbacks.
+        start = SOURCE.index("#define GRAPH_EDGE_LIMIT")
+        end = SOURCE.index("\ntypedef struct {\n  EFI_SYSTEM_TABLE", start)
+        records = SOURCE[start:end]
+        functions = (
+            "static BOOLEAN Removed(const EDGE *e,UINTN stage) {" +
+            function_body("Removed") + "}\n" +
+            "static BOOLEAN ProtectedHandle(EFI_HANDLE h) {" +
+            function_body("ProtectedHandle") + "}\n" +
+            "static EFI_STATUS ClassifyIdleOutput(EDGE *e) {" +
+            function_body("ClassifyIdleOutput") + "}\n")
+        program = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef uint32_t UINT32;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+typedef int EFI_GUID;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_ACCESS_DENIED 1
+#define EFI_DEVICE_ERROR 2
+#define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 8
+""" + records + r"""
+typedef struct { EFI_HANDLE handle; } SURVIVOR_GOP;
+typedef struct {
+  EFI_HANDLE pci,gop,self,console,input,error,nv_agent,out_agent,gfx_agent;
+  SURVIVOR_GOP *survivors;
+  UINTN survivor_count;
+} PLAN;
+static PLAN Plan;
+static GRAPH Original;
+static EFI_GUID TextGuid=1,GopGuid=2,PathGuid=3;
+static int peer,foreign;
+static EFI_HANDLE bad_path;
+static int Guid(const EFI_GUID *a,const EFI_GUID *b){return *a==*b;}
+static int GuIsPreparedPeerHandle(EFI_HANDLE h){return h==&peer;}
+static EFI_STATUS GopOnTarget(EFI_HANDLE h,BOOLEAN *on_target){
+  if(h==bad_path)return EFI_DEVICE_ERROR;
+  *on_target=h!=&foreign;return EFI_SUCCESS;
+}
+""" + functions + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  int pci,agent,console,gop,self,input,error,out_agent,gfx_agent,child[12],survivor;
+  SURVIVOR_GOP survivors[]={{&survivor}};
+  EDGE edges[14]={0};
+  Plan=(PLAN){&pci,&gop,&self,&console,&input,&error,&agent,
+              &out_agent,&gfx_agent,survivors,1};
+  Original=(GRAPH){12,14,edges};
+  for(UINTN i=0;i<12;i++){
+    edges[i]=(EDGE){.handle=&pci,.agent=&agent,.controller=&child[i],
+                    .protocol=PathGuid,.attributes=8,.count=1};
+  }
+  for(UINTN i=0;i<12;i++){
+    CHECK(ClassifyIdleOutput(&edges[i])==EFI_SUCCESS);
+    CHECK(edges[i].idle_output && ProtectedHandle(&child[i]));
+    CHECK(!Removed(&edges[i],2) && Removed(&edges[i],3));
+    EDGE unrelated={.handle=&child[i],.controller=&foreign,.agent=&out_agent};
+    CHECK(!Removed(&unrelated,3));
+  }
+  CHECK(ClassifyIdleOutput(&edges[0])==EFI_ACCESS_DENIED);
+  Original.count=13;
+  EDGE candidate={.handle=&pci,.agent=&agent,.controller=&peer,
+                  .protocol=PathGuid,.attributes=8,.count=1};
+  edges[12]=candidate;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[12].idle_output && ProtectedHandle(&peer));
+  edges[12].controller=&console;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[12].controller=&survivor;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[12].controller=&foreign;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  int other;
+  edges[12].controller=&other;
+  edges[12].agent=&out_agent;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[12].agent=&agent;edges[12].count=2;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[12].count=1;bad_path=&other;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_DEVICE_ERROR);
+  bad_path=NULL;Original.count=14;
+  edges[13]=(EDGE){.handle=&other,.controller=&foreign,.agent=&out_agent};
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13]=(EDGE){.handle=&foreign,.controller=&other,.agent=&out_agent};
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13]=(EDGE){.handle=&foreign,.controller=&foreign,.agent=&other};
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[12].idle_output && !ProtectedHandle(&other));
+  Original.count=13;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_SUCCESS && ProtectedHandle(&other));
+  CHECK(!Removed(&edges[13],3));
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "idle_output.c"
+            source.write_text(program, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(directory) / compiler
+                    built = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                        capture_output=True, text=True)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    checked = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
     def test_amd_owner_validation_is_read_only(self):
         owner = function_body("ReadOnlyAmdConsoleOwnership")
         paths = function_body("AmdConsoleVariable")
