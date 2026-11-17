@@ -4,6 +4,7 @@
 #include "../src/gpu_inventory.h"
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const GU_GPU_IDENTITY Primary={0x20b010deU,0xa12310deU,0,3,0,0};
@@ -11,6 +12,7 @@ static const GU_GPU_IDENTITY Secondary={0x250310deU,0xb45610deU,1,7,4,1};
 static unsigned checks;
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static int release_owner_token,other_owner_token;
+static unsigned state_allocs,state_frees,fail_state_alloc;
 #endif
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -97,10 +99,25 @@ static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
   return EFI_SUCCESS;
 }
 static EFI_STATUS Free(VOID *p) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(p && p!=handles) {free(p);state_frees++;return EFI_SUCCESS;}
+#endif
   free_calls++; if (p != handles || fail_pool_free) return 3;
   return EFI_SUCCESS;
 }
-static EFI_BOOT_SERVICES services = { Locate, Resolve, Free };
+static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(kind!=EfiLoaderData || !out || !bytes)return EFI_INVALID_PARAMETER;
+  state_allocs++;
+  if(fail_state_alloc==state_allocs)return EFI_OUT_OF_RESOURCES;
+  *out=calloc(1,bytes);
+  return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+#else
+  (void)kind;(void)bytes;(void)out;
+  return EFI_UNSUPPORTED;
+#endif
+}
+static EFI_BOOT_SERVICES services = { Locate, Resolve, Free, Allocate };
 static EFI_SYSTEM_TABLE system_table = { &services };
 static void Populate(size_t i, GU_GPU_IDENTITY id) {
   MOCK_DEVICE *m = &gpu[i]; memset(m, 0, sizeof(*m));
@@ -126,6 +143,12 @@ static void ResetPair(void) {
 /* The production single-target path supports the user's segment-0 PCI cards.
  * Earlier mock Segment=1 is intentionally not accepted by GuCheckConfig. */
 static void ResetActivePair(void) {
+  /* A test reset models a new boot, not a production unbind. */
+  free(ActiveSequenceTargets);free(ActiveSequenceOrder);
+  ActiveSequenceTargets=NULL;ActiveSequenceOrder=NULL;
+  memset(&ActiveSequence,0,sizeof(ActiveSequence));
+  ActiveSequenceValid=ActiveInventoryValid=0;
+  state_allocs=state_frees=fail_state_alloc=0;
   ResetPair();gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;
 }
 static void PrepareMockOwners(void) {
@@ -137,6 +160,7 @@ int main(void) {
   ResetActivePair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_SUCCESS && init_calls==1);
+  CHECK(state_allocs==2 && state_frees==0 && ActiveSequence.capacity==2);
   CHECK(Gu.handle==handles[1] && Gu.device_id==0x2503U);
   CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
   /* A refused rebind must not replace the previous target or saved peer
@@ -144,13 +168,30 @@ int main(void) {
   {
     EFI_HANDLE old=Gu.handle;
     UINT32 original_peer=ActiveSequence.targets[0].expected_config[4];
+    GU_GPU_EXEC_TARGET *original_targets=ActiveSequence.targets;
+    size_t *original_order=ActiveSequence.order;
     refuse_init=1;
     gpu[0].dwords[4]^=0x1000U;
     CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
     CHECK(Gu.handle==old && ActiveInventoryValid);
     CHECK(ActiveSequence.targets[0].expected_config[4]==original_peer);
+    CHECK(ActiveSequence.targets==original_targets && ActiveSequence.order==original_order);
+    CHECK(state_allocs==2 && state_frees==0 && init_calls==1);
     refuse_init=0;
   }
+  /* Independent allocation failures must not spend GuInit or publish storage. */
+  ResetActivePair();fail_state_alloc=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
+  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
+        init_calls==0 && state_allocs==1 && state_frees==0);
+  ResetActivePair();fail_state_alloc=2;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
+  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
+        init_calls==0 && state_allocs==2 && state_frees==1);
+  ResetActivePair();refuse_init=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(!ActiveSequenceValid && !ActiveSequenceTargets && !ActiveSequenceOrder &&
+        init_calls==1 && state_allocs==2 && state_frees==2);
   ResetActivePair();
   gpu[1].dwords[1]=4u; /* initial selected UEFI driver Bus Master enabled */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);

@@ -36,8 +36,8 @@ static int ActiveInventoryValid;
  * per-GPU state model used by read-only multi-card preparation. It still
  * cannot bind a second active Gu/MSI/assets context in this EFI image. */
 static GU_GPU_EXEC_SEQUENCE ActiveSequence;
-static GU_GPU_EXEC_TARGET ActiveSequenceTargets[GU_INVENTORY_MAX_NVIDIA];
-static size_t ActiveSequenceOrder[GU_INVENTORY_MAX_NVIDIA];
+static GU_GPU_EXEC_TARGET *ActiveSequenceTargets;
+static size_t *ActiveSequenceOrder;
 static int ActiveSequenceValid;
 #endif
 
@@ -345,9 +345,11 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
      !table || !table->BootServices || Gu.bs!=table->BootServices ||
      !ActiveInventory.inventory.count ||
      ActiveInventory.inventory.count>GU_INVENTORY_MAX_NVIDIA ||
+     !ActiveSequenceTargets || !ActiveSequenceOrder ||
      ActiveSequence.targets!=ActiveSequenceTargets ||
+     ActiveSequence.order!=ActiveSequenceOrder ||
      ActiveSequence.count!=ActiveInventory.inventory.count ||
-     ActiveSequence.count>ActiveSequence.capacity ||
+     ActiveSequence.count!=ActiveSequence.capacity ||
      ActiveTargetIndex>=ActiveSequence.count ||
      Gu.handle!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].handle ||
      Gu.pci!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].pci)
@@ -494,6 +496,63 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
   return EFI_SUCCESS;
 }
 
+/* Allocate one execution record per observed device. Keep the old sequence
+ * intact until the existing one-shot bind succeeds. Retain published storage
+ * for the remaining boot: completion and handover consume these records. */
+static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
+                                       EFI_PCI_IO_PROTOCOL *io,
+                                       const GU_GPU_PREPARED_SEQUENCE *prepared,
+                                       const GU_GPU_EXEC_OBSERVATION *observations) {
+  if(!table || !table->BootServices || !io || !prepared || !observations ||
+     !prepared->inventory.count || prepared->inventory.count>GU_INVENTORY_MAX_NVIDIA ||
+     prepared->selected_count!=1 ||
+     prepared->selected_indices[0]>=prepared->inventory.count)
+    return EFI_INVALID_PARAMETER;
+  EFI_BOOT_SERVICES *bs=table->BootServices;
+  if(!bs->AllocatePool || !bs->FreePool)return EFI_UNSUPPORTED;
+  if(ActiveSequenceValid || ActiveInventoryValid)return EFI_ALREADY_STARTED;
+  size_t count=prepared->inventory.count;
+  size_t chosen=prepared->selected_indices[0];
+  GU_GPU_EXEC_SEQUENCE candidate;
+  GU_GPU_EXEC_TARGET *targets=NULL;
+  size_t *order=NULL;
+  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,count*sizeof(*targets),(VOID **)&targets);
+  if(s==EFI_SUCCESS && !targets)s=EFI_OUT_OF_RESOURCES;
+  if(s==EFI_SUCCESS) {
+    s=bs->AllocatePool(EfiLoaderData,count*sizeof(*order),(VOID **)&order);
+    if(s==EFI_SUCCESS && !order)s=EFI_OUT_OF_RESOURCES;
+  }
+  if(s==EFI_SUCCESS &&
+     (GuGpuExecInit(&candidate,observations,count,&chosen,1,targets,order,count)!=GU_GPU_EXEC_OK ||
+      GuGpuExecCheckNext(&candidate,observations,count)!=GU_GPU_EXEC_OK))
+    s=EFI_UNSUPPORTED;
+  if(s==EFI_SUCCESS)s=GuInit(table->BootServices,io);
+  if(s!=EFI_SUCCESS) {
+    EFI_STATUS released=EFI_SUCCESS;
+    if(order) {
+      EFI_STATUS r=bs->FreePool(order);
+      if(r!=EFI_SUCCESS)released=r;
+    }
+    if(targets) {
+      EFI_STATUS r=bs->FreePool(targets);
+      if(r!=EFI_SUCCESS)released=r;
+    }
+    if(released!=EFI_SUCCESS) {
+      GuLog("ACTIVE_SEQUENCE_STORAGE_FREE_STATUS=%#llx\n",(unsigned long long)released);
+      return released;
+    }
+    return s;
+  }
+  ActiveInventory=*prepared;
+  ActiveTargetIndex=chosen;
+  ActiveSequenceTargets=targets;
+  ActiveSequenceOrder=order;
+  ActiveSequence=candidate;
+  ActiveSequenceValid=1;
+  ActiveInventoryValid=1;
+  return EFI_SUCCESS;
+}
+
 #endif
 
 EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
@@ -598,37 +657,14 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     /* Build the checked one-target execution state BEFORE spending GuInit.
      * Failed binding must not overwrite prior target/peer state. */
     GU_GPU_EXEC_OBSERVATION observations[GU_INVENTORY_MAX_NVIDIA];
-    GU_GPU_EXEC_SEQUENCE candidate;
-    GU_GPU_EXEC_TARGET candidate_targets[GU_INVENTORY_MAX_NVIDIA];
-    size_t candidate_order[GU_INVENTORY_MAX_NVIDIA];
-    size_t chosen=prepared.selected_indices[0];
     memset(observations,0,sizeof(observations));
     for(size_t i=0;i<all.inventory.count;i++) {
       observations[i].identity=all.inventory.nvidia[i];
       memcpy(observations[i].config,full.targets[i].config,
              sizeof(observations[i].config));
     }
-    if(GuGpuExecInit(&candidate,observations,all.inventory.count,
-                     &chosen,1,candidate_targets,candidate_order,
-                     GU_INVENTORY_MAX_NVIDIA)!=GU_GPU_EXEC_OK ||
-       GuGpuExecCheckNext(&candidate,observations,
-                          all.inventory.count)!=GU_GPU_EXEC_OK)
-      return EFI_UNSUPPORTED;
-    s=GuInit(table->BootServices,io);
+    s=BindPreparedSequence(table,io,&prepared,observations);
     if(s!=EFI_SUCCESS)return s;
-    ActiveInventoryValid=0;
-    ActiveSequenceValid=0;
-    ActiveInventory=prepared;
-    ActiveTargetIndex=chosen;
-    /* Publish into persistent storage only after the existing bind succeeds.
-     * A copied sequence must never reference a stack candidate. */
-    memcpy(ActiveSequenceTargets,candidate_targets,sizeof(ActiveSequenceTargets));
-    memcpy(ActiveSequenceOrder,candidate_order,sizeof(ActiveSequenceOrder));
-    ActiveSequence=candidate;
-    ActiveSequence.targets=ActiveSequenceTargets;
-    ActiveSequence.order=ActiveSequenceOrder;
-    ActiveSequenceValid=1;
-    ActiveInventoryValid=1;
   }
 #else
   s=GuInit(table->BootServices,io);

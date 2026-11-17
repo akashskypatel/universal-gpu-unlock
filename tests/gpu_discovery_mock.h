@@ -18,6 +18,8 @@ typedef struct { uint32_t a; uint16_t b,c; uint8_t d[8]; } EFI_GUID;
 #define EFI_INVALID_PARAMETER 2
 #define EFI_ALREADY_STARTED 4
 #define EFI_NOT_READY 5
+#define EFI_OUT_OF_RESOURCES 9
+#define EfiLoaderData 2
 #define EFI_ERROR(s) ((s) != EFI_SUCCESS)
 #define ByProtocol 2
 #define EfiPciIoWidthUint32 1
@@ -35,6 +37,7 @@ typedef struct MOCK_BOOT_SERVICES {
   EFI_STATUS (*LocateHandleBuffer)(int, EFI_GUID *, VOID *, UINTN *, EFI_HANDLE **);
   EFI_STATUS (*HandleProtocol)(EFI_HANDLE, EFI_GUID *, VOID **);
   EFI_STATUS (*FreePool)(VOID *);
+  EFI_STATUS (*AllocatePool)(int, UINTN, VOID **);
 } EFI_BOOT_SERVICES;
 typedef struct { EFI_BOOT_SERVICES *BootServices; } EFI_SYSTEM_TABLE;
 typedef struct {
