@@ -61,6 +61,11 @@ extern GU_PLATFORM *GuPlatformActive;
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *, EFI_PCI_IO_PROTOCOL *);
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *, EFI_PCI_IO_PROTOCOL *, GU_PLATFORM **);
 EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **);
+#ifdef GU_ACTIVE_SINGLE_TARGET
+#include "../src/gpu_execution_state.h"
+EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *,GU_PLATFORM **,
+    const GU_GPU_EXEC_SEQUENCE *,const GU_GPU_EXEC_OBSERVATION *,size_t);
+#endif
 void GuLog(const char *, ...);
 int GuIsSupportedPciId(UINT32);
 int GuIsAmpereDeviceId(UINT16);

@@ -163,6 +163,16 @@ EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *P
  * The caller must own the reference exclusively. Clear it only on success.
  * A lost active pointer cannot make a published platform disposable. */
 EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out);
+#ifdef GU_ACTIVE_SINGLE_TARGET
+#include "gpu_execution_state.h"
+/* Retain the verified completed context and publish a distinct registered
+ * next context. This changes only the CPU binding, not hardware ownership.
+ * The existing one-target admission in the boot entrypoints is unchanged. */
+EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
+                                      const GU_GPU_EXEC_SEQUENCE *sequence,
+                                      const GU_GPU_EXEC_OBSERVATION *observations,
+                                      size_t count);
+#endif
 #ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These
    values are private to port.c; the vendor core can only read/compare them. */

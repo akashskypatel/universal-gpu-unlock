@@ -417,6 +417,24 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
 #endif
 }
 
+/* Initialize the newly bound platform from the exact checked PCI snapshot.
+ * Reuse this for the initial and every subsequent context. */
+static void ConfigureBoundPlatform(EFI_HANDLE image,const GU_GPU_RECORD *selected,
+                                   const UINT32 config[64],const GU_CAPS *caps) {
+  Gu.image=image;
+  Gu.handle=(EFI_HANDLE)selected->handle;
+  Gu.device_id=(UINT16)(selected->pci_id >> 16);
+  Gu.is_ampere=GuIsAmpereDeviceId(Gu.device_id);
+  Gu.is_turing=GuIsTuringDeviceId(Gu.device_id);
+  Gu.bar_base=(config[4] & ~0xfU);
+  Gu.bar_size=0x1000000;
+  Gu.pm_cap=caps->pm;
+  Gu.pcie_cap=caps->pcie;
+  Gu.pcie_version=caps->pcie_version;
+  Gu.msi_cap=caps->msi;
+  Gu.msix_cap=caps->msix;
+}
+
 #ifdef GU_ACTIVE_SINGLE_TARGET
 /* Re-enumerate and read the COMPLETE NVIDIA inventory twice. A later
  * selected-card step must not trust a previous firmware/PCI snapshot. */
@@ -513,6 +531,55 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
   }
   GuLog("SELECTED_GPU_STEP=COMPLETE NEXT=%zu PEERS_VERIFIED=%zu\n",
         ActiveSequence.next_step,ActiveInventory.inventory.count);
+  return EFI_SUCCESS;
+}
+
+/* Select the next checked context after the previous step completed.
+ * This is an intermediate CPU binding, not an unlock or handover grant.
+ * The current boot entrypoints still admit only one requested active GPU. */
+EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
+  size_t step,target;
+  if(!table||!table->BootServices||Gu.bs!=table->BootServices||!Gu.image||
+     !ResolveSelectedBinding(&step,&target)||
+     ActiveSequence.targets[target].phase!=GU_GPU_EXEC_COMPLETE||
+     step+1!=ActiveSequence.next_step||
+     ActiveSequence.next_step>=ActiveSequence.selected_count)
+    return EFI_NOT_READY;
+  GU_GPU_EXEC_OBSERVATION observed[GU_INVENTORY_MAX_NVIDIA];
+  GU_CAPS caps;
+  EFI_STATUS s=ActiveStepObservations(table,observed);
+  if(s!=EFI_SUCCESS ||
+     GuGpuExecCheckNext(&ActiveSequence,observed,ActiveInventory.inventory.count)
+       !=GU_GPU_EXEC_OK) {
+    GuAbortSelectedGpuStep();
+    return EFI_UNSUPPORTED;
+  }
+  size_t next=ActiveSequence.order[ActiveSequence.next_step];
+  const GU_GPU_RECORD *selected=&observed[next].identity;
+  const UINT32 *config=observed[next].config;
+  if(!GuIsSupportedPciId(selected->pci_id)||
+     !GuCheckConfigInitialMaster(config,selected->segment,selected->bus,
+                                 selected->device,selected->function,&caps)) {
+    GuAbortSelectedGpuStep();
+    return EFI_UNSUPPORTED;
+  }
+  EFI_HANDLE image=Gu.image;
+  EFI_BOOT_SERVICES *bs=table->BootServices;
+  GU_PLATFORM *owner=NULL;
+  s=GuAllocatePlatform(bs,(EFI_PCI_IO_PROTOCOL *)selected->pci,&owner);
+  if(s==EFI_SUCCESS)
+    s=GuAdvanceAllocatedPlatform(bs,&owner,&ActiveSequence,observed,
+                                 ActiveInventory.inventory.count);
+  if(s!=EFI_SUCCESS) {
+    GuAbortSelectedGpuStep();
+    if(owner) {
+      EFI_STATUS released=GuDiscardUnboundPlatform(&owner);
+      if(released!=EFI_SUCCESS)return released;
+    }
+    return s;
+  }
+  ConfigureBoundPlatform(image,selected,config,&caps);
+  GuLog("SELECTED_GPU_STEP=BOUND ORDER=%zu TARGET=%zu\n",ActiveSequence.next_step,next);
   return EFI_SUCCESS;
 }
 
@@ -763,17 +830,6 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   s=GuInit(table->BootServices,io);
   if(s!=EFI_SUCCESS)return s;
 #endif
-  Gu.image = image;
-  Gu.handle = (EFI_HANDLE)selected->handle;
-  Gu.device_id = (UINT16)(selected->pci_id >> 16);
-  Gu.is_ampere = GuIsAmpereDeviceId(Gu.device_id);
-  Gu.is_turing = GuIsTuringDeviceId(Gu.device_id);
-  Gu.bar_base = (config[4] & ~0xfU);
-  Gu.bar_size = 0x1000000;
-  Gu.pm_cap = caps.pm;
-  Gu.pcie_cap = caps.pcie;
-  Gu.pcie_version = caps.pcie_version;
-  Gu.msi_cap = caps.msi;
-  Gu.msix_cap = caps.msix;
+  ConfigureBoundPlatform(image,selected,config,&caps);
   return EFI_SUCCESS;
 }

@@ -16,8 +16,11 @@ static int release_owner_token,other_owner_token;
 #if defined(GU_ACTIVE_SINGLE_TARGET) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
 static unsigned state_allocs,state_frees,fail_state_alloc;
 #endif
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 static unsigned context_allocs,context_frees,fail_context_free;
+#endif
+#ifdef GU_ACTIVE_SINGLE_TARGET
+static int refuse_advance;
 #endif
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -123,7 +126,7 @@ static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
   return EFI_UNSUPPORTED;
 #endif
 }
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,GU_PLATFORM **out) {
   if(!bs || !pci || !out || *out)return EFI_INVALID_PARAMETER;
   EFI_STATUS status=bs->AllocatePool(EfiLoaderData,sizeof(**out),(VOID **)out);
@@ -138,6 +141,19 @@ EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **out) {
   EFI_STATUS status=(*out)->bs->FreePool(*out);
   if(status==EFI_SUCCESS){*out=NULL;context_frees++;}
   return status;
+}
+#endif
+#ifdef GU_ACTIVE_SINGLE_TARGET
+/* The registry transition itself is tested from the actual port.c source
+ * in test_platform_bind_lifetime.py; this mock covers the adapter boundary. */
+EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
+    const GU_GPU_EXEC_SEQUENCE *sequence,const GU_GPU_EXEC_OBSERVATION *observed,size_t n) {
+  if(refuse_advance||!owner||!*owner||(*owner)->bs!=bs||
+     GuGpuExecCheckNext(sequence,observed,n)!=GU_GPU_EXEC_OK||
+     (*owner)->pci!=sequence->targets[sequence->order[sequence->next_step]].identity.pci)
+    return EFI_NOT_READY;
+  GuPlatformActive=*owner;*owner=NULL;
+  return EFI_SUCCESS;
 }
 #endif
 static EFI_BOOT_SERVICES services = { Locate, Resolve, Free, Allocate };
@@ -173,6 +189,8 @@ static void ResetActivePair(void) {
   memset(&ActiveSequence,0,sizeof(ActiveSequence));
   ActiveSequenceValid=ActiveInventoryValid=0;
   state_allocs=state_frees=fail_state_alloc=0;
+  context_allocs=context_frees=fail_context_free=0;
+  refuse_advance=0;
   ResetPair();gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;
 }
 static void PrepareMockOwners(void) {
@@ -384,15 +402,15 @@ int main(void) {
         ActiveSequence.halted);
   CHECK(ActiveSequence.next_step==0 && ActiveSequence.active_step==GU_GPU_EXEC_NO_STEP);
 
-  /* Use the real adapter and ordered record with two independent mock
-   * contexts. Switching the mock pointer is NOT a production bind API. */
-  ResetActivePair();
-  {
+  /* Exercise actual adapter selection and the registry mock boundary.
+   * Direct pointer changes below are negative fault injection only. */
+  for(int scenario=0;scenario<4;scenario++) {
+    ResetActivePair();
     GU_GPU_PREPARED_SEQUENCE prepared,all;
     GU_GPU_REFRESHED_SEQUENCE refreshed;
     GU_GPU_EXEC_OBSERVATION observations[2];
     GU_GPU_LOCATION requested[2]={{0,7,0,0},{0,3,0,0}};
-    GU_PLATFORM second={0};
+    GU_PLATFORM *second=NULL;
     CHECK(GuPrepareGpuSequence(&system_table,requested,2,&prepared)==EFI_SUCCESS);
     all=prepared;
     all.selected_count=all.inventory.count;
@@ -403,18 +421,38 @@ int main(void) {
       memcpy(observations[i].config,refreshed.targets[i].config,sizeof(observations[i].config));
     }
     CHECK(BindPreparedSequence(&system_table,&gpu[1].protocol,&prepared,observations)==EFI_SUCCESS);
-    Gu.handle=handles[1];Gu.profile_verified=Gu.prom_verified=1;PrepareMockOwners();
+    Gu.image=(EFI_HANDLE)1;Gu.handle=handles[1];
+    Gu.profile_verified=Gu.prom_verified=1;PrepareMockOwners();
     CHECK(GuIsPreparedPeerHandle(handles[0]) && !GuIsPreparedPeerHandle(handles[1]));
     CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
     CHECK(ActiveSequence.active_step==0);
+    CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
     gpu[1].dwords[4]^=0x1000U;
     CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
     CHECK(ActiveSequence.next_step==1 && GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
     GU_PLATFORM *first=GuPlatformActive;
-    second.bs=&services;second.pci=&gpu[0].protocol;second.handle=handles[0];
-    second.profile_verified=second.prom_verified=second.asset_entries_reserved=1;
-    second.release_state=&other_owner_token;
-    GuPlatformActive=&second;
+    if(scenario) {
+      EFI_STATUS expected=EFI_NOT_READY;
+      if(scenario==1)refuse_advance=1;
+      if(scenario==2){fail_state_alloc=state_allocs+1;expected=EFI_OUT_OF_RESOURCES;}
+      if(scenario==3){gpu[0].dwords[4]^=0x4000U;expected=EFI_UNSUPPORTED;}
+      CHECK(GuSelectNextGpu(&system_table)==expected);
+      CHECK(ActiveSequence.halted && ActiveSequence.next_step==1);
+      CHECK(GuPlatformActive==first && Gu.release_state==&release_owner_token);
+      CHECK(ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_COMPLETE);
+      CHECK(context_allocs==(unsigned)(scenario==1) && context_frees==context_allocs);
+      CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
+      continue;
+    }
+    CHECK(GuSelectNextGpu(&system_table)==EFI_SUCCESS);
+    second=GuPlatformActive;
+    CHECK(second!=first && context_allocs==1 && !context_frees);
+    CHECK(second->bs==&services && second->pci==&gpu[0].protocol && second->handle==handles[0]);
+    CHECK(second->image==first->image && second->device_id==(Primary.pci_id>>16));
+    CHECK(!second->profile_verified && !second->release_state && !second->asset_entries_reserved);
+    CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
+    second->profile_verified=second->prom_verified=second->asset_entries_reserved=1;
+    second->release_state=&other_owner_token;
     CHECK(GuIsPreparedPeerHandle(handles[1]) && !GuIsPreparedPeerHandle(handles[0]));
     CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
     CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,&other_owner_token,Gu.asset_entries)==EFI_SUCCESS);
@@ -422,12 +460,13 @@ int main(void) {
     GuPlatformActive=first;
     CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
     CHECK(GuIsPreparedPeerHandle(handles[0]) && GuIsPreparedPeerHandle(handles[1]));
-    GuPlatformActive=&second;
+    GuPlatformActive=second;
     gpu[0].dwords[4]^=0x2000U;
     CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,&other_owner_token,Gu.asset_entries)==EFI_SUCCESS);
     CHECK(ActiveSequence.next_step==2 && GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
     CHECK(ActiveSequence.targets[ActiveSequence.order[0]].owners.platform==first);
-    CHECK(ActiveSequence.targets[ActiveSequence.order[1]].owners.platform==&second);
+    CHECK(ActiveSequence.targets[ActiveSequence.order[1]].owners.platform==second);
+    CHECK(GuSelectNextGpu(&system_table)==EFI_NOT_READY);
     gpu[1].dwords[4]^=0x4000U;
     CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
     gpu[1].dwords[4]^=0x4000U;
@@ -436,6 +475,7 @@ int main(void) {
     CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
     GuPlatformActive=first;
     CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+    free(second); /* simulated boot termination only */
   }
   printf("PASS exact single-target active binding and CPU state handover: %u checks\n",checks);
   return 0;

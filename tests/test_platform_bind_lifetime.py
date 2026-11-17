@@ -438,9 +438,161 @@ int main(int argc,char **argv) {
                     self.assertEqual(result.returncode, 0,
                                      result.stdout + result.stderr)
 
+    def test_registry_advances_only_after_verified_completed_context(self):
+        start = SOURCE.index("typedef struct GU_PLATFORM_ALLOCATION {")
+        end = SOURCE.index("\n/* Allocate CPU-only state", start)
+        registry = SOURCE[start:end]
+        actual = registry + "\n" + "\n".join(
+            function(name) for name in ("GuAllocatePlatform", "GuBindAllocatedPlatform",
+            "GuAdvanceAllocatedPlatform", "GuDiscardUnboundPlatform"))
+        host = r"""
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "gpu_execution_state.h"
+typedef void VOID;
+typedef int BOOLEAN;
+typedef uintptr_t EFI_STATUS;
+typedef struct {int a;} EFI_PCI_IO_PROTOCOL;
+typedef struct EFI_BOOT_SERVICES {
+  EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+typedef struct {
+  EFI_BOOT_SERVICES *bs;
+  EFI_PCI_IO_PROTOCOL *pci;
+  VOID *handle,*image,*allocations,*release_state;
+  unsigned char asset_entries[5];
+  int profile_verified,prom_verified,release_state_reserved,release_owner_invalid;
+  int asset_entries_reserved,fault,retained,owned,quiesced;
+  unsigned dma_count,master_attributes_pending,flrs;
+} GU_PLATFORM;
+#define TRUE 1
+#define FALSE 0
+#define EfiLoaderData 2
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 2
+#define EFI_ACCESS_DENIED 3
+#define EFI_ALREADY_STARTED 4
+#define EFI_UNSUPPORTED 5
+#define EFI_OUT_OF_RESOURCES 6
+#define EFI_NOT_READY 7
+static GU_PLATFORM UnboundPlatform;
+static GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
+#define Gu (*GuPlatformActive)
+static const GU_PLATFORM EmptyPlatform;
+static unsigned ready_calls;
+static int ready=1;
+static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
+  if(kind!=EfiLoaderData||!out)return EFI_INVALID_PARAMETER;
+  *out=calloc(1,bytes);return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
+static EFI_STATUS Free(VOID *ptr){free(ptr);return EFI_SUCCESS;}
+static int GuMsiReadyForWindows(void){ready_calls++;return ready;}
+static const VOID *GuMsiPlanOwnerToken(void){return Gu.release_state;}
+static int GuSafeToReturn(void){return !Gu.fault&&!Gu.retained&&!Gu.allocations&&
+    !Gu.dma_count&&!Gu.master_attributes_pending;}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  EFI_BOOT_SERVICES bs={Allocate,Free};
+  EFI_PCI_IO_PROTOCOL pci[4]={{1},{2},{3},{4}};
+  int handles[4]={0},release[4]={0},image=1;
+  GU_PLATFORM *owner[4]={0},*saved[4]={0};
+  GU_GPU_EXEC_OBSERVATION observed[4]={0};
+  GU_GPU_EXEC_TARGET records[4];
+  size_t order[4],requested[3]={1,0,2};
+  GU_GPU_EXEC_SEQUENCE sequence;
+  for(size_t i=0;i<4;i++) {
+    CHECK(GuAllocatePlatform(&bs,&pci[i],&owner[i])==EFI_SUCCESS);
+    saved[i]=owner[i];
+    observed[i].identity=(GU_GPU_RECORD){.pci_id=i==0?0x268410deU:0x220a10deU,
+       .subsystem_id=0x123410deU,.class_code=0x0300,.bus=(uint32_t)(i+1),
+       .handle=&handles[i],.pci=&pci[i]};
+    observed[i].config[0]=observed[i].identity.pci_id;
+    observed[i].config[2]=0x03000000U;
+    observed[i].config[11]=0x123410deU;
+  }
+  CHECK(GuGpuExecInit(&sequence,observed,4,requested,3,records,order,4)==GU_GPU_EXEC_OK);
+  CHECK(GuBindAllocatedPlatform(&bs,&pci[1],&owner[1])==EFI_SUCCESS);
+  CHECK(!owner[1]&&GuPlatformActive==saved[1]);
+  for(size_t step=0;step<3;step++) {
+    size_t i=requested[step];
+    CHECK(GuPlatformActive==saved[i]&&Gu.pci==&pci[i]);
+    Gu.handle=&handles[i];Gu.image=&image;
+    Gu.profile_verified=Gu.prom_verified=Gu.release_state_reserved=
+      Gu.asset_entries_reserved=1;
+    Gu.release_state=&release[i];
+    CHECK(GuGpuExecBeginOwned(&sequence,step,observed,4,&Gu,Gu.release_state,
+                             Gu.asset_entries)==GU_GPU_EXEC_OK);
+    if(step<2)
+      CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[requested[step+1]],&sequence,
+        observed,4)==EFI_NOT_READY);
+    Gu.quiesced=1;Gu.flrs=1;
+    observed[i].config[4]=(uint32_t)(0x2000U+step);
+    CHECK(GuGpuExecFinish(&sequence,step,observed,4,1)==GU_GPU_EXEC_OK);
+    if(step==2)break;
+    size_t next=requested[step+1];
+    GU_PLATFORM prior=Gu;
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[3],&sequence,observed,4)==EFI_ACCESS_DENIED);
+    CHECK(GuPlatformActive==saved[i]&&owner[3]);
+    Gu.retained=1;
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+    Gu.retained=0;
+    Gu.release_state=&release[3];
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+    Gu.release_state=&release[i];
+    observed[3].config[4]^=1;
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_NOT_READY);
+    observed[3].config[4]^=1;
+    if(step==1) {
+      saved[1]->fault=1;
+      CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+      saved[1]->fault=0;
+    }
+    owner[next]->fault=1;
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+    owner[next]->fault=0;
+    ready=0;
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_NOT_READY);
+    ready=1; /* cases model separate observations, not a hardware recovery */
+    CHECK(GuPlatformActive==saved[i]&&owner[next]&&memcmp(&Gu,&prior,sizeof(prior))==0);
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_SUCCESS);
+    CHECK(!owner[next]&&GuPlatformActive==saved[next]&&memcmp(saved[i],&prior,sizeof(prior))==0);
+    CHECK(GuDiscardUnboundPlatform(&saved[i])==EFI_ACCESS_DENIED&&saved[i]);
+    CHECK(GuBindAllocatedPlatform(&bs,&pci[3],&owner[3])==EFI_ALREADY_STARTED);
+  }
+  CHECK(GuGpuExecCheckComplete(&sequence,observed,4)==GU_GPU_EXEC_OK);
+  CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[3],&sequence,observed,4)==EFI_NOT_READY);
+  CHECK(ready_calls==4);
+  CHECK(saved[1]->release_state==&release[1]&&saved[0]->release_state==&release[0]);
+  CHECK(GuDiscardUnboundPlatform(&owner[3])==EFI_SUCCESS);
+  /* Test process termination: production retains published allocations. */
+  while(PlatformAllocations){
+    GU_PLATFORM_ALLOCATION *next=PlatformAllocations->next;
+    free(PlatformAllocations);PlatformAllocations=next;
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "sequence_binding.c"
+            executable = Path(directory) / "sequence_binding"
+            source.write_text(host, encoding="utf-8")
+            result = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2",
+                 "-Wall", "-Wextra", "-Werror", "-pedantic", "-I", str(ROOT / "src"),
+                 str(source), str(ROOT / "src/gpu_execution_state.c"), "-o", str(executable)],
+                capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            checked = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
     def test_original_platform_rebind_guard(self):
         body = function("GuInit")
-        self.assertIn("BOOLEAN published;", SOURCE)
+        self.assertIn("BOOLEAN published,retired;", SOURCE)
         self.assertNotIn("static BOOLEAN TargetBound;", SOURCE)
         self.assertIn("static const GU_PLATFORM EmptyPlatform;", SOURCE)
         binding = function("GuBindAllocatedPlatform")
