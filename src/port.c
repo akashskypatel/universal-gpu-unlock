@@ -78,6 +78,29 @@ EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
   return EFI_SUCCESS;
 }
 
+EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out) {
+  if(!Out || !*Out)return EFI_INVALID_PARAMETER;
+  GU_PLATFORM *platform=*Out;
+  if(platform==GuPlatformActive || platform==&UnboundPlatform)
+    return EFI_ACCESS_DENIED;
+  if(!platform->bs || !platform->pci || !platform->bs->FreePool)
+    return EFI_UNSUPPORTED;
+  /* Only a pristine object from GuAllocatePlatform is disposable.
+   * No saved configuration, allocations, protocol state or errors may
+   * be discarded. This is not an active-platform teardown operation. */
+  GU_PLATFORM pristine;
+  memset(&pristine,0,sizeof(pristine));
+  pristine.bs=platform->bs;pristine.pci=platform->pci;
+#ifdef GU_ENTRY_LATCHED_SS1_FULL
+  pristine.selector_phase=GU_SELECTOR_PHASE_ENTRY;
+#endif
+  if(memcmp(platform,&pristine,sizeof(pristine))!=0)
+    return EFI_ACCESS_DENIED;
+  EFI_STATUS status=platform->bs->FreePool(platform);
+  if(status==EFI_SUCCESS)*Out=NULL;
+  return status;
+}
+
 BOOLEAN GuTargetConfig(const UINT32 *C, UINTN S, UINTN B, UINTN D, UINTN F) {
   return C && S <= 0xffffU && B < 256 && D < 32 && F < 8 &&
     GuIsSupportedPciId(C[0]) &&

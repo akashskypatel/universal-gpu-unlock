@@ -555,6 +555,73 @@ static EFI_STATUS BindPreparedSequence(EFI_SYSTEM_TABLE *table,
 
 #endif
 
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+/* Owned CPU-only candidates. Retain the table and any failed releases
+ * until boot termination. Never publish a candidate as the active GPU. */
+static GU_PLATFORM **PreparedContexts;
+static size_t PreparedContextCount;
+
+static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
+                                          const GU_GPU_EXEC_SEQUENCE *sequence) {
+  if(!bs || !bs->AllocatePool || !bs->FreePool || !sequence ||
+     !sequence->targets || !sequence->order || !sequence->count ||
+     sequence->count>sequence->capacity ||
+     sequence->capacity>GU_INVENTORY_MAX_NVIDIA ||
+     !sequence->selected_count || sequence->selected_count>sequence->count)
+    return EFI_INVALID_PARAMETER;
+  if(PreparedContexts)return EFI_ALREADY_STARTED;
+  size_t count=sequence->selected_count;
+  /* The sequence was checked by GuGpuExecCheckNext. Confirm all indices
+   * and PCI references before allocating any candidate. */
+  for(size_t i=0;i<count;i++) {
+    size_t index=sequence->order[i];
+    if(index>=sequence->count || !sequence->targets[index].identity.pci)
+      return EFI_INVALID_PARAMETER;
+    for(size_t j=0;j<i;j++)
+      if(sequence->targets[sequence->order[j]].identity.pci==
+         sequence->targets[index].identity.pci)return EFI_INVALID_PARAMETER;
+  }
+  GU_PLATFORM **contexts=NULL;
+  EFI_STATUS status=bs->AllocatePool(EfiLoaderData,count*sizeof(*contexts),
+                                     (VOID **)&contexts);
+  if(status!=EFI_SUCCESS)return status;
+  if(!contexts)return EFI_OUT_OF_RESOURCES;
+  memset(contexts,0,count*sizeof(*contexts));
+  PreparedContexts=contexts;
+  PreparedContextCount=count;
+  for(size_t i=0;i<count;i++) {
+    EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)
+        sequence->targets[sequence->order[i]].identity.pci;
+    status=GuAllocatePlatform(bs,pci,&contexts[i]);
+    if(status!=EFI_SUCCESS)break;
+    if(!contexts[i] || contexts[i]->bs!=bs || contexts[i]->pci!=pci) {
+      status=EFI_UNSUPPORTED;
+      break;
+    }
+    GuLog("ACTIVE_CONTEXT[%zu]=PREPARED CPU_ONLY=1 MUTATION_AUTHORIZED=0\n",i);
+  }
+  EFI_STATUS cleanup=EFI_SUCCESS;
+  for(size_t i=0;i<PreparedContextCount;i++) {
+    if(!contexts[i])continue;
+    EFI_STATUS released=GuDiscardUnboundPlatform(&contexts[i]);
+    if(released!=EFI_SUCCESS && cleanup==EFI_SUCCESS)cleanup=released;
+  }
+  if(cleanup==EFI_SUCCESS) {
+    cleanup=bs->FreePool(contexts);
+    if(cleanup==EFI_SUCCESS) {
+      PreparedContexts=NULL;
+      PreparedContextCount=0;
+    }
+  }
+  if(cleanup!=EFI_SUCCESS) {
+    GuLog("ACTIVE_CONTEXT_STORAGE_FREE_STATUS=%#llx RETAINED=1\n",
+          (unsigned long long)cleanup);
+    return cleanup;
+  }
+  return status;
+}
+#endif
+
 EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   GU_GPU_PREPARED_SEQUENCE prepared;
   const GU_GPU_RECORD *selected;
@@ -600,6 +667,12 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
        GuGpuExecCheckNext(&sequence,observed,all.inventory.count)!=GU_GPU_EXEC_OK) {
       GuLog("ACTIVE_SEQUENCE=REFUSED REASON=STATE_OR_PEER_DRIFT BEFORE_GU_INIT=1\n");
       return EFI_UNSUPPORTED;
+    }
+    s=PreparePlatformContexts(table->BootServices,&sequence);
+    if(s!=EFI_SUCCESS) {
+      GuLog("ACTIVE_CONTEXTS=REFUSED STATUS=%#llx BEFORE_GU_INIT=1\n",
+            (unsigned long long)s);
+      return s;
     }
     GuLog("ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=%zu TRACKED=%zu NEXT=0 MUTATION_AUTHORIZED=0\n",
           sequence.selected_count,sequence.count);

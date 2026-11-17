@@ -58,6 +58,8 @@ typedef struct {
 } GU_CAPS;
 extern GU_PLATFORM Gu;
 EFI_STATUS GuInit(EFI_BOOT_SERVICES *, EFI_PCI_IO_PROTOCOL *);
+EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *, EFI_PCI_IO_PROTOCOL *, GU_PLATFORM **);
+EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **);
 void GuLog(const char *, ...);
 int GuIsSupportedPciId(UINT32);
 int GuIsAmpereDeviceId(UINT16);

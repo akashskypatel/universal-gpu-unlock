@@ -152,6 +152,10 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
  * Does not select a GPU, claim a protocol, or authorize hardware access. */
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                               GU_PLATFORM **Out);
+/* Release only an unpublished, unchanged object from GuAllocatePlatform.
+ * The caller must own the reference exclusively. Clear it only on success.
+ * Never use this operation for a bound or previously used platform. */
+EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out);
 #ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These
    values are private to port.c; the vendor core can only read/compare them. */

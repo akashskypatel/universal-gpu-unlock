@@ -12,7 +12,12 @@ static const GU_GPU_IDENTITY Secondary={0x250310deU,0xb45610deU,1,7,4,1};
 static unsigned checks;
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static int release_owner_token,other_owner_token;
+#endif
+#if defined(GU_ACTIVE_SINGLE_TARGET) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
 static unsigned state_allocs,state_frees,fail_state_alloc;
+#endif
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+static unsigned context_allocs,context_frees,fail_context_free;
 #endif
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -99,14 +104,14 @@ static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
   return EFI_SUCCESS;
 }
 static EFI_STATUS Free(VOID *p) {
-#ifdef GU_ACTIVE_SINGLE_TARGET
+#if defined(GU_ACTIVE_SINGLE_TARGET) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
   if(p && p!=handles) {free(p);state_frees++;return EFI_SUCCESS;}
 #endif
   free_calls++; if (p != handles || fail_pool_free) return 3;
   return EFI_SUCCESS;
 }
 static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
-#ifdef GU_ACTIVE_SINGLE_TARGET
+#if defined(GU_ACTIVE_SINGLE_TARGET) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
   if(kind!=EfiLoaderData || !out || !bytes)return EFI_INVALID_PARAMETER;
   state_allocs++;
   if(fail_state_alloc==state_allocs)return EFI_OUT_OF_RESOURCES;
@@ -117,6 +122,23 @@ static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
   return EFI_UNSUPPORTED;
 #endif
 }
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,GU_PLATFORM **out) {
+  if(!bs || !pci || !out || *out)return EFI_INVALID_PARAMETER;
+  EFI_STATUS status=bs->AllocatePool(EfiLoaderData,sizeof(**out),(VOID **)out);
+  if(status==EFI_SUCCESS) {
+    (*out)->bs=bs;(*out)->pci=pci;context_allocs++;
+  }
+  return status;
+}
+EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **out) {
+  if(!out || !*out)return EFI_INVALID_PARAMETER;
+  if(fail_context_free && (*out)->pci==&gpu[1].protocol)return EFI_NOT_READY;
+  EFI_STATUS status=(*out)->bs->FreePool(*out);
+  if(status==EFI_SUCCESS){*out=NULL;context_frees++;}
+  return status;
+}
+#endif
 static EFI_BOOT_SERVICES services = { Locate, Resolve, Free, Allocate };
 static EFI_SYSTEM_TABLE system_table = { &services };
 static void Populate(size_t i, GU_GPU_IDENTITY id) {
@@ -370,6 +392,9 @@ int main(void) {
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_UNSUPPORTED && init_calls==0 && free_calls==2);
   CHECK(prep_markers==1 && prep_refusals==1 && global_refusals==0);
+  CHECK(context_allocs==GU_GPU_SELECTION_COUNT && context_frees==context_allocs);
+  CHECK(state_allocs==GU_GPU_SELECTION_COUNT+1 && state_frees==state_allocs);
+  CHECK(!PreparedContexts && !PreparedContextCount && !Gu.pci && !Gu.bs);
   /* Full-set re-enumeration precedes two PCI reads of all NVIDIA devices. */
   CHECK(gpu[0].full_reads == 2 && gpu[1].full_reads == 2);
   ResetPair(); count=1;
@@ -388,6 +413,32 @@ int main(void) {
   ResetPair(); gpu[1].read_fail=1; /* Unselected peer fails a read. */
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED && init_calls==0);
   CHECK(prep_markers==0 && prep_refusals==0 && global_refusals==0);
+  /* The registry must release earlier contexts after a later allocation fails. */
+  ResetPair();state_allocs=state_frees=context_allocs=context_frees=0;
+  fail_state_alloc=GU_GPU_SELECTION_COUNT+1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_OUT_OF_RESOURCES);
+  CHECK(init_calls==0 && !PreparedContexts && !PreparedContextCount);
+  CHECK(context_allocs==GU_GPU_SELECTION_COUNT-1 && context_frees==context_allocs);
+  CHECK(state_frees==state_allocs-1 && !prep_markers && !prep_refusals);
+  fail_state_alloc=0;
+#if GU_GPU_SELECTION_COUNT == 2
+  /* A failed context release retains its reference, not a dangling address. */
+  ResetPair();fail_context_free=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_NOT_READY);
+  CHECK(!init_calls && PreparedContexts && PreparedContextCount==2);
+  size_t retained=0;
+  for(size_t i=0;i<PreparedContextCount;i++)
+    if(PreparedContexts[i]){
+      CHECK(PreparedContexts[i]->pci==&gpu[1].protocol);
+      retained++;
+    }
+  CHECK(retained==1);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  fail_context_free=0;
+  /* Test-only disposal models boot termination, not production retry. */
+  for(size_t i=0;i<PreparedContextCount;i++)free(PreparedContexts[i]);
+  free(PreparedContexts);PreparedContexts=NULL;PreparedContextCount=0;
+#endif
   printf("PASS active selected-entrypoint refusal: %u checks; GuInit never called\n",checks);
   return 0;
 }
