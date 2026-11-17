@@ -153,6 +153,11 @@ EFI_STATUS GuInit(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci);
  * Does not select a GPU, claim a protocol, or authorize hardware access. */
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                               GU_PLATFORM **Out);
+/* Transfer a registered, pristine allocation to the first active slot.
+ * Consumes the caller's exclusive reference only on success. Does not
+ * permit a second bind or authorize hardware operations. */
+EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
+                                   GU_PLATFORM **Owner);
 /* Release only a registered, unpublished, unchanged allocation.
  * The caller must own the reference exclusively. Clear it only on success.
  * Never use this operation for a bound or previously used platform. */
