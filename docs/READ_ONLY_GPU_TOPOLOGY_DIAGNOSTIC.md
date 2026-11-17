@@ -279,7 +279,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology
 
 The example produces `src\build_diagnostic\GPU-SELECTION-0000-09-02-0-DIAGNOSTIC.EFI`.
 An ordered, read-only **multi-target** diagnostic can be compiled with
-`-SelectionBdfs` and 2–16 comma-separated PCI locations (the example below uses two):
+`-SelectionBdfs` and 2–128 comma-separated PCI locations (the example below uses two):
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdfs '0000:09:02.0,0001:2A:03.1'
@@ -318,11 +318,11 @@ nor the generic topology EFI links the GPU unlock/DMA/FLR/vendor Stop engine.
 
 The same `src/Gpu-Selection-Build.ps1` validator is used by this passive
 diagnostic and the separately built **non-diagnostic active app/DXE
-preparation-only images**. It validates 1–16 ordered, distinct PCI segment:BDF
+preparation-only images**. It validates 1–128 ordered, distinct PCI segment:BDF
 locations, independent of GPU model and motherboard. The active app/DXE
 preparation images do **not** use this passive diagnostic's full PCI/GOP/ConOut
-collector; their common UEFI discovery routine currently records bounded
-PCI identity/inventory only and refuses any GPU actuation.
+collector. Their common UEFI discovery routine allocates records from the
+observed PCI handle count. Preparation-only images refuse GPU actuation.
 
 See [Active GPU preparation](ACTIVE_GPU_PREPARATION.md). This is a distinct
 source/verification boundary from the previous passive diagnostic captures.

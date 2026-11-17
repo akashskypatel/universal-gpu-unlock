@@ -1,61 +1,36 @@
 # Dynamic GPU targeting for active-source EFI preparation
 
-**State: SOURCE/HOST/EFI-COMPILE VERIFIED; GPU ACTUATION BLOCKED.**
-The read-only prepared-sequence refresh is current through
-[CI `42855085195`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42855085195);
-the independent ErrOut classifier's invalid-graph refusal is current through
-[CI `42857858767`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42857858767).
-Neither is a new hardware approval.
+**State: DYNAMIC ORDERED SOURCE AND HOST TESTS VERIFIED; PHYSICAL GPU ACTUATION BLOCKED.**
 
-This document applies to the *non-diagnostic* interactive EFI application
-(`src/app.c`) and DXE entrypoint (`src/dxe_main.c`). Both still invoke the
-shared `src/gpu_discovery.c::GuDiscoverSingleGpu`. An operator-selected build
-prepares an ordered list of GPU identities, but **cannot run an unlock**.
-Do not deploy or register the preparation-only DXE driver as a startup driver.
+The interactive UEFI application and the Driver Execution Environment (DXE) driver use the same ordered execution coordinator. Neither production builder permits live GPU actuation.
 
 ## Dynamic selection and read-only preparation
 
-`GuPrepareGpuSequence` enumerates current-boot EFI PCI_IO handles, collecting
-up to 16 NVIDIA PCI display-class `03xx` functions from at most 4096 handles.
-It records full segment:bus:device.function, vendor/device, subsystem, class,
-and opaque current-boot EFI handle/protocol pointers. The source does not
-pin a motherboard model, a subsystem, PCI slot or architecture. Known
-legacy device IDs are reported separately from identity discovery; being
-discoverable does **not** qualify an unsupported model for mutation.
+A PCI location has the format segment:bus:device.function (BDF).
+Specify one location with `-SelectionBdf` or 2–128 distinct locations with
+`-SelectionBdfs`. The shared parser preserves the requested order and rejects
+invalid or duplicate locations. It does not select multiple devices implicitly.
 
-The operator may supply one BDF (`-SelectionBdf`) or 2–16 distinct BDFs
-(`-SelectionBdfs`, comma-delimited) in execution-intent order. The same
-`src/Gpu-Selection-Build.ps1` validation and generated `gpu-selection.h`
-are shared with the read-only topology EFI, not duplicated per builder.
-`GuFindGpuSequence` atomically resolves all requested locations against the
-observed inventory. Duplicate, nonexistent or invalid locations fail with
-no partially selected indices. With no explicit selection, a lone NVIDIA
-device may be identified by the legacy code, but **multiple devices are
-never implicitly selected**.
+The boot discovery path allocates its inventory from the observed PCI handle
+count, with a 4,096-handle resource bound. It retains independent saved
+records, live records, selected indices and PCI snapshots. The 16-record
+compatibility interface remains for bounded callers, not boot discovery.
+A device identity includes the BDF, vendor/device, subsystem, class and
+current-boot handle and PCI protocol references. Identity does not approve
+firmware execution.
 
-Each prepared record is **observational only**. Handles and PCI ownership
-are boot-local and cannot be assumed to survive driver Stop, FLR, firmware
-execution, reconnect, or handoff. `GuRefreshPreparedGpu` validates only
-one target's saved **current-boot handle, PCI_IO instance, BDF,
-vendor/device, class and subsystem**, returning a 256-byte PCI snapshot
-only after full identity match. That single-target helper does **not**
-validate the rest of the NVIDIA inventory.
+The shared collector reads the complete NVIDIA inventory. The refresh
+operation rejects added, removed, rebound or aliased records. It reads all
+PCI configurations twice, including unselected devices. A failed read or
+configuration change refuses the sequence. These reads are not atomic with
+hardware activity.
 
-**For a selected active-preparation image**, the existing
-`GuRefreshPreparedSequence` now also performs a fresh UEFI census of the
-complete NVIDIA display inventory. It rejects missing, added or rebound
-devices, aliased saved BDFs/handles/PCI_IO instances, read failures of
-unselected NVIDIA cards, and any mismatch in two sequential full
-256-byte PCI snapshots on **all** inventoried NVIDIA devices. Only the
-requested targets are returned in operator order after successful
-validation. A failed preflight returns no partial selected results.
-[Universal host and Windows EFI verification
-`42855085195`](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42855085195)
-**PASS**. The scans are **not atomic with hardware** and do not verify
-GOP/ConOut/ErrOut/driver ownership or safe release. A future active
-transaction still requires fresh ownership evidence and independent
-source-specific post-mutation and recovery checks; no GPU mutation
-is authorized.
+Each selected GPU has a distinct retained platform context, firmware assets,
+release state and protocol graph. The shared coordinator executes one
+transaction at a time. It checks the previous context before it selects a
+successor. It stops on a mandatory failure, retains completed contexts and
+checks the final combined handover. Standby persistence uses the existing
+per-target policy. The source does not grant hardware admission.
 
 ## Compile a preparation-only active EFI
 
@@ -97,30 +72,29 @@ PCI/GOP/ConOut capture use
 **Important:** Both repository MSVC builders now **refuse an omitted selection**
 before attempting to compile. Providing a BDF produces preparation-only
 artifacts; they refuse before `GuInit` and all hardware mutation stages.
-The legacy single-GPU transaction code still exists in the repository and
-may be compiled separately, but **`GuAd104PromMatches` now refuses any ROM
-without an independently authenticated per-card digest allowlist** (none is
-pinned), preventing ROM-length-only approval. This is a fail-closed source
-guard, **not** physical recovery proof or production firmware compatibility.
+The synthetic compile-only profile also permits selected sequences. It
+uses `-SyntheticCompileProfile` with an explicit selection. The resulting
+files have COMPILE-ONLY names and `NOT_FOR_DEPLOYMENT=1`. Both entrypoints
+refuse before device work. Do not deploy these files. The live builders
+and non-synthetic multiple-target source still refuse execution.
+`GuAd104PromMatches` requires an independently authenticated per-card digest
+allowlist. No source or compile result proves physical recovery.
 
 ## Known legacy blockers (not generalized or waived)
 
 | Component | Current limitation | Required direction |
 |---|---|---|
 | `src/port.c::GuTargetConfig` and `src/checks.c::GuCheckConfig` | Legacy active preflight assumes PCI segment 0 and other narrow PCI geometry/capability requirements | Use validated per-target device contracts; do not globally relax constraints merely to admit more boards |
-| `src/msi_release.c` | Static Z790-specific PCI/GOP/device paths, USB/input, NVIDIA driver bindings, exactly staged proprietary `Stop`, singleton static `Plan` | Replace with fresh observed per-target controller/driver graph and independently proven Stop/partial-failure/recovery contracts |
-| `src/port.c` | One mutable `GU_PLATFORM Gu`, shared DMA, BAR, FLR, selector and containment state | Isolated per-target contexts; never use the current `Gu` instance for more than one simultaneous/serial GPU transaction |
+| `src/msi_release.c` | Independent release state and dynamic graphs exist. Physical release and recovery contracts remain target-specific. | Verify the real owner graph and device-specific contract without relaxing admission. |
+| `src/port.c` | Independent registered contexts and retained completion state exist. The active CPU pointer is serialized. | Preserve context identity and test the complete physical sequence only when qualified. |
 | `src/boot_io.c`, `src/profile.c`, `src/vendor/*` | Fixed firmware asset names, sizes, hashes and 610 reference lineage | Per-architecture and exact-device authenticated assets, loader compatibility and observed signed Windows execution; no cross-card substitution |
 | Display/console | Passive graph can be dynamic; active release has not been proven with NVIDIA, AMD, Intel, shared root, or headless arrangements | Validate same-boot GOP/ConOut owner graph and independently demonstrate console survival following Stop |
 | Windows and recovery | Stock NVIDIA 617.42 acceptance, post-transaction device health and rollback remain unproven | Preserve fail-closed stages and demonstrate safe physical recovery before any separately authorized active execution |
 
-**Required future sequencing:** validate the complete ordered target list
-without mutation, capture per-target identity and non-target exclusions,
-validate independently authenticated assets and fresh owner/console graph
-for the *next* target, prove safe release/rollback, execute **at most one**
-approved target, verify cleanup/FLR/stock Windows readiness, re-inventory
-the remaining targets, and abort on the first unexpected state. The
-current code does **not** implement that active mutation sequence.
+**Remaining qualification:** The source coordinator and per-target context
+lifetime checks exist. Physical release, protected firmware acceptance,
+post-modification Windows operation and failed-transaction recovery remain
+unverified. The host tests do not remove these restrictions.
 
 ## Verification and evidence boundary
 
@@ -133,6 +107,15 @@ real interactive app and DXE source trees as selected preparation-only EFI
 images, as well as the separate passive diagnostic variants.
 
 **Verified CI:** [Run 42525760457](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42525760457) completed both `host` and `efi` jobs successfully at source commit `4e69a7c8cdc46023fbd21d6de7855f914a10cfd5`. Inventory/ordered-selection tests: **73 checks** under GCC, Clang and GCC UBSan. Topology tests: **72 checks** under GCC, Clang and GCC UBSan. Legacy UEFI discovery adapter: **39 checks** each under GCC and Clang; selected-entrypoint refusal: **4 checks per configuration** under GCC and Clang for both one- and two-target generated configurations, with zero `GuInit` calls. Windows MSVC built the default diagnostic, ordered single/two/three-target diagnostics, and genuine app and DXE selected preparation-only binaries. [Active app/DXE preparation build artifacts](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42525760457/artifacts/13635198013); [passive selected EFIs](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42525760457/artifacts/13635163109). The workflow deliberately does not execute these EFI binaries.
+
+**Current architecture verification:** [CI 44198436908](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/44198436908)
+passed host and Windows EFI compilation with runtime-sized discovery.
+[CI 44199844525](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/44199844525)
+passed the host tests with 18 selected GPUs and two protected peers.
+The actual discovery adapter completed 695 checks per compiler. The tests
+include late allocation failure, retained ownership and peer drift.
+Read-only preparation completed 25 checks per compiler and never called
+`GuInit`. Refer to the linked run for the Windows EFI result.
 
 None of these tests actually execute an EFI image on the physical host.
 Neither PCI device ownership, GPU detachment, signed firmware acceptance,
