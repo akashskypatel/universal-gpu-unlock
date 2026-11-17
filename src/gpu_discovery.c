@@ -30,7 +30,6 @@ static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static GU_GPU_PREPARED_SEQUENCE ActiveInventory;
-static UINT32 ActiveInitialConfig[GU_INVENTORY_MAX_NVIDIA][64];
 static size_t ActiveTargetIndex;
 static int ActiveInventoryValid;
 /* This one-target runtime now publishes its status into the same ordered
@@ -318,8 +317,9 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
 }
 
 /* Revalidate the complete saved NVIDIA PCI set. The selected card may have
- * expected configuration changes during its own transaction. Every other
- * NVIDIA card must retain its complete initial 256-byte PCI configuration.
+ * expected configuration changes during its own transaction. Every peer
+ * must match the expected configuration in its ordered execution record.
+ * A completed selected card must also retain its recorded post-state.
  * This function has no GPU writes, driver detach, DMA, or reset actions. */
 int GuIsPreparedPeerHandle(EFI_HANDLE handle) {
 #ifdef GU_ACTIVE_SINGLE_TARGET
@@ -341,7 +341,16 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
   GU_GPU_PREPARED_SEQUENCE live, all;
   size_t i,j;
   EFI_STATUS s;
-  if(!ActiveInventoryValid || !table || !table->BootServices)
+  if(!ActiveInventoryValid || !ActiveSequenceValid || ActiveSequence.halted ||
+     !table || !table->BootServices || Gu.bs!=table->BootServices ||
+     !ActiveInventory.inventory.count ||
+     ActiveInventory.inventory.count>GU_INVENTORY_MAX_NVIDIA ||
+     ActiveSequence.targets!=ActiveSequenceTargets ||
+     ActiveSequence.count!=ActiveInventory.inventory.count ||
+     ActiveSequence.count>ActiveSequence.capacity ||
+     ActiveTargetIndex>=ActiveSequence.count ||
+     Gu.handle!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].handle ||
+     Gu.pci!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].pci)
     return EFI_UNSUPPORTED;
   s=GuPrepareGpuSequence(table,NULL,0,&live);
   if(s!=EFI_SUCCESS || live.inventory.count!=ActiveInventory.inventory.count)
@@ -373,8 +382,12 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
       EFI_PCI_IO_PROTOCOL *io=NULL;
       s=GuRefreshPreparedGpu(table,&all,i,now,&io);
       if(s!=EFI_SUCCESS || io!=all.inventory.nvidia[i].pci)return EFI_UNSUPPORTED;
-      if(i!=ActiveTargetIndex &&
-         memcmp(now,ActiveInitialConfig[i],sizeof(now))!=0) {
+      /* The execution record is the single source of expected PCI state.
+       * Pending peers retain their initial state. Completed cards retain
+       * the state recorded by the successful Finish transition. */
+      if((i!=ActiveTargetIndex ||
+          ActiveSequence.targets[i].phase==GU_GPU_EXEC_COMPLETE) &&
+         memcmp(now,ActiveSequence.targets[i].expected_config,sizeof(now))!=0) {
         GuLog("ACTIVE_PEER=DRIFT INDEX=%zu PASS=%u REFUSED=1\n",i,pass);
         return EFI_UNSUPPORTED;
       }
@@ -607,8 +620,6 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     ActiveSequenceValid=0;
     ActiveInventory=prepared;
     ActiveTargetIndex=chosen;
-    for(size_t i=0;i<all.selected_count;i++)
-      memcpy(ActiveInitialConfig[i],full.targets[i].config,sizeof(config));
     /* Publish into persistent storage only after the existing bind succeeds.
      * A copied sequence must never reference a stack candidate. */
     memcpy(ActiveSequenceTargets,candidate_targets,sizeof(ActiveSequenceTargets));

@@ -143,12 +143,12 @@ int main(void) {
    * record, even after the new inventory has passed both PCI read passes. */
   {
     EFI_HANDLE old=Gu.handle;
-    UINT32 original_peer=ActiveInitialConfig[0][4];
+    UINT32 original_peer=ActiveSequence.targets[0].expected_config[4];
     refuse_init=1;
     gpu[0].dwords[4]^=0x1000U;
     CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
     CHECK(Gu.handle==old && ActiveInventoryValid);
-    CHECK(ActiveInitialConfig[0][4]==original_peer);
+    CHECK(ActiveSequence.targets[0].expected_config[4]==original_peer);
     refuse_init=0;
   }
   ResetActivePair();
@@ -236,6 +236,16 @@ int main(void) {
   CHECK(ActiveSequence.next_step==1 &&
         ActiveSequence.targets[ActiveTargetIndex].phase==GU_GPU_EXEC_COMPLETE &&
         ActiveSequence.targets[ActiveTargetIndex].expected_config[4]==gpu[1].dwords[4]);
+  CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+  gpu[1].dwords[4]^=0x2000U;
+  CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+  gpu[1].dwords[4]^=0x2000U;
+  CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
+  /* The active context must still belong to the saved selected device. */
+  Gu.handle=handles[0];
+  CHECK(GuVerifyActivePeers(&system_table)==EFI_UNSUPPORTED);
+  Gu.handle=handles[1];
+  CHECK(GuVerifyActivePeers(&system_table)==EFI_SUCCESS);
   CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
                                 &release_owner_token,Gu.asset_entries)==EFI_UNSUPPORTED);
 

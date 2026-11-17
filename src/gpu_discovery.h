@@ -51,8 +51,9 @@ EFI_STATUS GuRefreshPreparedSequence(EFI_SYSTEM_TABLE *table,
  * treats a read-only selection as permission for multi-GPU actuation. */
 EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table);
 
-/* Exact selected-card mode: verify original PCI identities and full non-target
- * PCI configuration twice. In default firmware modes this is a no-op. */
+/* Exact selected-card mode: verify PCI identities and compare peer config
+ * twice against the ordered execution record. Include a completed target.
+ * In default firmware modes this is a no-op. */
 EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table);
 int GuIsPreparedPeerHandle(EFI_HANDLE handle);
 
