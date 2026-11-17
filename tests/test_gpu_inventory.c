@@ -156,6 +156,47 @@ int main(void) {
     m.records[i]=Gpu(0x278210deU,0,0,(uint32_t)(i+1),0,0,i+1);
   CHECK(Refuse(&m,GU_INVENTORY_TOO_MANY)==0);
 
+  /* Caller-sized storage permits more devices than the legacy inventory.
+   * Same-model cards remain distinct by location and interface identity. */
+  {
+    GU_GPU_RECORD records[GU_INVENTORY_MAX_NVIDIA+2];
+    size_t count=99;
+    m.count=GU_INVENTORY_MAX_NVIDIA+2;
+    m.records[m.count-1]=Gpu(0x1e0710deU,0,0,(uint32_t)m.count,0,0,m.count);
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,records,m.count,&count)==GU_INVENTORY_OK);
+    CHECK(count==m.count && records[count-1].pci_id==0x1e0710deU);
+    CHECK(records[0].pci_id==records[1].pci_id && records[0].handle!=records[1].handle);
+    {
+      GU_GPU_LOCATION locations[GU_INVENTORY_MAX_NVIDIA+2];
+      size_t indices[GU_INVENTORY_MAX_NVIDIA+2];
+      for(i=0;i<count;i++) {
+        const GU_GPU_RECORD *gpu=&records[count-1-i];
+        locations[i]=(GU_GPU_LOCATION){gpu->segment,gpu->bus,gpu->device,gpu->function};
+      }
+      CHECK(GuFindGpuRecordSequence(records,count,locations,count,indices)==GU_INVENTORY_OK);
+      for(i=0;i<count;i++) CHECK(indices[i]==count-1-i);
+      locations[count-1]=locations[0];
+      CHECK(GuFindGpuRecordSequence(records,count,locations,count,indices)==GU_INVENTORY_DUPLICATE);
+      for(i=0;i<count;i++) CHECK(indices[i]==0);
+      locations[count-1].bus=255;
+      CHECK(GuFindGpuRecordSequence(records,count,locations,count,indices)==GU_INVENTORY_NOT_FOUND);
+      for(i=0;i<count;i++) CHECK(indices[i]==0);
+      CHECK(GuFindGpuRecordSequence(records,count,locations,1,indices)==GU_INVENTORY_OK && indices[0]==count-1);
+    }
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,records,m.count-1,&count)==GU_INVENTORY_TOO_MANY);
+    CHECK(count==0 && records[0].handle==NULL && records[m.count-2].handle==NULL);
+    m.records[m.count-1].pci=m.records[0].pci;
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,records,m.count,&count)==GU_INVENTORY_DUPLICATE);
+    CHECK(count==0 && records[0].handle==NULL);
+    m.records[m.count-1].pci=(void *)(uintptr_t)0x12345;
+    m.fail_at=m.count-1;
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,records,m.count,&count)==GU_INVENTORY_READ_FAILED);
+    CHECK(count==0 && records[0].handle==NULL);
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,records,0,&count)==GU_INVENTORY_INVALID && count==0);
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,records,SIZE_MAX,&count)==GU_INVENTORY_INVALID && count==0);
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,NULL,m.count,&count)==GU_INVENTORY_INVALID && count==0);
+  }
+
   Setup(&m);CHECK(GuCollectGpuInventory(0,Reader,&m,&inv)==GU_INVENTORY_INVALID);
   CHECK(GuCollectGpuInventory(GU_INVENTORY_MAX_HANDLES+1,Reader,&m,&inv)==GU_INVENTORY_INVALID);
   CHECK(GuCollectGpuInventory(2,NULL,&m,&inv)==GU_INVENTORY_INVALID);
