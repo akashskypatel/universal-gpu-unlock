@@ -412,6 +412,12 @@ void GuAbortSelectedGpuStep(void) {
   GuLog("SELECTED_GPU_STEP=HALTED NEXT=%zu MUTATION_AUTHORIZED=0\\n",
         ActiveSequence.next_step);
 }
+/* Verify the backing objects, not only the caller's claim about them. */
+static int SelectedOwnersMatch(const void *platform,const void *release_plan,
+                               const void *firmware_assets) {
+  return platform==&Gu && Gu.release_state && release_plan==Gu.release_state &&
+         Gu.asset_entries_reserved && firmware_assets==Gu.asset_entries;
+}
 EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                   const void *platform,
                                   const void *release_plan,
@@ -420,6 +426,7 @@ EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
      !table || !table->BootServices ||
      Gu.bs!=table->BootServices || !Gu.handle || !Gu.pci ||
      !Gu.profile_verified || !Gu.prom_verified ||
+     !SelectedOwnersMatch(platform,release_plan,firmware_assets) ||
      Gu.started || Gu.fault || Gu.retained || Gu.owned || Gu.armed ||
      ActiveTargetIndex>=ActiveInventory.inventory.count ||
      Gu.handle!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].handle ||
@@ -452,6 +459,7 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
      Gu.handle!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].handle ||
      Gu.pci!=ActiveInventory.inventory.nvidia[ActiveTargetIndex].pci ||
      !platform || !release_plan || !firmware_assets ||
+     !SelectedOwnersMatch(platform,release_plan,firmware_assets) ||
      ActiveSequence.targets[ActiveTargetIndex].owners.platform!=platform ||
      ActiveSequence.targets[ActiveTargetIndex].owners.release_plan!=release_plan ||
      ActiveSequence.targets[ActiveTargetIndex].owners.firmware_assets!=firmware_assets) {
