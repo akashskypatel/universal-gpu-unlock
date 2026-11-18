@@ -1937,10 +1937,15 @@ static int RevalidateGop(EFI_BOOT_SERVICES *bs) {
 #ifdef GU_TOPO_SAVE_LOG
 /* Opt-in diagnostic file on the app's own EFI volume. Never overwrite an
  * earlier capture. The ONLY intended persistent mutation is this new file. */
+/* A failed file ownership operation must not allow another log attempt
+ * in this diagnostic image. Independently confirmed references still close. */
+static int LogFileFault;
+
 static EFI_STATUS LogOpenResult(EFI_STATUS status,EFI_FILE_PROTOCOL **out,
                                 const char *stage) {
   if(status==EFI_SUCCESS)return *out?EFI_SUCCESS:EFI_DEVICE_ERROR;
   if(*out) {
+    LogFileFault=1;
     Say("LOG_OPEN_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
         stage,(VOID *)*out,(unsigned long long)status);
     *out=NULL;
@@ -1955,9 +1960,11 @@ static EFI_STATUS CloseLogFile(EFI_FILE_PROTOCOL **out,const char *stage) {
   *out=NULL;
   if(!file)return EFI_SUCCESS;
   status=file->Close?file->Close(file):EFI_UNSUPPORTED;
-  if(status!=EFI_SUCCESS)
+  if(status!=EFI_SUCCESS) {
+    LogFileFault=1;
     Say("LOG_CLOSE_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
         stage,(VOID *)file,(unsigned long long)status);
+  }
   return status;
 }
 
@@ -1968,6 +1975,7 @@ static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   EFI_STATUS s,closed;
   UINTN bytes,attempt,chars=0;
   CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
+  if(LogFileFault)return EFI_DEVICE_ERROR;
   if(LogOverflow || !LogUsed)return EFI_BAD_BUFFER_SIZE;
   s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
   if(s!=EFI_SUCCESS||!li)return EFI_NOT_FOUND;
@@ -1987,7 +1995,11 @@ static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
     s=LogOpenResult(s,&prior,"prior");
     if(s==EFI_SUCCESS) {
-      if(prior==root){prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;}
+      if(prior==root){
+        LogFileFault=1;
+        Say("LOG_OPEN_ALIAS STAGE=prior ADDRESS=%p\r\n",(VOID *)prior);
+        prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+      }
       s=CloseLogFile(&prior,"prior");
       if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
       continue;
@@ -1997,7 +2009,11 @@ static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
                  EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
     s=LogOpenResult(s,&file,"create");
     if(s!=EFI_SUCCESS)goto finish;
-    if(file==root){file=NULL;s=EFI_COMPROMISED_DATA;goto finish;}
+    if(file==root){
+      LogFileFault=1;
+      Say("LOG_OPEN_ALIAS STAGE=create ADDRESS=%p\r\n",(VOID *)file);
+      file=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+    }
     if(!file->Write||!file->Close){s=EFI_UNSUPPORTED;goto finish;}
     Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
     break;

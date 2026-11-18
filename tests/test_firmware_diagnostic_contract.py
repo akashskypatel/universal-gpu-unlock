@@ -911,8 +911,8 @@ int main(void){
 
     def test_diagnostic_log_file_ownership(self):
         source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
-        actual=source.split("static EFI_STATUS LogOpenResult(",1)[1].split("\n#endif",1)[0]
-        actual="static EFI_STATUS LogOpenResult("+actual
+        actual=source.split("static int LogFileFault;",1)[1].split("\n#endif",1)[0]
+        actual="static int LogFileFault;"+actual
         program=r"""
 #include <stdio.h>
 #include <stddef.h>
@@ -951,7 +951,7 @@ static EFI_GUID LoadedGuid,FsGuid;
 static unsigned LogOverflow;
 static size_t LogUsed=4;
 static char LogBytes[8]="log!";
-static unsigned mode,opens,creates,writes,flushes,root_closes,file_closes,prior_closes,foreign_closes;
+static unsigned mode,opens,creates,writes,flushes,root_closes,file_closes,prior_closes,foreign_closes,protocols,volumes;
 static EFI_FILE_PROTOCOL root,file,prior,foreign;
 static void Say(const char *format,...) {(void)format;}
 static EFI_STATUS Close(EFI_FILE_PROTOCOL *f) {
@@ -981,7 +981,7 @@ static EFI_STATUS Write(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *p) {
 }
 static EFI_STATUS Flush(EFI_FILE_PROTOCOL *f) {(void)f;flushes++;return EFI_SUCCESS;}
 static EFI_STATUS Volume(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs,EFI_FILE_PROTOCOL **out) {
-  (void)fs;
+  (void)fs;volumes++;
   if(mode==1){*out=&foreign;return EFI_DEVICE_ERROR;}
   if(mode==10)return 1;
   *out=&root;return EFI_SUCCESS;
@@ -989,7 +989,7 @@ static EFI_STATUS Volume(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs,EFI_FILE_PROTOCOL *
 static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL fs={Volume};
 static EFI_LOADED_IMAGE_PROTOCOL li={(EFI_HANDLE)1};
 static EFI_STATUS Protocol(EFI_HANDLE h,EFI_GUID *guid,VOID **out) {
-  (void)h;
+  (void)h;protocols++;
   if(guid==&LoadedGuid)*out=&li;else *out=&fs;
   return EFI_SUCCESS;
 }
@@ -1002,7 +1002,8 @@ int main(void){
   prior=(EFI_FILE_PROTOCOL){NULL,Close,NULL,NULL};
   foreign=prior;
   for(mode=0;mode<=12;mode++){
-    opens=creates=writes=flushes=root_closes=file_closes=prior_closes=foreign_closes=0;
+    opens=creates=writes=flushes=root_closes=file_closes=prior_closes=foreign_closes=protocols=volumes=0;
+    LogFileFault=0;
     EFI_STATUS s=SaveLog((EFI_HANDLE)1,&table);
     CHECK((s==EFI_SUCCESS)==(mode==0||mode==4));
     CHECK((s==EFI_SUCCESS)||EFI_ERROR(s));
@@ -1011,6 +1012,13 @@ int main(void){
     CHECK(prior_closes==(mode==4||mode==5));
     CHECK(writes==file_closes&&flushes==writes);
     CHECK(creates==(mode==0||mode==3||mode==4||mode==7||mode==8||mode==9||mode==12));
+    CHECK(LogFileFault==(mode>=1&&mode<=9&&mode!=4));
+    if(LogFileFault){
+      unsigned prior_ops=opens+creates+writes+flushes+root_closes+file_closes+prior_closes+foreign_closes;
+      CHECK(SaveLog((EFI_HANDLE)1,&table)==EFI_DEVICE_ERROR);
+      CHECK(protocols==2&&volumes==1);
+      CHECK(prior_ops==opens+creates+writes+flushes+root_closes+file_closes+prior_closes+foreign_closes);
+    }
   }
   return 0;
 }
