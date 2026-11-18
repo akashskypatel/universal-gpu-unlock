@@ -798,7 +798,7 @@ int main(void){
 
     def test_isolated_capture_file_ownership(self):
         source=(P/"gpu_prom_capture_efi.c").read_text(encoding="utf-8")
-        actual="EFI_STATUS GuPromSaveNew("+source.split("EFI_STATUS GuPromSaveNew(",1)[1]
+        actual="static int CaptureFileFault;"+source.split("static int CaptureFileFault;",1)[1]
         program=r"""
 #include <stdio.h>
 #include <stddef.h>
@@ -834,25 +834,25 @@ struct file {
  EFI_STATUS (*Delete)(EFI_FILE_PROTOCOL *);
 };
 static EFI_FILE_PROTOCOL root,file,prior,foreign;
-static int mode,creates,writes,flushes,deletes,prior_closes,file_closes,invalid;
+static int mode,opens,creates,writes,flushes,deletes,prior_closes,file_closes,invalid;
 static EFI_STATUS Close(EFI_FILE_PROTOCOL *p){
  if(p==&prior){prior_closes++;return mode==5?EFI_DEVICE_ERROR:EFI_SUCCESS;}
  if(p==&file){file_closes++;return mode==11?1:EFI_SUCCESS;}
  invalid++;return EFI_DEVICE_ERROR;
 }
 static EFI_STATUS Open(EFI_FILE_PROTOCOL *p,EFI_FILE_PROTOCOL **out,CHAR16 *name,uint64_t flags,uint64_t attr){
- (void)name;(void)attr;
+ (void)name;(void)attr;opens++;
  if(p!=&root){invalid++;return EFI_DEVICE_ERROR;}
  if(flags&EFI_FILE_MODE_CREATE){
   creates++;
-  if(mode==6){*out=&foreign;return EFI_DEVICE_ERROR;}
+  if(mode==6||mode==17){*out=&foreign;return mode==6?EFI_DEVICE_ERROR:1;}
   if(mode==7)return 1;
   if(mode==8){*out=&root;return EFI_SUCCESS;}
   if(mode==13)return EFI_SUCCESS;
   *out=&file;return EFI_SUCCESS;
  }
  if(mode==1||mode==5){*out=&prior;return EFI_SUCCESS;}
- if(mode==2){*out=&foreign;return EFI_NOT_FOUND;}
+ if(mode==2||mode==16){*out=&foreign;return mode==2?EFI_NOT_FOUND:1;}
  if(mode==3)return 1;
  if(mode==4){*out=&root;return EFI_SUCCESS;}
  if(mode==12)return EFI_SUCCESS;
@@ -882,18 +882,26 @@ int main(void){
  file=(EFI_FILE_PROTOCOL){NULL,Close,Write,Flush,Delete};
  prior=(EFI_FILE_PROTOCOL){NULL,Close,NULL,NULL,NULL};
  foreign=prior;
- for(mode=0;mode<=15;mode++){
-  creates=writes=flushes=deletes=prior_closes=file_closes=invalid=0;
+ for(mode=0;mode<=17;mode++){
+  opens=creates=writes=flushes=deletes=prior_closes=file_closes=invalid=0;
+  CaptureFileFault=0;
   EFI_STATUS s=GuPromSaveNew(&root,&target,data,sizeof(data));
   CHECK(mode==0?s==EFI_SUCCESS:EFI_ERROR(s));
   if(mode==1)CHECK(s==EFI_ALREADY_STARTED);
   CHECK(!invalid);
   CHECK(prior_closes==(mode==1||mode==5));
-  CHECK(creates==(mode==0||(mode>=6&&mode<=11)||mode>=13));
+  CHECK(creates==(mode==0||(mode>=6&&mode<=11)||(mode>=13&&mode<=15)||mode==17));
   CHECK(writes==(mode==0||mode==9||mode==10||mode==11||mode==14||mode==15));
   CHECK(flushes==(mode==0||mode==11||mode==15));
   CHECK(deletes==(mode==9||mode==10||mode==14||mode==15));
   CHECK(file_closes==(mode==0||mode==11));
+  int uncertain=mode==2||mode==4||mode==5||mode==6||mode==8||mode==10||mode==11||mode==16||mode==17;
+  CHECK(CaptureFileFault==uncertain);
+  if(uncertain){
+    int ops=opens+creates+writes+flushes+deletes+prior_closes+file_closes+invalid;
+    CHECK(GuPromSaveNew(&root,&target,data,sizeof(data))==EFI_DEVICE_ERROR);
+    CHECK(ops==opens+creates+writes+flushes+deletes+prior_closes+file_closes+invalid);
+  }
  }
  return 0;
 }

@@ -107,6 +107,11 @@ EFI_STATUS GuPromCapturePrepared(EFI_SYSTEM_TABLE *table,
   return EFI_SUCCESS;
 }
 
+/* Keep uncertain file ownership separate from descriptor observations.
+ * This isolated diagnostic must not start another file operation after
+ * an unconfirmed reference or release. */
+static int CaptureFileFault;
+
 EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root, const GU_GPU_RECORD *target,
     const UINT8 *output, UINTN output_size) {
   static const CHAR16 digits[]=L"0123456789ABCDEF";
@@ -115,6 +120,7 @@ EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root, const GU_GPU_RECORD *target,
   EFI_STATUS status,closed;
   UINTN written;
   UINTN i;
+  if(CaptureFileFault)return EFI_DEVICE_ERROR;
   if(!root || !root->Open || !target || !output ||
      output_size!=GU_PROM_CAPTURE_BYTES ||
      target->segment>0xffffU || target->bus>255U ||
@@ -128,18 +134,24 @@ EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root, const GU_GPU_RECORD *target,
   name[17]=(CHAR16)(L'0'+target->function);
   status=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
   if(status==EFI_SUCCESS) {
-    if(!prior || prior==root)return EFI_COMPROMISED_DATA;
-    if(!prior->Close)return EFI_UNSUPPORTED;
+    if(!prior)return EFI_COMPROMISED_DATA;
+    if(prior==root){CaptureFileFault=1;return EFI_COMPROMISED_DATA;}
+    if(!prior->Close){CaptureFileFault=1;return EFI_UNSUPPORTED;}
     closed=prior->Close(prior);
+    if(closed!=EFI_SUCCESS)CaptureFileFault=1;
     return closed==EFI_SUCCESS?EFI_ALREADY_STARTED:EFI_DEVICE_ERROR;
   }
   /* A failed open does not establish ownership of its output. */
-  if(prior)return EFI_DEVICE_ERROR;
+  if(prior){CaptureFileFault=1;return EFI_DEVICE_ERROR;}
   if(status!=EFI_NOT_FOUND)return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
   status=root->Open(root,&file,name,
                     EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
-  if(status!=EFI_SUCCESS)return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
-  if(!file || file==root)return EFI_COMPROMISED_DATA;
+  if(status!=EFI_SUCCESS){
+    if(file)CaptureFileFault=1;
+    return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
+  }
+  if(!file)return EFI_COMPROMISED_DATA;
+  if(file==root){CaptureFileFault=1;return EFI_COMPROMISED_DATA;}
   if(!file->Write || !file->Close)status=EFI_UNSUPPORTED;
   else {
     written=output_size;
@@ -151,10 +163,11 @@ EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root, const GU_GPU_RECORD *target,
   }
   if(EFI_ERROR(status) && file->Delete) {
     closed=file->Delete(file); /* Existing best-effort removal consumes the handle. */
+    if(closed!=EFI_SUCCESS)CaptureFileFault=1;
     return closed==EFI_SUCCESS?status:EFI_DEVICE_ERROR;
   }
-  if(!file->Close)return EFI_UNSUPPORTED;
+  if(!file->Close){CaptureFileFault=1;return EFI_UNSUPPORTED;}
   closed=file->Close(file);
-  if(closed!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
+  if(closed!=EFI_SUCCESS){CaptureFileFault=1;return EFI_DEVICE_ERROR;}
   return status;
 }
