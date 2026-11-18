@@ -8,12 +8,12 @@ import unittest
 ROOT=Path(__file__).resolve().parents[1]
 SOURCE=(ROOT/"src/profile.c").read_text(encoding="utf-8")
 start=SOURCE.index("static BOOLEAN TuringColdState(")
-stop=SOURCE.index("BOOLEAN GuAd104ColdEntry(",start)
+stop=SOURCE.index("BOOLEAN GuAd104ColdEntryFor(",start)
 PRODUCTION=SOURCE[start:stop]
 
 class TuringColdReadOnly(unittest.TestCase):
     def test_turing_cold_state_and_no_unmapped_selector_access(self):
-        self.assertIn("if(Gu.is_turing)",PRODUCTION)
+        self.assertIn("if(platform->is_turing)",PRODUCTION)
         self.assertIn("TuringColdState(pmc,wpr2_hi)",PRODUCTION)
         self.assertNotIn("GuWrite32(",PRODUCTION)
         self.assertNotIn("GuFlr(",PRODUCTION)
@@ -25,16 +25,19 @@ typedef uint32_t UINT32;
 typedef int BOOLEAN;
 #define TRUE 1
 #define FALSE 0
-static struct {BOOLEAN fault,is_turing;} Gu;
+typedef struct {BOOLEAN fault,is_turing;} GU_PLATFORM;
+static GU_PLATFORM Gu;
+static GU_PLATFORM *GuPlatformActive=&Gu;
 static UINT32 pmc_value, wpr_value, ss0_value, ss1_value;
 static unsigned selector_reads, all_reads;
-static UINT32 GuRead32(UINT32 off) {
+static UINT32 GuRead32For(GU_PLATFORM *platform,UINT32 off) {
+  if(platform!=GuPlatformActive){platform->fault=1;return 0xffffffffU;}
   all_reads++;
   if(off==0)return pmc_value;
   if(off==0x1fa828)return wpr_value;
   if(off==0x82381c){selector_reads++;return ss0_value;}
   if(off==0x823820){selector_reads++;return ss1_value;}
-  Gu.fault=1;return 0xffffffffU;
+  platform->fault=1;return 0xffffffffU;
 }
 static void GuLog(const char *format,...) {(void)format;}
 ''' + PRODUCTION + r'''
@@ -47,19 +50,19 @@ static void reset(void) {
 }
 int main(void) {
   UINT32 a=0xfeedU,b=0xbeefU;
-  reset();CHECK(Registers(&a,&b) && a==0 && b==0);
+  reset();CHECK(RegistersFor(&Gu,&a,&b) && a==0 && b==0);
   CHECK(selector_reads==0 && all_reads==2);
   reset();pmc_value=0x17000000U;
-  CHECK(!Registers(&a,&b) && selector_reads==0);
-  reset();wpr_value=0x10U;CHECK(!Registers(&a,&b) && selector_reads==0);
-  reset();pmc_value=0xffffffffU;CHECK(!Registers(&a,&b) && selector_reads==0);
-  reset();pmc_value=0xbadf0000U;CHECK(!Registers(&a,&b) && selector_reads==0);
-  reset();Gu.fault=1;CHECK(!Registers(&a,&b) && selector_reads==0);
+  CHECK(!RegistersFor(&Gu,&a,&b) && selector_reads==0);
+  reset();wpr_value=0x10U;CHECK(!RegistersFor(&Gu,&a,&b) && selector_reads==0);
+  reset();pmc_value=0xffffffffU;CHECK(!RegistersFor(&Gu,&a,&b) && selector_reads==0);
+  reset();pmc_value=0xbadf0000U;CHECK(!RegistersFor(&Gu,&a,&b) && selector_reads==0);
+  reset();Gu.fault=1;CHECK(!RegistersFor(&Gu,&a,&b) && selector_reads==0);
   reset();Gu.is_turing=0;ss0_value=0x12345678U;ss1_value=3;
-  CHECK(Registers(&a,&b) && a==ss0_value && b==ss1_value);
+  CHECK(RegistersFor(&Gu,&a,&b) && a==ss0_value && b==ss1_value);
   CHECK(selector_reads==2);
   reset();Gu.is_turing=0;ss0_value=0x88888888U;ss1_value=3;
-  CHECK(!Registers(&a,&b));
+  CHECK(!RegistersFor(&Gu,&a,&b));
   return 0;
 }
 '''
@@ -77,7 +80,7 @@ int main(void) {
 
     def test_fwsec_v2_never_passes_v3_signature_qualification(self):
         begin=SOURCE.index("BOOLEAN GuAd104FwsecMatches(")
-        end=SOURCE.index("static BOOLEAN Config(",begin)
+        end=SOURCE.index("static BOOLEAN ConfigFor(",begin)
         validator=SOURCE[begin:end]
         self.assertIn("descriptor_version == 3",validator)
         src=r'''
