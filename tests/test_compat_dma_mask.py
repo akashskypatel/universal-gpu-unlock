@@ -56,7 +56,7 @@ int main(void) {
         execution=(HEADER.parents[1]/"unlock_execution.c").read_text(encoding="utf-8")
         vendor=(HEADER.parents[1]/"vendor/unlock_610.c").read_text(encoding="utf-8")
         structs=header[header.index("struct list_head {"):header.index("/* CPU-only transaction identity.")]
-        helpers=compat[compat.index("static BOOLEAN GuCompatIdentityValid("):compat.index("GU_ASSET *GuAssetEntries(")]
+        helpers=compat[compat.index("static BOOLEAN GuCompatRecordMatches("):compat.index("GU_ASSET *GuAssetEntries(")]
         scope=compat[compat.index("void *devres_open_group("):compat.index("void usleep_range(")]
         masks=compat[compat.index("int dma_set_mask("):compat.index("void dma_wmb(")]
         read=compat[compat.index("int pci_read_config_word("):compat.index("int pci_read_config_dword(")]
@@ -93,13 +93,18 @@ typedef struct {int id;} EFI_PCI_IO_PROTOCOL;
 typedef struct {
   EFI_BOOT_SERVICES *bs;EFI_PCI_IO_PROTOCOL *pci;EFI_HANDLE handle;
   unsigned device_id,pm_cap;
-  int fault,retained,compat_device_open;
+  int fault,retained,compat_device_open,compat_device_closed;
   struct pci_dev *compat_device;
 } GU_PLATFORM;
 static GU_PLATFORM platforms[2],*active=&platforms[0];
 #define Gu (*active)
 static int allocs,reads,fail_alloc;
-static void *GuAlloc(size_t n){allocs++;return fail_alloc?NULL:calloc(1,n);}
+static const void *pool[2];
+static size_t pool_bytes[2];
+static void *GuAlloc(size_t n){allocs++;if(fail_alloc)return NULL;void *p=calloc(1,n);pool[active-platforms]=p;pool_bytes[active-platforms]=n;return p;}
+static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *m,size_t bytes){
+  return (p==&platforms[0]||p==&platforms[1])&&m&&pool[p-platforms]==m&&bytes==pool_bytes[p-platforms];
+}
 static EFI_STATUS GuConfigRead(int width,UINT32 offset,u16 *out){
   (void)width;(void)offset;reads++;*out=(u16)Gu.pci->id;return EFI_SUCCESS;
 }
@@ -125,12 +130,25 @@ int main(void){
   CHECK(group&&devres_release_group(&a->dev,group)==0&&!a->dev.scope);
   CHECK(pci_dev_get(a)==a&&a->refs==2);pci_dev_put(a);CHECK(a->refs==1);
   u16 value=0;CHECK(pci_read_config_word(a,0,&value)==0&&value==17&&reads==1);
-  CHECK(GuCompatCloseDevice(a)==EFI_SUCCESS&&!Gu.compat_device_open&&Gu.compat_device==a);
+  CHECK(!GuCompatCompletedPlatform(&Gu));
+  CHECK(GuCompatCloseDevice(a)==EFI_SUCCESS&&!Gu.compat_device_open&&Gu.compat_device_closed&&Gu.compat_device==a);
+  CHECK(GuCompatCompletedPlatform(&Gu));
   CHECK(pci_read_config_word(a,0,&value)==-EINVAL&&reads==1&&Gu.fault);
   Gu.fault=0; /* Test-only reset; production fault is sticky. */
   CHECK(GuCompatOpenDevice(&extra)==EFI_ALREADY_STARTED&&!extra);
   active=&platforms[1];
   CHECK(GuCompatOpenDevice(&b)==EFI_SUCCESS&&a!=b&&a->dev.dma_mask!=b->dev.dma_mask);
+  CHECK(GuCompatCompletedPlatform(&platforms[0])&&!GuCompatCompletedPlatform(&platforms[1]));
+  CHECK(active==&platforms[1]);
+  platforms[0].compat_device_closed=0;CHECK(!GuCompatCompletedPlatform(&platforms[0]));platforms[0].compat_device_closed=1;
+  platforms[0].compat_device=b;CHECK(!GuCompatCompletedPlatform(&platforms[0]));platforms[0].compat_device=a;
+  a->owner=&platforms[1];CHECK(!GuCompatCompletedPlatform(&platforms[0]));a->owner=&platforms[0];
+  a->refs=2;CHECK(!GuCompatCompletedPlatform(&platforms[0]));a->refs=1;
+  a->dev.scope=true;CHECK(!GuCompatCompletedPlatform(&platforms[0]));a->dev.scope=false;
+  a->dev.devres_head.count=1;CHECK(!GuCompatCompletedPlatform(&platforms[0]));a->dev.devres_head.count=0;
+  a->dev.dma_mask=&b->mask_storage;CHECK(!GuCompatCompletedPlatform(&platforms[0]));a->dev.dma_mask=&a->mask_storage;
+  pool[0]=NULL;CHECK(!GuCompatCompletedPlatform(&platforms[0]));pool[0]=a;
+  CHECK(GuCompatCompletedPlatform(&platforms[0])&&active==&platforms[1]);
   CHECK(pci_read_config_word(b,0,&value)==0&&value==23&&reads==2);
   CHECK(pci_read_config_word(a,0,&value)==-EINVAL&&reads==2&&Gu.fault);
   CHECK(dma_set_mask(&a->dev,99)==-EINVAL&&a->mask_storage==42);
@@ -146,7 +164,8 @@ int main(void){
   Gu.handle=&pci[0];CHECK(!GuCompatPciMatches(b));Gu.handle=&pci[1];
   CHECK(GuCompatPciMatches(b));
   CHECK(pci_dev_get(b)==b&&b->refs==2);
-  CHECK(GuCompatCloseDevice(b)==EFI_DEVICE_ERROR&&!Gu.compat_device_open);
+  CHECK(GuCompatCloseDevice(b)==EFI_DEVICE_ERROR&&!Gu.compat_device_open&&!Gu.compat_device_closed);
+  CHECK(!GuCompatCompletedPlatform(&platforms[1])&&GuCompatCompletedPlatform(&platforms[0]));
   CHECK(pci_read_config_word(b,0,&value)==-EINVAL&&reads==2);
   CHECK(allocs==3);
   free(a);free(b); /* End of simulated boot. */

@@ -130,7 +130,7 @@ typedef struct {
   struct GU_CPU_POOL *cpu_pool;
   /* Retained compatibility identity; never recycle it for another GPU. */
   struct pci_dev *compat_device;
-  BOOLEAN compat_device_open;
+  BOOLEAN compat_device_open,compat_device_closed;
   VOID *cpu_pool_failure_address;
   EFI_STATUS cpu_pool_failure_status;
   /* These resources belong to this platform, not to the active selector. */
@@ -215,6 +215,9 @@ VOID GuQuiesced(VOID);
 VOID GuLog(const char *Format, ...);
 VOID GuLogText(const char *Text);
 VOID GuCopyFromIo(VOID *Destination, const VOID *Source, size_t Bytes);
+/* Read-only ownership proof for retained CPU objects, including inactive platforms. */
+BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes);
+BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform);
 VOID *GuAlloc(size_t Bytes);
 VOID GuFree(VOID *Memory);
 VOID GuStall(UINTN Microseconds);

@@ -183,6 +183,7 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
        platform->fault||platform->retained||platform->owned||
        platform->allocations||platform->dma_count||platform->master_attributes_pending||
        !platform->quiesced||platform->flrs!=1||
+       !GuCompatCompletedPlatform(platform)||
        !GuMsiCompletedPlatform(platform,record->owners.release_plan))
       return EFI_ACCESS_DENIED;
   }
@@ -285,6 +286,15 @@ typedef struct GU_CPU_POOL {
   size_t bytes;
 } GU_CPU_POOL;
 
+BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes) {
+  if(!platform||!memory||!bytes||!platform->bs||
+     platform->cpu_pool_failure_status!=EFI_SUCCESS)return FALSE;
+  for(const GU_CPU_POOL *entry=platform->cpu_pool;entry;entry=entry->next)
+    if((const VOID *)(entry+1)==memory)
+      return entry->owner==platform&&entry->bs==platform->bs&&entry->bytes==bytes;
+  return FALSE;
+}
+
 static VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
   if(Gu.cpu_pool_failure_status==EFI_SUCCESS) {
     Gu.cpu_pool_failure_status=status;
@@ -317,6 +327,11 @@ VOID *GuAlloc(size_t N) {
 
 VOID GuFree(VOID *Memory) {
   if(!Memory||Gu.retained||Gu.cpu_pool_failure_status!=EFI_SUCCESS)return;
+  /* A published compatibility address must not be recycled in this boot. */
+  if(Memory==Gu.compat_device) {
+    GuRecordCpuPoolFailure(EFI_ACCESS_DENIED,Memory);
+    return;
+  }
   GU_CPU_POOL **link=&Gu.cpu_pool;
   while(*link&&(VOID *)(*link+1)!=Memory)link=&(*link)->next;
   GU_CPU_POOL *entry=*link;

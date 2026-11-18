@@ -3,25 +3,41 @@
 /* The current serialized platform owns exactly one compatibility record.
  * Compare the registered address before examining a caller's reference.
  * Retain the closed record so a later card can never reuse its address. */
+static BOOLEAN GuCompatRecordMatches(const GU_PLATFORM *platform,const struct pci_dev *D) {
+  /* Prove allocation membership before reading a retained record. */
+  return platform&&D&&D==platform->compat_device&&
+    GuCpuPoolOwns(platform,D,sizeof(*D))&&
+    D->owner==platform&&D->owner_bs==platform->bs&&
+    D->owner_pci==platform->pci&&D->owner_handle==platform->handle&&
+    platform->bs&&platform->pci&&platform->handle&&
+    D->vendor==0x10de&&D->device==platform->device_id&&
+    D->dev.dma_mask==&D->mask_storage;
+}
+
 static BOOLEAN GuCompatIdentityValid(const struct pci_dev *D) {
-  return D && Gu.compat_device_open && D==Gu.compat_device &&
-    D->owner==&Gu && D->owner_bs==Gu.bs && D->owner_pci==Gu.pci &&
-    D->owner_handle==Gu.handle && Gu.bs && Gu.pci && Gu.handle &&
-    D->vendor==0x10de && D->device==Gu.device_id;
+  return Gu.compat_device_open&&!Gu.compat_device_closed&&GuCompatRecordMatches(&Gu,D);
+}
+
+/* Inspect a completed inactive owner without rebinding or touching hardware. */
+BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform) {
+  if(!platform||platform->compat_device_open||!platform->compat_device_closed||
+     platform->fault||platform->retained||
+     !GuCompatRecordMatches(platform,platform->compat_device))return FALSE;
+  const struct pci_dev *D=platform->compat_device;
+  return D->refs==1&&!D->dev.scope&&list_empty(&D->dev.devres_head);
 }
 BOOLEAN GuCompatPciMatches(const struct pci_dev *D) {
   if(GuCompatIdentityValid(D))return TRUE;
   Gu.fault=TRUE;return FALSE;
 }
 static BOOLEAN GuCompatDeviceMatches(const struct device *D) {
-  if(Gu.compat_device && D==&Gu.compat_device->dev &&
-     GuCompatIdentityValid(Gu.compat_device))return TRUE;
+  if(GuCompatIdentityValid(Gu.compat_device)&&D==&Gu.compat_device->dev)return TRUE;
   Gu.fault=TRUE;return FALSE;
 }
 EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
   if(!out||*out)return EFI_INVALID_PARAMETER;
   if(!Gu.bs||!Gu.pci||!Gu.handle||Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(Gu.compat_device||Gu.compat_device_open)return EFI_ALREADY_STARTED;
+  if(Gu.compat_device||Gu.compat_device_open||Gu.compat_device_closed)return EFI_ALREADY_STARTED;
   struct pci_dev *D=GuAlloc(sizeof(*D));
   if(!D)return EFI_OUT_OF_RESOURCES;
   D->owner=&Gu;D->owner_bs=Gu.bs;D->owner_pci=Gu.pci;D->owner_handle=Gu.handle;
@@ -35,9 +51,10 @@ EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *D) {
   if(!GuCompatPciMatches(D))return EFI_ACCESS_DENIED;
   Gu.compat_device_open=FALSE;
-  if(D->refs!=1||D->dev.scope) {
+  if(D->refs!=1||D->dev.scope||!list_empty(&D->dev.devres_head)||Gu.fault||Gu.retained) {
     Gu.fault=TRUE;return EFI_DEVICE_ERROR;
   }
+  Gu.compat_device_closed=TRUE;
   return EFI_SUCCESS;
 }
 GU_ASSET *GuAssetEntries(VOID) {

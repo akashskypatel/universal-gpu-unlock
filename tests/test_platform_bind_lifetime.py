@@ -486,7 +486,8 @@ static GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 static const GU_PLATFORM EmptyPlatform;
 static unsigned ready_calls;
 static int ready=1;
-static const GU_PLATFORM *invalid_proof;
+static const GU_PLATFORM *invalid_proof,*invalid_compat;
+static int GuCompatCompletedPlatform(const GU_PLATFORM *platform){return platform!=invalid_compat;}
 static int GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token){
   return platform!=invalid_proof && platform->release_state==token;
 }
@@ -558,6 +559,9 @@ int main(void) {
       invalid_proof=saved[1];
       CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
       invalid_proof=NULL;
+      invalid_compat=saved[1];
+      CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+      invalid_compat=NULL;
       saved[1]->fault=1;
       CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
       saved[1]->fault=0;
@@ -580,6 +584,12 @@ int main(void) {
   CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
   CHECK(GuPlatformActive==saved[2]);
   invalid_proof=NULL;
+  for(size_t i=0;i<3;i++){
+    invalid_compat=saved[requested[i]];
+    CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+    CHECK(GuPlatformActive==saved[2]);
+  }
+  invalid_compat=NULL;
   saved[0]->fault=1;
   CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
   saved[0]->fault=0;
@@ -892,6 +902,8 @@ typedef int EFI_STATUS;
 #define EFI_DEVICE_ERROR 4
 #define EfiLoaderData 1
 #define TRUE 1
+#define FALSE 0
+typedef int BOOLEAN;
 typedef struct {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
   EFI_STATUS (*FreePool)(VOID *);
@@ -899,6 +911,7 @@ typedef struct {
 typedef struct {
   EFI_BOOT_SERVICES *bs;
   struct GU_CPU_POOL *cpu_pool;
+  VOID *compat_device;
   VOID *cpu_pool_failure_address;
   EFI_STATUS cpu_pool_failure_status;
   int fault,retained;
@@ -926,7 +939,7 @@ static EFI_STATUS Free(VOID *p){
 int main(int argc,char **argv) {
   EFI_BOOT_SERVICES bs={Allocate,Free};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>10)return 3;
+  if(mode<0||mode>11)return 3;
   if(mode)Gu.bs=&bs;
   if(mode==1)bs.AllocatePool=NULL;
   if(mode==9)bs.FreePool=NULL;
@@ -938,6 +951,7 @@ int main(int argc,char **argv) {
     VOID *ptr=GuAlloc(32);
     CHECK(ptr&&calls==1&&Gu.cpu_pool==allocated&&Gu.cpu_pool->owner==&Gu);
     CHECK(Gu.cpu_pool->bytes==32&&ptr==(VOID *)(Gu.cpu_pool+1));
+    CHECK(GuCpuPoolOwns(&Gu,ptr,32)&&!GuCpuPoolOwns(&Gu,ptr,31)&&!GuCpuPoolOwns(&platforms[1],ptr,32));
     for(size_t i=0;i<32;i++)CHECK(((unsigned char *)ptr)[i]==0);
     VOID *another=GuAlloc(7);
     CHECK(another&&Gu.cpu_pool->next==(GU_CPU_POOL *)((unsigned char *)ptr-sizeof(GU_CPU_POOL)));
@@ -986,12 +1000,18 @@ int main(int argc,char **argv) {
     CHECK(Gu.cpu_pool_failure_status==EFI_OUT_OF_RESOURCES&&!frees);
     CHECK(GuAlloc(8)==NULL&&calls==1);
     free(allocated);
-  }else{
+  }else if(mode==10){
     CHECK(GuAlloc((size_t)-1)==NULL&&!calls);
     VOID *p=GuAlloc(1);CHECK(p);
     void *base=Gu.cpu_pool;
     GuFree(p);CHECK(frees==1&&released==base);
     GuFree(p);CHECK(frees==1&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED);
+  }else{
+    VOID *ptr=GuAlloc(16);CHECK(ptr);Gu.compat_device=ptr;
+    CHECK(GuCpuPoolOwns(&Gu,ptr,16));GuFree(ptr);
+    CHECK(!frees&&Gu.retained&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED&&Gu.cpu_pool_failure_address==ptr);
+    CHECK(Gu.cpu_pool&&Gu.compat_device==ptr&&!GuCpuPoolOwns(&Gu,ptr,16));
+    free(Gu.cpu_pool);
   }
   CHECK(GuAlloc(0)==NULL);
   return 0;
@@ -1007,7 +1027,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            for mode in range(11):
+            for mode in range(12):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(binary), str(mode)],
                                             capture_output=True, text=True)
