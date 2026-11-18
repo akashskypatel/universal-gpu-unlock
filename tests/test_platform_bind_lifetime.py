@@ -1201,6 +1201,7 @@ typedef size_t UINTN;
 typedef int EFI_STATUS;
 typedef struct {EFI_STATUS (*Stall)(UINTN);} EFI_BOOT_SERVICES;
 #define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 1
 #define EFI_NOT_READY 2
 #define EFI_ACCESS_DENIED 3
 #define EFI_DEVICE_ERROR 4
@@ -1352,6 +1353,7 @@ typedef int BOOLEAN;
 #define EFI_OUT_OF_RESOURCES 3
 #define EFI_UNSUPPORTED 4
 #define EFI_DEVICE_ERROR 5
+#define EFI_ACCESS_DENIED 6
 #define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
 #define AllocateAnyPages 1
 #define EfiBootServicesData 2
@@ -1485,6 +1487,7 @@ typedef size_t UINTN;
 #define EFI_NOT_FOUND 1
 #define EFI_ACCESS_DENIED 2
 #define EFI_DEVICE_ERROR 3
+#define EFI_INVALID_PARAMETER 4
 #define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
 #define TRUE 1
 #define FALSE 0
