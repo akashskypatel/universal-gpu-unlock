@@ -52,11 +52,18 @@ int main(int argc, char **argv) {
   const char *variant = argc > 4 ? argv[4] : "nominal";
   int msi_enabled = strcmp(variant, "msi-enabled") == 0;
   int flr_refused = strcmp(variant, "flr-refused") == 0;
+  int dma_high = strcmp(variant, "dma-high") == 0;
+  int rebar = strcmp(variant, "rebar") == 0;
+  int bar_high = strcmp(variant, "bar-above-4g") == 0;
+  int runtime_target = strcmp(variant, "runtime-target") == 0;
+  int runtime_absent = strcmp(variant, "runtime-absent") == 0;
 
   SimReportLine("SIM_VARIANT=%s", variant);
   if (!esp || !windows) {
     fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir> "
-            "[nominal|msi-enabled|flr-refused]\n", argv[0]);
+            "[nominal|msi-enabled|flr-refused|dma-high|rebar|bar-above-4g|"
+            "runtime-target|runtime-absent]\n",
+            argv[0]);
     return 2;
   }
 
@@ -67,9 +74,21 @@ int main(int argc, char **argv) {
     SimReportLine("SIM_INIT=FAILED");
     return 2;
   }
+  /* The operator policy lives in NVRAM, not in the image. "runtime-absent"
+   * names a location no card occupies, so discovery must refuse. */
+  if (runtime_target) SimWorldSetTargets("0000:01:00.0");
+  if (runtime_absent) SimWorldSetTargets("0000:03:00.0");
   SIM_GPU *gpu = SimPrimaryGpu();
   if (msi_enabled) SimGpuEnableMsi(gpu, 1);
   if (flr_refused) SimGpuSetFlrSupported(gpu, 0);
+  if (dma_high) SimGpuForceHighDma(gpu, 1);
+  /* Firmware is free to place BAR0 above 4 GiB, and Resizable BAR makes the
+   * window larger than the 16 MiB of registers this code addresses. */
+  if (rebar) SimGpuSetBarWindow(gpu, 0x80000000ull, 0x10000000ull);
+  if (bar_high) SimGpuSetBarWindow(gpu, 0x100000000ull, 0x1000000ull);
+  if (rebar || bar_high)
+    SimReportLine("SIM_BAR BASE=%#llx SIZE=%#llx", (unsigned long long)SimGpuBarBase(gpu),
+                  (unsigned long long)SimGpuBarSize(gpu));
   EFI_SYSTEM_TABLE *table = SimSystemTable();
   ReportIdentity(gpu);
 
@@ -104,6 +123,27 @@ int main(int argc, char **argv) {
   SimReportLine("SIM_STAGE=GuDiscoverSingleGpu");
   status = GuDiscoverSingleGpu(SimImageHandle(), table);
   SimReportLine("SIM_RESULT=GuDiscoverSingleGpu STATUS=%llx", (unsigned long long)status);
+  if (runtime_absent) {
+    /* A request is not a permission and a stale request is not a target: the
+     * image must refuse rather than fall back to another card. */
+    Check(status != EFI_SUCCESS, "a target that is not present was accepted");
+    /* The unbound placeholder has no device; a refusal must leave it that way. */
+    Check(GuPlatformActive && GuPlatformActive->device_id == 0,
+          "a refused selection still bound a platform");
+    Check(SimGpuBarWrites(gpu) == 0, "a refused selection wrote BAR0");
+    Check(SimGpuFlrCount(gpu) == 0, "a refused selection reset the card");
+    Check(SimLogContains("ACTIVE_SELECTION=REQUESTED COUNT=1 SOURCE=VARIABLE"),
+          "the image did not report reading the operator selection");
+    SimReportLine("SIM_ABORT=selection REFUSED=1 REASON=TARGET_NOT_PRESENT STATUS=%llx",
+                  (unsigned long long)status);
+    SimReportLine("SIM_RESULT=%s CHECKS_FAILED=%d",
+                  SimFailures() ? "FAIL" : "PASS", SimFailures());
+    int refused = SimFailures();
+    SimWorldShutdown();
+    free(before);
+    if (refused) printf("%s", SimLogText());
+    return refused ? 1 : 0;
+  }
   if (msi_enabled) {
     /* An enabled MSI vector violates the cold PCI policy: the image must refuse
      * the card without touching it. */
@@ -134,6 +174,16 @@ int main(int argc, char **argv) {
                 (unsigned long long)owner->bar_size,
                 (unsigned)owner->profile_verified, (unsigned)owner->prom_verified);
 
+  if (runtime_target) {
+    Check(SimLogContains("ACTIVE_SELECTION=REQUESTED COUNT=1 SOURCE=VARIABLE"),
+          "the image did not report reading the operator selection");
+    Check(owner->discovery_identity.segment == 0 &&
+              owner->discovery_identity.bus == 1 &&
+              owner->discovery_identity.device == 0 &&
+              owner->discovery_identity.function == 0,
+          "the image bound a card other than the selected one");
+    SimReportLine("SIM_SELECTION=TARGET 0000:01:00.0 SOURCE=VARIABLE");
+  }
   SimReportLine("SIM_STAGE=GuPrepareBoundGpu");
   const char *prepare_stage = "none";
   status = GuPrepareBoundGpu(owner, &prepare_stage);
@@ -195,7 +245,23 @@ int main(int argc, char **argv) {
                   (unsigned)GuMsiReadyForWindows(),
                   SimGpuWpr2Low(gpu), SimGpuWpr2High(gpu));
 
-    if (flr_refused) {
+    if (dma_high) {
+      /* A firmware that ignores the 32-bit ceiling must stop the transaction
+       * before any register is written, and the buffer it did hand out must
+       * be retained rather than freed. */
+      Check(status != EFI_SUCCESS, "a high DMA address was accepted");
+      Check(SimGpuFlrCount(gpu) == 0, "a card was reset before DMA was refused");
+      Check(SimGpuWpr2Opens() == 0, "a DMA failure still opened a WPR2 window");
+      Check(owner->fault == 0, "a DMA refusal was recorded as a hardware fault");
+      Check(!SimLogContains("Selected preboot transaction verified"),
+            "a refused DMA window was reported as a verified transaction");
+      /* Freeing is correct here only because the firmware unmapped and released
+       * the buffer; the image must never free a buffer it could not account for. */
+      Check(owner->dma_count == 0, "a refused buffer was still counted as mapped");
+      SimReportLine("SIM_ABORT=dma-window RETAINED=%u DMA=%u STAGE=%s STATUS=%llx",
+                    (unsigned)owner->retained, (unsigned)owner->dma_count, tx_stage,
+                    (unsigned long long)status);
+    } else if (flr_refused) {
       /* A card that drops the reset leaves the permission window open. The
        * image must fail, and the model must show why: no reset happened. */
       Check(status != EFI_SUCCESS, "a card that refuses FLR still reported success");
@@ -235,6 +301,10 @@ int main(int argc, char **argv) {
       Check(owner->flrs == 1, "owner recorded an unexpected reset count");
       Check(GuMsiReadyForWindows() != 0, "handover was not ready after the transaction");
       Check(SimGpuStockDriverBound(gpu) == 0, "stock driver model was never released");
+      /* The assigned window, not a fixed 16 MiB assumption, is what the image
+       * must carry into the register offsets. */
+      Check(owner->bar_base == SimGpuBarBase(gpu), "the image used the wrong BAR base");
+      Check(owner->bar_size == SimGpuBarSize(gpu), "the image used the wrong BAR size");
       /* The image's own self-report has to agree with the model's view. */
       Check(SimLogContains("Selected GPU result=0 fault=0 safe=1"),
             "the image did not report a clean selected-GPU result");

@@ -169,8 +169,10 @@ struct SIM_GPU {
   UINTN               config_writes;
   int                 stock_driver_bound;
   UINT64              bar_base;
+  UINT64              bar_size;        /* firmware-assigned window */
   int                 device_ready;   /* model switch: BAR accessible */
   int                 flr_unsupported; /* scenario: the card refuses FLR */
+  int                 high_dma;        /* scenario: allocator ignores the ceiling */
   int                 flr_pending;
 };
 
@@ -689,11 +691,25 @@ static EFI_STATUS EFIAPI SimPciAllocateBuffer(EFI_PCI_IO_PROTOCOL *self,
                                               EFI_MEMORY_TYPE memory_type,
                                               UINTN pages, VOID **host,
                                               UINT64 attributes) {
-  (void)self; (void)type; (void)memory_type; (void)attributes;
+  (void)memory_type; (void)attributes;
   if (!host || !pages) return EFI_INVALID_PARAMETER;
+  SIM_GPU *gpu = (SIM_GPU *)((UINT8 *)self - offsetof(SIM_GPU, io));
   size_t bytes = pages * 4096u;
-  void *p = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
-                 MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+  /* A faithful allocator stays inside the caller's ceiling. The high-dma
+   * scenario models a firmware that ignores it: the image must refuse the
+   * buffer rather than hand a 64-bit address to a 32-bit DMA register. */
+  void *p = MAP_FAILED;
+  if (gpu->high_dma) {
+    p = mmap((void *)0x100000000ull, bytes, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (p == MAP_FAILED)
+      p = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  } else {
+    (void)type;                    /* both allocation kinds stay 32-bit */
+    p = mmap(NULL, bytes, PROT_READ | PROT_WRITE,
+             MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+  }
   if (p == MAP_FAILED) { *host = NULL; return EFI_OUT_OF_RESOURCES; }
   memset(p, 0, bytes);
   *host = p;
@@ -735,9 +751,9 @@ static EFI_STATUS EFIAPI SimPciGetBarAttributes(EFI_PCI_IO_PROTOCOL *self,
   desc->SpecificFlag = 0;
   desc->AddrSpaceGranularity = 0;
   desc->AddrRangeMin = gpu->bar_base;
-  desc->AddrRangeMax = gpu->bar_base + SIM_BAR_BYTES - 1;
+  desc->AddrRangeMax = gpu->bar_base + gpu->bar_size - 1;
   desc->AddrTranslationOffset = 0;
-  desc->AddrLen = SIM_BAR_BYTES;
+  desc->AddrLen = gpu->bar_size;
   /* End tag so a consumer that walks the list stops here. */
   ((UINT8 *)desc)[sizeof(*desc)] = 0x79;
   *resources = desc;
@@ -761,6 +777,7 @@ EFI_STATUS SimGpuBuild(SIM_GPU **out) {
     return EFI_OUT_OF_RESOURCES;
   }
   gpu->bar_base = 0x80000000ull;
+  gpu->bar_size = SIM_BAR_BYTES;
   gpu->segment = 0;
   gpu->bus = 1;
   gpu->device = 0;
@@ -975,6 +992,26 @@ void SimGpuEnableMsi(SIM_GPU *gpu, int enable) {
   Wr16(gpu->config, SIM_CAP_MSI + 2, control);
 }
 
+/* Move BAR0 the way firmware would: a 64-bit memory BAR, 32-bit encoding when
+ * the base fits, and the window size the descriptor must report. */
+void SimGpuSetBarWindow(SIM_GPU *gpu, UINT64 base, UINT64 size) {
+  if (!gpu || !size || (size & (size - 1)) || (base & (size - 1))) return;
+  gpu->bar_base = base;
+  gpu->bar_size = size;
+  UINT32 low = (UINT32)(base & 0xfffffff0ull);
+  if (base > 0xffffffffull) {
+    low |= 0x4;                     /* 64-bit memory BAR */
+    Wr32(gpu->config, 0x10, low);
+    Wr32(gpu->config, 0x14, (UINT32)(base >> 32));
+  } else {
+    Wr32(gpu->config, 0x10, low);
+    Wr32(gpu->config, 0x14, 0);
+  }
+}
+void SimGpuForceHighDma(SIM_GPU *gpu, int on) {
+  if (gpu) gpu->high_dma = on ? 1 : 0;
+}
+
 void SimGpuSetFlrSupported(SIM_GPU *gpu, int supported) {
   if (!gpu) return;
   gpu->flr_unsupported = supported ? 0 : 1;
@@ -987,6 +1024,8 @@ void SimGpuStockDriverDisconnected(SIM_GPU *gpu) {
 }
 
 size_t SimGpuSnapshotDwords(void) { return SIM_BAR_BYTES / 4; }
+UINT64 SimGpuBarSize(SIM_GPU *gpu) { return gpu ? gpu->bar_size : 0; }
+UINT64 SimGpuBarBase(SIM_GPU *gpu) { return gpu ? gpu->bar_base : 0; }
 
 void SimGpuSnapshot(SIM_GPU *gpu, UINT32 *out, size_t dwords) {
   if (!gpu || !out) return;

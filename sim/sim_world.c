@@ -822,6 +822,14 @@ static EFI_STATUS EFIAPI SimWaitForEvent(UINTN count, EFI_EVENT *events,
 static const EFI_GUID g_global_variable_guid = {
     0x8be4df61, 0x93ca, 0x11d2, {0xaa, 0x0d, 0x00, 0xe0, 0x98, 0x03, 0x2b, 0x8c}};
 
+/* Fork-owned variable the image reads to learn which PCI functions it may
+ * act on. The model stores the same ASCII text the firmware writes. */
+static const EFI_GUID g_gu_targets_guid = {
+    0x5c1f2b40, 0x8e21, 0x4ef7, {0x9d, 0x2b, 0x7a, 0x11, 0x3c, 0x5e, 0x84, 0x02}};
+static const char *g_gu_targets;
+
+void SimWorldSetTargets(const char *Ascii) { g_gu_targets = Ascii; }
+
 static int WideEquals(const CHAR16 *left, const char *ascii) {
   if (!left) return 0;
   for (UINTN i = 0;; i++) {
@@ -834,6 +842,21 @@ static EFI_STATUS EFIAPI SimGetVariable(CHAR16 *name, EFI_GUID *vendor,
                                         UINT32 *attributes, UINTN *size,
                                         VOID *data) {
   if (!name || !vendor || !size) return EFI_INVALID_PARAMETER;
+  if (memcmp(vendor, &g_gu_targets_guid, sizeof(EFI_GUID)) == 0) {
+    if (!g_gu_targets) return EFI_NOT_FOUND;
+    if (!WideEquals(name, "GuTargets")) return EFI_NOT_FOUND;
+    UINTN need = strlen(g_gu_targets);
+    if (*size < need) {
+      *size = need;
+      return EFI_BUFFER_TOO_SMALL;
+    }
+    if (!data) return EFI_INVALID_PARAMETER;
+    memcpy(data, g_gu_targets, need);
+    *size = need;
+    if (attributes)
+      *attributes = EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS;
+    return EFI_SUCCESS;
+  }
   if (memcmp(vendor, &g_global_variable_guid, sizeof(EFI_GUID)) != 0 ||
       !g_amd_path)
     return EFI_NOT_FOUND;

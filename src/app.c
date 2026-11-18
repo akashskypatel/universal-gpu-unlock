@@ -21,7 +21,109 @@
 
 #include "driver_nvram.h"
 
+#ifdef GU_RUNTIME_SELECTION
+#include "gpu_selection.h"
+#endif
+
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
+
+#ifdef GU_RUNTIME_SELECTION
+/* The image carries no compiled target list, so it has to acquire the
+ * operator's policy on a machine it has never seen. One card is recorded
+ * automatically; several are listed and chosen here; no answer leaves the
+ * policy unset and discovery refuses instead of guessing. Writing the variable
+ * is the only NVRAM side effect, and it happens before any device is bound. */
+static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
+  if(!t||!t->BootServices)return EFI_INVALID_PARAMETER;
+  GU_SELECTION selection;
+  EFI_STATUS s=GuSelectionRead(t,&selection);
+  if(s==EFI_SUCCESS) {
+    GuLog("ACTIVE_SELECTION=PRESENT COUNT=%zu ALL=%u SOURCE=VARIABLE\n",
+          selection.count,(unsigned)selection.all);
+    return EFI_SUCCESS;
+  }
+  if(s!=EFI_NOT_FOUND) {
+    GuLog("ACTIVE_SELECTION=UNREADABLE STATUS=%#llx\n",(unsigned long long)s);
+    return s;
+  }
+  GU_GPU_PREPARED_SEQUENCE prepared;
+  s=GuPrepareGpuSequence(t,NULL,0,&prepared);
+  if(s!=EFI_SUCCESS) {
+    GuLog("ACTIVE_SELECTION=NO_INVENTORY STATUS=%#llx\n",(unsigned long long)s);
+    return s;
+  }
+  if(!prepared.inventory.count) {
+    GuLog("ACTIVE_SELECTION=NONE_PRESENT NVIDIA_COUNT=0\n");
+    return EFI_NOT_FOUND;
+  }
+  memset(&selection,0,sizeof(selection));
+  if(prepared.inventory.count==1) {
+    const GU_GPU_RECORD *record=&prepared.inventory.nvidia[0];
+    selection.list[0].segment=(UINT16)record->segment;
+    selection.list[0].bus=(UINT8)record->bus;
+    selection.list[0].device=(UINT8)record->device;
+    selection.list[0].function=(UINT8)record->function;
+    selection.count=1;
+    s=GuSelectionWrite(t,&selection);
+    GuLog("ACTIVE_SELECTION=AUTO_SINGLE BDF=%04x:%02x:%02x.%x STATUS=%#llx\n",
+          (unsigned)record->segment,(unsigned)record->bus,
+          (unsigned)record->device,(unsigned)record->function,
+          (unsigned long long)s);
+    GuBootSay(L"\r\nOne NVIDIA GPU found; recording it as the target.\r\n");
+    return s;
+  }
+  /* Bounded display: the console offers at most nine entries. A larger
+   * machine sets the variable directly, which this path only reads. */
+  size_t shown=prepared.inventory.count<9?prepared.inventory.count:9;
+  GuLog("ACTIVE_SELECTION=CHOICE_NEEDED NVIDIA_COUNT=%zu SHOWN=%zu\n",
+        prepared.inventory.count,shown);
+  for(size_t i=0;i<shown;i++) {
+    const GU_GPU_RECORD *record=&prepared.inventory.nvidia[i];
+    GuLog("ACTIVE_GPU[%zu] CHOICE=%zu BDF=%04x:%02x:%02x.%x ID=%04x:%04x\n",i,i+1,
+          (unsigned)record->segment,(unsigned)record->bus,
+          (unsigned)record->device,(unsigned)record->function,
+          (unsigned)(record->pci_id&0xffffU),(unsigned)(record->pci_id>>16));
+  }
+  GuBootSay(L"\r\nMultiple NVIDIA GPUs found.\r\n"
+            L"Press 1-9 to select a target, A for all supported cards, "
+            L"or S to skip (no card is touched).\r\n");
+  if(!t->ConIn||!t->ConIn->ReadKeyStroke)return EFI_NOT_FOUND;
+  for(unsigned attempt=0;attempt<600;attempt++) {
+    EFI_INPUT_KEY key;
+    if(t->ConIn->ReadKeyStroke(t->ConIn,&key)==EFI_SUCCESS) {
+      CHAR16 c=key.UnicodeChar;
+      if(c=='s'||c=='S'||key.ScanCode==0x17) {   /* S or ESC */
+        GuLog("ACTIVE_SELECTION=SKIPPED BY_OPERATOR=1\n");
+        return EFI_NOT_FOUND;
+      }
+      if(c=='a'||c=='A') {
+        selection.all=TRUE;
+        s=GuSelectionWrite(t,&selection);
+        GuLog("ACTIVE_SELECTION=POLICY_ALL BY_OPERATOR=1 STATUS=%#llx\n",
+              (unsigned long long)s);
+        return s;
+      }
+      if(c>='1'&&c<=(CHAR16)('0'+shown)) {
+        const GU_GPU_RECORD *record=&prepared.inventory.nvidia[c-'1'];
+        selection.list[0].segment=(UINT16)record->segment;
+        selection.list[0].bus=(UINT8)record->bus;
+        selection.list[0].device=(UINT8)record->device;
+        selection.list[0].function=(UINT8)record->function;
+        selection.count=1;
+        s=GuSelectionWrite(t,&selection);
+        GuLog("ACTIVE_SELECTION=CHOSEN BDF=%04x:%02x:%02x.%x STATUS=%#llx\n",
+              (unsigned)record->segment,(unsigned)record->bus,
+              (unsigned)record->device,(unsigned)record->function,
+              (unsigned long long)s);
+        return s;
+      }
+    }
+    t->BootServices->Stall(10000);
+  }
+  GuLog("ACTIVE_SELECTION=NO_ANSWER TIMEOUT=1\n");
+  return EFI_NOT_FOUND;
+}
+#endif
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
@@ -43,6 +145,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   const char *stage="discover";CHAR16 choice=L'S';
 
+#ifdef GU_RUNTIME_SELECTION
+  /* A selection that cannot be resolved is not fatal here: discovery refuses
+   * it and reports why, which is the behaviour the refusal tests pin. */
+  s=ResolveTargetsOnConsole(t);
+  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND) {stage="selection";goto failed;}
+#endif
   s=GuDiscoverSingleGpu(image,t);if(s!=EFI_SUCCESS)goto failed;
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
   /* Defense in depth: selected active preparation images never enter the

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "gpu_discovery.h"
+#include "gpu_bar.h"
 #include "gpu_execution_state.h"
 #include <string.h>
 #ifndef GU_DISCOVERY_HOST_TEST
@@ -19,6 +20,12 @@
 #endif
 #endif
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
+#if defined(GU_RUNTIME_SELECTION)
+/* The operator supplies the targets at boot ("GuTargets" variable), so the
+ * count is not a build-time constant. The runtime admission below is the same
+ * one the compiled list is subject to: a request is not a permission. */
+#include "gpu_selection.h"
+#else
 #include "gpu-selection.h" /* Generated operator-supplied PCI addresses. */
 #if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_INVENTORY_MAX_HANDLES
 #error Invalid active target count
@@ -29,6 +36,7 @@
 #endif
 static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
+#endif
 #endif
 
 /* Admission is one decision with two provenances (hardware waiver or the
@@ -257,9 +265,48 @@ static EFI_STATUS ReadGpuRecords(EFI_SYSTEM_TABLE *table,GU_GPU_RECORD *records,
   return CollectLocatedGpuRecords(table,handles,handle_count,records,capacity,count);
 }
 
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
+#if defined(GU_RUNTIME_SELECTION)
+/* The variable is read once per boot and kept: the list pointer escapes this
+ * call into the prepared view. */
+static GU_SELECTION g_runtime_selection;
+static BOOLEAN g_runtime_selection_loaded;
+static EFI_STATUS ResolveRuntimeSelection(EFI_SYSTEM_TABLE *table,
+                                          const GU_GPU_LOCATION **requested,
+                                          size_t *requested_count,BOOLEAN *all) {
+  if(!requested||!requested_count||!all)return EFI_INVALID_PARAMETER;
+  if(!g_runtime_selection_loaded) {
+    EFI_STATUS s=GuSelectionRead(table,&g_runtime_selection);
+    if(s==EFI_NOT_FOUND) {
+      memset(&g_runtime_selection,0,sizeof(g_runtime_selection));
+      s=EFI_SUCCESS;
+    }
+    if(s!=EFI_SUCCESS) {
+      GuLog("ACTIVE_SELECTION=REFUSED REASON=VARIABLE_STATUS STATUS=%#llx\n",
+            (unsigned long long)s);
+      return s;
+    }
+    g_runtime_selection_loaded=TRUE;
+    if(g_runtime_selection.all)
+      GuLog("ACTIVE_SELECTION=POLICY_ALL SOURCE=VARIABLE\n");
+    else if(g_runtime_selection.count)
+      GuLog("ACTIVE_SELECTION=REQUESTED COUNT=%zu SOURCE=VARIABLE\n",
+            g_runtime_selection.count);
+    else
+      GuLog("ACTIVE_SELECTION=UNSET SOURCE=NONE AUTO_SINGLE_ONLY=1\n");
+  }
+  *requested=g_runtime_selection.count?g_runtime_selection.list:NULL;
+  *requested_count=g_runtime_selection.count;
+  *all=g_runtime_selection.all;
+  return EFI_SUCCESS;
+}
+#endif
+#endif
+
 static EFI_STATUS SelectPreparedRecords(GU_GPU_PREPARED_VIEW *prepared,
                                          const GU_GPU_LOCATION *requested,
-                                         size_t requested_count) {
+                                         size_t requested_count,
+                                         BOOLEAN all) {
   size_t count=prepared->inventory.count;
   prepared->selected_count=0;
   GuLog("ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1\n",
@@ -281,6 +328,15 @@ static EFI_STATUS SelectPreparedRecords(GU_GPU_PREPARED_VIEW *prepared,
       return EFI_UNSUPPORTED;
     }
     prepared->selected_count=requested_count;
+  }else if(all){
+    /* "ALL" is an explicit operator policy, not a default: every supported
+     * NVIDIA function present at boot, in enumeration order. */
+    for(size_t i=0;i<count;i++)
+      if(GuIsSupportedPciId(prepared->inventory.nvidia[i].pci_id))
+        prepared->selected_indices[prepared->selected_count++]=i;
+    if(!prepared->selected_count)return EFI_UNSUPPORTED;
+    GuLog("ACTIVE_PREPARE=POLICY_ALL SUPPORTED=%zu NVIDIA_COUNT=%zu\n",
+          prepared->selected_count,count);
   }else if(count==1){
     prepared->selected_count=1;prepared->selected_indices[0]=0;
   }
@@ -311,7 +367,7 @@ EFI_STATUS GuPrepareGpuSequence(EFI_SYSTEM_TABLE *table,
                               0,prepared->selected_indices};
   EFI_STATUS s=ReadGpuRecords(table,view.inventory.nvidia,view.inventory.capacity,
                              &view.inventory.count);
-  if(s==EFI_SUCCESS)s=SelectPreparedRecords(&view,requested,requested_count);
+  if(s==EFI_SUCCESS)s=SelectPreparedRecords(&view,requested,requested_count,FALSE);
   if(s!=EFI_SUCCESS){memset(prepared,0,sizeof(*prepared));return s;}
   prepared->inventory.count=view.inventory.count;
   prepared->selected_count=view.selected_count;
@@ -533,23 +589,63 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
 #endif
 }
 
+/* Read the firmware-assigned BAR0 window. The config-space dwords only
+ * cross-check it: a 64-bit BAR may be placed above 4 GiB and a Resizable BAR
+ * may be larger than the 16 MiB this code addresses, so neither the low dword
+ * nor a fixed 16 MiB size is an authority. */
+static EFI_STATUS ReadBarWindow(EFI_PCI_IO_PROTOCOL *pci,UINT64 *Base,UINT64 *Size) {
+  EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *d=NULL;
+  UINT64 Supports=0;
+  if(!pci||!pci->GetBarAttributes||!Base||!Size)return EFI_INVALID_PARAMETER;
+  *Base=0;*Size=0;
+  EFI_STATUS s=pci->GetBarAttributes(pci,0,&Supports,(VOID **)&d);
+  UINT64 base=0,size=0;
+  if(s==EFI_SUCCESS) {
+    if(!d||d->Desc!=0x8a||d->Len!=43||d->ResType||d->AddrTranslationOffset||
+       !d->AddrLen||(d->AddrLen&(d->AddrLen-1U))||d->AddrLen<GU_BAR_MIN_BYTES||
+       (d->AddrRangeMin&(d->AddrLen-1U))||
+       d->AddrRangeMax!=d->AddrRangeMin+d->AddrLen-1U||
+       d->AddrRangeMin>~(UINT64)0-d->AddrLen) s=EFI_UNSUPPORTED;
+    else { base=d->AddrRangeMin;size=d->AddrLen; }
+  }
+  /* The descriptor is firmware-allocated. A failed release must not be
+   * reported as a hardware fault; it is a leak, and the caller decides. */
+  if(d&&Gu.bs&&Gu.bs->FreePool)(VOID)Gu.bs->FreePool(d);
+  if(s!=EFI_SUCCESS)return s;
+  *Base=base;*Size=size;
+  return EFI_SUCCESS;
+}
+
 /* Initialize the newly bound platform from the exact checked PCI snapshot.
  * Reuse this for the initial and every subsequent context. */
-static void ConfigureBoundPlatform(EFI_HANDLE image,const GU_GPU_RECORD *selected,
-                                   const UINT32 config[64],const GU_CAPS *caps) {
+static EFI_STATUS ConfigureBoundPlatform(EFI_HANDLE image,const GU_GPU_RECORD *selected,
+                                         const UINT32 config[64],const GU_CAPS *caps) {
+  UINT64 Base=0,Size=0;
+  EFI_STATUS s=ReadBarWindow(Gu.pci,&Base,&Size);
+  if(s!=EFI_SUCCESS) {
+    GuLog("BAR0 window unavailable: GetBarAttributes status=%#llx\n",
+          (unsigned long long)s);
+    return s;
+  }
+  if(GuBarBaseFromConfig(config)!=Base) {
+    GuLog("BAR0 config/attribute mismatch: config=%#llx attributes=%#llx\n",
+          (unsigned long long)GuBarBaseFromConfig(config),(unsigned long long)Base);
+    return EFI_UNSUPPORTED;
+  }
   Gu.image=image;
   Gu.discovery_identity=*selected;
   Gu.handle=(EFI_HANDLE)selected->handle;
   Gu.device_id=(UINT16)(selected->pci_id >> 16);
   Gu.is_ampere=GuIsAmpereDeviceId(Gu.device_id);
   Gu.is_turing=GuIsTuringDeviceId(Gu.device_id);
-  Gu.bar_base=(config[4] & ~0xfU);
-  Gu.bar_size=0x1000000;
+  Gu.bar_base=Base;
+  Gu.bar_size=Size;
   Gu.pm_cap=caps->pm;
   Gu.pcie_cap=caps->pcie;
   Gu.pcie_version=caps->pcie_version;
   Gu.msi_cap=caps->msi;
   Gu.msix_cap=caps->msix;
+  return EFI_SUCCESS;
 }
 
 #ifdef GU_ACTIVE_SINGLE_TARGET
@@ -743,7 +839,11 @@ EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
     }
     return s;
   }
-  ConfigureBoundPlatform(image,selected,config,&caps);
+  s=ConfigureBoundPlatform(image,selected,config,&caps);
+  if(s!=EFI_SUCCESS) {
+    GuAbortSelectedGpuStep();
+    return s;
+  }
   GuLog("SELECTED_GPU_STEP=BOUND ORDER=%zu TARGET=%zu\n",ActiveSequence.next_step,next);
   return EFI_SUCCESS;
 }
@@ -919,9 +1019,22 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
                              prepared.inventory.capacity,&prepared.inventory.count);
   if(s!=EFI_SUCCESS)goto done;
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
-  s=SelectPreparedRecords(&prepared,ActiveRequested,GU_GPU_SELECTION_COUNT);
+  {
+#if defined(GU_RUNTIME_SELECTION)
+    const GU_GPU_LOCATION *requested=NULL;
+    size_t requested_count=0;
+    BOOLEAN all=FALSE;
+    s=ResolveRuntimeSelection(table,&requested,&requested_count,&all);
+    if(s!=EFI_SUCCESS)goto done;
 #else
-  s=SelectPreparedRecords(&prepared,NULL,0);
+    const GU_GPU_LOCATION *requested=ActiveRequested;
+    size_t requested_count=GU_GPU_SELECTION_COUNT;
+    BOOLEAN all=FALSE;
+#endif
+    s=SelectPreparedRecords(&prepared,requested,requested_count,all);
+  }
+#else
+  s=SelectPreparedRecords(&prepared,NULL,0,FALSE);
 #endif
   if(s!=EFI_SUCCESS)goto done;
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
@@ -1033,7 +1146,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   s=GuInit(table->BootServices,io);
   if(s!=EFI_SUCCESS)return s;
 #endif
-  ConfigureBoundPlatform(image,&selected,config,&caps);
+  s=ConfigureBoundPlatform(image,&selected,config,&caps);
+  if(s!=EFI_SUCCESS)goto done;
   return EFI_SUCCESS;
 done:
   {

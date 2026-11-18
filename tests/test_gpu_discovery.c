@@ -32,6 +32,7 @@ static int refuse_advance,refuse_completed,refuse_final_graph,drift_after_graph;
 
 typedef struct {
   EFI_PCI_IO_PROTOCOL protocol;
+  EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR bar;
   UINT32 dwords[64];
   UINTN segment, bus, device, function;
   int read_fail, location_fail, mutate_at_full_read;
@@ -117,7 +118,17 @@ static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
   *io = (redirect_on_refresh && resolve_calls > count) ? handles[1] : h;
   return EFI_SUCCESS;
 }
+static EFI_STATUS BarAttributes(EFI_PCI_IO_PROTOCOL *p, UINT8 index,
+                               UINT64 *supports, VOID **out) {
+  MOCK_DEVICE *m = (MOCK_DEVICE *)p->context;
+  if (index != 0 || !supports || !out) return EFI_INVALID_PARAMETER;
+  *supports = 0;
+  *out = &m->bar;
+  return EFI_SUCCESS;
+}
 static EFI_STATUS Free(VOID *p) {
+  for (size_t i = 0; i < GU_INVENTORY_MAX_HANDLES; i++)
+    if (p == &gpu[i].bar) return EFI_SUCCESS;   /* firmware descriptor, not pool */
   if(p && p!=handles) {
     if(fail_state_free){fail_state_free=0;last_failed_free=p;return EFI_NOT_READY;}
     free(p);state_frees++;return EFI_SUCCESS;
@@ -194,15 +205,21 @@ int GuMsiVerifyFinalGraph(void){
 }
 #endif
 static EFI_BOOT_SERVICES services = { Locate, Resolve, Free, Allocate };
-static EFI_SYSTEM_TABLE system_table = { &services };
+static EFI_SYSTEM_TABLE system_table = { &services, NULL };
 static void Populate(size_t i, GU_GPU_IDENTITY id) {
   MOCK_DEVICE *m = &gpu[i]; memset(m, 0, sizeof(*m));
   m->protocol.GetLocation = GetLocation; m->protocol.Pci.Read = Read;
   m->protocol.context = m;
+  m->protocol.GetBarAttributes = BarAttributes;
   m->dwords[0] = id.pci_id;
   m->dwords[2] = 0x03000000U;
   m->dwords[0x2c / 4] = id.subsystem_id;
   m->dwords[4] = 0xfb000000U + (UINT32)(i * 0x1000000U);
+  /* A firmware-assigned 16 MiB window at the address config space reports. */
+  m->bar.Desc = 0x8a; m->bar.Len = 43;
+  m->bar.AddrRangeMin = m->dwords[4] & 0xfffffff0U;
+  m->bar.AddrLen = 0x1000000ULL;
+  m->bar.AddrRangeMax = m->bar.AddrRangeMin + m->bar.AddrLen - 1;
   m->segment = id.segment; m->bus = id.bus;
   m->device = id.device; m->function = id.function;
   handles[i] = &m->protocol;
@@ -626,7 +643,7 @@ int main(void) {
     GU_GPU_LOCATION requested[2]={{0,7,0,0},{0,3,0,0}};
     GU_PLATFORM *second=NULL;
     CHECK(ReadGpuRecords(&system_table,prepared.inventory.nvidia,storage.capacity,&prepared.inventory.count)==EFI_SUCCESS);
-    CHECK(SelectPreparedRecords(&prepared,requested,2)==EFI_SUCCESS);
+    CHECK(SelectPreparedRecords(&prepared,requested,2,FALSE)==EFI_SUCCESS);
     CHECK(RefreshGpuRecords(&system_table,&prepared,storage.live,storage.scanned,storage.capacity)==EFI_SUCCESS);
     for(size_t i=0;i<2;i++){
       storage.observed[i].identity=prepared.inventory.nvidia[i];

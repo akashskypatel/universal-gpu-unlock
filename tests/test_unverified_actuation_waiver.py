@@ -294,8 +294,12 @@ class BuilderOptIn(unittest.TestCase):
 
     def test_multi_target_selection_is_allowed_only_when_waived(self):
         for name, text in BUILDERS:
+            # -RuntimeSelection is exempt from the static one-address check
+            # because it carries no compiled list at all; the runtime admission
+            # gate is unchanged. Every other active build still needs exactly
+            # one explicit address unless the operator waiver is present.
             self.assertIn(
-                "if ($EnableSingleTargetExecution -and $selection.Count -ne 1 -and -not $AcceptUnverifiedActuation) {",
+                "if (-not $RuntimeSelection -and $EnableSingleTargetExecution -and $selection.Count -ne 1 -and -not $AcceptUnverifiedActuation) {",
                 text, name)
             self.assertIn("-AcceptUnverifiedActuation requires at least one explicit", text, name)
 

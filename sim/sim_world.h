@@ -84,6 +84,10 @@ EFI_STATUS SimWorldInit(const char *seed_dir, const char *esp_dir,
                         const char *windows_dir);
 void       SimWorldShutdown(void);
 EFI_SYSTEM_TABLE *SimSystemTable(void);
+
+/* Publish the operator's "GuTargets" variable contents (ASCII). Call after
+ * SimWorldInit and before the image starts. NULL leaves it absent. */
+void SimWorldSetTargets(const char *Ascii);
 EFI_HANDLE        SimImageHandle(void);
 SIM_GPU          *SimPrimaryGpu(void);
 SIM_VOLUME       *SimEspVolume(void);
@@ -113,6 +117,10 @@ EFI_PCI_IO_PROTOCOL *SimGpuIo(SIM_GPU *gpu);
 UINT32 SimGpuConfigRead(SIM_GPU *gpu, UINT32 offset);
 int    SimGpuStockDriverBound(SIM_GPU *gpu);
 void   SimGpuEnableMsi(SIM_GPU *gpu, int enable);
+void   SimGpuSetBarWindow(SIM_GPU *gpu, UINT64 base, UINT64 size);
+void   SimGpuForceHighDma(SIM_GPU *gpu, int on);
+UINT64 SimGpuBarSize(SIM_GPU *gpu);
+UINT64 SimGpuBarBase(SIM_GPU *gpu);
 void   SimGpuSetFlrSupported(SIM_GPU *gpu, int supported);
 
 /* Ordered operation trace: what the image did, in the order it did it. */
