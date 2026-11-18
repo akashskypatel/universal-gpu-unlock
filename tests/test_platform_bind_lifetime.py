@@ -116,7 +116,7 @@ int main(void) {
                              executed.stdout + executed.stderr)
 
     def test_selector_latches_and_write_phase_are_card_private(self):
-        first = SOURCE.index("BOOLEAN GuGetEntrySelectors(")
+        first = SOURCE.index("BOOLEAN GuGetEntrySelectorsFor(")
         middle = SOURCE.index("#endif\n#ifdef GU_ENTRY_LATCHED_SS1_FULL", first)
         last = SOURCE.index("#endif\nEFI_STATUS GuInit(", middle)
         actual_latch = SOURCE[first:middle]
@@ -802,7 +802,7 @@ int main(int argc,char **argv) {
     def test_generic_pci_function_location(self):
         """Compile the actual production predicate with nonzero BDF slots."""
         left = SOURCE.index("BOOLEAN GuTargetConfig(")
-        right = SOURCE.index("BOOLEAN GuSafeToReturn(", left)
+        right = SOURCE.index("BOOLEAN GuSafeToReturnFor(", left)
         pred = SOURCE[left:right]
         self.assertNotIn("&& !D && !F", pred)
         header = r"""
@@ -978,7 +978,7 @@ int main(int argc,char **argv) {
     def test_scratch_pool_rejects_null_service_and_null_success(self):
         """Compile the real CPU pool allocation and release paths."""
         start = SOURCE.index("typedef struct GU_CPU_POOL {")
-        end = SOURCE.index("\nVOID GuStarted(", start)
+        end = SOURCE.index("\nVOID GuStartedFor(", start)
         actual = SOURCE[start:end]
         host = r"""
 #include <stdint.h>
@@ -1009,6 +1009,13 @@ typedef struct {
   EFI_STATUS cpu_pool_failure_status;
   int fault,retained;
 } GU_PLATFORM;
+typedef struct GU_PLATFORM_ALLOCATION {
+  GU_PLATFORM platform;
+  int published,retired;
+  struct GU_PLATFORM_ALLOCATION *next;
+} GU_PLATFORM_ALLOCATION;
+static GU_PLATFORM_ALLOCATION *PlatformAllocations;
+static EFI_STATUS PlatformRegistryStatus;
 static GU_PLATFORM platforms[2],*active=&platforms[0];
 #define Gu (*active)
 static int mode,calls,frees,free_error;
