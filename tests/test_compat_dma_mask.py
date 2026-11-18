@@ -343,7 +343,7 @@ int main(void){
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
         self.assertLess(execution.index("GuMsiPreflight("),execution.index("GuCompatReserveDevice()"))
         self.assertLess(execution.index("GuCompatReserveDevice()"),execution.index("GuMsiRelease()"))
-        self.assertLess(execution.index("GuAd104ColdEntry()"),execution.index("GuCompatOpenDevice(&dev)"))
+        self.assertLess(execution.index("GuAd104ColdEntryFor(owner)"),execution.index("GuCompatOpenDevice(&dev)"))
         self.assertLess(execution.index("GuCompatOpenDevice(&dev)"),execution.index("gpu_unlock_610_load_shared(dev,"))
         self.assertLess(execution.index("gpu_unlock_610_release_shared(dev,&shared)"),execution.index("GuCompatCloseDevice(dev)"))
         self.assertLess(execution.index("GuCompatCloseDevice(dev)"),execution.index("GuMsiFinish()"))
