@@ -174,11 +174,14 @@ static GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT];
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
 static GU_TOPO_GPU_REPORT gpu_reports[GU_GPU_SELECTION_COUNT];
+static GU_TOPO_GOP existing_gop;
 static int fail_alloc,fail_free,allocs,frees,steps;
 static GU_GPU_RECORD uncertain_inventory;
 static int uncertain_frees;
 static EFI_STATUS Allocate(int type,size_t bytes,VOID **out) {
   if(fail_alloc==2) {*out=&uncertain_inventory;return 1;}
+  if(fail_alloc==3) {*out=gpu_reports;return EFI_SUCCESS;}
+  if(fail_alloc==4) {*out=&existing_gop;return EFI_SUCCESS;}
   if(type!=EfiLoaderData || fail_alloc)return 1;
   *out=calloc(1,bytes);
   if(!*out)return 1;
@@ -186,7 +189,7 @@ static EFI_STATUS Allocate(int type,size_t bytes,VOID **out) {
   return EFI_SUCCESS;
 }
 static EFI_STATUS Free(VOID *p) {
-  if(p==&uncertain_inventory) {uncertain_frees++;return 1;}
+  if(p==&uncertain_inventory || p==gpu_reports || p==&existing_gop) {uncertain_frees++;return 1;}
   free(p);frees++;return fail_free?1:EFI_SUCCESS;
 }
 static void Say(const char *fmt,...) {
@@ -217,6 +220,21 @@ int main(void) {
   CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
   CHECK(!steps && allocs==1 && frees==1 && !uncertain_frees);
   CHECK(!memcmp(&original_uncertain,&uncertain_inventory,sizeof(original_uncertain)));
+  Snapshot.gop=&existing_gop;
+  Snapshot.gop_count=Snapshot.gop_capacity=1;
+  GU_TOPO_GPU_REPORT original_reports[GU_GPU_SELECTION_COUNT];
+  GU_TOPO_GOP original_gop;
+  memcpy(original_reports,gpu_reports,sizeof(original_reports));
+  memset(&existing_gop,0xa5,sizeof(existing_gop));
+  memcpy(&original_gop,&existing_gop,sizeof(original_gop));
+  for(fail_alloc=3;fail_alloc<=4;fail_alloc++) {
+    CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+    CHECK(!steps && allocs==1 && frees==1 && !uncertain_frees);
+    CHECK(!memcmp(original_reports,gpu_reports,sizeof(original_reports)));
+    CHECK(!memcmp(&original_gop,&existing_gop,sizeof(original_gop)));
+  }
+  Snapshot.gop=NULL;
+  Snapshot.gop_count=Snapshot.gop_capacity=0;
   fail_alloc=0;fail_free=1;
   CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
   CHECK(!steps && allocs==2 && frees==2);

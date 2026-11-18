@@ -829,6 +829,11 @@ static int ReportPassiveSelections(EFI_BOOT_SERVICES *bs, int pci_ok,
           (VOID *)inventory,(unsigned long long)allocated);
       inventory=NULL; /* No confirmed pool ownership. */
     }
+    if(inventory && ((VOID *)inventory==(VOID *)Report.gpus ||
+                     (VOID *)inventory==(VOID *)Snapshot.gop)) {
+      Say("SELECTION_STORAGE_ALIAS ADDRESS=%p\r\n",(VOID *)inventory);
+      inventory=NULL;
+    }
     if(allocated==EFI_SUCCESS && inventory) {
       status=GuCollectGpuRecords(Snapshot.pci_count,SelectionRead,&Snapshot,
                                  inventory,Snapshot.pci_count,&inventory_count);
