@@ -95,14 +95,15 @@ void usleep_range(unsigned long,unsigned long);
 ktime_t ktime_get(void);
 static inline ktime_t ktime_add_us(ktime_t t,unsigned long u) {return t+u;}
 static inline int ktime_compare(ktime_t a,ktime_t b) {return a>b?1:a<b?-1:0;}
-u32 readl(const void *);
-void writel(u32,void *);
-#define memcpy_fromio GuCopyFromIo
+/* Device-attributed transaction I/O. The device must own the open scope. */
+u32 GuCompatRead32(const struct pci_dev *,const void *);
+void GuCompatWrite32(const struct pci_dev *,u32,void *);
+void GuCompatCopyFromIo(const struct pci_dev *,void *,const void *,size_t);
 void *dma_alloc_coherent(struct device *,size_t,dma_addr_t *,int);
 void dma_free_coherent(struct device *,size_t,void *,dma_addr_t);
 int dma_set_mask(struct device *,u64);
 int dma_set_coherent_mask(struct device *,u64);
-void dma_wmb(void);
+void GuCompatDmaBarrier(const struct pci_dev *);
 void *kzalloc(size_t,int);
 void *kvcalloc(size_t,size_t,int);
 void *kvmalloc(size_t,int);

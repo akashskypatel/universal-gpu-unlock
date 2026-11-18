@@ -94,16 +94,22 @@ int devres_release_group(struct device *D,void *Group) {
 }
 void usleep_range(unsigned long A,unsigned long B) {(void)B;GuStall(A);}
 ktime_t ktime_get(void) {return Gu.ticks;}
-u32 readl(const void *P) {
+/* Vendor access must carry the transaction's retained device reference.
+ * A numeric BAR address alone cannot identify a physical GPU. */
+u32 GuCompatRead32(const struct pci_dev *D,const void *P) {
+  if(!GuCompatPciMatches(D))return ~0U;
   UINT64 Address=(UINTN)P;
   if(Address<Gu.bar_base || Address-Gu.bar_base>0xffffffffULL){Gu.fault=TRUE;return ~0U;}
   return GuRead32((UINT32)(Address-Gu.bar_base));
 }
-void writel(u32 Value,void *P) {
+void GuCompatWrite32(const struct pci_dev *D,u32 Value,void *P) {
+  if(!GuCompatPciMatches(D))return;
   UINT64 Address=(UINTN)P;
   if(Address<Gu.bar_base || Address-Gu.bar_base>0xffffffffULL){Gu.fault=TRUE;return;}
   GuWrite32((UINT32)(Address-Gu.bar_base),Value);
 }
+/* The read-only profile also uses this low-level selected-platform helper
+ * before the compatibility scope opens. Vendor code uses the checked wrapper. */
 VOID GuCopyFromIo(VOID *D,const VOID *S,size_t N) {
   UINT64 Address=(UINTN)S,Offset;UINTN Done=0;
   memset(D,0,N);
@@ -118,6 +124,13 @@ VOID GuCopyFromIo(VOID *D,const VOID *S,size_t N) {
     Done+=Count;
   }
 }
+void GuCompatCopyFromIo(const struct pci_dev *D,VOID *Destination,const VOID *Source,size_t N) {
+  if(!GuCompatPciMatches(D)) {
+    memset(Destination,0,N);
+    return;
+  }
+  GuCopyFromIo(Destination,Source,N);
+}
 void *dma_alloc_coherent(struct device *D,size_t N,dma_addr_t *Address,int Flags) {
   VOID *Cpu=NULL;(void)Flags;
   if(!GuCompatDeviceMatches(D)||!D->dma_mask || *D->dma_mask!=0xffffffffULL || D->coherent_dma_mask!=0xffffffffULL)return NULL;
@@ -129,7 +142,8 @@ void dma_free_coherent(struct device *D,size_t N,void *P,dma_addr_t A) {
 }
 int dma_set_mask(struct device *D,u64 Mask) {if(!GuCompatDeviceMatches(D)||!D->dma_mask)return -EINVAL;*D->dma_mask=Mask;return 0;}
 int dma_set_coherent_mask(struct device *D,u64 Mask) {if(!GuCompatDeviceMatches(D))return -EINVAL;D->coherent_dma_mask=Mask;return 0;}
-void dma_wmb(void) {
+void GuCompatDmaBarrier(const struct pci_dev *D) {
+  if(!GuCompatPciMatches(D))return;
 #if defined(_MSC_VER)
   _ReadWriteBarrier();
 #else

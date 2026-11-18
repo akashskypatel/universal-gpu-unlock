@@ -58,7 +58,10 @@ int main(void) {
         structs=header[header.index("struct list_head {"):header.index("/* CPU-only transaction identity.")]
         helpers=compat[compat.index("static BOOLEAN GuCompatRecordMatches("):compat.index("GU_ASSET *GuAssetEntries(")]
         scope=compat[compat.index("void *devres_open_group("):compat.index("void usleep_range(")]
-        masks=compat[compat.index("int dma_set_mask("):compat.index("void dma_wmb(")]
+        masks=compat[compat.index("int dma_set_mask("):compat.index("void GuCompatDmaBarrier(")]
+        mmio=compat[compat.index("u32 GuCompatRead32("):compat.index("/* The read-only profile")]
+        copy=compat[compat.index("void GuCompatCopyFromIo("):compat.index("void *dma_alloc_coherent(")]
+        barrier=compat[compat.index("void GuCompatDmaBarrier("):compat.index("void *kzalloc(")]
         read=compat[compat.index("int pci_read_config_word("):compat.index("int pci_read_config_dword(")]
         refs=compat[compat.index("struct pci_dev *pci_dev_get("):]
         host=r"""
@@ -67,15 +70,20 @@ int main(void) {
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 typedef void VOID;
 typedef uint16_t u16;
 typedef uint64_t u64;
 typedef uint32_t UINT32;
+typedef uint64_t UINT64;
+typedef uintptr_t UINTN;
+typedef uint32_t u32;
 typedef int BOOLEAN;
 typedef int EFI_STATUS;
 typedef void *EFI_HANDLE;
 typedef struct {int id;} EFI_BOOT_SERVICES;
-typedef struct {int id;} EFI_PCI_IO_PROTOCOL;
+typedef struct EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
+struct EFI_PCI_IO_PROTOCOL {int id; EFI_STATUS (*Flush)(EFI_PCI_IO_PROTOCOL *);};
 #define TRUE 1
 #define FALSE 0
 #define EFI_SUCCESS 0
@@ -93,13 +101,21 @@ typedef struct {int id;} EFI_PCI_IO_PROTOCOL;
 typedef struct {
   EFI_BOOT_SERVICES *bs;EFI_PCI_IO_PROTOCOL *pci;EFI_HANDLE handle;
   unsigned device_id,pm_cap;
+  UINT64 bar_base;
   int fault,retained,started,owned,armed,display_ok;
   int compat_device_open,compat_device_closed;
   struct pci_dev *compat_device;
 } GU_PLATFORM;
 static GU_PLATFORM platforms[2],*active=&platforms[0];
 #define Gu (*active)
-static int allocs,reads,fail_alloc;
+static int allocs,reads,fail_alloc,mmio_reads,mmio_writes,copies,flushes;
+static int last_io_owner;
+static UINT32 GuRead32(UINT32 offset){mmio_reads++;last_io_owner=Gu.pci->id;return offset;}
+static void GuWrite32(UINT32 offset,UINT32 value){(void)offset;(void)value;mmio_writes++;last_io_owner=Gu.pci->id;}
+static void GuCopyFromIo(void *dst,const void *src,size_t n){
+  (void)src;copies++;last_io_owner=Gu.pci->id;memset(dst,0x5a,n);
+}
+static EFI_STATUS Flush(EFI_PCI_IO_PROTOCOL *pci){flushes++;last_io_owner=pci->id;return EFI_SUCCESS;}
 static const void *pool[2];
 static size_t pool_bytes[2];
 static void *GuAlloc(size_t n){allocs++;if(fail_alloc)return NULL;void *p=calloc(1,n);pool[active-platforms]=p;pool_bytes[active-platforms]=n;return p;}
@@ -109,14 +125,17 @@ static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *m,size_t bytes){
 static EFI_STATUS GuConfigRead(int width,UINT32 offset,u16 *out){
   (void)width;(void)offset;reads++;*out=(u16)Gu.pci->id;return EFI_SUCCESS;
 }
-""" + structs + helpers + scope + masks + read + refs + r"""
+""" + structs + helpers + scope + masks + mmio + copy + barrier + read + refs + r"""
 #define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}}while(0)
 int main(void){
   EFI_BOOT_SERVICES bs={1},foreign={2};
-  EFI_PCI_IO_PROTOCOL pci[2]={{17},{23}};
+  EFI_PCI_IO_PROTOCOL pci[2]={{17,Flush},{23,Flush}};
+  void *bar=(void *)(uintptr_t)0x1004;
+  unsigned char buffer[4];
   for(int i=0;i<2;i++){
     platforms[i].bs=&bs;platforms[i].pci=&pci[i];platforms[i].handle=&pci[i];
     platforms[i].device_id=0x2684;platforms[i].pm_cap=7; /* repeated model */
+    platforms[i].bar_base=0x1000; /* deliberately equal numeric BAR addresses */
   }
   struct pci_dev *a=NULL,*b=NULL,*extra=NULL;
   CHECK(GuCompatOpenDevice(NULL)==EFI_INVALID_PARAMETER);
@@ -135,6 +154,10 @@ int main(void){
   Gu.pm_cap=9;
   CHECK(GuCompatOpenDevice(&a)==EFI_SUCCESS&&a&&Gu.compat_device==a);
   CHECK(a->pm_cap==9&&allocs==2);
+  CHECK(GuCompatRead32(a,bar)==4&&mmio_reads==1&&last_io_owner==17);
+  GuCompatWrite32(a,12,bar);CHECK(mmio_writes==1&&last_io_owner==17);
+  GuCompatCopyFromIo(a,buffer,bar,sizeof(buffer));CHECK(copies==1&&buffer[0]==0x5a&&last_io_owner==17);
+  GuCompatDmaBarrier(a);CHECK(flushes==1&&last_io_owner==17);
   CHECK(a->owner==&Gu&&a->owner_bs==&bs&&a->owner_pci==&pci[0]&&a->owner_handle==&pci[0]);
   CHECK(GuCompatOpenDevice(&extra)==EFI_ALREADY_STARTED&&!extra);
   CHECK(a->dev.dma_mask==&a->mask_storage&&a->refs==1&&list_empty(&a->dev.devres_head));
@@ -170,6 +193,15 @@ int main(void){
   pool[0]=NULL;CHECK(!GuCompatCompletedPlatform(&platforms[0]));pool[0]=a;
   CHECK(GuCompatCompletedPlatform(&platforms[0])&&active==&platforms[1]);
   CHECK(pci_read_config_word(b,0,&value)==0&&value==23&&reads==2);
+  CHECK(GuCompatRead32(b,bar)==4&&mmio_reads==2&&last_io_owner==23);
+  GuCompatWrite32(b,12,bar);CHECK(mmio_writes==2&&last_io_owner==23);
+  GuCompatCopyFromIo(b,buffer,bar,sizeof(buffer));CHECK(copies==2&&buffer[0]==0x5a&&last_io_owner==23);
+  GuCompatDmaBarrier(b);CHECK(flushes==2&&last_io_owner==23);
+  CHECK(GuCompatRead32(a,bar)==~0U&&mmio_reads==2&&Gu.fault);
+  GuCompatWrite32(a,12,bar);CHECK(mmio_writes==2);
+  GuCompatCopyFromIo(a,buffer,bar,sizeof(buffer));CHECK(copies==2&&buffer[0]==0&&buffer[3]==0);
+  GuCompatDmaBarrier(a);CHECK(flushes==2&&last_io_owner==23);
+  CHECK(!platforms[0].fault);
   CHECK(pci_read_config_word(a,0,&value)==-EINVAL&&reads==2&&Gu.fault);
   CHECK(dma_set_mask(&a->dev,99)==-EINVAL&&a->mask_storage==42);
   CHECK(dma_set_coherent_mask(&a->dev,99)==-EINVAL&&a->dev.coherent_dma_mask==41);
@@ -207,6 +239,11 @@ int main(void){
         self.assertLess(execution.index("GuCompatOpenDevice(&dev)"),execution.index("gpu_unlock_610_load_shared(dev,"))
         self.assertLess(execution.index("gpu_unlock_610_release_shared(&shared)"),execution.index("GuCompatCloseDevice(dev)"))
         self.assertLess(execution.index("GuCompatCloseDevice(dev)"),execution.index("GuMsiFinish()"))
+        # Vendor I/O must carry its own work record even for repeated BAR addresses.
+        for call in ("GuCompatRead32", "GuCompatWrite32", "GuCompatCopyFromIo", "GuCompatDmaBarrier"):
+            self.assertNotRegex(vendor, rf"\b{call}\((?!work->pdev,|work->pdev\))")
+            self.assertIn(call + "(work->pdev",vendor)
+        self.assertNotRegex(vendor,r"\b(?:readl|writel|memcpy_fromio|dma_wmb)\(")
         load=vendor.split("int gpu_unlock_610_load_shared(",1)[1].split("void gpu_unlock_610_release_shared(",1)[0]
         run=vendor.split("int gpu_unlock_610_unlock(",1)[1]
         self.assertLess(load.index("GuCompatPciMatches(pdev)"),load.index("pdev->device"))

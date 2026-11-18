@@ -286,7 +286,7 @@ static int read_bar(struct unlock_transaction_work *work, u32 offset, u32 *value
 	work->last_valid = false;
 	if (!work->mapped || offset > work->bar_len || work->bar_len - offset < 4)
 		return GU_RESULT(-EINVAL);
-	*value = readl(work->bar + offset);
+	*value = GuCompatRead32(work->pdev, work->bar + offset);
 	if (Gu.fault) return GU_RESULT(-EIO);
 	work->last_value = *value;
 	work->last_valid = true;
@@ -295,9 +295,11 @@ static int read_bar(struct unlock_transaction_work *work, u32 offset, u32 *value
 
 static void write_bar(struct unlock_transaction_work *work, u32 offset, u32 value)
 {
+	if (!GuCompatPciMatches(work->pdev))
+		return;
 	/* Retain DMA from the first mutating MMIO call, including reset failures. */
 	if (!work->firmware_started) { work->firmware_started = true; GuStarted(); }
-	writel(value, work->bar + offset);
+	GuCompatWrite32(work->pdev, value, work->bar + offset);
 }
 
 static int poll_us(struct unlock_transaction_work *work, u32 offset, u32 mask, u32 expect,
@@ -471,10 +473,10 @@ static int falcon_reset(struct unlock_transaction_work *work, const struct falco
 		return GU_RESULT(-ENODEV);
 	write_bar(work, eng->base + 0x3c0, engine | 1);
 	for (i = 0; i < 10; i++)
-		readl(work->bar + eng->base + 0x3c0);
+		GuCompatRead32(work->pdev, work->bar + eng->base + 0x3c0);
 	write_bar(work, eng->base + 0x3c0, engine & ~1u);
 	for (i = 0; i < 10; i++)
-		readl(work->bar + eng->base + 0x3c0);
+		GuCompatRead32(work->pdev, work->bar + eng->base + 0x3c0);
 	ret = poll_us(work, eng->base + 0xf4, 1u << 12, 0, 1000000, true);
 	if (ret)
 		return GU_RESULT(ret);
@@ -651,7 +653,7 @@ static int falcon_hs(struct unlock_transaction_work *work, const struct falcon_e
 		return GU_RESULT(-ENODEV);
 	trans = (trans & ~7u) | 5u;
 	write_bar(work, eng->fbif, trans);
-	dma_wmb();
+	GuCompatDmaBarrier(work->pdev);
 	ret = falcon_dma(work, eng->base, code_pa, code_va, code_src,
 			 code_size, gpu_unlock_dma_cmd(true));
 	if (ret)
@@ -1210,7 +1212,7 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	rom = kvmalloc(mapped, GFP_KERNEL);
 	if (!rom)
 		return GU_RESULT(-ENOMEM);
-	memcpy_fromio(rom, work->bar + 0x300000, mapped);
+	GuCompatCopyFromIo(work->pdev, rom, work->bar + 0x300000, mapped);
 	dev_info(&work->pdev->dev, "FWSEC: PROM bytes=%zu signature=%#x\n",
 		 mapped, (unsigned int)(rom[0] | (rom[1] << 8)));
 	if (Gu.fault || !GuAd104PromMatches(rom,mapped)) { ret=-EBADMSG; goto out; }
@@ -1455,7 +1457,7 @@ static int publish_v67(struct unlock_transaction_work *work)
 
 	if (ret)
 		return GU_RESULT(ret);
-	dma_wmb();
+	GuCompatDmaBarrier(work->pdev);
 	work->published = true;
 	return 0;
 }
@@ -1479,7 +1481,7 @@ static int unlock_transaction_signature(struct unlock_transaction_work *work)
 		}
 		put_le64(meta + 72, work->stock_dma);
 		put_le64(meta + 80, work->stock_size);
-		dma_wmb();
+		GuCompatDmaBarrier(work->pdev);
 	}
 	work->signature_calls++;
 	return 0;
