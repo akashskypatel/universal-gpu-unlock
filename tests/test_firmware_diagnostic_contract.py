@@ -668,6 +668,66 @@ int main(void){
                     run=subprocess.run([str(binary)],capture_output=True,text=True)
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
+
+    def test_final_topology_storage_cleanup(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        actual="static int ReleaseTopologyStorage("+source.split("static int ReleaseTopologyStorage(",1)[1].split("\nEFI_STATUS EFIAPI UefiMain(",1)[0]
+        main=source.split("EFI_STATUS EFIAPI UefiMain(",1)[1]
+        self.assertLess(main.index("TOPOLOGY_REPORT_STORAGE_ALIAS"),main.index("GuTopoAssess("))
+        self.assertLess(main.index("TOPOLOGY_VERDICT="),main.index("ReleaseTopologyStorage(bs,&report_storage)"))
+        self.assertIn("if(!ReleaseTopologyStorage(bs,&report_storage))result=GU_TOPO_INVALID;",main)
+        program=r"""
+#include "gpu_topology.h"
+#include <stdio.h>
+#include <stddef.h>
+#include <string.h>
+typedef void VOID;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+typedef struct { EFI_STATUS (*FreePool)(VOID *); } EFI_BOOT_SERVICES;
+static GU_TOPO_CAPTURE Snapshot;
+static GU_TOPO_REPORT Report;
+static GU_TOPO_GPU_REPORT report;
+static GU_TOPO_GOP gop;
+static GU_TOPO_GPU_REPORT *storage;
+static int report_frees,gop_frees,unexpected,mode,logs;
+static void Say(const char *fmt,...){(void)fmt;logs++;}
+static EFI_STATUS Release(VOID *p) {
+  if(storage||Report.gpus||Report.gpu_count||Snapshot.gop||
+     Snapshot.gop_count||Snapshot.gop_capacity)unexpected++;
+  if(p==&report){report_frees++;return mode==1?1:mode==4?2:0;}
+  if(p==&gop){gop_frees++;return mode==2?1:0;}
+  unexpected++;return 1;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode %d: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void) {
+  EFI_BOOT_SERVICES bs={Release};
+  for(mode=0;mode<=5;mode++){
+    report_frees=gop_frees=unexpected=logs=0;
+    storage=mode==3?(GU_TOPO_GPU_REPORT *)(void *)&gop:mode==5?NULL:&report;
+    Report.gpus=storage;Report.gpu_count=storage?1:0;
+    Snapshot.gop=&gop;Snapshot.gop_count=Snapshot.gop_capacity=1;
+    CHECK(ReleaseTopologyStorage(&bs,&storage)==(mode==0||mode==5));
+    CHECK(!storage&&!Report.gpus&&!Report.gpu_count&&!Snapshot.gop&&!Snapshot.gop_count&&!Snapshot.gop_capacity);
+    CHECK(!unexpected&&report_frees==(mode!=3&&mode!=5)&&gop_frees==1);
+    CHECK(logs==(mode==0||mode==5?1:2));
+    CHECK(ReleaseTopologyStorage(&bs,&storage)&&!unexpected&&report_frees==(mode!=3&&mode!=5)&&gop_frees==1);
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"final_topology.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic","-I",str(P),str(c),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)

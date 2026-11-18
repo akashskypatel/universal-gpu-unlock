@@ -1993,6 +1993,43 @@ finish:
 }
 #endif
 
+/* Final disposal is independent of the graph verdict. Consume confirmed
+ * references before calling firmware, including when a release is uncertain. */
+static int ReleaseTopologyStorage(EFI_BOOT_SERVICES *bs,
+                                  GU_TOPO_GPU_REPORT **storage) {
+  GU_TOPO_GPU_REPORT *report=*storage;
+  GU_TOPO_GOP *gop=Snapshot.gop;
+  int okay=1;
+  *storage=NULL;
+  Report.gpus=NULL;
+  Report.gpu_count=0;
+  Snapshot.gop=NULL;
+  Snapshot.gop_count=Snapshot.gop_capacity=0;
+  if(report && (VOID *)report==(VOID *)gop) {
+    Say("TOPOLOGY_FINAL_STORAGE_ALIAS ADDRESS=%p\r\n",(VOID *)report);
+    report=NULL;okay=0;
+  }
+  if(report) {
+    EFI_STATUS released=bs->FreePool(report);
+    if(released!=EFI_SUCCESS) {
+      Say("TOPOLOGY_REPORT_STORAGE_FREE_STATUS=%#llx ADDRESS=%p\r\n",
+          (unsigned long long)released,(VOID *)report);
+      okay=0;
+    }
+  }
+  if(gop) {
+    EFI_STATUS released=bs->FreePool(gop);
+    if(released!=EFI_SUCCESS) {
+      Say("GOP_CAPTURE_STORAGE_FREE_STATUS=%#llx ADDRESS=%p\r\n",
+          (unsigned long long)released,(VOID *)gop);
+      okay=0;
+    }
+  }
+  Say("FINAL_TOPOLOGY_STORAGE_CLEANUP=%s NO_STOP_EVIDENCE=1\r\n",
+      okay?"COMPLETE":"UNCERTAIN");
+  return okay;
+}
+
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   EFI_BOOT_SERVICES *bs;
   int pci_ok,gop_ok,console_ok,error_ok,error_classified,result;
@@ -2078,6 +2115,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
           (VOID *)report_storage,(unsigned long long)allocated);
       report_storage=NULL;
     }
+    if(report_storage && (VOID *)report_storage==(VOID *)Snapshot.gop) {
+      Say("TOPOLOGY_REPORT_STORAGE_ALIAS ADDRESS=%p\r\n",(VOID *)report_storage);
+      report_storage=NULL;
+    }
     if(allocated==EFI_SUCCESS && report_storage)
       result=GuTopoAssess(&Snapshot,&Report,report_storage,Snapshot.pci_count);
     else
@@ -2156,24 +2197,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #ifdef GU_TOPO_SELECTION_ENABLED
   SelectionOk=ReportPassiveSelections(bs,pci_ok,result);
 #endif
-  if(report_storage) {
-    EFI_STATUS released=bs->FreePool(report_storage);
-    Report.gpus=NULL;
-    if(EFI_ERROR(released)) {
-      Say("TOPOLOGY_REPORT_STORAGE_FREE_STATUS=%#llx\r\n",
-          (unsigned long long)released);
-      result=GU_TOPO_INVALID;
-    }
-  }
-  if(Snapshot.gop) {
-    EFI_STATUS released=bs->FreePool(Snapshot.gop);
-    Snapshot.gop=NULL;Snapshot.gop_count=Snapshot.gop_capacity=0;
-    if(released!=EFI_SUCCESS) {
-      Say("GOP_CAPTURE_STORAGE_FREE_STATUS=%#llx\r\n",
-          (unsigned long long)released);
-      result=GU_TOPO_INVALID;
-    }
-  }
+  if(!ReleaseTopologyStorage(bs,&report_storage))result=GU_TOPO_INVALID;
   Say("SUPPLEMENTARY_PROTOCOL_POOL_STATUS=%s NO_STOP_EVIDENCE=1\r\n",
       ObservationPoolFault?"UNCERTAIN":"NO_UNCERTAIN_RESULT_OBSERVED");
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
