@@ -301,6 +301,7 @@ int main(void){
   for(size_t i=0;i<sizeof(multi);i++)CHECK(multi[i]==0);
   Gu.fault=0;fail_copy_at=0;
   CHECK(!GuCopyFromIo(&platforms[0],multi,bar,sizeof(multi))&&copies==7&&!Gu.fault&&platforms[0].fault);
+  platforms[0].fault=0; /* Test-only reset after the stale-owner negative case. */
   Gu.fault=0;pci[1].Mem.Read=NULL;
   CHECK(!GuCompatCopyFromIo(b,multi,bar,sizeof(multi))&&copies==7&&Gu.fault);
   pci[1].Mem.Read=ReadMemory;Gu.fault=0;
