@@ -21,6 +21,7 @@ static EFI_HANDLE DxeImage;
 static EFI_SYSTEM_TABLE *DxeTable;
 static EFI_EVENT DxeEvent;
 static BOOLEAN DxeExecuted;
+static EFI_STATUS DxeEventCloseStatus;
 
 
 
@@ -82,13 +83,15 @@ finish:
 /* Signal once, close the event, then execute the existing checked path. */
 static VOID EFIAPI GuDxeOnReadyToBoot(EFI_EVENT event, VOID *context) {
   (VOID)context;
-  if(DxeExecuted || !DxeImage || !DxeTable)return;
+  if(DxeExecuted || !DxeImage || !DxeTable||!DxeEvent||event!=DxeEvent)return;
   DxeExecuted=TRUE;
-  if(DxeEvent && DxeTable->BootServices && DxeTable->BootServices->CloseEvent) {
-    (VOID)DxeTable->BootServices->CloseEvent(DxeEvent);
-    DxeEvent=NULL;
+  if(!DxeTable->BootServices||!DxeTable->BootServices->CloseEvent) {
+    DxeEventCloseStatus=EFI_UNSUPPORTED;return;
   }
-  (VOID)event;
+  DxeEventCloseStatus=DxeTable->BootServices->CloseEvent(DxeEvent);
+  /* On uncertainty keep the address for diagnosis, never retry or run. */
+  if(DxeEventCloseStatus!=EFI_SUCCESS)return;
+  DxeEvent=NULL;
   (VOID)GuDxeRun(DxeImage,DxeTable);
 }
 
@@ -107,7 +110,10 @@ EFI_STATUS EFIAPI AdaUnlockDriverEntryPoint(EFI_HANDLE image, EFI_SYSTEM_TABLE *
     EVT_NOTIFY_SIGNAL,TPL_CALLBACK,GuDxeOnReadyToBoot,
     NULL,&ReadyToBootGroup,&DxeEvent);
   if(s!=EFI_SUCCESS||!DxeEvent) {
-    DxeImage=NULL;DxeTable=NULL;DxeEvent=NULL;
+    /* An error with a nonnull event output cannot prove no event exists.
+     * Keep the reference and permanently refuse this image's callback. */
+    if(DxeEvent)DxeExecuted=TRUE;
+    DxeImage=NULL;DxeTable=NULL;
     return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
   }
   return EFI_SUCCESS;

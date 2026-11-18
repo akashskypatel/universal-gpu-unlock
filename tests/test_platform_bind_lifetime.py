@@ -1294,6 +1294,89 @@ int main(int argc,char **argv) {
                     self.assertEqual(executed.returncode, 0,
                                      executed.stdout + executed.stderr)
 
+    def test_dma_descriptor_error_is_not_released_buffer_success(self):
+        """Execute the actual descriptor cleanup against fake, non-device resources."""
+        actual=function("GuDmaFree")
+        host=r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+typedef void VOID;
+typedef int EFI_STATUS;
+typedef uint64_t UINT64;
+typedef size_t UINTN;
+#define EFI_SUCCESS 0
+#define EFI_NOT_FOUND 1
+#define EFI_ACCESS_DENIED 2
+#define EFI_DEVICE_ERROR 3
+#define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
+#define TRUE 1
+#define FALSE 0
+typedef struct GU_DMA {
+  struct GU_DMA *next;
+  VOID *cpu,*mapping;
+  UINT64 dma;
+  UINTN bytes,pages;
+  int mapped;
+} GU_DMA;
+typedef struct EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
+struct EFI_PCI_IO_PROTOCOL {
+  EFI_STATUS (*Unmap)(EFI_PCI_IO_PROTOCOL *,VOID *);
+  EFI_STATUS (*FreeBuffer)(EFI_PCI_IO_PROTOCOL *,UINTN,VOID *);
+};
+static struct {
+  EFI_PCI_IO_PROTOCOL *pci;
+  GU_DMA *allocations;
+  unsigned dma_count;
+  int retained,master_attributes_pending,started,quiesced,fault;
+  EFI_STATUS cpu_pool_failure_status;
+} Gu;
+static int mode,unmaps,buffer_frees,pool_frees;
+static int buffer,mapping;
+static EFI_STATUS Unmap(EFI_PCI_IO_PROTOCOL *io,VOID *token){
+  (void)io;unmaps++;return token!=&mapping||mode==1?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static EFI_STATUS Release(EFI_PCI_IO_PROTOCOL *io,UINTN pages,VOID *cpu){
+  (void)io;buffer_frees++;return pages!=1||cpu!=&buffer||mode==2?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static VOID GuFree(VOID *p){
+  (void)p;pool_frees++;
+  if(mode==3){Gu.cpu_pool_failure_status=EFI_DEVICE_ERROR;Gu.retained=Gu.fault=1;}
+}
+""" +actual+r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode %d: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void){
+  EFI_PCI_IO_PROTOCOL io={Unmap,Release};
+  for(mode=0;mode<5;mode++){
+    GU_DMA entry={NULL,&buffer,&mapping,0x1000,4096,1,1};
+    Gu.pci=&io;Gu.allocations=&entry;Gu.dma_count=1;
+    Gu.retained=Gu.master_attributes_pending=Gu.started=Gu.fault=0;
+    Gu.quiesced=1;Gu.cpu_pool_failure_status=EFI_SUCCESS;unmaps=buffer_frees=pool_frees=0;
+    if(mode==4)Gu.retained=1;
+    EFI_STATUS s=GuDmaFree(&buffer,0x1000);
+    CHECK(s==(mode==0?EFI_SUCCESS:mode==4?EFI_ACCESS_DENIED:EFI_DEVICE_ERROR));
+    CHECK(unmaps==(mode!=4)&&buffer_frees==(mode==0||mode==2||mode==3));
+    CHECK(pool_frees==(mode==0||mode==3));
+    if(mode==0||mode==3){
+      CHECK(!Gu.allocations&&!Gu.dma_count);
+      CHECK(GuDmaFree(&buffer,0x1000)==EFI_NOT_FOUND);
+      CHECK(unmaps==1&&buffer_frees==1&&pool_frees==1);
+      CHECK(Gu.retained==(mode==3));
+    }else CHECK(Gu.allocations==&entry&&Gu.dma_count==1&&Gu.retained);
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            src=Path(directory)/"dma_descriptor.c"
+            src.write_text(host,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                exe=Path(directory)/compiler
+                built=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(src),"-o",str(exe)],capture_output=True,text=True)
+                self.assertEqual(built.returncode,0,built.stderr)
+                result=subprocess.run([str(exe)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
     def test_release_plan_is_not_reset_after_attempt(self):
         start = MSI_SOURCE.index("EFI_STATUS GuMsiPreflight(")
         stop = MSI_SOURCE.index("static BOOLEAN DecodeMask(", start)

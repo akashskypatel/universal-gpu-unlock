@@ -395,7 +395,12 @@ EFI_STATUS GuDmaFree(VOID *C, UINT64 D) {
   }
   Status=Gu.pci->FreeBuffer(Gu.pci,Entry->pages,Entry->cpu);
   if(EFI_ERROR(Status)) {Gu.retained=TRUE;return Status;}
-  *Link=Entry->next;GuFree(Entry);if(Gu.dma_count)Gu.dma_count--;return EFI_SUCCESS;
+  /* GPU-visible buffer release succeeded. Remove its descriptor once;
+   * report a CPU-pool release error without retrying either release. */
+  *Link=Entry->next;
+  if(Gu.dma_count)Gu.dma_count--;
+  GuFree(Entry);
+  return Gu.cpu_pool_failure_status;
 }
 UINT32 GuRead32(UINT32 O) {
   UINT32 Value=0xffffffffU;
