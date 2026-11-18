@@ -14,6 +14,7 @@
 #include "boot_io.h"
 #include "gpu_discovery.h"
 #include "profile.h"
+#include "msi_release.h"
 #include "unlock_execution.h"
 #include "profile.h"
 #include "vendor/gfw_eval.h"
@@ -48,8 +49,14 @@ int main(int argc, char **argv) {
   const char *stage = argc > 1 ? argv[1] : "prepare";
   const char *esp = argc > 2 ? argv[2] : NULL;
   const char *windows = argc > 3 ? argv[3] : NULL;
+  const char *variant = argc > 4 ? argv[4] : "nominal";
+  int msi_enabled = strcmp(variant, "msi-enabled") == 0;
+  int flr_refused = strcmp(variant, "flr-refused") == 0;
+
+  SimReportLine("SIM_VARIANT=%s", variant);
   if (!esp || !windows) {
-    fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir>\n", argv[0]);
+    fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir> "
+            "[nominal|msi-enabled|flr-refused]\n", argv[0]);
     return 2;
   }
 
@@ -61,6 +68,8 @@ int main(int argc, char **argv) {
     return 2;
   }
   SIM_GPU *gpu = SimPrimaryGpu();
+  if (msi_enabled) SimGpuEnableMsi(gpu, 1);
+  if (flr_refused) SimGpuSetFlrSupported(gpu, 0);
   EFI_SYSTEM_TABLE *table = SimSystemTable();
   ReportIdentity(gpu);
 
@@ -95,6 +104,23 @@ int main(int argc, char **argv) {
   SimReportLine("SIM_STAGE=GuDiscoverSingleGpu");
   status = GuDiscoverSingleGpu(SimImageHandle(), table);
   SimReportLine("SIM_RESULT=GuDiscoverSingleGpu STATUS=%llx", (unsigned long long)status);
+  if (msi_enabled) {
+    /* An enabled MSI vector violates the cold PCI policy: the image must refuse
+     * the card without touching it. */
+    Check(status != EFI_SUCCESS, "an MSI-enabled card was accepted");
+    Check(SimGpuBarWrites(gpu) == 0, "a refused card still saw BAR0 writes");
+    Check(SimGpuFlrCount(gpu) == 0, "a refused card was reset");
+    SimReportLine("SIM_ABORT=pre-execution REFUSED=1 BAR_WRITES=%zu FLR=%zu STATUS=%llx",
+                  SimGpuBarWrites(gpu), SimGpuFlrCount(gpu),
+                  (unsigned long long)status);
+    SimReportLine("SIM_RESULT=%s CHECKS_FAILED=%d",
+                  SimFailures() ? "FAIL" : "PASS", SimFailures());
+    int refused = SimFailures();
+    SimWorldShutdown();
+    free(before);
+    if (refused) printf("%s", SimLogText());
+    return refused ? 1 : 0;
+  }
   Check(status == EFI_SUCCESS, "selected discovery failed");
 
   GU_PLATFORM *owner = GuPlatformActive;
@@ -135,74 +161,92 @@ int main(int argc, char **argv) {
     if (!pre_tx) { SimReportLine("SIM_SNAPSHOT=FAILED"); return 2; }
     SimGpuSnapshot(gpu, pre_tx, SimGpuSnapshotDwords());
     UINTN flrs_before = SimGpuFlrCount(gpu);
-    UINTN prom_before = SimGpuPromWrites(gpu);
     SimTraceReset();
+    int ss0_slot = SimTraceWatch(GU_FEAT_SS0_OFFSET);
+    int ss1_slot = SimTraceWatch(GU_FEAT_SS1_OFFSET);
 
-    {
-      EFI_BOOT_SERVICES *b = table->BootServices;
-      SimReportLine("SIM_PROBE_BS dc=%d op=%d cp=%d rt=%d st=%d pph=%d opi=%d lhb=%d hp=%d ap=%d fp=%d",
-                    b->DisconnectController != NULL, b->OpenProtocol != NULL,
-                    b->CloseProtocol != NULL, b->RaiseTPL != NULL, b->RestoreTPL != NULL,
-                    b->ProtocolsPerHandle != NULL, b->OpenProtocolInformation != NULL,
-                    b->LocateHandleBuffer != NULL, b->HandleProtocol != NULL,
-                    b->AllocatePool != NULL, b->FreePool != NULL);
-      SimReportLine("SIM_PROBE_CON con=%d in=%d err=%d keys=%d rk=%d rs=%d wk=%d",
-                    table->ConsoleOutHandle != NULL, table->ConsoleInHandle != NULL,
-                    table->StandardErrorHandle != NULL, table->ConIn != NULL,
-                    table->ConIn && table->ConIn->ReadKeyStroke != NULL,
-                    table->ConIn && table->ConIn->Reset != NULL,
-                    table->ConIn && table->ConIn->WaitForKey != NULL);
-    }
-    SimReportLine("SIM_PROBE peers=%llx cold_entry=%u started=%u owned=%u armed=%u",
-                  (unsigned long long)GuVerifyActivePeers(table),
-                  (unsigned)GuAd104ColdEntry(), (unsigned)owner->started,
-                  (unsigned)owner->owned, (unsigned)owner->armed);
     SimReportLine("SIM_STAGE=GuExecuteUnlock");
     const char *tx_stage = "none";
     status = GuExecuteUnlock(owner, table, SimImageHandle(), &tx_stage);
     SimReportLine("SIM_RESULT=GuExecuteUnlock STATUS=%llx STAGE=%s",
                   (unsigned long long)status, tx_stage);
 
-    long flr_first = SimTraceFirstOf(SIM_TRACE_FLR);
     long flr_last = SimTraceLastOf(SIM_TRACE_FLR);
-    long prom_last = SimTraceLastOf(SIM_TRACE_PROM_WRITE);
-    long sel0 = -1, sel1 = -1;
-    for (size_t i = 0; i < SimTraceCount(); i++) {
-      if (SimTraceKind((size_t)i) != SIM_TRACE_BAR_WRITE) continue;
-      if (SimTraceOffset((size_t)i) == GU_FEAT_SS0_OFFSET) sel0 = (long)i;
-      if (SimTraceOffset((size_t)i) == GU_FEAT_SS1_OFFSET) sel1 = (long)i;
-    }
-    SimReportLine("SIM_TX TRACE=%zu OVERFLOW=%d BAR_WRITES=%zu PROM_WRITES=%zu "
-                  "CONFIG_WRITES=%zu FLR=%zu",
-                  SimTraceCount(), SimTraceOverflowed(),
-                  SimTraceCountKind(SIM_TRACE_BAR_WRITE),
-                  SimTraceCountKind(SIM_TRACE_PROM_WRITE),
-                  SimTraceCountKind(SIM_TRACE_CONFIG_WRITE),
-                  SimTraceCountKind(SIM_TRACE_FLR));
-    SimReportLine("SIM_TX ORDER FLR_FIRST=%ld FLR_LAST=%ld PROM_LAST=%ld "
-                  "SS0_AT=%ld SS1_AT=%ld",
-                  flr_first, flr_last, prom_last, sel0, sel1);
+    long ss0_at = SimTraceWatchLast(ss0_slot);
+    long ss1_at = SimTraceWatchLast(ss1_slot);
+
+    SimReportLine("SIM_TX TRACE=%zu BAR_WRITES=%zu PROM_WRITES=%zu "
+                  "CONFIG_WRITES=%zu FLR=%zu FW_STARTS=%zu WPR2_OPENS=%zu",
+                  SimTraceCount(),
+                  SimTraceCountOf(SIM_TRACE_BAR_WRITE),
+                  SimTraceCountOf(SIM_TRACE_PROM_WRITE),
+                  SimTraceCountOf(SIM_TRACE_CONFIG_WRITE),
+                  SimTraceCountOf(SIM_TRACE_FLR),
+                  SimTraceCountOf(SIM_TRACE_FW_START),
+                  SimTraceCountOf(SIM_TRACE_WPR2));
+    SimReportLine("SIM_TX ORDER FLR=%ld SS0=%ld SS1=%ld SEL_WRITES=%zu:%zu",
+                  flr_last, ss0_at, ss1_at,
+                  SimTraceWatchWrites(ss0_slot), SimTraceWatchWrites(ss1_slot));
     SimReportLine("SIM_TX STATE ARMED=%u FAULT=%u RETAINED=%u FLRS=%u DMA=%u "
-                  "STARTED=%u READY_FOR_WINDOWS=%u",
+                  "STARTED=%u READY_FOR_WINDOWS=%u WPR2=%08x:%08x",
                   (unsigned)owner->armed, (unsigned)owner->fault,
                   (unsigned)owner->retained, (unsigned)owner->flrs,
                   (unsigned)owner->dma_count, (unsigned)owner->started,
-                  (unsigned)GuMsiReadyForWindows());
+                  (unsigned)GuMsiReadyForWindows(),
+                  SimGpuWpr2Low(gpu), SimGpuWpr2High(gpu));
 
-    Check(status == EFI_SUCCESS, "transaction failed");
-    Check(!SimTraceOverflowed(), "operation trace overflowed");
-    Check(SimGpuFlrCount(gpu) == flrs_before + 1, "expected exactly one function-level reset");
-    Check(SimGpuPromWrites(gpu) > prom_before, "transaction never wrote the PROM window");
-    Check(flr_last >= 0, "no function-level reset was performed");
-    Check(prom_last >= 0 && flr_last > prom_last,
-          "PROM writes did not precede the final reset");
-    Check(sel0 >= 0 && sel1 >= 0 && sel0 < sel1, "selectors were not written in order");
-    Check(sel1 < flr_last || flr_last < 0,
-          "selectors were not applied before the final reset");
-    Check(owner->armed != 0, "owner was not armed after the transaction");
-    Check(owner->fault == 0, "owner reported a fault");
-    Check(owner->retained == 0, "owner retained firmware buffers");
-    Check(GuMsiReadyForWindows() != 0, "handover was not ready after the transaction");
+    if (flr_refused) {
+      /* A card that drops the reset leaves the permission window open. The
+       * image must fail, and the model must show why: no reset happened. */
+      Check(status != EFI_SUCCESS, "a card that refuses FLR still reported success");
+      Check(SimGpuFlrCount(gpu) == 0, "a refused reset was counted as performed");
+      Check(SimTraceCountOf(SIM_TRACE_FLR_REFUSED) == 1,
+            "the refused reset was not observed");
+      Check(SimGpuWpr2High(gpu) != 0, "the open WPR2 window was silently closed");
+      /* The engine may still be reading its buffers, so the image must keep
+       * them and the device reference instead of freeing memory. */
+      Check(owner->retained != 0, "buffers were freed while firmware may still DMA");
+      Check(owner->dma_count > 0, "DMA accounting was cleared after the abort");
+      Check(!SimLogContains("Selected preboot transaction verified"),
+            "a refused reset was still reported as a verified transaction");
+      SimReportLine("SIM_ABORT=function-reset REFUSED=1 WPR2=%08x:%08x "
+                    "STAGE=%s STATUS=%llx RETAINED=%u DMA=%u FAULT=%u",
+                    SimGpuWpr2Low(gpu), SimGpuWpr2High(gpu), tx_stage,
+                    (unsigned long long)status, (unsigned)owner->retained,
+                    (unsigned)owner->dma_count, (unsigned)owner->fault);
+    } else {
+      Check(status == EFI_SUCCESS, "transaction failed");
+      Check(SimGpuFlrCount(gpu) == flrs_before + 1,
+            "expected exactly one function-level reset");
+      Check(flr_last >= 0, "no function-level reset was performed");
+      /* The PROM window is read-only in this design: the unlock patches a RAM
+       * copy of the ROM and DMAs it to the engines. */
+      Check(SimGpuPromWrites(gpu) == 0, "the PROM window was written");
+      Check(SimGpuWpr2Opens() == 1, "FWSEC did not open exactly one WPR2 window");
+      Check(SimGpuWpr2High(gpu) == 0, "WPR2 remained enabled after the reset");
+      Check(ss0_at >= 0 && ss1_at >= 0 && ss0_at < ss1_at,
+            "selectors were not written in order");
+      Check(ss1_at >= 0 && flr_last >= 0 && ss1_at < flr_last,
+            "selectors were not applied before the final reset");
+      Check(owner->armed != 0, "owner was not armed after the transaction");
+      Check(owner->fault == 0, "owner reported a fault");
+      Check(owner->retained == 0, "owner retained firmware buffers");
+      Check(owner->dma_count == 0, "DMA buffers were not released");
+      Check(owner->flrs == 1, "owner recorded an unexpected reset count");
+      Check(GuMsiReadyForWindows() != 0, "handover was not ready after the transaction");
+      Check(SimGpuStockDriverBound(gpu) == 0, "stock driver model was never released");
+      /* The image's own self-report has to agree with the model's view. */
+      Check(SimLogContains("Selected GPU result=0 fault=0 safe=1"),
+            "the image did not report a clean selected-GPU result");
+      Check(SimLogContains("SELECTED_GPU_STEP=COMPLETE"),
+            "the image did not report the selected step as complete");
+      Check(SimLogContains("Selected preboot transaction verified"),
+            "the image did not verify the preboot transaction");
+      Check(SimLogContains("MSI pre-close silicon verification: valid=1"),
+            "MSI state was not re-read from the card before handover");
+      Check(SimLogContains("restore PCI command: actual=0x2"),
+            "the PCI command word was not restored");
+    }
 
     UINT32 *post_tx = SnapshotNew();
     if (post_tx) {

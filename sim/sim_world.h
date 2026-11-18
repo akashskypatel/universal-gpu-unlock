@@ -104,11 +104,16 @@ const UINT8 *SimGpuProm(SIM_GPU *gpu);
 UINTN  SimGpuFlrCount(SIM_GPU *gpu);
 UINTN  SimGpuBarWrites(SIM_GPU *gpu);
 UINTN  SimGpuPromWrites(SIM_GPU *gpu);
+UINTN  SimGpuWpr2Opens(void);
+UINT32 SimGpuWpr2Low(SIM_GPU *gpu);
+UINT32 SimGpuWpr2High(SIM_GPU *gpu);
 void   SimGpuStockDriverDisconnected(SIM_GPU *gpu);
 EFI_HANDLE SimGpuHandle(SIM_GPU *gpu);
 EFI_PCI_IO_PROTOCOL *SimGpuIo(SIM_GPU *gpu);
 UINT32 SimGpuConfigRead(SIM_GPU *gpu, UINT32 offset);
 int    SimGpuStockDriverBound(SIM_GPU *gpu);
+void   SimGpuEnableMsi(SIM_GPU *gpu, int enable);
+void   SimGpuSetFlrSupported(SIM_GPU *gpu, int supported);
 
 /* Ordered operation trace: what the image did, in the order it did it. */
 enum {
@@ -117,6 +122,9 @@ enum {
   SIM_TRACE_CONFIG_WRITE,
   SIM_TRACE_FLR,
   SIM_TRACE_MAP,
+  SIM_TRACE_FW_START,     /* a falcon engine was started by the host */
+  SIM_TRACE_WPR2,         /* FWSEC opened the WPR2 window */
+  SIM_TRACE_FLR_REFUSED,  /* a function-level reset was refused */
 };
 void   SimTraceReset(void);
 size_t SimTraceCount(void);
@@ -124,7 +132,11 @@ int    SimTraceOverflowed(void);
 int    SimTraceKind(size_t index);
 UINT32 SimTraceOffset(size_t index);
 UINT32 SimTraceValue(size_t index);
-size_t SimTraceCountKind(int kind);
+size_t SimTraceCountOf(int kind);
+int    SimTraceWatch(UINT32 offset);
+long   SimTraceWatchFirst(int slot);
+long   SimTraceWatchLast(int slot);
+size_t SimTraceWatchWrites(int slot);
 long   SimTraceFirstOf(int kind);
 long   SimTraceLastOf(int kind);
 

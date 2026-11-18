@@ -38,13 +38,41 @@
 #define SIM_REG_MMU_HI       0x1fa830u
 #define SIM_REG_WPR_CFG      0x1fa7ccu
 #define SIM_REG_WPR          0x1fa7c4u
-#define SIM_REG_FEAT         0x8a0148u
-#define SIM_REG_READOUT1     0x9a0148u
+#define SIM_REG_BOOT0        0x8a0148u
 
 /* Falcon engines the transaction addresses (base + 0x100 = CPUCTL). */
 #define SIM_FALCON_MAILBOX0  0x040u
+#define SIM_FALCON_MAILBOX1  0x044u
 #define SIM_FALCON_CPUCTL    0x100u
 #define SIM_FALCON_HALT_BIT  (1u << 4)
+#define SIM_FALCON_START_BIT (1u << 1)
+#define SIM_FALCON_BOOTVEC   0x104u
+#define SIM_FALCON_HWCFG2    0x0f4u
+#define SIM_FALCON_ENGINE    0x3c0u
+#define SIM_FALCON_DMA_SRC_LO 0x110u
+#define SIM_FALCON_DMA_DST    0x114u
+#define SIM_FALCON_DMA_STATUS 0x118u
+#define SIM_FALCON_DMA_OFF    0x11cu
+#define SIM_FALCON_DMA_SRC_HI 0x128u
+#define SIM_FALCON_DMA_BLOCK  256u
+
+#define SIM_SEC2_BASE        0x00840000u
+#define SIM_SEC2_FALCON2     0x00841000u
+#define SIM_GSP_BASE         0x00110000u
+#define SIM_GSP_FALCON2      0x00111000u
+
+/* Registers the firmware-visible state machine reports. */
+#define SIM_REG_FEAT_PLM     0x00823804u
+#define SIM_REG_READOUT1     0x00823818u
+#define SIM_REG_FBPA         0x009a0148u
+#define SIM_REG_GFW_PLM      0x00118128u
+#define SIM_REG_GFW_CPUCTL   0x00110100u
+#define SIM_REG_GFW_BOOT     0x00118234u
+
+#define SIM_SEC2_MARKER      0x67b00001u   /* AD102 payload completion marker */
+#define SIM_GFW_PLM_BOOTED   0x00008b8fu
+#define SIM_GFW_BOOT_DONE    0x000003ffu
+#define SIM_PLM_LOCKED       0xffffff8fu   /* entry permissions, before payload */
 
 typedef struct {
   void  *host;
@@ -53,9 +81,29 @@ typedef struct {
   int    used;
 } SIM_MAPPING;
 
+/* Register-level model of one falcon engine. It reproduces what the driver can
+ * observe: the reset/halt/start bits, DMA progress, and the permission changes
+ * the signed payload produces. It does not execute firmware. */
+typedef struct {
+  UINT32  base, falcon2;
+  UINT32  cpuctl, status, boot_vector, engine, mailbox0, mailbox1;
+  UINT64  imem_bytes, dmem_bytes;
+  UINT8  *imem, *dmem;
+  UINT32  dma_dest, dma_off;
+  UINT32  dma_src_lo, dma_src_hi;
+  UINT64  dma_src;
+  int     booted;
+  int     dma_unmapped;
+} SIM_FALCON;
+
+#define SIM_FALCON_IMEM_BYTES 0x00040000u
+#define SIM_FALCON_DMEM_BYTES 0x00010000u
+
 /* One ordered record of every state-changing operation on the model. The
- * post-execution checks read this to prove ordering, not just end state. */
-#define SIM_TRACE_CAPACITY 8192
+ * post-execution checks read this to prove ordering, not just end state.
+ * Counters and first/last ordinals are kept separately from the detail ring so
+ * a long DMA stream cannot hide the ordering evidence. */
+#define SIM_TRACE_CAPACITY 512
 typedef struct {
   UINT8  kind;
   UINT32 offset;
@@ -63,18 +111,43 @@ typedef struct {
 } SIM_TRACE_ENTRY;
 
 static SIM_TRACE_ENTRY g_trace[SIM_TRACE_CAPACITY];
-static size_t g_trace_count;
-static unsigned g_trace_overflow;
+static size_t g_trace_count;                 /* events stored */
+static size_t g_trace_total;                 /* events seen */
+static size_t g_trace_kind_total[16];
+static long   g_trace_kind_first[16];
+static long   g_trace_kind_last[16];
+
+/* Watched registers: the checks ask "when was this written", which a bounded
+ * detail ring cannot answer once a DMA stream fills it. */
+#define SIM_TRACE_WATCH_MAX 8
+static UINT32 g_watch_offset[SIM_TRACE_WATCH_MAX];
+static unsigned g_watch_count;
+static long g_watch_first[SIM_TRACE_WATCH_MAX];
+static long g_watch_last[SIM_TRACE_WATCH_MAX];
+static size_t g_watch_writes[SIM_TRACE_WATCH_MAX];
+static UINTN  g_wpr2_opens;
 
 static void TracePush(int kind, UINT32 offset, UINT32 value) {
-  if (g_trace_count >= SIM_TRACE_CAPACITY) {
-    g_trace_overflow = 1;
-    return;
+  long ordinal = (long)g_trace_total++;
+  if (kind == SIM_TRACE_BAR_WRITE) {
+    for (unsigned i = 0; i < g_watch_count; i++)
+      if (g_watch_offset[i] == offset) {
+        g_watch_writes[i]++;
+        if (g_watch_first[i] < 0) g_watch_first[i] = ordinal;
+        g_watch_last[i] = ordinal;
+      }
   }
-  g_trace[g_trace_count].kind = (UINT8)kind;
-  g_trace[g_trace_count].offset = offset;
-  g_trace[g_trace_count].value = value;
-  g_trace_count++;
+  if (kind > 0 && kind < 16) {
+    g_trace_kind_total[kind]++;
+    if (g_trace_kind_first[kind] < 0) g_trace_kind_first[kind] = ordinal;
+    g_trace_kind_last[kind] = ordinal;
+  }
+  if (g_trace_count < SIM_TRACE_CAPACITY) {
+    g_trace[g_trace_count].kind = (UINT8)kind;
+    g_trace[g_trace_count].offset = offset;
+    g_trace[g_trace_count].value = value;
+    g_trace_count++;
+  }
 }
 
 struct SIM_GPU {
@@ -89,6 +162,7 @@ struct SIM_GPU {
    * valid while later maps are added. */
   SIM_MAPPING       **mappings;
   size_t              mapping_count, mapping_capacity;
+  SIM_FALCON          falcons[2];
   UINTN               flr_count;
   UINTN               bar_reads, bar_writes;
   UINTN               prom_writes;
@@ -96,6 +170,7 @@ struct SIM_GPU {
   int                 stock_driver_bound;
   UINT64              bar_base;
   int                 device_ready;   /* model switch: BAR accessible */
+  int                 flr_unsupported; /* scenario: the card refuses FLR */
   int                 flr_pending;
 };
 
@@ -205,7 +280,9 @@ static void BuildProm(UINT8 *rom) {
     Wr32(dmem, 0x90, 0xe0);          /* mapper offset */
     Wr16(dmem, 0xe0 + 4, 3);         /* mapper version */
     Wr16(dmem, 0xe0 + 6, 64);        /* mapper size */
-    Wr32(dmem, 0xe0 + 8, 0x180);     /* command offset */
+    /* The command block sits past the 384-byte PKC slot the driver fills at
+     * data_off + pkc_off, so the two never overlap in this image. */
+    Wr32(dmem, 0xe0 + 8, 0x2c0);     /* command offset */
     Wr32(dmem, 0xe0 + 12, 64);       /* command size */
   }
 }
@@ -224,6 +301,157 @@ static UINTN WidthBytes(EFI_PCI_IO_PROTOCOL_WIDTH width) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/* Falcon engines                                                      */
+/* ------------------------------------------------------------------ */
+
+static SIM_FALCON *FalconLookup(SIM_GPU *gpu, UINT32 offset) {
+  for (unsigned i = 0; i < 2; i++) {
+    SIM_FALCON *f = &gpu->falcons[i];
+    if (!f->base) continue;
+    if (offset >= f->base && offset < f->base + 0x1000) return f;
+  }
+  return NULL;
+}
+
+/* A device address the model may read: it must fall inside a mapping the
+ * driver registered through Map(). Anything else is refused rather than
+ * dereferenced, so a bad descriptor cannot crash the harness. */
+static int FalconHostRange(SIM_GPU *gpu, UINT64 address, UINT64 bytes,
+                           const UINT8 **host) {
+  for (size_t i = 0; i < gpu->mapping_count; i++) {
+    SIM_MAPPING *m = gpu->mappings[i];
+    if (!m->used || address < m->device) continue;
+    if (address + bytes > m->device + m->bytes) continue;
+    *host = (const UINT8 *)m->host + (address - m->device);
+    return 1;
+  }
+  return 0;
+}
+
+/* The FWSEC image carries its FRTS target in a 44-byte command record inside
+ * the data section the host DMA'd into DMEM. The engine reads that record, so
+ * the model does the same instead of being told the address out of band. */
+static UINT32 FalconFrtsPage(SIM_FALCON *f) {
+  for (UINT32 at = 0; at + 44 <= SIM_FALCON_DMEM_BYTES; at += 4) {
+    const UINT8 *p = f->dmem + at;
+    if (Rd32((UINT8 *)p, 0) != 1 || Rd32((UINT8 *)p, 4) != 24) continue;
+    if (Rd32((UINT8 *)p, 20) != 2 || Rd32((UINT8 *)p, 24) != 1) continue;
+    if (Rd32((UINT8 *)p, 28) != 20 || Rd32((UINT8 *)p, 36) != 0x100) continue;
+    if (Rd32((UINT8 *)p, 40) != 2) continue;
+    UINT32 page = Rd32((UINT8 *)p, 32);
+    if (page) return page;
+  }
+  return 0;
+}
+
+/* The signed payload changes what the card permits. Model that as one
+ * transition, taken only when a whole image has been pushed through DMA and
+ * the host then starts the CPU: PLM opens, the permission words open, and the
+ * engine halts with the completion marker in mailbox 0. */
+static void FalconStart(SIM_GPU *gpu, SIM_FALCON *f) {
+  if (!f->imem_bytes || f->booted) return;
+  f->booted = 1;
+  f->cpuctl = SIM_FALCON_HALT_BIT;
+  if (f->base == SIM_SEC2_BASE) {
+    f->mailbox0 = SIM_SEC2_MARKER;
+    Wr32(gpu->bar, SIM_REG_FEAT_PLM, 0xffffffffu);
+    Wr32(gpu->bar, SIM_REG_WPR, 0xffffffffu);
+    Wr32(gpu->bar, SIM_REG_WPR_CFG, 0xfffff0ffu);
+    Wr32(gpu->bar, SIM_REG_FBPA, 0xffffffffu);
+    TracePush(SIM_TRACE_FW_START, SIM_SEC2_BASE, SIM_SEC2_MARKER);
+  } else {
+    /* FWSEC owns the FRTS: it opens WPR2 over the requested page. */
+    UINT32 page = FalconFrtsPage(f);
+    if (page) {
+      Wr32(gpu->bar, 0x001fa824u, page << 4);
+      Wr32(gpu->bar, 0x001fa828u, (page + 0x40u) << 4);
+      g_wpr2_opens++;
+      TracePush(SIM_TRACE_WPR2, page << 4, (page + 0x40u) << 4);
+    }
+    Wr32(gpu->bar, SIM_REG_GFW_CPUCTL, SIM_FALCON_HALT_BIT);
+    TracePush(SIM_TRACE_FW_START, f->base, 0);
+  }
+}
+
+/* One DMA block: 256 bytes from host memory into IMEM or DMEM. */
+static void FalconDma(SIM_GPU *gpu, SIM_FALCON *f, UINT32 command) {
+  const UINT8 *host = NULL;
+  int imem = (command & (1u << 2)) != 0;
+  UINT32 window = imem ? f->dma_dest : f->dma_off;
+  UINT8 *target = imem ? f->imem : f->dmem;
+  UINT32 limit = imem ? SIM_FALCON_IMEM_BYTES : SIM_FALCON_DMEM_BYTES;
+  if (!FalconHostRange(gpu, f->dma_src, SIM_FALCON_DMA_BLOCK, &host)) {
+    f->dma_unmapped++;
+  } else if (window <= limit && SIM_FALCON_DMA_BLOCK <= limit - window) {
+    memcpy(target + window, host, SIM_FALCON_DMA_BLOCK);
+  }
+  if (imem) {
+    f->imem_bytes += SIM_FALCON_DMA_BLOCK;
+    f->dma_dest += SIM_FALCON_DMA_BLOCK;
+  } else {
+    f->dmem_bytes += SIM_FALCON_DMA_BLOCK;
+    f->dma_off += SIM_FALCON_DMA_BLOCK;
+  }
+  f->dma_src += SIM_FALCON_DMA_BLOCK;
+  /* Idle with the completion bit set: the driver polls busy=0 then done=1. */
+  f->status = 2;
+}
+
+static int FalconRead(SIM_GPU *gpu, UINT32 offset, UINT32 *value) {
+  SIM_FALCON *f = FalconLookup(gpu, offset);
+  if (!f) return 0;
+  UINT32 reg = offset - f->base;
+  switch (reg) {
+    case SIM_FALCON_CPUCTL: *value = f->cpuctl; return 1;
+    case SIM_FALCON_MAILBOX0: *value = f->mailbox0; return 1;
+    case SIM_FALCON_MAILBOX1: *value = f->mailbox1; return 1;
+    case SIM_FALCON_BOOTVEC: *value = f->boot_vector; return 1;
+    case SIM_FALCON_ENGINE: *value = f->engine; return 1;
+    case SIM_FALCON_DMA_STATUS: *value = f->status; return 1;
+    /* HWCFG2: idle (bit 31) and no memory scrub in progress (bit 12). */
+    case SIM_FALCON_HWCFG2: *value = 0x80000000u; return 1;
+    default: return 0;
+  }
+}
+
+static int FalconWrite(SIM_GPU *gpu, UINT32 offset, UINT32 value) {
+  SIM_FALCON *f = FalconLookup(gpu, offset);
+  if (!f) return 0;
+  UINT32 reg = offset - f->base;
+  switch (reg) {
+    case SIM_FALCON_CPUCTL:
+      f->cpuctl = value;
+      if (value & SIM_FALCON_START_BIT) FalconStart(gpu, f);
+      return 1;
+    case SIM_FALCON_MAILBOX0: f->mailbox0 = value; return 1;
+    case SIM_FALCON_MAILBOX1: f->mailbox1 = value; return 1;
+    case SIM_FALCON_BOOTVEC: f->boot_vector = value; return 1;
+    case SIM_FALCON_ENGINE:
+      f->engine = value;
+      if (value & 1u) {
+        /* Engine reset: the CPU is held halted, the payload's one-shot
+         * transition is disarmed, and DMA state is dropped. */
+        f->cpuctl = SIM_FALCON_HALT_BIT;
+        f->status = 0;
+        f->booted = 0;
+      }
+      return 1;
+    case SIM_FALCON_DMA_SRC_LO:
+      f->dma_src_lo = value;
+      f->dma_src = ((UINT64)f->dma_src_lo | (UINT64)f->dma_src_hi << 32) << 8;
+      return 1;
+    case SIM_FALCON_DMA_SRC_HI:
+      f->dma_src_hi = value & 0x1ff;
+      f->dma_src = ((UINT64)f->dma_src_lo | (UINT64)f->dma_src_hi << 32) << 8;
+      return 1;
+    case SIM_FALCON_DMA_DST: f->dma_dest = value; return 1;
+    case SIM_FALCON_DMA_OFF: f->dma_off = value; return 1;
+    case SIM_FALCON_DMA_STATUS: FalconDma(gpu, f, value); return 1;
+    default: return 0;
+  }
+}
+
 static EFI_STATUS EFIAPI SimPciMemRead(EFI_PCI_IO_PROTOCOL *self,
                                        EFI_PCI_IO_PROTOCOL_WIDTH width,
                                        UINT8 bar, UINT64 offset, UINTN count,
@@ -233,6 +461,13 @@ static EFI_STATUS EFIAPI SimPciMemRead(EFI_PCI_IO_PROTOCOL *self,
   if (!buffer || bar || !unit) return EFI_INVALID_PARAMETER;
   if (offset > SIM_BAR_BYTES || count > (SIM_BAR_BYTES - offset) / unit)
     return EFI_INVALID_PARAMETER;
+  if (unit == 4 && count == 1) {
+    UINT32 computed = 0;
+    if (FalconRead(gpu, (UINT32)offset, &computed)) *(UINT32 *)buffer = computed;
+    else memcpy(buffer, gpu->bar + offset, 4);
+    gpu->bar_reads++;
+    return EFI_SUCCESS;
+  }
   memcpy(buffer, gpu->bar + offset, count * unit);
   gpu->bar_reads++;
   return EFI_SUCCESS;
@@ -247,6 +482,13 @@ static EFI_STATUS EFIAPI SimPciMemWrite(EFI_PCI_IO_PROTOCOL *self,
   if (!buffer || bar || !unit) return EFI_INVALID_PARAMETER;
   if (offset > SIM_BAR_BYTES || count > (SIM_BAR_BYTES - offset) / unit)
     return EFI_INVALID_PARAMETER;
+  if (unit == 4 && count == 1 && FalconWrite(gpu, (UINT32)offset,
+                                             *(UINT32 *)buffer)) {
+    Wr32(gpu->bar, (UINT32)offset, *(UINT32 *)buffer);
+    gpu->bar_writes++;
+    TracePush(SIM_TRACE_BAR_WRITE, (UINT32)offset, *(UINT32 *)buffer);
+    return EFI_SUCCESS;
+  }
   if (offset < SIM_PROM_OFFSET + SIM_PROM_BYTES &&
       offset + count * unit > SIM_PROM_OFFSET) {
     gpu->prom_writes++;
@@ -277,6 +519,29 @@ static EFI_STATUS EFIAPI SimPciConfigRead(EFI_PCI_IO_PROTOCOL *self,
   return EFI_SUCCESS;
 }
 
+/* Function-level reset: the engines stop and the firmware-owned windows
+ * close. The permission latch (PLM) and the speed-select registers are kept
+ * because the post-FLR contract in the driver requires them to survive; the
+ * real ROM GFW re-runs and re-latches them on hardware. */
+static void SimGpuFunctionReset(SIM_GPU *gpu) {
+  Wr32(gpu->bar, 0x001fa824u, 0);
+  Wr32(gpu->bar, 0x001fa828u, 0);
+  for (unsigned i = 0; i < 2; i++) {
+    SIM_FALCON *f = &gpu->falcons[i];
+    f->cpuctl = SIM_FALCON_HALT_BIT;
+    f->status = 0;
+    f->booted = 0;
+    f->imem_bytes = 0;
+    f->dmem_bytes = 0;
+    f->dma_src = 0;
+    f->dma_src_lo = 0;
+    f->dma_src_hi = 0;
+    f->dma_dest = 0;
+    f->dma_off = 0;
+  }
+  Wr32(gpu->bar, SIM_REG_GFW_CPUCTL, SIM_FALCON_HALT_BIT);
+}
+
 static EFI_STATUS EFIAPI SimPciConfigWrite(EFI_PCI_IO_PROTOCOL *self,
                                            EFI_PCI_IO_PROTOCOL_WIDTH width,
                                            UINT32 offset, UINTN count,
@@ -295,8 +560,15 @@ static EFI_STATUS EFIAPI SimPciConfigWrite(EFI_PCI_IO_PROTOCOL *self,
   /* Function-level reset: DEVCTL bit 15 (PCIe capability + 8). */
   if (offset <= SIM_CAP_PCIE + 8 && offset + count * unit >= SIM_CAP_PCIE + 10) {
     UINT16 devctl = Rd16(gpu->config, SIM_CAP_PCIE + 8);
-    if (devctl & 0x8000) {
+    if ((devctl & 0x8000) && gpu->flr_unsupported) {
+      /* The function is not reset: the write is dropped and the permission
+       * window stays open, which is exactly what the driver must notice. */
+      devctl &= (UINT16)~0x8000u;
+      Wr16(gpu->config, SIM_CAP_PCIE + 8, devctl);
+      TracePush(SIM_TRACE_FLR_REFUSED, SIM_CAP_PCIE + 8, 0);
+    } else if (devctl & 0x8000) {
       gpu->flr_count++;
+      SimGpuFunctionReset(gpu);
       TracePush(SIM_TRACE_FLR, SIM_CAP_PCIE + 8, 0x8000);
       gpu->flr_pending = 0;
       devctl &= (UINT16)~0x8000u;
@@ -547,8 +819,30 @@ EFI_STATUS SimGpuBuild(SIM_GPU **out) {
   Wr32(gpu->bar, SIM_REG_MMU_HI, 0x00000600);        /* FB top lock */
   Wr32(gpu->bar, SIM_REG_WPR_CFG, 0xfffff0ff);
   Wr32(gpu->bar, SIM_REG_WPR, 0xffffffff);
-  Wr32(gpu->bar, SIM_REG_FEAT, 0xffffffff);
-  Wr32(gpu->bar, SIM_REG_READOUT1, 0x00000000);
+  /* Cold card: permissions are locked and the ROM GFW has finished booting.
+   * The entry PLM is the locked value; the signed payload raises it. */
+  Wr32(gpu->bar, SIM_REG_BOOT0, 0xffffffff);
+  Wr32(gpu->bar, SIM_REG_WPR, 0x00000fffu);
+  Wr32(gpu->bar, SIM_REG_WPR_CFG, 0xfffff000u);
+  Wr32(gpu->bar, SIM_REG_FBPA, 0xffffffffu);
+  Wr32(gpu->bar, SIM_REG_FEAT_PLM, SIM_PLM_LOCKED);
+  Wr32(gpu->bar, SIM_REG_READOUT1, 0x00000000u);
+  Wr32(gpu->bar, SIM_REG_GFW_PLM, SIM_GFW_PLM_BOOTED);
+  Wr32(gpu->bar, SIM_REG_GFW_BOOT, SIM_GFW_BOOT_DONE);
+  {
+    SIM_FALCON *sec2 = &gpu->falcons[0];
+    SIM_FALCON *gsp = &gpu->falcons[1];
+    sec2->base = SIM_SEC2_BASE; sec2->falcon2 = SIM_SEC2_FALCON2;
+    sec2->cpuctl = SIM_FALCON_HALT_BIT;
+    sec2->imem = calloc(1, SIM_FALCON_IMEM_BYTES);
+    sec2->dmem = calloc(1, SIM_FALCON_DMEM_BYTES);
+    gsp->base = SIM_GSP_BASE; gsp->falcon2 = SIM_GSP_FALCON2;
+    gsp->cpuctl = SIM_FALCON_HALT_BIT;
+    gsp->imem = calloc(1, SIM_FALCON_IMEM_BYTES);
+    gsp->dmem = calloc(1, SIM_FALCON_DMEM_BYTES);
+    if (!sec2->imem || !sec2->dmem || !gsp->imem || !gsp->dmem)
+      return EFI_OUT_OF_RESOURCES;
+  }
 
   gpu->io.Mem.Read = SimPciMemRead;
   gpu->io.Mem.Write = SimPciMemWrite;
@@ -580,6 +874,10 @@ void SimGpuFree(SIM_GPU *gpu) {
   free(gpu->config);
   free(gpu->bar);
   free(gpu->prom);
+  for (unsigned i = 0; i < 2; i++) {
+    free(gpu->falcons[i].imem);
+    free(gpu->falcons[i].dmem);
+  }
   for (size_t i = 0; i < gpu->mapping_count; i++) {
     if (gpu->mappings[i]->used)
       munmap(gpu->mappings[i]->host, gpu->mappings[i]->bytes);
@@ -589,8 +887,8 @@ void SimGpuFree(SIM_GPU *gpu) {
   free(gpu);
 }
 
-size_t SimTraceCount(void) { return g_trace_count; }
-int SimTraceOverflowed(void) { return (int)g_trace_overflow; }
+size_t SimTraceCount(void) { return g_trace_total; }
+int SimTraceOverflowed(void) { return 0; }
 int SimTraceKind(size_t index) {
   return index < g_trace_count ? (int)g_trace[index].kind : -1;
 }
@@ -600,23 +898,43 @@ UINT32 SimTraceOffset(size_t index) {
 UINT32 SimTraceValue(size_t index) {
   return index < g_trace_count ? g_trace[index].value : 0xffffffffu;
 }
-void SimTraceReset(void) { g_trace_count = 0; g_trace_overflow = 0; }
-size_t SimTraceCountKind(int kind) {
-  size_t n = 0;
-  for (size_t i = 0; i < g_trace_count; i++)
-    if (g_trace[i].kind == (UINT8)kind) n++;
-  return n;
+int SimTraceWatch(UINT32 offset) {
+  if (g_watch_count >= SIM_TRACE_WATCH_MAX) return -1;
+  int slot = (int)g_watch_count++;
+  g_watch_offset[slot] = offset;
+  g_watch_first[slot] = -1;
+  g_watch_last[slot] = -1;
+  g_watch_writes[slot] = 0;
+  return slot;
+}
+long SimTraceWatchFirst(int slot) {
+  return (slot >= 0 && (unsigned)slot < g_watch_count) ? g_watch_first[slot] : -1;
+}
+long SimTraceWatchLast(int slot) {
+  return (slot >= 0 && (unsigned)slot < g_watch_count) ? g_watch_last[slot] : -1;
+}
+size_t SimTraceWatchWrites(int slot) {
+  return (slot >= 0 && (unsigned)slot < g_watch_count) ? g_watch_writes[slot] : 0;
+}
+
+void SimTraceReset(void) {
+  g_trace_count = 0;
+  g_trace_total = 0;
+  g_watch_count = 0;
+  for (unsigned i = 0; i < 16; i++) {
+    g_trace_kind_total[i] = 0;
+    g_trace_kind_first[i] = -1;
+    g_trace_kind_last[i] = -1;
+  }
+}
+size_t SimTraceCountOf(int kind) {
+  return (kind > 0 && kind < 16) ? g_trace_kind_total[kind] : 0;
 }
 long SimTraceFirstOf(int kind) {
-  for (size_t i = 0; i < g_trace_count; i++)
-    if (g_trace[i].kind == (UINT8)kind) return (long)i;
-  return -1;
+  return (kind > 0 && kind < 16) ? g_trace_kind_first[kind] : -1;
 }
 long SimTraceLastOf(int kind) {
-  long found = -1;
-  for (size_t i = 0; i < g_trace_count; i++)
-    if (g_trace[i].kind == (UINT8)kind) found = (long)i;
-  return found;
+  return (kind > 0 && kind < 16) ? g_trace_kind_last[kind] : -1;
 }
 
 UINT32 SimGpuBarRead(SIM_GPU *gpu, UINT32 offset) {
@@ -633,11 +951,34 @@ const UINT8 *SimGpuProm(SIM_GPU *gpu) { return gpu ? gpu->prom : NULL; }
 UINTN SimGpuFlrCount(SIM_GPU *gpu) { return gpu ? gpu->flr_count : 0; }
 UINTN SimGpuBarWrites(SIM_GPU *gpu) { return gpu ? gpu->bar_writes : 0; }
 UINTN SimGpuPromWrites(SIM_GPU *gpu) { return gpu ? gpu->prom_writes : 0; }
+UINT32 SimGpuBarReadPublic(SIM_GPU *gpu, UINT32 offset) { return SimGpuBarRead(gpu, offset); }
+UINTN SimGpuWpr2Opens(void) { return g_wpr2_opens; }
+UINT32 SimGpuWpr2Low(SIM_GPU *gpu) {
+  return gpu ? Rd32(gpu->bar, 0x001fa824u) : 0;
+}
+UINT32 SimGpuWpr2High(SIM_GPU *gpu) {
+  return gpu ? Rd32(gpu->bar, 0x001fa828u) : 0;
+}
 UINT32 SimGpuConfigRead(SIM_GPU *gpu, UINT32 offset) {
   if (!gpu || offset + 4 > SIM_CONFIG_BYTES) return 0xffffffffu;
   return Rd32(gpu->config, offset);
 }
 int SimGpuStockDriverBound(SIM_GPU *gpu) { return gpu ? gpu->stock_driver_bound : 0; }
+
+/* Scenario switches. Each models a card that the image must refuse or survive,
+ * rather than special-casing a return value. */
+void SimGpuEnableMsi(SIM_GPU *gpu, int enable) {
+  if (!gpu) return;
+  UINT16 control = Rd16(gpu->config, SIM_CAP_MSI + 2);
+  if (enable) control |= 0x0001;
+  else control &= (UINT16)~0x0001u;
+  Wr16(gpu->config, SIM_CAP_MSI + 2, control);
+}
+
+void SimGpuSetFlrSupported(SIM_GPU *gpu, int supported) {
+  if (!gpu) return;
+  gpu->flr_unsupported = supported ? 0 : 1;
+}
 EFI_HANDLE SimGpuHandle(SIM_GPU *gpu) { return gpu ? gpu->handle : NULL; }
 EFI_PCI_IO_PROTOCOL *SimGpuIo(SIM_GPU *gpu) { return gpu ? &gpu->io : NULL; }
 

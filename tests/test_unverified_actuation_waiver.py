@@ -41,12 +41,16 @@ def host_compiler():
     return shutil.which("clang") or shutil.which("gcc")
 
 
-def run_cc(compiler, flags, source, include=()):
+def run_cc(compiler, flags, source, include=(), hosted=False):
+    """Compile a probe. Firmware probes are freestanding and carry the UEFI
+    port marker; ``hosted`` drops both, which is the only way the simulator
+    profile is allowed to exist."""
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "probe.c"
         path.write_text(source, encoding="utf-8")
+        environment = [] if hosted else ["-ffreestanding", "-DGU_UEFI_PORT"]
         command = [compiler, "-std=c11", "-fsyntax-only", "-fshort-wchar",
-                   "-ffreestanding", "-DGU_UEFI_PORT",
+                   *environment,
                    "-I", str(SRC),
                    "-I", str(SRC / "vendor" / "edk2" / "Include"),
                    "-I", str(SRC / "vendor" / "edk2" / "Include" / "X64")]
@@ -81,9 +85,12 @@ class WaiverHeaderMatrix(unittest.TestCase):
     def test_waiver_is_not_part_of_any_default_profile(self):
         for name, text in BUILDERS:
             self.assertEqual(text.count("/DGU_ACTIVE_UNVERIFIED_ACTUATION"), 1, name)
-        self.assertIn("#if defined(GU_ACTIVE_UNVERIFIED_ACTUATION)\n#define GU_PREFLIGHT_ONLY 0", PORT)
+        self.assertIn("#if GU_ACTUATION_ADMITTED\n#define GU_PREFLIGHT_ONLY 0", PORT)
+        # Only two profiles may define GU_ACTUATION_ADMITTED: the operator
+        # waiver and the hosted simulator. Nothing else admits I/O writes.
+        self.assertEqual(PORT.count("#define GU_ACTUATION_ADMITTED 1"), 2)
+        self.assertEqual(PORT.count("#define GU_ACTUATION_ADMITTED 0"), 1)
         # The last branch, taken by every unspecified build, still refuses I/O.
-        self.assertTrue(PORT.rstrip().endswith("#endif") or True)
         tail = PORT.split("#define GU_PREFLIGHT_ONLY 0", 1)[1]
         self.assertIn("#else\n#define GU_PREFLIGHT_ONLY 1\n#endif", tail)
 
@@ -116,6 +123,68 @@ class WaiverHeaderMatrix(unittest.TestCase):
         self.assertEqual(status, 0, output)
 
 
+SIMULATED = (
+    "-DGU_SIMULATED_ACTUATION",
+    "-DGU_AD104_TRANSACTION",
+    "-DGU_ENTRY_LATCHED_SS1_FULL",
+    "-DGU_ACTIVE_SINGLE_TARGET",
+)
+
+
+class SimulatorProfile(unittest.TestCase):
+    """The hosted simulator relaxes the same admission checks as the waiver.
+
+    It must be impossible to ship: freestanding builds, the UEFI port marker,
+    the waiver, and the preparation-only/synthetic profiles all refuse it.
+    """
+
+    def setUp(self):
+        self.compiler = host_compiler()
+        if not self.compiler:
+            self.skipTest("A host C compiler is required")
+
+    def assertRefused(self, flags, reason, hosted=False):
+        status, output = run_cc(self.compiler, flags, PROBE, hosted=hosted)
+        self.assertNotEqual(status, 0, "profile was admitted: %s" % (flags,))
+        self.assertIn(reason, output)
+
+    def test_simulator_is_refused_in_a_firmware_build(self):
+        self.assertRefused(SIMULATED, "Simulated actuation is a hosted-only build")
+        self.assertRefused(SIMULATED, "Simulated actuation must not use the UEFI port marker")
+
+    def test_simulator_requires_transaction_and_ordered_mode(self):
+        self.assertRefused(("-DGU_SIMULATED_ACTUATION",),
+                           "Simulated actuation requires the experimental firmware transaction profile",
+                           hosted=True)
+        self.assertRefused(("-DGU_SIMULATED_ACTUATION", "-DGU_AD104_TRANSACTION"),
+                           "Simulated actuation requires the ordered selected-target execution mode",
+                           hosted=True)
+
+    def test_simulator_rejects_preparation_synthetic_and_waiver_profiles(self):
+        self.assertRefused(SIMULATED + ("-DGU_ACTIVE_SEQUENCE_PREPARE_ONLY",),
+                           "Simulated actuation cannot be combined with preparation-only or synthetic builds",
+                           hosted=True)
+        self.assertRefused(SIMULATED + ("-DGU_SYNTHETIC_COMPILE_ONLY",),
+                           "Simulated actuation cannot be combined with preparation-only or synthetic builds",
+                           hosted=True)
+        self.assertRefused(SIMULATED + ("-DGU_ACTIVE_UNVERIFIED_ACTUATION",),
+                           "Simulated actuation and the hardware waiver are distinct profiles",
+                           hosted=True)
+
+    def test_simulator_profile_compiles_only_when_hosted(self):
+        status, output = run_cc(self.compiler, SIMULATED, PROBE, hosted=True)
+        self.assertEqual(status, 0, output)
+
+    def test_no_builder_can_produce_a_simulated_image(self):
+        for name, text in BUILDERS:
+            self.assertNotIn("GU_SIMULATED_ACTUATION", text, name)
+        runner = (ROOT / "tools" / "run_simulation.py").read_text(encoding="utf-8")
+        self.assertIn("-DGU_SIMULATED_ACTUATION", runner)
+        # The simulated card satisfies the same config policy as hardware, so
+        # the synthetic ESP/host-test profile is never mixed in.
+        self.assertNotIn("GU_HOST_TEST_PROFILE", runner)
+
+
 class OrderedTargetAdmission(unittest.TestCase):
     def setUp(self):
         self.compiler = host_compiler()
@@ -144,11 +213,12 @@ class OrderedTargetAdmission(unittest.TestCase):
         self.assertEqual(status, 0, output)
 
     def test_runtime_refusal_survives_without_the_waiver(self):
-        guard = DISCOVERY.split("if(prepared.selected_count!=1 && !GU_ACTUATION_WAIVED){", 1)
+        guard = DISCOVERY.split("if(prepared.selected_count!=1 && !GU_ACTUATION_ADMITTED){", 1)
         self.assertEqual(len(guard), 2)
         self.assertIn("ACTIVE_EXECUTION=REFUSED REASON=MULTI_TARGET_WITHOUT_WAIVER SELECTED=%zu", guard[1])
         self.assertIn("s=EFI_UNSUPPORTED;goto done;", guard[1].split("}", 1)[0])
-        self.assertIn("#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION\n#define GU_ACTUATION_WAIVED 1", DISCOVERY)
+        # Translation units that do not include port.h must still refuse.
+        self.assertIn("#ifndef GU_ACTUATION_ADMITTED\n#define GU_ACTUATION_ADMITTED 0", DISCOVERY)
 
     def test_waiver_records_authorisation_without_claiming_eligibility(self):
         waived = DISCOVERY.split("ACTIVE_EXECUTION=WAIVED_UNVERIFIED", 1)[1]
@@ -164,19 +234,31 @@ class OrderedTargetAdmission(unittest.TestCase):
 
 class ReleaseAdmission(unittest.TestCase):
     def test_original_boards_stay_refused_by_default(self):
-        guard = RELEASE.split("#ifndef GU_ACTIVE_UNVERIFIED_ACTUATION", 1)[1]
+        guard = RELEASE.split("#if !GU_ACTUATION_ADMITTED", 1)[1]
         guard = guard.split("#else", 1)[0]
         self.assertIn("if(Gu.device_id==0x2684U||Gu.device_id==0x220aU) {", guard)
         self.assertIn("MSI release refused for original AD102/GA102", guard)
         self.assertIn("return EFI_UNSUPPORTED;", guard)
 
     def test_waived_release_records_the_unverified_outcome(self):
-        waived = RELEASE.split("#else", 1)[1].split("#endif", 1)[0]
+        waived = RELEASE.split("#if GU_ACTUATION_SIMULATED", 1)[1]
+        waived = waived.split("#else", 1)[1].split("#endif", 1)[0]
         self.assertIn("MSI release WAIVED for original AD102/GA102", waived)
         for token in ("VENDOR_STOP_BOUND=UNVERIFIED", "SIGNED_BOOTER=UNVERIFIED",
                       "RECOVERY=UNVERIFIED", "WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION"):
             self.assertIn(token, waived)
         self.assertNotIn("return EFI_UNSUPPORTED;", waived)
+
+    def test_simulated_release_cannot_claim_verification(self):
+        simulated = RELEASE.split("#if GU_ACTUATION_SIMULATED", 1)[1]
+        simulated = simulated.split("#else", 1)[0]
+        self.assertIn("MSI release SIMULATED for original AD102/GA102", simulated)
+        self.assertIn("ENVIRONMENT=HOST_SIMULATOR", simulated)
+        for token in ("VENDOR_STOP_BOUND=UNVERIFIED", "SIGNED_BOOTER=UNVERIFIED",
+                      "RECOVERY=UNVERIFIED"):
+            self.assertIn(token, simulated)
+        # A simulated run must never borrow the hardware waiver's vocabulary.
+        self.assertNotIn("WAIVER=", simulated)
 
     def test_other_devices_are_unaffected(self):
         # The refusal/admission pair is keyed on the two original boards only.

@@ -144,15 +144,52 @@ def build() -> Path:
     return binary
 
 
+VARIANTS = ("nominal", "msi-enabled", "flr-refused")
+
+# Scenario matrix: every row must pass, and the two negative rows are the
+# documented refusal and abort paths.
+SCENARIOS = (
+    ("prepare", "nominal"),
+    ("transaction", "nominal"),
+    ("prepare", "msi-enabled"),
+    ("transaction", "flr-refused"),
+)
+
+
+def run(binary: Path, stage: str, variant: str) -> subprocess.CompletedProcess:
+    command = [str(binary), stage, str(BUILD / "esp"),
+               str(BUILD / "windows"), variant]
+    return subprocess.run(command, capture_output=True, text=True)
+
+
 def main() -> int:
     stage = sys.argv[1] if len(sys.argv) > 1 else "prepare"
+    if stage == "verify":
+        prepare_tree()
+        binary = build()
+        results = []
+        for scenario_stage, variant in SCENARIOS:
+            done = run(binary, scenario_stage, variant)
+            summary = ""
+            for line in done.stdout.splitlines():
+                if line.startswith("SIM_RESULT=") and "CHECKS_FAILED" in line:
+                    summary = line.strip()
+            results.append((scenario_stage, variant, done.returncode, summary))
+            print("%-12s %-12s rc=%d  %s" % (scenario_stage, variant,
+                                             done.returncode, summary))
+        failed = [r for r in results if r[2] != 0]
+        print("SIM_VERIFY=%s SCENARIOS=%d FAILED=%d"
+              % ("PASS" if not failed else "FAIL", len(results), len(failed)))
+        return 1 if failed else 0
     if stage not in ("prepare", "transaction"):
-        raise SystemExit("unknown stage: %s" % stage)
+        raise SystemExit("unknown stage: %s (use prepare, transaction or verify)"
+                         % stage)
+    variant = sys.argv[2] if len(sys.argv) > 2 else "nominal"
+    if variant not in VARIANTS:
+        raise SystemExit("unknown variant: %s" % variant)
     prepare_tree()
     binary = build()
-    command = [str(binary), stage,
-               str(BUILD / "esp"), str(BUILD / "windows")]
-    done = subprocess.run(command, capture_output=True, text=True)
+    done = run(binary, stage, variant)
     sys.stdout.write(done.stdout)
     if done.stderr.strip():
         sys.stdout.write("\n--- stderr ---\n" + done.stderr)

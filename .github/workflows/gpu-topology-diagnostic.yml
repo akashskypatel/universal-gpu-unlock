@@ -11,6 +11,8 @@ on:
       - 'Setup-AdaUnlock.ps1'
       - 'Check-GPU-Unlock.bat'
       - 'README.md'
+      - 'sim/**'
+      - 'docs/HOST_SIMULATOR.md'
       - '.github/workflows/gpu-topology-diagnostic.yml'
   pull_request:
     paths:
@@ -22,6 +24,8 @@ on:
       - 'Setup-AdaUnlock.ps1'
       - 'Check-GPU-Unlock.bat'
       - 'README.md'
+      - 'sim/**'
+      - 'docs/HOST_SIMULATOR.md'
       - '.github/workflows/gpu-topology-diagnostic.yml'
   workflow_dispatch:
 permissions:
@@ -229,6 +233,14 @@ jobs:
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
             "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
           ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
+      - name: Run the host simulator scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "=== host simulator $(date -u +%FT%TZ) ==="
+            python3 tools/run_simulation.py verify
+          } 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
       - name: Preserve final host status
         if: always()
         shell: bash
