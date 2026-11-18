@@ -26,8 +26,8 @@ def body(source, start, end):
 LOADER = body(BOOT, "EFI_STATUS GuBootLoadAssets(VOID) {",
               "\nstatic EFI_STATUS ReadWindowsBinary(")
 MANIFEST = body(PROFILE, "static const GU_ARCH_ASSETS AdaAssets=",
-                "BOOLEAN GuAd104AssetsValid(VOID) {")
-ASSET_VERIFY = body(PROFILE, "BOOLEAN GuAd104AssetsValid(VOID) {",
+                "BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {")
+ASSET_VERIFY = body(PROFILE, "BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {",
                     "BOOLEAN GuAd104PromMatches(")
 PREDICATES = body(PORT, "#define GU_PORT_MATCH(id)",
                   "static inline BOOLEAN GuIsAdaPciId(")
@@ -196,7 +196,8 @@ typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gs
 struct firmware {UINTN size;const VOID *data;};
 typedef struct {const char *name;struct firmware firmware;} LOADED;
 static LOADED GuAssets[GU_ASSET_COUNT];
-static struct {int started,fault,retained,asset_load_attempted;} Gu;
+typedef struct {int started,fault,retained,asset_load_attempted;} GU_PLATFORM;
+static GU_PLATFORM Gu;
 static VOID *Root=(VOID *)(uintptr_t)1;
 static VOID *UnreleasedFilesystemHandles;
 static EFI_STATUS BootFileStatus;
@@ -218,7 +219,8 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,co
 static BOOLEAN GuHashMatches(const VOID *data,UINTN bytes,const char *hash) {
   (void)bytes;(void)hash;return data!=NULL && read_calls!=corrupt_at;
 }
-static BOOLEAN GuAd104AssetsValid(VOID) {
+static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
+  (void)platform;
   for(unsigned i=0;i<GU_ASSET_COUNT;i++)
     if(!GuAssets[i].name||!GuAssets[i].firmware.data)return FALSE;
   return TRUE;
@@ -343,14 +345,15 @@ static BOOLEAN GuCheckConfig(UINT32 *c,UINTN s,UINTN b,UINTN d,UINTN f,GU_CAPS *
 static BOOLEAN GuIsSupportedPciId(UINT32 id){return id==0x268410deU||id==0x220a10deU;}
 static void GuLog(const char *fmt,...){(void)fmt;}
 static BOOLEAN Registers(UINT32 *a,UINT32 *b){*a=1;*b=2;return !Gu.fault;}
-static BOOLEAN GuAd104AssetsValid(void){return TRUE;}
+static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform){(void)platform;return TRUE;}
 static void *GuAlloc(size_t n){return malloc(n);}
 static void GuFree(void *p){free(p);if(free_fails)Gu.fault=Gu.retained=1;}
 static void GuCopyFromIo(void *p,const void *source,size_t bytes){
   (void)p;(void)source;(void)bytes;
   if(read_fails)Gu.fault=1;
 }
-static BOOLEAN GuAd104PromMatches(const void *p,size_t bytes){
+static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const void *p,size_t bytes){
+  (void)platform;
   (void)p;(void)bytes;rom_checks++;return TRUE;
 }
 struct gpu_unlock_fwsec {int valid;};
@@ -492,14 +495,15 @@ int main(void) {
       GuAssets[i].name=ada->entries[i].name;
       GuAssets[i].firmware=(struct firmware){ada->entries[i].bytes,&data[n][i]};
     }
-    CHECK(GuAd104AssetsValid());
+    CHECK(GuAd104AssetsValid(&Gu));
   }
   CHECK(hash_calls==10);
+  CHECK(GuAd104AssetsValid(&platforms[0])&&active==&platforms[1]&&hash_calls==15);
   CHECK(GuPlatformAssetsOwned(&platforms[0])&&GuPlatformAssetsOwned(&platforms[1]));
-  CHECK(active==&platforms[1]&&hash_calls==10);
+  CHECK(active==&platforms[1]&&hash_calls==15);
   const unsigned char *own=GuAssets[0].firmware.data;
   GuAssets[0].firmware.data=platforms[0].asset_entries[0].firmware.data;
-  CHECK(!GuAd104AssetsValid()&&hash_calls==10); /* reject before content access */
+  CHECK(!GuAd104AssetsValid(&Gu)&&hash_calls==15); /* reject before content access */
   CHECK(!GuPlatformAssetsOwned(&platforms[1])&&GuPlatformAssetsOwned(&platforms[0]));
   GuAssets[0].firmware.data=own;
   const char *name=platforms[0].asset_entries[0].name;
@@ -507,10 +511,10 @@ int main(void) {
   CHECK(!GuPlatformAssetsOwned(&platforms[0])&&GuPlatformAssetsOwned(&platforms[1]));
   platforms[0].asset_entries[0].name=name;
   platforms[0].asset_entries[0].firmware.size--;
-  CHECK(!GuPlatformAssetsOwned(&platforms[0])&&active==&platforms[1]&&hash_calls==10);
+  CHECK(!GuPlatformAssetsOwned(&platforms[0])&&active==&platforms[1]&&hash_calls==15);
   platforms[0].asset_entries[0].firmware.size++;
-  CHECK(GuAd104AssetsValid()&&hash_calls==15);
-  active=&platforms[0];CHECK(GuAd104AssetsValid()&&hash_calls==20);
+  CHECK(GuAd104AssetsValid(&Gu)&&hash_calls==20);
+  active=&platforms[0];CHECK(GuAd104AssetsValid(&Gu)&&hash_calls==25);
   return 0;
 }
 '''

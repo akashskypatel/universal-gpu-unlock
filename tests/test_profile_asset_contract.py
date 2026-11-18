@@ -20,16 +20,16 @@ class AssetContract(unittest.TestCase):
         self.assertIn("REASON=SELECTION_PREPARATION_ONLY",discovery)
     def test_load_and_validate_same_manifest(self):
         load=B.split("EFI_STATUS GuBootLoadAssets(VOID) {",1)[1].split("static EFI_STATUS ReadWindowsBinary(",1)[0]
-        verify=P.split("BOOLEAN GuAd104AssetsValid(VOID) {",1)[1].split("BOOLEAN GuAd104PromMatches(",1)[0]
+        verify=P.split("BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {",1)[1].split("BOOLEAN GuAd104PromMatches(",1)[0]
         self.assertIn("GuGetArchAssets()",load)
         self.assertIn("arch->entries[i]",load)
-        self.assertIn("GuAd104AssetsValid()",load)
-        self.assertIn("GuGetArchAssets()",verify)
+        self.assertIn("GuAd104AssetsValid(&Gu)",load)
+        self.assertIn("PlatformManifest(platform)",verify)
         self.assertIn("GuHashMatches(",verify)
         ownership=P.split("BOOLEAN GuPlatformAssetsOwned(",1)[1].split("BOOLEAN GuAd104AssetsValid(",1)[0]
         self.assertIn("GuCpuPoolOwns(platform,",ownership)
         self.assertIn("entry->name!=a->name",ownership)
-        self.assertLess(verify.index("GuPlatformAssetsOwned(&Gu)"),verify.index("GuHashMatches("))
+        self.assertLess(verify.index("GuPlatformAssetsOwned(platform)"),verify.index("GuHashMatches("))
         self.assertNotIn("GuHashMatches(",ownership)
         self.assertNotIn("GuPlatformActive",ownership)
         self.assertNotIn("ada_sizes",load)

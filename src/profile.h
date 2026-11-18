@@ -18,10 +18,10 @@ typedef struct {
 const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id);
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID);
 EFI_STATUS GuDiagnosticScan(VOID);
-BOOLEAN GuAd104AssetsValid(VOID);
+BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform);
 /* CPU-only ownership proof; no content validation or hardware dispatch. */
 BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *platform);
-BOOLEAN GuAd104PromMatches(const VOID *, UINTN);
+BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *, UINTN);
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *);
 /* Prepare is read-only on the GPU. It validates ROM, assets, exact PCI/card
  * state and creates the immutable selector latch. No driver release here. */

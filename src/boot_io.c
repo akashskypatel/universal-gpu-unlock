@@ -382,7 +382,7 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     GuAssets[i].name=a->name;
     GuAssets[i].firmware=(struct firmware){a->bytes,p};
   }
-  if(status==EFI_SUCCESS&&!GuAd104AssetsValid())status=EFI_CRC_ERROR;
+  if(status==EFI_SUCCESS&&!GuAd104AssetsValid(&Gu))status=EFI_CRC_ERROR;
   if(status!=EFI_SUCCESS) {
     for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
       if(GuAssets[i].firmware.data)GuFree((VOID *)GuAssets[i].firmware.data);

@@ -206,6 +206,12 @@ int main(void){
   CHECK(GuCompatOpenDevice(&b)==EFI_ACCESS_DENIED&&!b&&Gu.fault&&allocs==3);
   Gu.handle=&pci[1];Gu.fault=0; /* Test-only reset. */
   CHECK(GuCompatOpenDevice(&b)==EFI_SUCCESS&&a!=b&&a->dev.dma_mask!=b->dev.dma_mask&&allocs==3);
+  CHECK(GuCompatOwner(b)==&platforms[1]&&!Gu.fault);
+  CHECK(!GuCompatOwner(a)&&Gu.fault&&!platforms[0].fault);
+  Gu.fault=0; /* Independent host cases. */
+  b->refs=0;
+  CHECK(!GuCompatOwner(b)&&Gu.fault);
+  Gu.fault=0;b->refs=1;
   CHECK(GuCompatCompletedPlatform(&platforms[0])&&!GuCompatCompletedPlatform(&platforms[1]));
   CHECK(active==&platforms[1]);
   platforms[0].compat_device_closed=0;CHECK(!GuCompatCompletedPlatform(&platforms[0]));platforms[0].compat_device_closed=1;
@@ -307,13 +313,14 @@ int main(void){
             self.assertNotRegex(vendor, rf"\b{call}\((?!work->pdev,|pdev,|pdev\))")
         load=vendor.split("int gpu_unlock_610_load_shared(",1)[1].split("int gpu_unlock_610_release_shared(",1)[0]
         run=vendor.split("int gpu_unlock_610_unlock(",1)[1]
-        self.assertLess(load.index("GuCompatPciMatches(pdev)"),load.index("pdev->device"))
-        self.assertLess(run.index("GuCompatPciMatches(pdev)"),run.index("Gu.transaction_attempted"))
-        self.assertLess(run.index("GuCompatPciMatches(pdev)"),run.index("pdev->device"))
+        self.assertLess(load.index("GuCompatOwner(pdev)"),load.index("pdev->device"))
+        self.assertLess(run.index("GuCompatOwner(pdev)"),run.index("owner->transaction_attempted"))
+        self.assertLess(run.index("GuCompatOwner(pdev)"),run.index("pdev->device"))
         self.assertIn("shared->owner!=pdev",run)
         self.assertIn("if(!result&&released)result=released;",execution)
-        self.assertLess(run.index("GuCompatPciMatches(pdev)"),run.index("Gu.display_check()"))
+        self.assertLess(run.index("GuCompatOwner(pdev)"),run.index("owner->display_check()"))
         self.assertLess(run.index("if (!work->pdev)"),run.index("unlock_transaction_assets(work)"))
+        self.assertNotRegex(vendor,r"\bGu\.|\bGuAssets\b")
 
 
     def test_borrowed_asset_record_is_device_scoped(self):
@@ -340,16 +347,16 @@ struct firmware {size_t size;const unsigned char *data;};
 struct device {int scope;};
 struct pci_dev {struct device dev;int device;};
 typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
-typedef struct {int fault;GU_ASSET assets[5];} GU_PLATFORM;
+typedef struct {int fault;GU_ASSET asset_entries[5];} GU_PLATFORM;
 static GU_PLATFORM contexts[2],*active=&contexts[0];
 static struct pci_dev cards[2],*selected=&cards[0];
 #define Gu (*active)
-#define GuAssets (Gu.assets)
+#define GuAssets (Gu.asset_entries)
 static int releases,opens,fail_release,invalid_assets;
 static GU_ASSET *GuAssetEntries(void){return GuAssets;}
 static int GuPlatformAssetsOwned(const GU_PLATFORM *p){return p==active&&!invalid_assets;}
-static int GuAd104AssetsValid(void){return GuPlatformAssetsOwned(active);}
-static int GuCompatPciMatches(const struct pci_dev *p){return p==selected;}
+static int GuAd104AssetsValid(const GU_PLATFORM *p){return GuPlatformAssetsOwned(p);}
+static GU_PLATFORM *GuCompatOwner(const struct pci_dev *p){return p==selected?active:NULL;}
 static int GuCompatDeviceMatches(const struct device *d){return d==&selected->dev;}
 static int gpu_is_supported_device(int d){return d==1;}
 static const struct asset_names {const char *gsp;} names={"gsp"};
@@ -371,11 +378,11 @@ int main(void){
   unsigned char bytes[2]={1,2};
   for(int i=0;i<2;i++){
     cards[i].device=1;
-    contexts[i].assets[2]=(GU_ASSET){"gsp",{1,&bytes[i]}};
+    contexts[i].asset_entries[2]=(GU_ASSET){"gsp",{1,&bytes[i]}};
   }
   struct gpu_unlock_610_shared a={0},b={0};
   CHECK(gpu_unlock_610_load_shared(&cards[0],&a)==0);
-  CHECK(a.owner==&cards[0]&&a.gsp==&contexts[0].assets[2].firmware&&opens==1&&releases==1);
+  CHECK(a.owner==&cards[0]&&a.gsp==&contexts[0].asset_entries[2].firmware&&opens==1&&releases==1);
   CHECK(gpu_unlock_610_load_shared(&cards[0],&a)==-EALREADY&&opens==1);
   active=&contexts[1];selected=&cards[1];
   CHECK(gpu_unlock_610_load_shared(&cards[1],&a)==-EALREADY&&opens==1);
@@ -391,7 +398,7 @@ int main(void){
   fail_release=1;
   CHECK(gpu_unlock_610_load_shared(&cards[1],&b)==-EIO&&!b.gsp&&!b.owner);
   CHECK(opens==3&&releases==3&&cards[1].dev.scope);
-  CHECK(a.owner==&cards[0]&&a.gsp==&contexts[0].assets[2].firmware);
+  CHECK(a.owner==&cards[0]&&a.gsp==&contexts[0].asset_entries[2].firmware);
   active=&contexts[0];selected=&cards[0];
   CHECK(gpu_unlock_610_release_shared(&cards[0],&a)==0&&!a.owner&&!a.gsp);
   return 0;

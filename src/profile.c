@@ -65,24 +65,25 @@ BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *platform) {
   }
   return TRUE;
 }
-BOOLEAN GuAd104AssetsValid(VOID) {
-  const GU_ARCH_ASSETS *arch=GuGetArchAssets();
-  if(!arch||!GuPlatformAssetsOwned(&Gu))return FALSE;
+BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
+  const GU_ARCH_ASSETS *arch=PlatformManifest(platform);
+  if(!arch||!GuPlatformAssetsOwned(platform))return FALSE;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
-    if(!GuHashMatches(GuAssets[i].firmware.data,a->bytes,a->sha256))
+    if(!GuHashMatches(platform->asset_entries[i].firmware.data,a->bytes,a->sha256))
       return FALSE;
   }
   return TRUE;
 }
-BOOLEAN GuAd104PromMatches(const VOID *Data,UINTN Bytes) {
+BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *Data,UINTN Bytes) {
   /* The live NV_PROM_DATA window is 1 MiB, unlike the accepted 2 MiB
    * archive. Compare live PCI identity and validate the PROM structure;
    * the FWSEC descriptor and cold/PCI snapshots are checked separately.
    * Neither structural validity nor a logged digest authenticates FWSEC. */
-  if(!GuPromImageMatchesDevice((const unsigned char *)Data,Bytes,Gu.device_id)) {
+  if(!platform)return FALSE;
+  if(!GuPromImageMatchesDevice((const unsigned char *)Data,Bytes,platform->device_id)) {
     GuLog("PROM qualification refused: invalid ROM or mismatched live PCI device %04x\n",
-          (unsigned)Gu.device_id);
+          (unsigned)platform->device_id);
     return FALSE;
   }
   UINT8 hash[32];
@@ -92,7 +93,7 @@ BOOLEAN GuAd104PromMatches(const VOID *Data,UINTN Bytes) {
   for(int i=0;i<32;i++){s[i*2]=hex[(hash[i]>>4)&0xf];s[i*2+1]=hex[hash[i]&0xf];}
   s[64]=0;
   GuLog("PROM readout SHA256: %s PCIR_device=%04x STRUCTURE_VALID=1 SIGNATURE_AUTHENTICATED=0\n",
-        s,(unsigned)Gu.device_id);
+        s,(unsigned)platform->device_id);
   return TRUE;
 }
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
@@ -197,14 +198,14 @@ EFI_STATUS GuDiagnosticScan(VOID) {
     return EFI_NOT_READY;
   BOOLEAN config_ok=Config();
   BOOLEAN regs_ok=config_ok&&Registers(&before0,&before1);
-  BOOLEAN assets_ok=GuAd104AssetsValid();
+  BOOLEAN assets_ok=GuAd104AssetsValid(&Gu);
   GuLog("DIAGNOSTIC CONFIG=%u REGISTERS=%u PINNED_ASSETS=%u\n",
         (unsigned)config_ok,(unsigned)regs_ok,(unsigned)assets_ok);
   if(!config_ok||!regs_ok||!assets_ok)return EFI_NOT_READY;
   VOID *prom=GuAlloc(1048576U);
   if(!prom)return EFI_OUT_OF_RESOURCES;
   GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576U);
-  BOOLEAN prom_ok=!Gu.fault&&GuAd104PromMatches(prom,1048576U);
+  BOOLEAN prom_ok=!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576U);
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2=Config();
@@ -240,7 +241,7 @@ EFI_STATUS GuAd104Prepare(VOID) {
     GuLog("GuAd104Prepare: Registers() returned FALSE\n");
     return EFI_NOT_READY;
   }
-  if(!GuAd104AssetsValid()) {
+  if(!GuAd104AssetsValid(&Gu)) {
     GuLog("GuAd104Prepare: Assets invalid\n");
     return EFI_CRC_ERROR;
   }
@@ -250,7 +251,7 @@ EFI_STATUS GuAd104Prepare(VOID) {
     return EFI_OUT_OF_RESOURCES;
   }
   GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
-  BOOLEAN prom_match = !Gu.fault&&GuAd104PromMatches(prom,1048576);
+  BOOLEAN prom_match = !Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576);
   int fwsec_res = prom_match?gpu_unlock_vbios_fwsec(prom,1048576,&fw):-1;
   BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2 = Config();

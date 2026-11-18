@@ -17,7 +17,7 @@ static BOOLEAN GuCompatRecordMatches(const GU_PLATFORM *platform,const struct pc
 }
 
 static BOOLEAN GuCompatIdentityValid(const struct pci_dev *D) {
-  return Gu.compat_device_open&&!Gu.compat_device_closed&&GuCompatRecordMatches(&Gu,D);
+  return Gu.compat_device_open&&!Gu.compat_device_closed&&GuCompatRecordMatches(&Gu,D)&&D->refs>=1;
 }
 
 /* Inspect a completed inactive owner without rebinding or touching hardware. */
@@ -29,9 +29,12 @@ BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform) {
   return D->refs==1&&!D->dev.scope&&list_empty(&D->dev.devres_head)&&
     GuCpuPoolCompatEmpty(platform);
 }
+GU_PLATFORM *GuCompatOwner(const struct pci_dev *D) {
+  if(GuCompatIdentityValid(D))return D->owner;
+  Gu.fault=TRUE;return NULL;
+}
 BOOLEAN GuCompatPciMatches(const struct pci_dev *D) {
-  if(GuCompatIdentityValid(D))return TRUE;
-  Gu.fault=TRUE;return FALSE;
+  return GuCompatOwner(D)!=NULL;
 }
 static BOOLEAN GuCompatDeviceMatches(const struct device *D) {
   if(GuCompatIdentityValid(Gu.compat_device)&&D==&Gu.compat_device->dev)return TRUE;

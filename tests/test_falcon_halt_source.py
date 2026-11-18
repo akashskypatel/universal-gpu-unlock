@@ -41,7 +41,9 @@ typedef long long ktime_t;
 struct falcon_eng { u32 base; u32 falcon2; };
 struct gpu_dev { int dev; };
 struct unlock_transaction_work { struct gpu_dev *pdev; };
-static struct { bool fault; } Gu;
+typedef struct { bool fault; } GU_PLATFORM;
+static GU_PLATFORM Gu;
+static GU_PLATFORM *GuCompatOwner(struct gpu_dev *dev){return dev?&Gu:NULL;}
 static const struct falcon_eng gu_gsp={0x1000u,0x2000u};
 static const struct falcon_eng gu_sec2={0x3000u,0x4000u};
 static const struct falcon_eng *active;

@@ -290,13 +290,14 @@ static int check_devres_empty(struct unlock_transaction_work *work, const char *
 
 static int read_bar(struct unlock_transaction_work *work, u32 offset, u32 *value)
 {
-	if (Gu.fault) return GU_RESULT(-EIO);
+	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+	if (!owner || owner->fault) return GU_RESULT(-EIO);
 	work->last_offset = offset;
 	work->last_valid = false;
 	if (!work->mapped || offset > work->bar_len || work->bar_len - offset < 4)
 		return GU_RESULT(-EINVAL);
 	*value = GuCompatRead32(work->pdev, work->bar + offset);
-	if (Gu.fault) return GU_RESULT(-EIO);
+	if (GuCompatOwner(work->pdev)!=owner || owner->fault) return GU_RESULT(-EIO);
 	work->last_value = *value;
 	work->last_valid = true;
 	return 0;
@@ -367,7 +368,8 @@ static int poll_falcon_engine_halt(struct unlock_transaction_work *work, const s
 	for (;;) {
 		bool cpu_halt = !read_bar(work, eng->base + 0x100, &cpuctl) && !inaccessible(cpuctl) && ((cpuctl & (1u << 4)) != 0);
 		bool riscv_halt = !is_gsp && !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
-		if (Gu.fault)
+		GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+		if (!owner || owner->fault)
 			return GU_RESULT(-EIO);
 		if (cpu_halt || riscv_halt)
 			return 0;
@@ -462,8 +464,10 @@ static int ad102_readout(struct unlock_transaction_work *work, const char *phase
 static int check_entry_selectors(struct unlock_transaction_work *work)
 {
     u32 a,b;
-    if (!work->selectors_saved || !Gu.profile_verified ||
+    GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+    if (!owner || !work->selectors_saved || !owner->profile_verified ||
         read_bar(work,GU_FEAT_SS0_OFFSET,&a) || read_bar(work,GU_FEAT_SS1_OFFSET,&b) ||
+        GuCompatOwner(work->pdev)!=owner ||
         !GuEntrySelectorsMatch(a,b) || a!=work->ss0_entry || b!=work->ss1_entry)
         return GU_RESULT(-EIO);
     return 0;
@@ -787,11 +791,13 @@ static int patch_booter(struct unlock_transaction_work *work)
 static bool free_coherent(struct unlock_transaction_work *work)
 {
 	u32 i;
+	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+	if (!owner || owner->retained) return false;
 
 	for (i = 0; i < work->pages_allocated; i++) {
 		dma_free_coherent(&work->pdev->dev, GU_RADIX_PAGE,
 				  work->pages[i].cpu, work->pages[i].dma);
-		if (Gu.retained) return false;
+		if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 	}
 	if (!GuCompatFree(work->pdev, work->pages)) return false;
 	work->pages = NULL;
@@ -799,30 +805,30 @@ static bool free_coherent(struct unlock_transaction_work *work)
 	if (work->boot_cpu)
 		dma_free_coherent(&work->pdev->dev, work->boot_desc.image_size,
 				  work->boot_cpu, work->boot_dma);
-	if (Gu.retained) return false;
+	if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 	work->boot_cpu = NULL;
 	if (work->fwsec_cpu) {
 		dma_free_coherent(&work->pdev->dev, work->fwsec_size,
 				  work->fwsec_cpu, work->fwsec_dma);
-		if (Gu.retained) return false;
+		if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 		work->fwsec_cpu = NULL;
 	}
 	if (work->booter_cpu)
 		dma_free_coherent(&work->pdev->dev, work->booter_image_size,
 				  work->booter_cpu, work->booter_dma);
-	if (Gu.retained) return false;
+	if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 	if (work->v67_cpu)
 		dma_free_coherent(&work->pdev->dev, GU_V67_SIZE, work->v67_cpu,
 				  work->v67_dma);
-	if (Gu.retained) return false;
+	if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 	if (work->stock_cpu)
 		dma_free_coherent(&work->pdev->dev, work->stock_size,
 				  work->stock_cpu, work->stock_dma);
-	if (Gu.retained) return false;
+	if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 	if (work->meta_cpu)
 		dma_free_coherent(&work->pdev->dev, GU_WPR_META_SIZE,
 				  work->meta_cpu, work->meta_dma);
-	if (Gu.retained) return false;
+	if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 	work->booter_cpu = NULL;
 	work->v67_cpu = NULL;
 	work->stock_cpu = NULL;
@@ -835,7 +841,8 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 	u16 now, want;
 	int ret = 0;
 
-	if (!GuCompatPciMatches(work->pdev)) {
+	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+	if (!owner) {
 		work->retained = true;
 		return GU_RESULT(-EIO);
 	}
@@ -848,7 +855,7 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 		pci_clear_master(work->pdev);
 		work->master = false;
 	}
-	if (Gu.retained || Gu.master_attributes_pending) {
+	if (GuCompatOwner(work->pdev)!=owner || owner->retained || owner->master_attributes_pending) {
 		work->retained=true;return GU_RESULT(-EBUSY);
 	}
 	if (work->mapped) {
@@ -864,7 +871,7 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 		pci_disable_device(work->pdev);
 		work->enabled = false;
 	}
-	if (!free_coherent(work) || Gu.retained || Gu.allocations) {
+	if (!free_coherent(work) || GuCompatOwner(work->pdev)!=owner || owner->retained || owner->allocations) {
 		work->retained=true;return GU_RESULT(-EBUSY);
 	}
 	if (work->booter_fw) {
@@ -1234,7 +1241,8 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	GuCompatCopyFromIo(work->pdev, rom, work->bar + 0x300000, mapped);
 	dev_info(&work->pdev->dev, "FWSEC: PROM bytes=%zu signature=%#x\n",
 		 mapped, (unsigned int)(rom[0] | (rom[1] << 8)));
-	if (Gu.fault || !GuAd104PromMatches(rom,mapped)) { ret=-EBADMSG; goto out; }
+	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+	if (!owner || owner->fault || !GuAd104PromMatches(owner,rom,mapped)) { ret=-EBADMSG; goto out; }
 	ret = gpu_unlock_vbios_fwsec(rom, mapped, &fw);
 	if (ret) {
 		dev_err(&work->pdev->dev, "FWSEC-FRTS not found in board ROM (%d)\n", ret);
@@ -1364,7 +1372,8 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 				dev_err(&work->pdev->dev, "card already initialised since power on (WPR2 enabled); power off first\n");
 				return GU_RESULT(-EBUSY);
 			}
-            if (!Gu.profile_verified || !GuEntrySelectorsMatch(ss0,ss1) ||
+            GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+            if (!owner || !owner->profile_verified || !GuEntrySelectorsMatch(ss0,ss1) ||
                 inaccessible(ss0) || ss0==GU_SS0_UNLOCK || (ss1 > 7) ||
                 work->plm_entry!=0xffffff8f || sample.plm!=0x8b8f ||
                 sample.boot!=0x3ff || sample.cpuctl!=0x10 || wpr_hi)
@@ -1786,7 +1795,8 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 		ret=ad102_readout(work, "post-FLR", true);
 		if (ret) return ret;
 	}
-	if (Gu.fault) return GU_RESULT(-EIO);
+	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+	if (!owner || owner->fault) return GU_RESULT(-EIO);
 	work->quiesced=true;GuQuiesced();
 	return 0;
 }
@@ -1794,9 +1804,10 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 int gpu_unlock_610_load_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared)
 {
 	int ret;
-	if (!GuCompatPciMatches(pdev) || !shared || !gpu_is_supported_device(pdev->device)) return -ENODEV;
+	GU_PLATFORM *owner = GuCompatOwner(pdev);
+	if (!owner || !shared || !gpu_is_supported_device(pdev->device)) return -ENODEV;
 	if (shared->owner || shared->gsp) return -EALREADY;
-	if (!GuAd104AssetsValid()) return -ENODEV;
+	if (!GuAd104AssetsValid(owner)) return -ENODEV;
 	ret = request_scoped(&pdev->dev, &shared->gsp, unlock_assets(pdev)->gsp);
 	if (!ret) shared->owner = pdev;
 	return ret;
@@ -1804,9 +1815,10 @@ int gpu_unlock_610_load_shared(struct pci_dev *pdev, struct gpu_unlock_610_share
 
 int gpu_unlock_610_release_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared)
 {
-	if (!GuCompatPciMatches(pdev) || !shared) return -EINVAL;
+	GU_PLATFORM *owner = GuCompatOwner(pdev);
+	if (!owner || !shared) return -EINVAL;
 	if (!shared->owner && !shared->gsp) return 0;
-	if (shared->owner != pdev || shared->gsp != &GuAssets[2].firmware) return -EINVAL;
+	if (shared->owner != pdev || shared->gsp != &owner->asset_entries[2].firmware) return -EINVAL;
 	release_firmware(shared->gsp);
 	shared->gsp = NULL;
 	shared->owner = NULL;
@@ -1819,14 +1831,17 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 	int ret, cleanup;
 
     /* Check the open owner before consulting its one-use transaction state. */
-    if (!GuCompatPciMatches(pdev)) return -ENODEV;
-    if (Gu.transaction_attempted) return -EALREADY;
+    GU_PLATFORM *owner = GuCompatOwner(pdev);
+    if (!owner) return -ENODEV;
+    if (owner->transaction_attempted) return -EALREADY;
     if (!gpu_is_supported_device(pdev->device) ||
-        !shared || shared->owner!=pdev || shared->gsp!=&GuAssets[2].firmware || !GuAd104AssetsValid() ||
-        !Gu.prom_verified || !Gu.profile_verified || !Gu.owned || !Gu.armed ||
-        !Gu.display_ok || !Gu.display_check || !Gu.display_check() || Gu.fault ||
-        Gu.started || Gu.allocations || Gu.retained || !GuAd104ColdEntry()) return -ENODEV;
-    Gu.transaction_attempted=TRUE;
+        !shared || shared->owner!=pdev || shared->gsp!=&owner->asset_entries[2].firmware || !GuAd104AssetsValid(owner) ||
+        !owner->prom_verified || !owner->profile_verified || !owner->owned || !owner->armed ||
+        !owner->display_ok || !owner->display_check || !owner->display_check() ||
+        GuCompatOwner(pdev)!=owner || owner->fault ||
+        owner->started || owner->allocations || owner->retained || !GuAd104ColdEntry() ||
+        GuCompatOwner(pdev)!=owner) return -ENODEV;
+    owner->transaction_attempted=TRUE;
 	work = GuCompatAlloc(pdev, 1, sizeof(*work));
 	if (!work)
 		return -ENOMEM;

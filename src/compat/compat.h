@@ -77,6 +77,8 @@ struct pci_dev {
 EFI_STATUS GuCompatReserveDevice(VOID);
 EFI_STATUS GuCompatOpenDevice(struct pci_dev **out);
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *dev);
+/* Resolve only the validated open owner. Does not select or rebind a GPU. */
+GU_PLATFORM *GuCompatOwner(const struct pci_dev *dev);
 BOOLEAN GuCompatPciMatches(const struct pci_dev *dev);
 /* The table always belongs to the current platform, even before reservation. */
 GU_ASSET *GuAssetEntries(VOID);
