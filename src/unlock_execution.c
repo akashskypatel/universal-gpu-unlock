@@ -47,7 +47,8 @@ static EFI_STATUS GuExecuteUnlockCore(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
     *stage="firmware-transaction";
     result=gpu_unlock_610_unlock(dev,&shared);
   }
-  gpu_unlock_610_release_shared(&shared);
+  int released=gpu_unlock_610_release_shared(dev,&shared);
+  if(!result&&released)result=released;
   s=GuCompatCloseDevice(dev);
   if(s!=EFI_SUCCESS)return s;
   GuLog("Selected GPU result=%d fault=%u safe=%u retained=%u flrs=%u DMA=%u\n",

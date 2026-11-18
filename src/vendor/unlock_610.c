@@ -245,17 +245,26 @@ static void *diag_dma_alloc(struct unlock_transaction_work *work, const char *na
 static int request_scoped(struct device *dev, const struct firmware **fw, const char *name)
 {
 	void *group;
+	const struct firmware *asset = NULL;
 	int ret, released;
 
+	if (!fw || *fw || !name)
+		return -EINVAL;
 	group = devres_open_group(dev, NULL, GFP_KERNEL);
 	if (!group)
 		return -ENOMEM;
 	dev_info(dev, "asset request: %s\n", name);
-	ret = request_firmware(fw, name, dev);
+	ret = request_firmware(&asset, name, dev);
 	released = devres_release_group(dev, group);
+	if (!ret && released)
+		ret = released;
+	if (!ret && !asset)
+		ret = -EIO;
 	dev_info(dev, "asset result: %s error=%d bytes=%zu\n",
-		name, ret, ret ? (size_t)0 : (*fw)->size);
+		name, ret, ret ? (size_t)0 : asset->size);
 	dev_info(dev, "asset cache cleanup: %s devres_released=%d\n", name, released);
+	if (!ret)
+		*fw = asset;
 	return ret;
 }
 
@@ -911,7 +920,7 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 
 static int unlock_transaction_assets(struct unlock_transaction_work *work)
 {
-	const struct firmware *desc;
+	const struct firmware *desc = NULL;
 	int ret;
 
 	ret = check_devres_empty(work, "entry");
@@ -1784,14 +1793,24 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 
 int gpu_unlock_610_load_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared)
 {
-	if (!GuCompatPciMatches(pdev) || !shared || !gpu_is_supported_device(pdev->device) || !GuAd104AssetsValid()) return -ENODEV;
-	return request_scoped(&pdev->dev, &shared->gsp, unlock_assets(pdev)->gsp);
+	int ret;
+	if (!GuCompatPciMatches(pdev) || !shared || !gpu_is_supported_device(pdev->device)) return -ENODEV;
+	if (shared->owner || shared->gsp) return -EALREADY;
+	if (!GuAd104AssetsValid()) return -ENODEV;
+	ret = request_scoped(&pdev->dev, &shared->gsp, unlock_assets(pdev)->gsp);
+	if (!ret) shared->owner = pdev;
+	return ret;
 }
 
-void gpu_unlock_610_release_shared(struct gpu_unlock_610_shared *shared)
+int gpu_unlock_610_release_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared)
 {
+	if (!GuCompatPciMatches(pdev) || !shared) return -EINVAL;
+	if (!shared->owner && !shared->gsp) return 0;
+	if (shared->owner != pdev || shared->gsp != &GuAssets[2].firmware) return -EINVAL;
 	release_firmware(shared->gsp);
 	shared->gsp = NULL;
+	shared->owner = NULL;
+	return 0;
 }
 
 int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shared *shared)
@@ -1799,11 +1818,11 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 	struct unlock_transaction_work *work;
 	int ret, cleanup;
 
-    /* No EFI application calls this library yet. A future ownership adapter
-     * must prove exclusive release of GOP, console and all active consumers. */
+    /* Check the open owner before consulting its one-use transaction state. */
+    if (!GuCompatPciMatches(pdev)) return -ENODEV;
     if (Gu.transaction_attempted) return -EALREADY;
-    if (!GuCompatPciMatches(pdev) || !gpu_is_supported_device(pdev->device) ||
-        !shared || shared->gsp!=&GuAssets[2].firmware || !GuAd104AssetsValid() ||
+    if (!gpu_is_supported_device(pdev->device) ||
+        !shared || shared->owner!=pdev || shared->gsp!=&GuAssets[2].firmware || !GuAd104AssetsValid() ||
         !Gu.prom_verified || !Gu.profile_verified || !Gu.owned || !Gu.armed ||
         !Gu.display_ok || !Gu.display_check || !Gu.display_check() || Gu.fault ||
         Gu.started || Gu.allocations || Gu.retained || !GuAd104ColdEntry()) return -ENODEV;

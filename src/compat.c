@@ -1,4 +1,5 @@
 #include "compat/compat.h"
+#include "profile.h"
 
 /* The current serialized platform owns exactly one compatibility record.
  * Compare the registered address before examining a caller's reference.
@@ -176,6 +177,7 @@ void GuCompatRetain(const struct pci_dev *D) {
 int request_firmware(const struct firmware **Out,const char *Name,struct device *D) {
   UINTN I;if(!Out)return -EINVAL;*Out=NULL;
   if(!GuCompatDeviceMatches(D)||!Name)return -EINVAL;
+  if(!GuPlatformAssetsOwned(&Gu)){Gu.fault=TRUE;return -EIO;}
   for(I=0;I<GU_ASSET_COUNT;I++)if(GuAssetEntries()[I].name && !strcmp(Name,GuAssetEntries()[I].name) &&
       GuAssetEntries()[I].firmware.data && GuAssetEntries()[I].firmware.size) {
     *Out=&GuAssetEntries()[I].firmware;return 0;

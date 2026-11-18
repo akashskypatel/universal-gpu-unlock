@@ -5,25 +5,21 @@
 struct firmware;
 struct pci_dev;
 
-/* Read-only firmware every unlock uses: loaded once, shared by concurrent unlocks. */
+/* Borrowed immutable firmware reference for one open GPU scope.
+ * The data remains owned by that GPU's platform, not by this record. */
 struct gpu_unlock_610_shared {
 	const struct firmware *gsp;
+	const struct pci_dev *owner;
 };
 
-/*
- * Load the shared firmware. pdev is any target card; the request leaves no
- * device resources behind on it. Returns 0 or a negative errno.
- */
+/* Load the reference into an empty record for this device. */
 int gpu_unlock_610_load_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared);
 
-/* Release the shared firmware once every unlock using it has returned. */
-void gpu_unlock_610_release_shared(struct gpu_unlock_610_shared *shared);
+/* Consume a matching borrow; do not free platform-owned data. */
+int gpu_unlock_610_release_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared);
 
-/*
- * Unlock one cold, unbound supported GPU. The caller holds pci_dev_lock. Returns 0
- * when the unlock and reset checks pass; otherwise a negative errno. Unlocks of different cards may run
- * concurrently with the same shared firmware.
- */
+/* Execute one checked transaction with its own borrowed firmware reference.
+ * This interface does not authorize concurrent transactions. */
 int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shared *shared);
 
 #endif

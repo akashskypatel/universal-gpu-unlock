@@ -282,7 +282,7 @@ int main(void){
         self.assertLess(execution.index("GuCompatReserveDevice()"),execution.index("GuMsiRelease()"))
         self.assertLess(execution.index("GuAd104ColdEntry()"),execution.index("GuCompatOpenDevice(&dev)"))
         self.assertLess(execution.index("GuCompatOpenDevice(&dev)"),execution.index("gpu_unlock_610_load_shared(dev,"))
-        self.assertLess(execution.index("gpu_unlock_610_release_shared(&shared)"),execution.index("GuCompatCloseDevice(dev)"))
+        self.assertLess(execution.index("gpu_unlock_610_release_shared(dev,&shared)"),execution.index("GuCompatCloseDevice(dev)"))
         self.assertLess(execution.index("GuCompatCloseDevice(dev)"),execution.index("GuMsiFinish()"))
         # Vendor I/O must carry its own work record even for repeated BAR addresses.
         for call in ("GuCompatRead32", "GuCompatWrite32", "GuCompatCopyFromIo", "GuCompatDmaBarrier", "GuCompatTime", "GuCompatDelay"):
@@ -292,12 +292,107 @@ int main(void){
         for call in ("GuCompatAlloc", "GuCompatFree", "GuCompatRetain"):
             self.assertIn(call + "(",vendor)
             self.assertNotRegex(vendor, rf"\b{call}\((?!work->pdev,|pdev,|pdev\))")
-        load=vendor.split("int gpu_unlock_610_load_shared(",1)[1].split("void gpu_unlock_610_release_shared(",1)[0]
+        load=vendor.split("int gpu_unlock_610_load_shared(",1)[1].split("int gpu_unlock_610_release_shared(",1)[0]
         run=vendor.split("int gpu_unlock_610_unlock(",1)[1]
         self.assertLess(load.index("GuCompatPciMatches(pdev)"),load.index("pdev->device"))
+        self.assertLess(run.index("GuCompatPciMatches(pdev)"),run.index("Gu.transaction_attempted"))
         self.assertLess(run.index("GuCompatPciMatches(pdev)"),run.index("pdev->device"))
+        self.assertIn("shared->owner!=pdev",run)
+        self.assertIn("if(!result&&released)result=released;",execution)
         self.assertLess(run.index("GuCompatPciMatches(pdev)"),run.index("Gu.display_check()"))
         self.assertLess(run.index("if (!work->pdev)"),run.index("unlock_transaction_assets(work)"))
+
+
+    def test_borrowed_asset_record_is_device_scoped(self):
+        """Run the real CPU-only asset request and borrow lifecycle."""
+        compat=(HEADER.parents[1]/"compat.c").read_text(encoding="utf-8")
+        vendor=(HEADER.parents[1]/"vendor/unlock_610.c").read_text(encoding="utf-8")
+        header=(HEADER.parents[1]/"vendor/unlock_610.h").read_text(encoding="utf-8")
+        record=header[header.index("struct gpu_unlock_610_shared {"):header.index("/* Load the reference")]
+        request=compat[compat.index("int request_firmware("):compat.index("int pci_read_config_word(")]
+        scoped=vendor[vendor.index("static int request_scoped("):vendor.index("static int request_asset(")]
+        borrow=vendor[vendor.index("int gpu_unlock_610_load_shared("):vendor.index("int gpu_unlock_610_unlock(")]
+        host=r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#define TRUE 1
+#define GU_ASSET_COUNT 5
+#define GFP_KERNEL 0
+#define dev_info(...) ((void)0)
+typedef size_t UINTN;
+struct firmware {size_t size;const unsigned char *data;};
+struct device {int scope;};
+struct pci_dev {struct device dev;int device;};
+typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
+typedef struct {int fault;GU_ASSET assets[5];} GU_PLATFORM;
+static GU_PLATFORM contexts[2],*active=&contexts[0];
+static struct pci_dev cards[2],*selected=&cards[0];
+#define Gu (*active)
+#define GuAssets (Gu.assets)
+static int releases,opens,fail_release,invalid_assets;
+static GU_ASSET *GuAssetEntries(void){return GuAssets;}
+static int GuPlatformAssetsOwned(const GU_PLATFORM *p){return p==active&&!invalid_assets;}
+static int GuAd104AssetsValid(void){return GuPlatformAssetsOwned(active);}
+static int GuCompatPciMatches(const struct pci_dev *p){return p==selected;}
+static int GuCompatDeviceMatches(const struct device *d){return d==&selected->dev;}
+static int gpu_is_supported_device(int d){return d==1;}
+static const struct asset_names {const char *gsp;} names={"gsp"};
+static const struct asset_names *unlock_assets(const struct pci_dev *p){(void)p;return &names;}
+static void *devres_open_group(struct device *d,void *id,int flags){
+  (void)id;(void)flags;
+  if(!GuCompatDeviceMatches(d)||d->scope)return NULL;
+  opens++;d->scope=1;return &d->scope;
+}
+static int devres_release_group(struct device *d,void *g){
+  if(g!=&d->scope||!d->scope)return -EINVAL;
+  releases++;
+  if(fail_release)return -EIO;
+  d->scope=0;return 0;
+}
+""" + record + request + scoped + borrow + r"""
+#define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void){
+  unsigned char bytes[2]={1,2};
+  for(int i=0;i<2;i++){
+    cards[i].device=1;
+    contexts[i].assets[2]=(GU_ASSET){"gsp",{1,&bytes[i]}};
+  }
+  struct gpu_unlock_610_shared a={0},b={0};
+  CHECK(gpu_unlock_610_load_shared(&cards[0],&a)==0);
+  CHECK(a.owner==&cards[0]&&a.gsp==&contexts[0].assets[2].firmware&&opens==1&&releases==1);
+  CHECK(gpu_unlock_610_load_shared(&cards[0],&a)==-EALREADY&&opens==1);
+  active=&contexts[1];selected=&cards[1];
+  CHECK(gpu_unlock_610_load_shared(&cards[1],&a)==-EALREADY&&opens==1);
+  CHECK(gpu_unlock_610_release_shared(&cards[1],&a)==-EINVAL&&a.owner==&cards[0]);
+  CHECK(gpu_unlock_610_load_shared(&cards[1],&b)==0&&b.owner==&cards[1]&&b.gsp!=a.gsp);
+  CHECK(gpu_unlock_610_release_shared(&cards[0],&a)==-EINVAL&&a.gsp);
+  CHECK(gpu_unlock_610_release_shared(&cards[1],&b)==0&&!b.owner&&!b.gsp);
+  CHECK(gpu_unlock_610_release_shared(&cards[1],&b)==0);
+  invalid_assets=1;
+  const struct firmware *asset=NULL;
+  CHECK(request_firmware(&asset,"gsp",&cards[1].dev)==-EIO&&!asset&&Gu.fault);
+  invalid_assets=0;Gu.fault=0; /* Independent host case. */
+  fail_release=1;
+  CHECK(gpu_unlock_610_load_shared(&cards[1],&b)==-EIO&&!b.gsp&&!b.owner);
+  CHECK(opens==3&&releases==3&&cards[1].dev.scope);
+  CHECK(a.owner==&cards[0]&&a.gsp==&contexts[0].assets[2].firmware);
+  active=&contexts[0];selected=&cards[0];
+  CHECK(gpu_unlock_610_release_shared(&cards[0],&a)==0&&!a.owner&&!a.gsp);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            src=Path(directory)/"borrow.c"
+            src.write_text(host,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                exe=Path(directory)/compiler
+                built=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(src),"-o",str(exe)],capture_output=True,text=True)
+                self.assertEqual(built.returncode,0,built.stderr)
+                result=subprocess.run([str(exe)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
 
 if __name__ == "__main__":

@@ -1088,6 +1088,7 @@ int main(int argc,char **argv) {
     VOID *general=GuAlloc(16);
     VOID *temporary=GuCpuPoolAllocScoped(scope,32);
     CHECK(general&&temporary&&Gu.cpu_pool->scope==scope&&!GuCpuPoolCompatEmpty(&Gu));
+    CHECK(GuCpuPoolOwns(&Gu,general,16)&&!GuCpuPoolOwns(&Gu,temporary,32));
     if(mode==12){
       CHECK(GuCpuPoolFreeScoped(scope,temporary)&&frees==1&&GuCpuPoolCompatEmpty(&Gu));
       GuFree(general);CHECK(frees==2&&!Gu.fault&&GuCpuPoolCompatEmpty(&Gu));
