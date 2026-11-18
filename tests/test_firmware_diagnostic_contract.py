@@ -287,7 +287,8 @@ typedef int EFI_GUID;
 typedef GU_TOPO_PATH EFI_DEVICE_PATH_PROTOCOL;
 typedef int EFI_GRAPHICS_OUTPUT_PROTOCOL;
 #define EFI_SUCCESS 0
-#define EFI_ERROR(x) ((x)!=EFI_SUCCESS)
+/* EFI warnings are nonzero but are not EFI errors. */
+#define EFI_ERROR(x) ((x)<0)
 #define EfiLoaderData 1
 #define ByProtocol 2
 typedef struct {
@@ -300,7 +301,7 @@ static EFI_GUID GopGuid,PathGuid;
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_PATH paths[40];
 static int protocols[40],allocs,frees,fail_alloc,fail_read,alias,drift,fail_free;
-static int fail_locate,uncertain_frees,reads,allocation_alias,enumeration_alias;
+static int fail_locate,uncertain_frees,reads,allocation_alias,enumeration_alias,path_copies;
 static EFI_HANDLE *located;
 static EFI_HANDLE uncertain_handles[40];
 static GU_TOPO_GOP uncertain_records[40];
@@ -339,12 +340,14 @@ static EFI_STATUS Handle(EFI_HANDLE handle,EFI_GUID *guid,VOID **out) {
   reads++;
   if(fail_locate || fail_alloc==2)return 1;
   i=(GU_TOPO_PATH *)handle-paths;
-  if(fail_read && i==39)return 1;
+  if(fail_read==1 && i==39)return -1;
   if(guid==&GopGuid)*out=&protocols[(alias&&i==39)?0:(drift&&i==39)?38:i];
   else *out=&paths[i];
+  if(i==0 && ((fail_read==2&&guid==&GopGuid)||(fail_read==3&&guid==&PathGuid)))return 1;
   return EFI_SUCCESS;
 }
 static int PathCopy(EFI_DEVICE_PATH_PROTOCOL *path,GU_TOPO_PATH *out) {
+  path_copies++;
   if(!GuTopoPathValid(path))return 0;
   *out=*path;return 1;
 }
@@ -395,6 +398,10 @@ int main(void) {
   CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees && !reads && !uncertain_frees);
   fail_locate=0;fail_read=1;
   CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
+  fail_read=2;reads=path_copies=0;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees && reads==1 && !path_copies);
+  fail_read=3;reads=path_copies=0;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees && reads==2 && !path_copies);
   fail_read=0;alias=1;
   CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
   alias=0;fail_free=1;

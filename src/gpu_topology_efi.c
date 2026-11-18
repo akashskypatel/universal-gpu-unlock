@@ -1878,8 +1878,8 @@ static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
     memset(&records[i],0,sizeof(records[i]));
     if(!handles[i] ||
-       EFI_ERROR(bs->HandleProtocol(handles[i],&GopGuid,(VOID **)&gop)) || !gop ||
-       EFI_ERROR(bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)) ||
+       bs->HandleProtocol(handles[i],&GopGuid,(VOID **)&gop)!=EFI_SUCCESS || !gop ||
+       bs->HandleProtocol(handles[i],&PathGuid,(VOID **)&path)!=EFI_SUCCESS ||
        !PathCopy(path,&records[i].path)){okay=0;break;}
     records[i].handle=handles[i];
     records[i].protocol=gop;
