@@ -46,10 +46,20 @@ must be revalidated within the current boot.
 - Dynamic PCI discovery and ordered target selection work in passive
   diagnostics and host verification. Selecting a GPU does **not** authorize
   its controller to be stopped or its registers to be changed.
-- The non-diagnostic selected application and DXE builds are preparation-only:
-  they refuse before `GuInit` and guarded hardware-write, DMA and FLR stages.
-  Both MSVC builders now **reject omitted target selections** instead of
-  emitting legacy mutating EFI binaries.
+- The non-diagnostic selected application and DXE builds are preparation-only
+  by default: they refuse before `GuInit` and guarded hardware-write, DMA and
+  FLR stages. Both MSVC builders now **reject omitted target selections**
+  instead of emitting legacy mutating EFI binaries.
+- **One explicit, non-default exception.** `-EnableSingleTargetExecution
+  -AcceptUnverifiedActuation` builds a real transaction image
+  (`GU_ACTIVE_UNVERIFIED_ACTUATION`) that may attempt the firmware transaction
+  for one target, or for an ordered list of targets executed one card at a
+  time. It is unsigned, named `*-UNVERIFIED-ACTUATION-*`, reports
+  `ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0
+  RECOVERY_VERIFIED=0 NOT_FOR_DEPLOYMENT=1`, and no test here observes the
+  result. It exists because the owner reviewed the gate map and accepted the
+  risk; it is not evidence of anything. See
+  [the gate analysis](docs/MULTI_GPU_REFACTOR_REVIEW.md#42-the-operator-waiver-gu_active_unverified_actuation).
   Selected preparation also performs an all-or-none, read-only refresh of
   every requested GPU's PCI identity before the existing refusal; it does
   not create independent per-card mutable transaction state or a
@@ -136,6 +146,7 @@ compatibility, anti-cheat safety, or guaranteed speedup are established.
 - [Read-only GPU topology diagnostic](docs/READ_ONLY_GPU_TOPOLOGY_DIAGNOSTIC.md)
 - [Preparation-only active source builds](docs/ACTIVE_GPU_PREPARATION.md)
 - [Dynamic multi-GPU refactor review and active-execution gate analysis](docs/MULTI_GPU_REFACTOR_REVIEW.md)
+- [Unverified actuation runbook](docs/UNVERIFIED_ACTUATION_RUNBOOK.md) — the one opt-in build that may attempt the transaction, and how to read it
 - [Windows-GPU-UNLOCK authoritative execution map](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia_unlock_evidence_to_execution_map.md)
 - [Windows 617.42 cumulative reverse engineering notes](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia-tensor-core-unlock-investigation.md)
 

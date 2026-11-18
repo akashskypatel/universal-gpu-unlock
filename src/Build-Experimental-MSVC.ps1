@@ -3,14 +3,28 @@ param(
     [string]$SelectionBdf,
     [string]$SelectionBdfs,
     [switch]$EnableSingleTargetExecution,
-    [switch]$SyntheticCompileProfile
+    [switch]$SyntheticCompileProfile,
+    [switch]$AcceptUnverifiedActuation
 )
 $ErrorActionPreference = 'Stop'
 # The experimental original NVIDIA Stop and stock recovery baseline passed.
 # The owner accepts cold-power recovery risk. Production hardware ownership
-# and signed firmware acceptance remain unverified. Emit compile-only images.
-if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile) {
-    throw 'Live GPU execution build refused: production hardware ownership and signed firmware acceptance remain unverified. Use -SyntheticCompileProfile only for compile validation.'
+# and signed firmware acceptance remain unverified.
+#
+# Default behaviour is unchanged: compile-only images, or preparation-only
+# artifacts that never touch the GPU. -AcceptUnverifiedActuation is the single
+# explicit operator waiver. It removes the source-level admission gates so the
+# image can actuate, and it statically asserts that nothing in this repository
+# verified the result: eligibility stays CAN_DETACH/CAN_UNLOCK/CAN_FLASH/
+# RECOVERY_VERIFIED = false in every status line the waiver emits.
+if ($AcceptUnverifiedActuation -and -not $EnableSingleTargetExecution) {
+    throw '-AcceptUnverifiedActuation requires -EnableSingleTargetExecution: the waiver only applies to ordered active execution builds'
+}
+if ($AcceptUnverifiedActuation -and $SyntheticCompileProfile) {
+    throw '-AcceptUnverifiedActuation cannot be combined with -SyntheticCompileProfile: a compile-only image never actuates'
+}
+if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation) {
+    throw 'Live GPU execution build refused: production hardware ownership and signed firmware acceptance remain unverified. Use -AcceptUnverifiedActuation for an explicitly unverified image, or -SyntheticCompileProfile only for compile validation.'
 }
 if (-not $SelectionBdf -and -not $SelectionBdfs) {
     throw 'Active firmware build refused: supply -SelectionBdf or -SelectionBdfs. Only preparation-only artifacts are supported.'
@@ -46,8 +60,11 @@ try {
     New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
     . (Join-Path $PSScriptRoot 'Gpu-Selection-Build.ps1')
     $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $buildDir
-    if ($EnableSingleTargetExecution -and $selection.Count -ne 1) {
+    if ($EnableSingleTargetExecution -and $selection.Count -ne 1 -and -not $AcceptUnverifiedActuation) {
         throw "Single-target execution requires exactly one explicit -SelectionBdf"
+    }
+    if ($AcceptUnverifiedActuation -and $selection.Count -lt 1) {
+        throw '-AcceptUnverifiedActuation requires at least one explicit -SelectionBdf or -SelectionBdfs entry'
     }
 
     $sources = @(
@@ -85,7 +102,12 @@ try {
     $clFlags = '/nologo /O2 /Oi /GS- /Gs65536 /Zl /c /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild /Icompat /Ivendor /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
 
     if ($selection.Count) {
-        if ($SyntheticCompileProfile) {
+        if ($AcceptUnverifiedActuation) {
+            # Explicit waiver: real transaction defines, no host-test or
+            # synthetic profile, and the documented ordered-sequential model
+            # (one card active at a time, each step gated on its predecessor).
+            $clFlags += ' /DGU_ACTIVE_SINGLE_TARGET /DGU_ACTIVE_UNVERIFIED_ACTUATION'
+        } elseif ($SyntheticCompileProfile) {
             # The selected execution source can compile for any valid order.
             # Both EFI entrypoints return before any firmware or GPU operation.
             $clFlags += ' /DGU_ACTIVE_SINGLE_TARGET /DGU_HOST_TEST_PROFILE /DGU_SYNTHETIC_COMPILE_ONLY'
@@ -108,7 +130,7 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $binaryName = if ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
+    $binaryName = if ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
     $compileCmds += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
@@ -121,7 +143,7 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile)) SINGLE_TARGET_ACTIVE=$([int]($SyntheticCompileProfile -and $selection.Count -eq 1)) ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) MULTI_GPU_MUTATION_ALLOWED=0 SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) NOT_FOR_DEPLOYMENT=$([int][bool]$SyntheticCompileProfile)"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$([int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and $selection.Count -eq 1)) ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
 } finally {
     Pop-Location
 }

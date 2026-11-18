@@ -81,17 +81,30 @@ artifacts; they refuse before `GuInit` and all hardware mutation stages.
 The synthetic compile-only profile also permits selected sequences. It
 uses `-SyntheticCompileProfile` with an explicit selection. The resulting
 files have COMPILE-ONLY names and `NOT_FOR_DEPLOYMENT=1`. Both entrypoints
-refuse before device work. Do not deploy these files. The live builders
-and non-synthetic multiple-target source still refuse execution.
-`GuAd104PromMatches` requires an independently authenticated per-card digest
-allowlist. No source or compile result proves physical recovery.
+refuse before device work. Do not deploy these files.
 
-## Known legacy blockers (not generalized or waived)
+**One explicit exception exists, and it is not a verification result.** With
+`-EnableSingleTargetExecution -AcceptUnverifiedActuation` both builders emit a
+real transaction image (`/DGU_ACTIVE_SINGLE_TARGET
+/DGU_ACTIVE_UNVERIFIED_ACTUATION`, no host-test or synthetic profile). That
+image may attempt the firmware transaction for one target or for an ordered
+list of targets, one card active at a time. It is named
+`*-UNVERIFIED-ACTUATION-*`, its status line reports
+`ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0
+RECOVERY_VERIFIED=0 NOT_FOR_DEPLOYMENT=1`, and no test in this repository
+observes the result. `GU_ACTIVE_UNVERIFIED_ACTUATION` is rejected at compile
+time next to every preparation-only, synthetic or host-test profile; see
+[the gate map](MULTI_GPU_REFACTOR_REVIEW.md#42-the-operator-waiver-gu_active_unverified_actuation).
+`GuAd104PromMatches` still requires an independently authenticated per-card
+digest allowlist, and Turing cards are still refused. No source or compile
+result proves physical recovery.
+
+## Known legacy blockers (not generalized; admission only via the waiver)
 
 | Component | Current limitation | Required direction |
 |---|---|---|
 | `src/port.c::GuTargetConfig` and `src/checks.c::GuCheckConfig` | Legacy active preflight assumes PCI segment 0 and other narrow PCI geometry/capability requirements | Use validated per-target device contracts; do not globally relax constraints merely to admit more boards |
-| `src/msi_release.c` | Independent release state and dynamic graphs exist. Physical release and recovery contracts remain target-specific. | Verify the real owner graph and device-specific contract without relaxing admission. |
+| `src/msi_release.c` | Independent release state and dynamic graphs exist. Physical release and recovery contracts remain target-specific. The `0x2684`/`0x220a` refusal is waived only by `GU_ACTIVE_UNVERIFIED_ACTUATION`, which logs `VENDOR_STOP_BOUND=UNVERIFIED`. | Verify the real owner graph and device-specific contract so the refusal can be removed on evidence instead of a waiver. |
 | `src/port.c` | Independent registered contexts and retained completion state exist. The active CPU pointer is serialized. | Preserve context identity and test the complete physical sequence only when qualified. |
 | `src/boot_io.c`, `src/profile.c`, `src/vendor/*` | Fixed firmware asset names, sizes, hashes and 610 reference lineage | Per-architecture and exact-device authenticated assets, loader compatibility and observed signed Windows execution; no cross-card substitution |
 | Display/console | Passive graph can be dynamic; active release has not been proven with NVIDIA, AMD, Intel, shared root, or headless arrangements | Validate same-boot GOP/ConOut owner graph and independently demonstrate console survival following Stop |

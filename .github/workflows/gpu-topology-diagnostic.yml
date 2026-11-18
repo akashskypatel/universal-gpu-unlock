@@ -158,6 +158,17 @@ jobs:
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -DGU_SYNTHETIC_COMPILE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
               "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
             done
+            # The explicit GU_ACTIVE_UNVERIFIED_ACTUATION waiver is the only
+            # non-synthetic configuration that admits an ordered multi-target
+            # list. It is an operator acceptance, not a verification result:
+            # the compile check proves the gate opens, nothing more.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -fsyntax-only -DGU_ACTIVE_SINGLE_TARGET \
+                -DGU_ACTIVE_UNVERIFIED_ACTUATION -DGU_AD104_TRANSACTION \
+                -DGU_ENTRY_LATCHED_SS1_FULL -I"$RUNNER_TEMP/active-selected" -Isrc \
+                tests/test_gpu_discovery.c
+            done
+            python3 -m unittest tests.test_unverified_actuation_waiver
             # Exercise the real adapter with 18 requested identities and two protected peers.
             python3 -c 'from pathlib import Path; import sys; buses=[7,9,3]+list(range(23,38)); Path(sys.argv[1]).write_text("#define GU_GPU_SELECTION_COUNT 18U\n#define GU_GPU_SELECTION_LOCATIONS { "+", ".join("{ 0U,%dU,0U,0U }"%b for b in buses)+" }\n")' "$RUNNER_TEMP/active-selected/gpu-selection.h"
             for compiler in gcc clang; do

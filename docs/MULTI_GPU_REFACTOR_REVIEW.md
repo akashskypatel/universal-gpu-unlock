@@ -7,9 +7,15 @@ establishes.
 
 **Scope of the code changed in this pass:** resource-ownership and lifetime
 contracts in the passive diagnostic and CPU-inventory layers, diagnostic
-completeness reporting, and benchmark result attribution. **No active
-hardware-execution gate was opened.** Section 4 explains why, and what would
-have to be true before one could be.
+completeness reporting, benchmark result attribution, and — after the owner
+reviewed §4.1 and asked for it — one explicit, non-default operator waiver
+that opens the admission gates G1–G4 in §4.1.
+
+**What the waiver is not:** a verification result. Nothing in this repository
+observes a GPU, so a waived image is *allowed to attempt* the firmware
+transaction and is still *unproven*. Eligibility remains `CAN_DETACH=false`,
+`CAN_UNLOCK=false`, `CAN_FLASH=false`, `RECOVERY_VERIFIED=false`, and every
+waived artifact and log line says so.
 
 ---
 
@@ -24,7 +30,8 @@ have to be true before one could be.
 | 5 | `gpu_topology.c` assessment used caller report storage initialized after validation | `GuTopoAssess()` now rejects report/storage/capture ranges that overlap, before the first output byte is written, so a partially initialized report cannot be mistaken for an assessment. | `tests/test_gpu_topology.c`: storage-overlaps-report, storage-overlaps-capture, report-overlaps-capture negatives and a populated positive control (243 checks) |
 | 6 | `gpu_topology_efi.c` could omit an invalid or oversized diagnostic line without saying so | `Say()` refuses the whole line (never a partial line), counts it in `LogDropped`, and publishes one bounded `DIAGNOSTIC_LINE_DROPPED=1 CONTENT_WITHHELD=1` marker. A trailing `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE\|INCOMPLETE DROPPED=<n> OVERFLOW=<0\|1>` line is emitted after every other line and before the durable write. The supplementary PCI report also prints `PCI_OBS_CLASSIFICATION` (warnings, aliases, duplicates) and one `PCI_OBS_POOL_UNCERTAIN[...]` line per retained buffer, so item 1's new categories reach the durable log. | `tests/test_diagnostic_log_completeness.py`: the extracted `Say`/`SayDropped`/`SayCompleteness` block compiled with and without `GU_TOPO_SAVE_LOG` (4 tests); plus a `-fshort-wchar` syntax build of the real `gpu_topology_efi.c` and `gpu_pci_observation.c` against the vendored EDK II headers in both log variants |
 | 7 | `gpu_prom_capture.c` depended on caller output memory and callback lifetime | The capture refuses a reader record or caller context that lies inside the 1 MiB output window, before the first write, leaving the caller's storage untouched. Invalid arguments no longer publish or modify the output. | `tests/test_gpu_prom_capture.c`: reader-inside-window, context-inside-window, same-context-outside-window positive control (29 checks) |
-| 8 | `benchmark_4090.py` silently measured CUDA device zero | The script is explicitly legacy (`LEGACY_SINGLE_DEVICE_SCRIPT=1`, `LEGACY_SINGLE_DEVICE=1`), takes an explicit `--device` ordinal, refuses invalid/out-of-range ordinals instead of falling back, and prints `CUDA_INDEX`, `NAME`, `PCI_BUS_ID` and `ATTRIBUTION=MEASURED_NOT_VERIFIED`. `tools/benchmark_all_gpus.py` additionally reports PCI bus id and UUID per device. | `tests/test_benchmark_attribution.py` (9 tests) |
+| 8 | Active-execution admission gates G1–G4 (see §4.1) | New `GU_ACTIVE_UNVERIFIED_ACTUATION`, emitted only by `-AcceptUnverifiedActuation`. It forces `GU_PREFLIGHT_ONLY 0`, admits 1..N ordered targets instead of exactly one, and replaces the `0x2684`/`0x220a` MSI-release refusal with a recorded admission. `port.h` `#error`s it without `GU_AD104_TRANSACTION` + `GU_ACTIVE_SINGLE_TARGET`, and with any preparation-only, synthetic or host-test profile. | `tests/test_unverified_actuation_waiver.py` (23 tests): header matrix through the real compiler, the three-target compile gate, branch-exclusivity after preprocessing, builder status/name contracts, and a repository-wide check that no source claims eligibility |
+| 9 | `benchmark_4090.py` silently measured CUDA device zero | The script is explicitly legacy (`LEGACY_SINGLE_DEVICE_SCRIPT=1`, `LEGACY_SINGLE_DEVICE=1`), takes an explicit `--device` ordinal, refuses invalid/out-of-range ordinals instead of falling back, and prints `CUDA_INDEX`, `NAME`, `PCI_BUS_ID` and `ATTRIBUTION=MEASURED_NOT_VERIFIED`. `tools/benchmark_all_gpus.py` additionally reports PCI bus id and UUID per device. | `tests/test_benchmark_attribution.py` (9 tests) |
 
 All of the above compile clean under `-std=c11 -Wall -Wextra -Werror
 -pedantic` and execute; the modified C is also exercised under
@@ -131,46 +138,107 @@ The repository currently has **one** verified physical actuation path: the
 isolated MSI Stop-to-Windows experiment, which calls the *original* NVIDIA
 driver's `DisconnectController` for the RTX 4090 under an explicit risk
 acceptance, with a pinned Windows handoff (`docs/MSI_4090_STOP_ONLY_EXPERIMENT.md`).
-That is **not** the unlock path. The unlock path is blocked at six
-independent places, and each block is a *policy* decision backed by missing
-evidence, not missing code.
+That is **not** the unlock path. The unlock path is gated at six independent
+places. At the owner's explicit request, four of those refusals can now be
+lifted by **one** non-default build switch, `-AcceptUnverifiedActuation`
+(`GU_ACTIVE_UNVERIFIED_ACTUATION`). The switch is an *acceptance*, not a
+verification result: it changes what the image is allowed to attempt, and
+changes nothing about what has been proven.
 
 ### 4.1 Gate map
 
-| Gate | Location | What it prevents | Why it is still closed |
-|------|----------|------------------|------------------------|
-| G1 | `gpu_discovery.c::GuDiscoverSingleGpu` (`GU_ACTIVE_SEQUENCE_PREPARE_ONLY`) | One or more selected GPUs reaching `GuInit` | Selected multi-target builds prepare ordered CPU contexts, revalidate every PCI identity twice read-only, then return `EFI_UNSUPPORTED` before `GuInit`. Nothing has demonstrated a multi-target *transaction*, only multi-target *preparation*. |
-| G2 | `port.h` `GU_PREFLIGHT_ONLY` (1 for prepare-only/synthetic builds) | GPU MMIO writes, DMA mappings, FLR and PCI config writes in those builds | The write/DMA/FLR helpers are compiled to refuse. A real transaction mode exists only as `GU_ACTIVE_SINGLE_TARGET` with `GU_PREFLIGHT_ONLY == 0`. |
-| G3 | `gpu_discovery.c` `GU_ACTIVE_SINGLE_TARGET` + `GU_SYNTHETIC_COMPILE_ONLY` | A non-synthetic real execution image | The builders emit `GU_ACTIVE_SINGLE_TARGET` only together with `GU_SYNTHETIC_COMPILE_ONLY`, and both entrypoints (`app.c`, `dxe_main.c`) then return `EFI_UNSUPPORTED` before any device work. |
-| G4 | `msi_release.c::GuMsiRelease` (`device_id == 0x2684 || 0x220a`) | Vendor Stop for the exact research cards, RTX 4090 (AD102) and RTX 3080 12 GB (GA102) | The stock Stop callback can write BAR0 and poll without a proven local bound. Profile hashes plus a structural FWSEC descriptor do not prove Windows 617.42 signed-Booter acceptance. Failed-transaction recovery is unverified. |
-| G5 | `profile.c::GuAd104PromMatches` | Accepting a PROM image as an authenticated firmware reference | It validates structure and logs a digest; `SIGNATURE_AUTHENTICATED=0`. There is no authenticated per-card allowlist. |
-| G6 | `profile.c::GuAd104Prepare` (Turing) and asset manifests | Turing signed-loader execution; cross-architecture asset substitution | FWSEC v2 has a bounded structural parser only. Reference assets are 610.43.03 Linux-lineage; Windows 617.42 Booter provenance is unverified. |
+| Gate | Location | What it prevents | State by default | State with the waiver |
+|------|----------|------------------|------------------|------------------------|
+| G1 | `gpu_discovery.c::GuDiscoverSingleGpu` (`GU_ACTIVE_SEQUENCE_PREPARE_ONLY`) | One or more selected GPUs reaching `GuInit` | Preparation-only builds revalidate every PCI identity read-only, then return `EFI_UNSUPPORTED` before `GuInit`. The whole block is compiled out of an active build. | Open. The ordered coordinator admits 1..`GU_INVENTORY_MAX_HANDLES` selected targets; each step requires its predecessor's completion record. |
+| G2 | `port.h` `GU_PREFLIGHT_ONLY` (1 for prepare-only/synthetic builds) | GPU MMIO writes, DMA mappings, FLR and PCI config writes in those builds | Write/DMA/FLR helpers compile to refuse unless the build is a real transaction mode. | Open: the waiver forces `GU_PREFLIGHT_ONLY 0`. The waiver itself is rejected next to prepare-only, synthetic and host-test profiles. |
+| G3 | `gpu_discovery.c` `GU_ACTIVE_SINGLE_TARGET` + `GU_SYNTHETIC_COMPILE_ONLY` | A non-synthetic real execution image | Builders emit `GU_ACTIVE_SINGLE_TARGET` only with `GU_SYNTHETIC_COMPILE_ONLY`, and both entrypoints return `EFI_UNSUPPORTED` before device work. | Open: `-AcceptUnverifiedActuation` emits `/DGU_ACTIVE_SINGLE_TARGET /DGU_ACTIVE_UNVERIFIED_ACTUATION` and no synthetic or host-test define. |
+| G4 | `msi_release.c::GuMsiRelease` (`device_id == 0x2684 || 0x220a`) | Vendor Stop for the exact research cards, RTX 4090 (AD102) and RTX 3080 12 GB (GA102) | Refusal retained because the stock Stop callback can write BAR0 and poll without a proven local bound. | Open, logged as `MSI release WAIVED ... VENDOR_STOP_BOUND=UNVERIFIED SIGNED_BOOTER=UNVERIFIED RECOVERY=UNVERIFIED`. |
+| G5 | `profile.c::GuAd104PromMatches` | Accepting a PROM image as an authenticated firmware reference | Structural validation plus a digest log; `SIGNATURE_AUTHENTICATED=0`. | Unchanged. There is no authenticated per-card allowlist to switch to; the check never claimed to authenticate, so nothing is lifted. |
+| G6 | `profile.c::GuAd104Prepare` (Turing) and asset manifests | Turing signed-loader execution; cross-architecture asset substitution | Turing returns `TURING_PREPARE=REFUSED REASON=SIGNED_LOADER_NOT_VERIFIED`; assets are 610.43.03 Linux-lineage. | Unchanged. The transaction code is AD104/GA10x-specific; opening the Turing refusal would push a Turing card into an AD10x register script, which is a wrong-write, not an unlock. |
 
-Each gate fails *closed and early*: before the mutation it protects, with a
-explicit log line, and without retry or fallback.
+Without the switch each gate fails *closed and early*: before the mutation it
+protects, with an explicit log line, and without retry or fallback. With the
+switch, G1–G4 admit the mutation and G5–G6 still refuse.
 
-### 4.2 Why these gates were not opened in this pass
+### 4.2 The operator waiver: `GU_ACTIVE_UNVERIFIED_ACTUATION`
 
-Opening even one of them is not a refactor step:
+This section replaces the earlier "why the gates were not opened" rationale.
+The owner reviewed the gate map and chose to open G1–G4 anyway, so the
+decision is now recorded in the build instead of argued in prose.
+
+Why an earlier pass declined is still true and still matters:
 
 1. **It is not verifiable here.** There is no NVIDIA GPU, no MSI B850, no
-   Windows 617.42 Booter image, and no MSVC/EDK II toolchain in this
-   environment. A change that removes G1–G4 could not be executed, observed,
-   or shown to fail safely.
+   Windows 617.42 Booter image and no MSVC/EDK II toolchain in the
+   development environment. A change that removes G1–G4 cannot be executed,
+   observed, or shown to fail safely.
 2. **The failure mode is not recoverable by software.** A wrong BAR0 write or
    a Stop callback without a bound leaves the GPU in an unknown state. The
-   project's own documented recovery is physical power removal, and
-   "healthy-stock cold-power recovery" is the *only* recovery item marked
-   passed.
+   documented recovery is physical power removal, and "healthy-stock cold-power
+   recovery" is the only recovery item ever marked passed.
 3. **The remaining work is evidence acquisition, not source edits.**
    Authenticated per-card firmware acceptance, DMA inactivity proof and
    post-modification Windows behaviour are measurements on the physical
-   machine. Deleting a refusal would only remove the check that currently
-   prevents those unverified steps from running.
-4. **It would invalidate the existing test contracts.** `tests/test_release_handoff_contract.py`
-   and `tests/test_unlock_execution_contract.py` assert the refusal ordering
-   for exactly these cards; removing the gate requires new evidence to replace
-   them, not deleted assertions.
+   machine.
+
+The waiver does not pretend otherwise. It makes the acceptance explicit,
+single, non-default and loud:
+
+| Property | Implementation |
+|---|---|
+| Single switch | `GU_ACTIVE_UNVERIFIED_ACTUATION`, emitted only by `-AcceptUnverifiedActuation` in `src/Build-Experimental-MSVC.ps1` and `src/Build-Dxe-Driver.ps1`. |
+| Never a default | No script, workflow or default define sets it. `tests/test_unverified_actuation_waiver.py` asserts there is exactly one `/DGU_ACTIVE_UNVERIFIED_ACTUATION` per builder and that the fallback `GU_PREFLIGHT_ONLY` branch still refuses. |
+| Only in a real transaction build | `port.h` `#error`s unless `GU_AD104_TRANSACTION` and `GU_ACTIVE_SINGLE_TARGET` are also defined. |
+| Never combined with a passive profile | `port.h` `#error`s with `GU_ACTIVE_SEQUENCE_PREPARE_ONLY`, `GU_SYNTHETIC_COMPILE_ONLY` or `GU_HOST_TEST_PROFILE`; the builders refuse `-AcceptUnverifiedActuation` with `-SyntheticCompileProfile`. |
+| Required to be deliberate | `-AcceptUnverifiedActuation` requires `-EnableSingleTargetExecution`, so an operator cannot drift into it while producing a preparation image. |
+| Still ordered, never simultaneous | Multi-target is admitted as an ordered list; the coordinator runs one transaction at a time and gates each step on its predecessor's completion record. `MULTI_GPU_REFACTOR_REVIEW.md` §4.3 step 6 still forbids simultaneous ownership. |
+| Loud at build time | Artifact names contain `UNVERIFIED-ACTUATION`; the `STATUS=COMPLETE` line carries `UNVERIFIED_ACTUATION=1 ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION NOT_FOR_DEPLOYMENT=1`. |
+| Loud at run time | `ACTIVE_EXECUTION=WAIVED_UNVERIFIED ... MUTATION_AUTHORIZED=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0`, plus `MSI release WAIVED ... VENDOR_STOP_BOUND=UNVERIFIED SIGNED_BOOTER=UNVERIFIED RECOVERY=UNVERIFIED`. |
+| Honest about scope | Eligibility strings stay `false`. A waived image is *allowed to try*; it is not *shown to work*, and no status line says otherwise. |
+
+Two refusals deliberately stay closed (G5, G6). They are not policy refusals
+that a waiver can lift:
+
+* `GuAd104PromMatches` never claimed authentication, so there is nothing to
+  switch off; the digest it logs is evidence, not a verdict.
+* the Turing refusal protects a different register script. The transaction
+  code in this fork is AD104/GA10x-specific, so admitting a Turing card would
+  produce a wrong write rather than an unlock.
+
+### 4.2.1 Building and reading the result
+
+```powershell
+# One target, explicitly unverified actuation
+.\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0' `
+    -EnableSingleTargetExecution -AcceptUnverifiedActuation
+
+# Ordered list: one card active at a time, each step gated on its predecessor
+.\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:01:00.0,0000:02:00.0' `
+    -EnableSingleTargetExecution -AcceptUnverifiedActuation
+
+# Same for the DXE driver entrypoint
+.\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:01:00.0' `
+    -EnableSingleTargetExecution -AcceptUnverifiedActuation
+```
+
+Expected status from either script:
+
+```text
+STATUS=COMPLETE ... MULTI_GPU_MUTATION_ALLOWED=1 UNVERIFIED_ACTUATION=1
+ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0
+WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION NOT_FOR_DEPLOYMENT=1
+```
+
+Step-by-step build, expected markers, stop conditions and the evidence that
+must be captured afterwards are in
+[`UNVERIFIED_ACTUATION_RUNBOOK.md`](UNVERIFIED_ACTUATION_RUNBOOK.md).
+
+What is still required from the operator, unchanged by the waiver: the pinned
+Windows 617.42 handoff and the reviewed `local/boot_profile.h` ESP GUID
+(a waived build cannot use the synthetic host-test GUID), the matched
+`AD102-ASSETS`/`GA102-ASSETS` payloads (`tools/verify_reference_assets.py`),
+an independent console for the ordered log, and physical power-removal
+recovery within reach for the first run.
 
 ### 4.3 Implementation plan for full hardware execution
 
@@ -178,13 +246,17 @@ Sequenced so that each step is independently testable and the fail-closed
 default is never widened:
 
 1. **Transaction mode for 2..N targets (source work, host-testable).**
-   Introduce an explicit `GU_ACTIVE_SEQUENCE_TRANSACTION` mode that is
-   mutually exclusive with prepare-only and synthetic modes, requires a
-   per-target completion record, and preserves the existing ordering
-   coordinator. Host tests must prove: a successor never starts before the
-   predecessor's completion record is verified; a mid-sequence refusal retains
-   completed contexts; no target is retried.
-   *This is the only step that can be finished and verified without hardware.*
+   Introduced as `GU_ACTIVE_SINGLE_TARGET` + `GU_ACTIVE_UNVERIFIED_ACTUATION`
+   rather than as a separate `GU_ACTIVE_SEQUENCE_TRANSACTION` name: the
+   ordered coordinator already existed, and the missing piece was an admission
+   that was explicit instead of implicit. Host tests prove what they can —
+   a successor never starts before the predecessor's completion record is
+   verified, a mid-sequence refusal retains completed contexts, no target is
+   retried (`tests/test_gpu_discovery.c`, 210 checks; `tests/test_unlock_execution_contract.py`;
+   `tests/test_unverified_actuation_waiver.py`). What they cannot prove is
+   that the transaction succeeds on real silicon.
+   *This is the only step that could be finished without hardware, and it is
+   the only step finished here.*
 2. **Per-card firmware acceptance contract (source + offline evidence).**
    Replace the structural PROM check with an authenticated per-device
    reference: exact device ID, subsystem, signed image digest and loader
@@ -233,6 +305,12 @@ CAN_FLASH=false
 RECOVERY_VERIFIED=false
 ```
 
+Every row above is unchanged by `GU_ACTIVE_UNVERIFIED_ACTUATION`. The waiver
+moves one item — production active hardware execution — from *cannot be
+attempted* to *may be attempted and is still untested*. It moves nothing from
+Unverified to Verified, and it cannot, because no test in this repository
+observes a GPU.
+
 ---
 
 ## 5. Reproducing the verification in this pass
@@ -246,6 +324,14 @@ for define in "" "-DGU_TOPO_SAVE_LOG"; do
         -Isrc/vendor/edk2/Include -Isrc/vendor/edk2/Include/X64 "$src"
   done
 done
+
+# The waiver: only the complete define set compiles, and only with the waiver
+# does an ordered three-target source admit a non-synthetic image.
+gcc -std=c11 -fsyntax-only -DGU_ACTIVE_SINGLE_TARGET \
+    -DGU_ACTIVE_UNVERIFIED_ACTUATION -DGU_AD104_TRANSACTION \
+    -DGU_ENTRY_LATCHED_SS1_FULL -I/tmp/active-selected -Isrc \
+    tests/test_gpu_discovery.c
+python3 -m unittest tests.test_unverified_actuation_waiver
 
 # Shared host logic
 gcc -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc \

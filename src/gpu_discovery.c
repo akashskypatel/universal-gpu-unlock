@@ -23,11 +23,20 @@
 #if GU_GPU_SELECTION_COUNT < 1 || GU_GPU_SELECTION_COUNT > GU_INVENTORY_MAX_HANDLES
 #error Invalid active target count
 #endif
-#if defined(GU_ACTIVE_SINGLE_TARGET) && GU_GPU_SELECTION_COUNT != 1 && !defined(GU_SYNTHETIC_COMPILE_ONLY)
+#if defined(GU_ACTIVE_SINGLE_TARGET) && GU_GPU_SELECTION_COUNT != 1 && \
+    !defined(GU_SYNTHETIC_COMPILE_ONLY) && !defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
 #error One-target active execution requires exactly one PCI address
 #endif
 static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
+#endif
+
+/* The operator waiver is visible with and without port.h so the ordered
+ * selected-target count rules below are identical in host tests and firmware. */
+#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
+#define GU_ACTUATION_WAIVED 1
+#else
+#define GU_ACTUATION_WAIVED 0
 #endif
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
@@ -561,7 +570,7 @@ static EFI_STATUS ActiveStepObservations(EFI_SYSTEM_TABLE *table) {
 void GuAbortSelectedGpuStep(void) {
   if(!ActiveSequenceValid)return;
   GuGpuExecAbort(&ActiveSequence);
-  GuLog("SELECTED_GPU_STEP=HALTED NEXT=%zu MUTATION_AUTHORIZED=0\\n",
+  GuLog("SELECTED_GPU_STEP=HALTED NEXT=%zu MUTATION_AUTHORIZED=0\n",
         ActiveSequence.next_step);
 }
 /* Verify the backing objects, not only the caller's claim about them. */
@@ -688,7 +697,9 @@ EFI_STATUS GuSelectedSequenceHasNext(EFI_SYSTEM_TABLE *table,int *more) {
 
 /* Select the next checked context after the previous step completed.
  * This is an intermediate CPU binding, not an unlock or handover grant.
- * Production discovery and build admission still permit only one target. */
+ * Build admission permits only one target unless the operator passes
+ * -AcceptUnverifiedActuation; the ordered list then runs one card at a time
+ * and each step still requires its predecessor's verified completion. */
 EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
   size_t step,target;
   if(!table||!table->BootServices||Gu.bs!=table->BootServices||!Gu.image||
@@ -958,7 +969,14 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     s=EFI_UNSUPPORTED;goto done;
   }
 #ifndef GU_SYNTHETIC_COMPILE_ONLY
-  if(prepared.selected_count!=1){s=EFI_UNSUPPORTED;goto done;}
+  /* Without the explicit waiver only one card may be admitted at a time. The
+   * waiver admits an ordered list: the shared coordinator still executes one
+   * transaction at a time and requires each predecessor's completion record. */
+  if(prepared.selected_count!=1 && !GU_ACTUATION_WAIVED){
+    GuLog("ACTIVE_EXECUTION=REFUSED REASON=MULTI_TARGET_WITHOUT_WAIVER SELECTED=%zu\n",
+          prepared.selected_count);
+    s=EFI_UNSUPPORTED;goto done;
+  }
 #endif
 #endif
   /* Copy the selected identity: non-active discovery releases scratch
@@ -991,6 +1009,14 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   }
   s=BindPreparedSequence(table,io,&prepared,&storage);
   if(s!=EFI_SUCCESS)goto done;
+#if GU_ACTUATION_WAIVED
+  /* The waiver authorises the write; it does not make the outcome eligible.
+   * Eligibility stays false so a log cannot be mistaken for a qualification. */
+  GuLog("ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu ORDERED_SEQUENTIAL=1 "
+        "MUTATION_AUTHORIZED=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 "
+        "RECOVERY_VERIFIED=0 SIGNED_BOOTER_UNVERIFIED=1 "
+        "WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION\n",prepared.selected_count);
+#endif
 #else
   s=FreeDiscoveryStorage(table->BootServices,&storage);
   if(s!=EFI_SUCCESS)return s;

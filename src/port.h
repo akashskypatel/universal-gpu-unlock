@@ -69,10 +69,39 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #elif defined(GU_STOCK_PROFILE_ORIGINAL_03100062) || defined(GU_STOCK_PROFILE_OBSERVED_03000062) || defined(GU_ENTRY_LATCHED_SS1_PRESERVE) || defined(GU_ENTRY_LATCHED_SS1_FULL)
 #error Stock profile selection requires experimental firmware
 #endif
+/* GU_ACTIVE_UNVERIFIED_ACTUATION is the single, non-default acceptance that
+ * an image may perform the unverified, irreversible GPU firmware transaction.
+ * It is a deliberate operator waiver, not a verification result: vendor Stop
+ * bounds, signed Windows 617.42 Booter acceptance, DMA quiescence and physical
+ * recovery all remain unproven (see docs/MULTI_GPU_REFACTOR_REVIEW.md).
+ *
+ * The waiver is only meaningful in a deployable transaction build, so it is
+ * rejected in combination with every preparation-only or synthetic profile
+ * and requires both the experimental firmware transaction profile and the
+ * ordered selected-target mode. GU_ACTIVE_SINGLE_TARGET selects that ordered
+ * path: one card is active at a time, and the ordered list may name several
+ * targets that are executed sequentially. */
+#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
+#if !defined(GU_AD104_TRANSACTION)
+#error Unverified actuation requires the experimental firmware transaction profile
+#endif
+#if !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Unverified actuation requires the ordered selected-target execution mode
+#endif
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
+#error Unverified actuation cannot be combined with preparation-only or synthetic builds
+#endif
+#if defined(GU_HOST_TEST_PROFILE)
+#error Unverified actuation requires the reviewed local boot profile, not the synthetic ESP GUID
+#endif
+#endif
+
 /* Selected active artifacts are restricted to inventory/plan preparation.
  * The legacy engine is linked for compile coverage, but GPU I/O write,
  * DMA and FLR helpers also refuse in this configuration. */
-#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
+#if defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
+#define GU_PREFLIGHT_ONLY 0
+#elif defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
 #define GU_PREFLIGHT_ONLY 1
 #elif defined(GU_AD104_TRANSACTION) || (defined(GU_AD104_HOST_TEST) && __STDC_HOSTED__ == 1)
 #define GU_PREFLIGHT_ONLY 0
