@@ -775,49 +775,50 @@ static int patch_booter(struct unlock_transaction_work *work)
 				       work->booter_hdr.sig_bytes, fuse_ver));
 }
 
-static void free_coherent(struct unlock_transaction_work *work)
+static bool free_coherent(struct unlock_transaction_work *work)
 {
 	u32 i;
 
 	for (i = 0; i < work->pages_allocated; i++) {
 		dma_free_coherent(&work->pdev->dev, GU_RADIX_PAGE,
 				  work->pages[i].cpu, work->pages[i].dma);
-		if (Gu.retained) return;
+		if (Gu.retained) return false;
 	}
-	kvfree(work->pages);
+	if (!GuCompatFree(work->pdev, work->pages)) return false;
 	work->pages = NULL;
 	work->pages_allocated = 0;
 	if (work->boot_cpu)
 		dma_free_coherent(&work->pdev->dev, work->boot_desc.image_size,
 				  work->boot_cpu, work->boot_dma);
-	if (Gu.retained) return;
+	if (Gu.retained) return false;
 	work->boot_cpu = NULL;
 	if (work->fwsec_cpu) {
 		dma_free_coherent(&work->pdev->dev, work->fwsec_size,
 				  work->fwsec_cpu, work->fwsec_dma);
-		if (Gu.retained) return;
+		if (Gu.retained) return false;
 		work->fwsec_cpu = NULL;
 	}
 	if (work->booter_cpu)
 		dma_free_coherent(&work->pdev->dev, work->booter_image_size,
 				  work->booter_cpu, work->booter_dma);
-	if (Gu.retained) return;
+	if (Gu.retained) return false;
 	if (work->v67_cpu)
 		dma_free_coherent(&work->pdev->dev, GU_V67_SIZE, work->v67_cpu,
 				  work->v67_dma);
-	if (Gu.retained) return;
+	if (Gu.retained) return false;
 	if (work->stock_cpu)
 		dma_free_coherent(&work->pdev->dev, work->stock_size,
 				  work->stock_cpu, work->stock_dma);
-	if (Gu.retained) return;
+	if (Gu.retained) return false;
 	if (work->meta_cpu)
 		dma_free_coherent(&work->pdev->dev, GU_WPR_META_SIZE,
 				  work->meta_cpu, work->meta_dma);
-	if (Gu.retained) return;
+	if (Gu.retained) return false;
 	work->booter_cpu = NULL;
 	work->v67_cpu = NULL;
 	work->stock_cpu = NULL;
 	work->meta_cpu = NULL;
+	return true;
 }
 
 static int unlock_transaction_unwind(struct unlock_transaction_work *work)
@@ -825,6 +826,10 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 	u16 now, want;
 	int ret = 0;
 
+	if (!GuCompatPciMatches(work->pdev)) {
+		work->retained = true;
+		return GU_RESULT(-EIO);
+	}
 	/* A timeout never authorizes freeing firmware-visible memory. */
 	if (work->firmware_started && !work->quiesced) {
 		work->retained = true;
@@ -850,8 +855,7 @@ static int unlock_transaction_unwind(struct unlock_transaction_work *work)
 		pci_disable_device(work->pdev);
 		work->enabled = false;
 	}
-	free_coherent(work);
-	if (Gu.retained || Gu.allocations) {
+	if (!free_coherent(work) || Gu.retained || Gu.allocations) {
 		work->retained=true;return GU_RESULT(-EBUSY);
 	}
 	if (work->booter_fw) {
@@ -1052,10 +1056,10 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 	int ret = 0;
 
 	work->page_count = r->table_pages + r->pages[3];
-	work->pages = kvcalloc(work->page_count, sizeof(*work->pages), GFP_KERNEL);
-	addresses = kvcalloc(work->page_count, sizeof(*addresses), GFP_KERNEL);
+	work->pages = GuCompatAlloc(work->pdev, work->page_count, sizeof(*work->pages));
+	addresses = GuCompatAlloc(work->pdev, work->page_count, sizeof(*addresses));
 	if (!work->pages || !addresses) {
-		kvfree(addresses);
+		if (!GuCompatFree(work->pdev, addresses)) return GU_RESULT(-EIO);
 		return GU_RESULT(-ENOMEM);
 	}
 	for (i = 0; i < work->page_count; i++) {
@@ -1092,7 +1096,7 @@ static int unlock_transaction_radix(struct unlock_transaction_work *work)
 		first = child;
 	}
 out:
-	kvfree(addresses);
+	if (!GuCompatFree(work->pdev, addresses) && !ret) ret = -EIO;
 	return GU_RESULT(ret);
 }
 
@@ -1215,7 +1219,7 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	if (work->bar_len < 0x300000 + 0x1a)
 		return GU_RESULT(-ENODEV);
 	mapped = min_t(size_t, 1024 * 1024, work->bar_len - 0x300000);
-	rom = kvmalloc(mapped, GFP_KERNEL);
+	rom = GuCompatAlloc(work->pdev, 1, mapped);
 	if (!rom)
 		return GU_RESULT(-ENOMEM);
 	GuCompatCopyFromIo(work->pdev, rom, work->bar + 0x300000, mapped);
@@ -1309,7 +1313,7 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 		ret = -EIO;
 out:
 	/* Ownership transfers to work before publication, including failure paths. */
-	kvfree(rom);
+	if (!GuCompatFree(work->pdev, rom) && !ret) ret = -EIO;
 	return GU_RESULT(ret);
 }
 
@@ -1804,12 +1808,12 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
         !Gu.display_ok || !Gu.display_check || !Gu.display_check() || Gu.fault ||
         Gu.started || Gu.allocations || Gu.retained || !GuAd104ColdEntry()) return -ENODEV;
     Gu.transaction_attempted=TRUE;
-	work = kzalloc(sizeof(*work), GFP_KERNEL);
+	work = GuCompatAlloc(pdev, 1, sizeof(*work));
 	if (!work)
 		return -ENOMEM;
 	work->pdev = pci_dev_get(pdev);
 	if (!work->pdev) {
-		kfree(work);
+		if (!GuCompatFree(pdev, work)) return -EIO;
 		return -ENODEV;
 	}
 	work->gsp_fw = shared->gsp;
@@ -1847,11 +1851,11 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 		/* Firmware may still DMA into these buffers: keep them, the device
 		 * reference and this module until the next power off. */
 		dev_err(&pdev->dev, "firmware did not stop; keeping its DMA buffers until power off\n");
-		__module_get(THIS_MODULE);
+		GuCompatRetain(pdev);
 		return ret;
 	}
 	pci_dev_put(work->pdev);
-	kfree(work);
+	if (!GuCompatFree(pdev, work) && !ret) ret = -EIO;
 	return ret;
 }
 

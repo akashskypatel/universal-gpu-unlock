@@ -104,14 +104,11 @@ void dma_free_coherent(struct device *,size_t,void *,dma_addr_t);
 int dma_set_mask(struct device *,u64);
 int dma_set_coherent_mask(struct device *,u64);
 void GuCompatDmaBarrier(const struct pci_dev *);
-void *kzalloc(size_t,int);
-void *kvcalloc(size_t,size_t,int);
-void *kvmalloc(size_t,int);
-#define kfree GuFree
-#define kvfree GuFree
+void *GuCompatAlloc(const struct pci_dev *,size_t,size_t);
+BOOLEAN GuCompatFree(const struct pci_dev *,void *);
+void GuCompatRetain(const struct pci_dev *);
 int request_firmware(const struct firmware **,const char *,struct device *);
 void release_firmware(const struct firmware *);
-void __module_get(void *);
 int pci_read_config_word(struct pci_dev *,int,u16 *);
 int pci_read_config_dword(struct pci_dev *,int,u32 *);
 int pci_write_config_word(struct pci_dev *,int,u16);

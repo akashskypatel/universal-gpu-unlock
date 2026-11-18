@@ -62,7 +62,8 @@ int main(void) {
         masks=compat[compat.index("int dma_set_mask("):compat.index("void GuCompatDmaBarrier(")]
         mmio=compat[compat.index("u32 GuCompatRead32("):compat.index("/* The read-only profile")]
         copy=compat[compat.index("void GuCompatCopyFromIo("):compat.index("void *dma_alloc_coherent(")]
-        barrier=compat[compat.index("void GuCompatDmaBarrier("):compat.index("void *kzalloc(")]
+        barrier=compat[compat.index("void GuCompatDmaBarrier("):compat.index("void *GuCompatAlloc(")]
+        scratch=compat[compat.index("void *GuCompatAlloc("):compat.index("int request_firmware(")]
         read=compat[compat.index("int pci_read_config_word("):compat.index("int pci_read_config_dword(")]
         refs=compat[compat.index("struct pci_dev *pci_dev_get("):]
         host=r"""
@@ -125,6 +126,18 @@ static void GuCopyFromIo(void *dst,const void *src,size_t n){
 static EFI_STATUS Flush(EFI_PCI_IO_PROTOCOL *pci){flushes++;last_io_owner=pci->id;return EFI_SUCCESS;}
 static const void *pool[2];
 static size_t pool_bytes[2];
+static void *temporary[2];
+static int scratch_allocs,scratch_frees;
+static int GuCpuPoolCompatEmpty(const GU_PLATFORM *p){return !temporary[p-platforms];}
+static void *GuCpuPoolAllocScoped(const struct pci_dev *scope,size_t n){
+  if(scope!=Gu.compat_device||!n||temporary[active-platforms])return NULL;
+  scratch_allocs++;return temporary[active-platforms]=calloc(1,n);
+}
+static int GuCpuPoolFreeScoped(const struct pci_dev *scope,void *ptr){
+  if(!ptr)return 1;
+  if(scope!=Gu.compat_device||ptr!=temporary[active-platforms])return 0;
+  scratch_frees++;free(ptr);temporary[active-platforms]=NULL;return 1;
+}
 static void *GuAlloc(size_t n){allocs++;if(fail_alloc)return NULL;void *p=calloc(1,n);pool[active-platforms]=p;pool_bytes[active-platforms]=n;return p;}
 static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *m,size_t bytes){
   return (p==&platforms[0]||p==&platforms[1])&&m&&pool[p-platforms]==m&&bytes==pool_bytes[p-platforms];
@@ -132,7 +145,7 @@ static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *m,size_t bytes){
 static EFI_STATUS GuConfigRead(int width,UINT32 offset,u16 *out){
   (void)width;(void)offset;reads++;*out=(u16)Gu.pci->id;return EFI_SUCCESS;
 }
-""" + structs + helpers + scope + timing + masks + mmio + copy + barrier + read + refs + r"""
+""" + structs + helpers + scope + timing + masks + mmio + copy + barrier + scratch + read + refs + r"""
 #define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}}while(0)
 int main(void){
   EFI_BOOT_SERVICES bs={1},foreign={2};
@@ -176,6 +189,9 @@ int main(void){
   CHECK(pci_dev_get(a)==a&&a->refs==2);pci_dev_put(a);CHECK(a->refs==1);
   u16 value=0;CHECK(pci_read_config_word(a,0,&value)==0&&value==17&&reads==1);
   CHECK(!GuCompatCompletedPlatform(&Gu));
+  CHECK(!GuCompatAlloc(a,(size_t)-1,2)&&scratch_allocs==0);
+  void *first=GuCompatAlloc(a,2,16);CHECK(first&&scratch_allocs==1);
+  CHECK(!GuCpuPoolCompatEmpty(&Gu)&&GuCompatFree(a,first)&&scratch_frees==1);
   CHECK(GuCompatCloseDevice(a)==EFI_SUCCESS&&!Gu.compat_device_open&&Gu.compat_device_closed&&Gu.compat_device==a);
   CHECK(GuCompatCompletedPlatform(&Gu));
   CHECK(pci_read_config_word(a,0,&value)==-EINVAL&&reads==1&&Gu.fault);
@@ -200,6 +216,15 @@ int main(void){
   a->dev.dma_mask=&b->mask_storage;CHECK(!GuCompatCompletedPlatform(&platforms[0]));a->dev.dma_mask=&a->mask_storage;
   pool[0]=NULL;CHECK(!GuCompatCompletedPlatform(&platforms[0]));pool[0]=a;
   CHECK(GuCompatCompletedPlatform(&platforms[0])&&active==&platforms[1]);
+  temporary[0]=&platforms[0];CHECK(!GuCompatCompletedPlatform(&platforms[0]));temporary[0]=NULL;
+  void *second=GuCompatAlloc(b,1,16);CHECK(second&&scratch_allocs==2);
+  CHECK(!GuCompatAlloc(a,1,16)&&scratch_allocs==2&&Gu.fault);
+  CHECK(!GuCompatFree(a,second)&&scratch_frees==1&&temporary[1]==second);
+  GuCompatRetain(a);CHECK(!Gu.retained&&Gu.fault);
+  Gu.fault=0; /* Continue independent fixture cases. */
+  CHECK(GuCompatFree(b,second)&&scratch_frees==2&&GuCpuPoolCompatEmpty(&Gu));
+  GuCompatRetain(b);CHECK(Gu.retained);
+  Gu.retained=0; /* Test-only reset. */
   CHECK(pci_read_config_word(b,0,&value)==0&&value==23&&reads==2);
   CHECK(GuCompatTime(b)==0&&GuCompatDelay(b,200)&&GuCompatTime(b)==200&&stalls==2&&last_io_owner==23);
   CHECK(GuCompatTime(a)==0&&Gu.fault&&!GuCompatDelay(a,100)&&stalls==2);
@@ -235,7 +260,12 @@ int main(void){
   CHECK(!GuCompatCompletedPlatform(&platforms[1])&&GuCompatCompletedPlatform(&platforms[0]));
   CHECK(pci_read_config_word(b,0,&value)==-EINVAL&&reads==2);
   CHECK(allocs==3);
-  free(a);free(b); /* End of simulated boot. */
+  /* A clean reference count is not sufficient if transaction memory remains. */
+  Gu.fault=0;Gu.compat_device_open=1;b->refs=1; /* Independent close case. */
+  void *leaked=GuCompatAlloc(b,1,8);CHECK(leaked&&scratch_allocs==3);
+  CHECK(GuCompatCloseDevice(b)==EFI_DEVICE_ERROR&&!Gu.compat_device_closed&&Gu.fault);
+  CHECK(!GuCompatCompletedPlatform(&Gu)&&temporary[1]==leaked);
+  free(leaked);free(a);free(b); /* End of simulated boot. */
   return 0;
 }
 """
@@ -258,7 +288,10 @@ int main(void){
         for call in ("GuCompatRead32", "GuCompatWrite32", "GuCompatCopyFromIo", "GuCompatDmaBarrier", "GuCompatTime", "GuCompatDelay"):
             self.assertNotRegex(vendor, rf"\b{call}\((?!work->pdev,|work->pdev\))")
             self.assertIn(call + "(work->pdev",vendor)
-        self.assertNotRegex(vendor,r"\b(?:readl|writel|memcpy_fromio|dma_wmb|ktime_get|usleep_range)\(")
+        self.assertNotRegex(vendor,r"\b(?:readl|writel|memcpy_fromio|dma_wmb|ktime_get|usleep_range|kzalloc|kvmalloc|kvcalloc|kfree|kvfree|__module_get)\(")
+        for call in ("GuCompatAlloc", "GuCompatFree", "GuCompatRetain"):
+            self.assertIn(call + "(",vendor)
+            self.assertNotRegex(vendor, rf"\b{call}\((?!work->pdev,|pdev,|pdev\))")
         load=vendor.split("int gpu_unlock_610_load_shared(",1)[1].split("void gpu_unlock_610_release_shared(",1)[0]
         run=vendor.split("int gpu_unlock_610_unlock(",1)[1]
         self.assertLess(load.index("GuCompatPciMatches(pdev)"),load.index("pdev->device"))

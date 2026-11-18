@@ -277,13 +277,15 @@ BOOLEAN GuSafeToReturn(VOID) {
     (!Gu.started || (Gu.quiesced && !Gu.fault));
 }
 /* CPU pool records belong to a single platform. The payload follows a
- * naturally aligned header (four machine words on the supported x64 ABI).
- * Resolve a release through the owner's list, not an untrusted payload. */
+ * naturally aligned header on the supported x64 ABI. A nonnull scope
+ * identifies temporary compatibility transaction memory. Resolve a release
+ * through the owner's list, not an untrusted payload. */
 typedef struct GU_CPU_POOL {
   struct GU_CPU_POOL *next;
   GU_PLATFORM *owner;
   EFI_BOOT_SERVICES *bs;
   size_t bytes;
+  const struct pci_dev *scope;
 } GU_CPU_POOL;
 
 BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes) {
@@ -295,6 +297,14 @@ BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t byte
   return FALSE;
 }
 
+/* General CPU allocations may survive compatibility scope closure, but
+ * temporary transaction allocations must not. Check inactive owners too. */
+BOOLEAN GuCpuPoolCompatEmpty(const GU_PLATFORM *platform) {
+  if(!platform||!platform->bs||platform->cpu_pool_failure_status!=EFI_SUCCESS)return FALSE;
+  for(const GU_CPU_POOL *entry=platform->cpu_pool;entry;entry=entry->next)
+    if(entry->owner!=platform||entry->bs!=platform->bs||!entry->bytes||entry->scope)return FALSE;
+  return TRUE;
+}
 static VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
   if(Gu.cpu_pool_failure_status==EFI_SUCCESS) {
     Gu.cpu_pool_failure_status=status;
@@ -304,7 +314,7 @@ static VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
   Gu.retained=TRUE;
 }
 
-VOID *GuAlloc(size_t N) {
+static VOID *PoolAllocate(const struct pci_dev *scope,size_t N) {
   GU_CPU_POOL *entry=NULL;
   if(!N||N>(size_t)-1-sizeof(*entry)||Gu.retained||
      Gu.cpu_pool_failure_status!=EFI_SUCCESS||!Gu.bs||
@@ -319,32 +329,50 @@ VOID *GuAlloc(size_t N) {
   entry->owner=&Gu;
   entry->bs=Gu.bs;
   entry->bytes=N;
+  entry->scope=scope;
   Gu.cpu_pool=entry;
   VOID *memory=entry+1;
   memset(memory,0,N);
   return memory;
 }
 
-VOID GuFree(VOID *Memory) {
-  if(!Memory||Gu.retained||Gu.cpu_pool_failure_status!=EFI_SUCCESS)return;
+static BOOLEAN PoolFree(const struct pci_dev *scope,VOID *Memory) {
+  if(!Memory)return TRUE;
+  if(Gu.retained||Gu.cpu_pool_failure_status!=EFI_SUCCESS)return FALSE;
   /* A published compatibility address must not be recycled in this boot. */
   if(Memory==Gu.compat_device) {
     GuRecordCpuPoolFailure(EFI_ACCESS_DENIED,Memory);
-    return;
+    return FALSE;
   }
   GU_CPU_POOL **link=&Gu.cpu_pool;
   while(*link&&(VOID *)(*link+1)!=Memory)link=&(*link)->next;
   GU_CPU_POOL *entry=*link;
-  if(!entry||entry->owner!=&Gu||entry->bs!=Gu.bs||
+  if(!entry||entry->owner!=&Gu||entry->bs!=Gu.bs||entry->scope!=scope||
      !entry->bs||!entry->bs->FreePool) {
     GuRecordCpuPoolFailure(EFI_ACCESS_DENIED,Memory);
-    return;
+    return FALSE;
   }
   /* Unlink before attempting release. On error retain its address only;
    * the firmware may already have consumed the original pool memory. */
   *link=entry->next;
   EFI_STATUS status=entry->bs->FreePool(entry);
   if(status!=EFI_SUCCESS)GuRecordCpuPoolFailure(status,entry);
+  return status==EFI_SUCCESS;
+}
+VOID *GuAlloc(size_t N) {return PoolAllocate(NULL,N);}
+VOID GuFree(VOID *Memory) {(VOID)PoolFree(NULL,Memory);}
+static BOOLEAN PoolScopeMatches(const struct pci_dev *scope) {
+  if(scope&&scope==Gu.compat_device&&Gu.compat_device_open&&!Gu.compat_device_closed)return TRUE;
+  Gu.fault=TRUE;
+  return FALSE;
+}
+VOID *GuCpuPoolAllocScoped(const struct pci_dev *scope,size_t bytes) {
+  if(!PoolScopeMatches(scope)||Gu.fault)return NULL;
+  return PoolAllocate(scope,bytes);
+}
+BOOLEAN GuCpuPoolFreeScoped(const struct pci_dev *scope,VOID *memory) {
+  if(!PoolScopeMatches(scope))return FALSE;
+  return PoolFree(scope,memory);
 }
 VOID GuStarted(VOID) {Gu.started=TRUE;Gu.quiesced=FALSE;}
 VOID GuQuiesced(VOID) {if(!Gu.fault)Gu.quiesced=TRUE;}

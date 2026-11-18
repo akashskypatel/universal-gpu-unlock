@@ -24,7 +24,8 @@ BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform) {
      platform->fault||platform->retained||
      !GuCompatRecordMatches(platform,platform->compat_device))return FALSE;
   const struct pci_dev *D=platform->compat_device;
-  return D->refs==1&&!D->dev.scope&&list_empty(&D->dev.devres_head);
+  return D->refs==1&&!D->dev.scope&&list_empty(&D->dev.devres_head)&&
+    GuCpuPoolCompatEmpty(platform);
 }
 BOOLEAN GuCompatPciMatches(const struct pci_dev *D) {
   if(GuCompatIdentityValid(D))return TRUE;
@@ -56,7 +57,7 @@ EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
   if(!Gu.compat_device||!Gu.owned||!Gu.armed||!Gu.display_ok)return EFI_NOT_READY;
   struct pci_dev *D=Gu.compat_device;
   if(!GuCompatRecordMatches(&Gu,D)||D->refs||D->dev.scope||
-     !list_empty(&D->dev.devres_head)) {
+     !list_empty(&D->dev.devres_head)||!GuCpuPoolCompatEmpty(&Gu)) {
     Gu.fault=TRUE;return EFI_ACCESS_DENIED;
   }
   D->current_state=PCI_D0;D->pm_cap=Gu.pm_cap;D->refs=1;
@@ -66,7 +67,8 @@ EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *D) {
   if(!GuCompatPciMatches(D))return EFI_ACCESS_DENIED;
   Gu.compat_device_open=FALSE;
-  if(D->refs!=1||D->dev.scope||!list_empty(&D->dev.devres_head)||Gu.fault||Gu.retained) {
+  if(D->refs!=1||D->dev.scope||!list_empty(&D->dev.devres_head)||Gu.fault||Gu.retained||
+     !GuCpuPoolCompatEmpty(&Gu)) {
     Gu.fault=TRUE;return EFI_DEVICE_ERROR;
   }
   Gu.compat_device_closed=TRUE;
@@ -160,10 +162,16 @@ void GuCompatDmaBarrier(const struct pci_dev *D) {
 #endif
   if(Gu.pci->Flush && EFI_ERROR(Gu.pci->Flush(Gu.pci)))Gu.fault=TRUE;
 }
-void *kzalloc(size_t N,int Flags) {(void)Flags;return GuAlloc(N);}
-void *kvmalloc(size_t N,int Flags) {(void)Flags;return GuAlloc(N);}
-void *kvcalloc(size_t N,size_t S,int Flags) {
-  (void)Flags;if(!S || N>(size_t)-1/S)return NULL;return GuAlloc(N*S);
+void *GuCompatAlloc(const struct pci_dev *D,size_t N,size_t S) {
+  if(!GuCompatPciMatches(D)||!S||N>(size_t)-1/S)return NULL;
+  return GuCpuPoolAllocScoped(D,N*S);
+}
+BOOLEAN GuCompatFree(const struct pci_dev *D,void *P) {
+  if(!GuCompatPciMatches(D))return FALSE;
+  return GuCpuPoolFreeScoped(D,P);
+}
+void GuCompatRetain(const struct pci_dev *D) {
+  if(GuCompatPciMatches(D))Gu.retained=TRUE;
 }
 int request_firmware(const struct firmware **Out,const char *Name,struct device *D) {
   UINTN I;if(!Out)return -EINVAL;*Out=NULL;
@@ -175,7 +183,6 @@ int request_firmware(const struct firmware **Out,const char *Name,struct device 
   return -ENOENT;
 }
 void release_firmware(const struct firmware *F) {(void)F; /* Preloaded, app-owned immutable assets. */}
-void __module_get(void *M) {(void)M;Gu.retained=TRUE;}
 int pci_read_config_word(struct pci_dev *D,int O,u16 *V) {
   if(!GuCompatPciMatches(D))return -EINVAL;
   return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint16,(UINT32)O,V))?-EIO:0;

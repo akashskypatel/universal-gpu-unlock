@@ -912,6 +912,7 @@ typedef struct {
   EFI_BOOT_SERVICES *bs;
   struct GU_CPU_POOL *cpu_pool;
   VOID *compat_device;
+  int compat_device_open,compat_device_closed;
   VOID *cpu_pool_failure_address;
   EFI_STATUS cpu_pool_failure_status;
   int fault,retained;
@@ -939,7 +940,7 @@ static EFI_STATUS Free(VOID *p){
 int main(int argc,char **argv) {
   EFI_BOOT_SERVICES bs={Allocate,Free};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>11)return 3;
+  if(mode<0||mode>15)return 3;
   if(mode)Gu.bs=&bs;
   if(mode==1)bs.AllocatePool=NULL;
   if(mode==9)bs.FreePool=NULL;
@@ -1006,12 +1007,40 @@ int main(int argc,char **argv) {
     void *base=Gu.cpu_pool;
     GuFree(p);CHECK(frees==1&&released==base);
     GuFree(p);CHECK(frees==1&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED);
-  }else{
+  }else if(mode==11){
     VOID *ptr=GuAlloc(16);CHECK(ptr);Gu.compat_device=ptr;
     CHECK(GuCpuPoolOwns(&Gu,ptr,16));GuFree(ptr);
     CHECK(!frees&&Gu.retained&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED&&Gu.cpu_pool_failure_address==ptr);
     CHECK(Gu.cpu_pool&&Gu.compat_device==ptr&&!GuCpuPoolOwns(&Gu,ptr,16));
     free(Gu.cpu_pool);
+  }else{
+    struct pci_dev *scope=(struct pci_dev *)GuAlloc(8);
+    CHECK(scope);Gu.compat_device=scope;Gu.compat_device_open=1;
+    CHECK(GuCpuPoolCompatEmpty(&Gu));
+    VOID *general=GuAlloc(16);
+    VOID *temporary=GuCpuPoolAllocScoped(scope,32);
+    CHECK(general&&temporary&&Gu.cpu_pool->scope==scope&&!GuCpuPoolCompatEmpty(&Gu));
+    if(mode==12){
+      CHECK(GuCpuPoolFreeScoped(scope,temporary)&&frees==1&&GuCpuPoolCompatEmpty(&Gu));
+      GuFree(general);CHECK(frees==2&&!Gu.fault&&GuCpuPoolCompatEmpty(&Gu));
+      free(Gu.cpu_pool);
+    }else if(mode==13){
+      GuFree(temporary);
+      CHECK(!frees&&Gu.retained&&!GuCpuPoolCompatEmpty(&Gu)&&Gu.cpu_pool->scope==scope);
+      while(Gu.cpu_pool){GU_CPU_POOL *old=Gu.cpu_pool;Gu.cpu_pool=old->next;free(old);}
+    }else if(mode==14){
+      CHECK(!GuCpuPoolFreeScoped(scope,general)&&!frees&&Gu.retained&&!GuCpuPoolCompatEmpty(&Gu));
+      while(Gu.cpu_pool){GU_CPU_POOL *old=Gu.cpu_pool;Gu.cpu_pool=old->next;free(old);}
+    }else{
+      GU_CPU_POOL *previous=Gu.cpu_pool;
+      active=&platforms[1];Gu.bs=&bs;
+      CHECK(!GuCpuPoolAllocScoped(scope,8)&&!GuCpuPoolFreeScoped(scope,temporary));
+      CHECK(Gu.fault&&!Gu.retained&&!frees&&!Gu.cpu_pool&&calls==3);
+      CHECK(platforms[0].cpu_pool==previous&&!platforms[0].fault&&!GuCpuPoolCompatEmpty(&platforms[0]));
+      active=&platforms[0];
+      CHECK(GuCpuPoolFreeScoped(scope,temporary)&&GuCpuPoolCompatEmpty(&Gu));
+      GuFree(general);free(Gu.cpu_pool);
+    }
   }
   CHECK(GuAlloc(0)==NULL);
   return 0;
@@ -1027,7 +1056,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            for mode in range(12):
+            for mode in range(16):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(binary), str(mode)],
                                             capture_output=True, text=True)

@@ -217,6 +217,11 @@ VOID GuLogText(const char *Text);
 VOID GuCopyFromIo(VOID *Destination, const VOID *Source, size_t Bytes);
 /* Read-only ownership proof for retained CPU objects, including inactive platforms. */
 BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes);
+/* Temporary transaction memory uses the open compatibility record as its tag.
+ * These CPU-only helpers do not select or claim a GPU. */
+BOOLEAN GuCpuPoolCompatEmpty(const GU_PLATFORM *platform);
+VOID *GuCpuPoolAllocScoped(const struct pci_dev *scope,size_t bytes);
+BOOLEAN GuCpuPoolFreeScoped(const struct pci_dev *scope,VOID *memory);
 BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform);
 VOID *GuAlloc(size_t Bytes);
 VOID GuFree(VOID *Memory);
