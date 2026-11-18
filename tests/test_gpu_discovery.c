@@ -15,6 +15,9 @@ static int release_owner_token,other_owner_token;
 #endif
 static unsigned state_allocs,state_frees,fail_state_alloc,fail_state_free;
 static void *last_failed_free;
+static unsigned fail_state_alloc_with_output;
+static void *uncertain_state;
+static UINTN uncertain_state_bytes;
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 static unsigned context_allocs,context_frees,fail_context_free;
 #endif
@@ -124,6 +127,14 @@ static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
   if(kind!=EfiLoaderData || !out || !bytes)return EFI_INVALID_PARAMETER;
   state_allocs++;
   if(fail_state_alloc==state_allocs)return EFI_OUT_OF_RESOURCES;
+  if(fail_state_alloc_with_output==state_allocs) {
+    *out=malloc(bytes);
+    if(*out) {
+      memset(*out,0xa5,bytes);
+      uncertain_state=*out;uncertain_state_bytes=bytes;
+    }
+    return EFI_OUT_OF_RESOURCES;
+  }
   *out=calloc(1,bytes);
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
 }
@@ -190,6 +201,7 @@ static void ResetPair(void) {
   prep_markers = prep_refusals = global_refusals = 0;
   fail_pool_free = fail_locate = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
   state_allocs=state_frees=fail_state_alloc=fail_state_free=0;
+  fail_state_alloc_with_output=0;uncertain_state=NULL;uncertain_state_bytes=0;
   last_failed_free=NULL;
   /* Test-only boot reset. The production path never retries release. */
   UnreleasedPciHandles=NULL;
@@ -236,6 +248,23 @@ static int CheckHandleBufferLifetime(void) {
   CHECK(GuPrepareGpuSequence(&system_table,NULL,0,&prepared)==EFI_ALREADY_STARTED);
   CHECK(!prepared.inventory.count&&!prepared.selected_count);
   CHECK(locate_calls==1&&!free_calls&&!resolve_calls&&!state_allocs&&!init_calls);
+  /* Error with nonnull discovery storage must not publish or initialize it.
+   * The independently confirmed enumeration buffer is still released once. */
+  ResetPair();fail_state_alloc_with_output=1;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_DEVICE_ERROR);
+  CHECK(uncertain_state&&uncertain_state_bytes&&UnreleasedDiscoveryAllocation==uncertain_state);
+  CHECK(state_allocs==1&&!state_frees&&locate_calls==1&&free_calls==1);
+  CHECK(!resolve_calls&&!init_calls&&!UnreleasedPciHandles);
+  for(UINTN i=0;i<uncertain_state_bytes;i++)
+    CHECK(((const unsigned char *)uncertain_state)[i]==0xa5);
+  fail_state_alloc_with_output=0;
+  GU_GPU_DISCOVERY_STORAGE empty={0};
+  CHECK(AllocateDiscoveryStorage(&services,2,&empty)==EFI_ALREADY_STARTED);
+  CHECK(!empty.allocation&&!empty.capacity&&!empty.records&&!empty.live);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(state_allocs==1&&!state_frees&&locate_calls==1&&free_calls==1&&!init_calls);
+  free(uncertain_state); /* Host fixture teardown, not a production release. */
+  UnreleasedDiscoveryAllocation=NULL;
   ResetPair();
   return 0;
 }

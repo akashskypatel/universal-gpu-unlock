@@ -68,6 +68,7 @@ static EFI_STATUS AllocateDiscoveryStorage(EFI_BOOT_SERVICES *bs,size_t capacity
                                            GU_GPU_DISCOVERY_STORAGE *storage) {
   if(!bs||!bs->AllocatePool||!bs->FreePool||!storage||storage->allocation||
      !capacity||capacity>GU_INVENTORY_MAX_HANDLES)return EFI_INVALID_PARAMETER;
+  if(UnreleasedDiscoveryAllocation)return EFI_ALREADY_STARTED;
   const size_t types[]={
     sizeof(GU_GPU_RECORD),sizeof(GU_GPU_RECORD),sizeof(size_t),
     sizeof(GU_GPU_REFRESHED_TARGET),sizeof(GU_GPU_EXEC_OBSERVATION),
@@ -85,7 +86,16 @@ static EFI_STATUS AllocateDiscoveryStorage(EFI_BOOT_SERVICES *bs,size_t capacity
   }
   VOID *allocation=NULL;
   EFI_STATUS s=bs->AllocatePool(EfiLoaderData,total,&allocation);
-  if(s!=EFI_SUCCESS)return s;
+  if(s!=EFI_SUCCESS) {
+    if(allocation) {
+      /* An error does not establish ownership of the returned address.
+       * Do not initialize, publish or release this unverified buffer. */
+      UnreleasedDiscoveryAllocation=allocation;
+      GuLog("DISCOVERY_STORAGE_ALLOC_STATUS=%#llx RETAINED=1\n",(unsigned long long)s);
+      return EFI_DEVICE_ERROR;
+    }
+    return s;
+  }
   if(!allocation)return EFI_OUT_OF_RESOURCES;
   memset(allocation,0,total);
   unsigned char *base=(unsigned char *)allocation;
