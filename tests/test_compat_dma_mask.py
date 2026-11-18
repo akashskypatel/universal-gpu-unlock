@@ -120,7 +120,8 @@ typedef struct {
 static GU_PLATFORM platforms[2],*active=&platforms[0];
 #define Gu (*active)
 #define GuPlatformActive active
-static int allocs,reads,fail_alloc,mmio_reads,mmio_writes,copies,flushes;
+static int allocs,reads,fail_alloc,wrong_pool_owner,change_active_after_alloc;
+static int mmio_reads,mmio_writes,copies,flushes;
 static int last_io_owner,stalls,fail_stall;
 static EFI_STATUS Stall(UINTN us){
   (void)us;stalls++;
@@ -149,7 +150,14 @@ static int GuCpuPoolFreeScoped(const struct pci_dev *scope,void *ptr){
   if(scope!=Gu.compat_device||ptr!=temporary[active-platforms])return 0;
   scratch_frees++;free(ptr);temporary[active-platforms]=NULL;return 1;
 }
-static void *GuAlloc(size_t n){allocs++;if(fail_alloc)return NULL;void *p=calloc(1,n);pool[active-platforms]=p;pool_bytes[active-platforms]=n;return p;}
+static void *GuAlloc(size_t n){
+  allocs++;if(fail_alloc)return NULL;
+  void *p=calloc(1,n);
+  size_t slot=(size_t)(active-platforms)^(size_t)wrong_pool_owner;
+  pool[slot]=p;pool_bytes[slot]=n;
+  if(change_active_after_alloc)active=&platforms[1];
+  return p;
+}
 static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *m,size_t bytes){
   return (p==&platforms[0]||p==&platforms[1])&&m&&pool[p-platforms]==m&&bytes==pool_bytes[p-platforms];
 }
@@ -336,6 +344,19 @@ int main(void){
   CHECK(GuCompatCloseDevice(b)==EFI_DEVICE_ERROR&&!Gu.compat_device_closed&&Gu.fault);
   CHECK(!GuCompatCompletedPlatform(&Gu)&&temporary[1]==leaked);
   free(leaked);free(a);free(b); /* End of simulated boot. */
+  /* Independent reservation failures: an allocation must not be published
+     if the recorded pool owner or the active selector is not the caller. */
+  for(int which=0;which<2;which++){
+    memset(platforms,0,sizeof(platforms));memset(pool,0,sizeof(pool));
+    memset(pool_bytes,0,sizeof(pool_bytes));active=&platforms[0];
+    Gu.bs=&bs;Gu.pci=&pci[0];Gu.handle=&pci[0];Gu.device_id=0x2684;
+    wrong_pool_owner=(which==0);change_active_after_alloc=(which==1);
+    CHECK(GuCompatReserveDevice(&platforms[0])==EFI_ACCESS_DENIED);
+    CHECK(!platforms[0].compat_device&&!platforms[1].compat_device);
+    CHECK(platforms[0].fault&&platforms[0].retained&&!platforms[1].fault&&!platforms[1].retained);
+    CHECK(active==&platforms[which]);
+    free((void*)pool[which==0?1:0]); /* Test fixture teardown only. */
+  }
   return 0;
 }
 """
