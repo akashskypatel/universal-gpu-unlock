@@ -316,6 +316,14 @@ typedef int EFI_STATUS;
 #define EFI_COMPROMISED_DATA 6
 #define EFI_ERROR(x) ((x)!=EFI_SUCCESS)
 #define EfiPciIoWidthUint32 1
+/* The production BAR gate: any firmware-assigned window of at least 16 MiB. */
+#define GU_BAR_MIN_BYTES 0x1000000ULL
+static uint64_t GuBarBaseFromConfig(const UINT32 *c) {
+  /* Same decode as port.h: 32-bit BAR0 at 0x10, 64-bit when type bits say so. */
+  uint64_t base = (uint64_t)(c[4] & 0xfffffff0U);
+  if (((c[4] >> 1) & 3U) == 2U) base |= ((uint64_t)c[5]) << 32;
+  return base;
+}
 typedef struct mock_pci mock_pci;
 struct mock_pci {
   EFI_STATUS (*GetLocation)(mock_pci *,UINTN *,UINTN *,UINTN *,UINTN *);

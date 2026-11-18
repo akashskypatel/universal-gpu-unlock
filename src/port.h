@@ -96,6 +96,22 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #endif
 #endif
 
+/* GU_RUNTIME_SELECTION moves the target list out of the build: the image reads
+ * the operator's "GuTargets" variable at boot instead of a generated
+ * gpu-selection.h. Because the count is then unknown at build time, the static
+ * "exactly one address" gate cannot apply; the runtime admission gate does,
+ * unchanged, so a multi-card request without a waiver still refuses to actuate.
+ * A synthetic compile-only profile has no operator policy to read, so the
+ * combination is rejected. */
+#if defined(GU_RUNTIME_SELECTION)
+#if !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Runtime target selection requires the ordered selected-target execution mode
+#endif
+#if defined(GU_SYNTHETIC_COMPILE_ONLY) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+#error Runtime target selection requires a real execution profile
+#endif
+#endif
+
 /* GU_SIMULATED_ACTUATION is the hosted simulator profile. It exists so the
  * real active transaction sources can be executed against a modelled PCI
  * device on a workstation, for pre-execution and post-execution inspection.
@@ -164,6 +180,9 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #define GU_SELECTOR_PHASE_TARGET 3U
 /* The manifest contains a fixed number of files per GPU. Each platform
  * owns its own table, including before asset reservation. */
+/* BAR0 window rules live in gpu_bar.h so the host fixtures compile the same
+ * definitions the firmware does. */
+#include "gpu_bar.h"
 #define GU_ASSET_COUNT 5U
 struct firmware {size_t size;const UINT8 *data;};
 typedef struct GU_ASSET {const char *name;struct firmware firmware;} GU_ASSET;

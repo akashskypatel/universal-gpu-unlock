@@ -111,7 +111,7 @@ static BOOLEAN ConfigFor(GU_PLATFORM *platform) {
   if(!platform->handle||!platform->pci||id->handle!=platform->handle||id->pci!=platform->pci||
      id->pci_id!=(((UINT32)platform->device_id<<16)|0x10deU)||
      !platform->pci->GetLocation||!platform->pci->Pci.Read||
-     !platform->bar_base||platform->bar_size!=0x1000000||
+     !platform->bar_base||platform->bar_size<GU_BAR_MIN_BYTES||
      EFI_ERROR(platform->pci->GetLocation(platform->pci,&s,&b,&d,&f))) {
     GuLog("Config: invalid pci handle or location\n");return FALSE;
   }
@@ -133,7 +133,7 @@ static BOOLEAN ConfigFor(GU_PLATFORM *platform) {
   }
   if(c[0]!=id->pci_id||c[11]!=id->subsystem_id||(c[2]>>16)!=id->class_code||
      !GuIsSupportedPciId(c[0])||((c[2]>>16)!=0x0300U&&(c[2]>>16)!=0x0302U)||
-     (c[4]&~0xfU)!=platform->bar_base) {
+     GuBarBaseFromConfig(c)!=platform->bar_base) {
     GuLog("Config: mismatch c0=0x%x c2=0x%x c4=0x%x bar_base=0x%llx\n",
           c[0],c[2],c[4],(unsigned long long)platform->bar_base);return FALSE;
   }

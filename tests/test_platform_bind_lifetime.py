@@ -1402,6 +1402,9 @@ typedef int BOOLEAN;
 #define EFI_ACCESS_DENIED 6
 #define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
 #define AllocateAnyPages 1
+/* The production allocator asks for a buffer below an explicit 32-bit ceiling;
+   the mock ignores the type, so only the name has to exist. */
+#define AllocateMaxAddress 1
 #define EfiBootServicesData 2
 #define EfiPciIoOperationBusMasterCommonBuffer 3
 typedef struct GU_DMA GU_DMA;

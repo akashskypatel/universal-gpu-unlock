@@ -469,8 +469,20 @@ EFI_STATUS GuDmaAllocate(GU_PLATFORM *owner,UINTN N,VOID **C,UINT64 *D) {
   if(GU_PREFLIGHT_ONLY || !owner->profile_verified || !owner->armed || !owner->display_ok || !N || N>(128U<<20) || owner->fault || owner->retained || !owner->pci || !owner->owned)return EFI_INVALID_PARAMETER;
   Entry=GuAlloc(sizeof(*Entry));if(!Entry)return EFI_OUT_OF_RESOURCES;
   Entry->pages=(N+4095)/4096;Entry->bytes=Entry->pages*4096;
-  Status=owner->pci->AllocateBuffer(owner->pci,AllocateAnyPages,EfiBootServicesData,
-    Entry->pages,&Entry->cpu,0);
+  /* The falcon DMA registers carry 32-bit addresses. Ask for a buffer inside
+   * that window instead of relying on where AllocateAnyPages happens to land,
+   * which on a large-memory machine is routinely above 4 GiB. The sentinel is
+   * page-unaligned, so a real allocation can never be mistaken for "the
+   * firmware did not touch the output". */
+  {
+    /* Take ownership of any output the firmware wrote, including one above
+     * the ceiling: the mapped address below decides usability, and a buffer
+     * that exists must never be dropped. */
+    VOID *Buffer=(VOID *)(UINTN)~(UINTN)0;
+    Status=owner->pci->AllocateBuffer(owner->pci,AllocateMaxAddress,EfiBootServicesData,
+      Entry->pages,&Buffer,0);
+    if(Buffer&&Buffer!=(VOID *)(UINTN)~(UINTN)0)Entry->cpu=Buffer;
+  }
   if(EFI_ERROR(Status) || !Entry->cpu) {
     /* The service may report an error after writing an output pointer.
      * Never discard ownership of a possibly allocated DMA-capable buffer. */

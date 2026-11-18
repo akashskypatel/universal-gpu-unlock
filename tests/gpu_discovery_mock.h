@@ -12,6 +12,12 @@ typedef size_t UINTN;
 typedef uint8_t UINT8;
 typedef uint16_t UINT16;
 typedef uint32_t UINT32;
+typedef uint64_t UINT64;
+typedef unsigned char BOOLEAN;
+#ifndef TRUE
+#define TRUE 1
+#define FALSE 0
+#endif
 typedef struct { uint32_t a; uint16_t b,c; uint8_t d[8]; } EFI_GUID;
 #define EFI_PCI_IO_PROTOCOL_GUID { 1, 0, 0, {0,0,0,0,0,0,0,0} }
 #define EFI_SUCCESS 0
@@ -30,10 +36,26 @@ typedef struct MOCK_PCI_PROTOCOL EFI_PCI_IO_PROTOCOL;
 typedef struct {
   EFI_STATUS (*Read)(EFI_PCI_IO_PROTOCOL *, int, UINT32, UINTN, VOID *);
 } GU_PCI_ACCESS;
+/* The firmware-assigned BAR descriptor the real adapter validates. The mock
+ * keeps one per modelled card so the release path can be exercised without
+ * perturbing the pool counters. */
+typedef struct {
+  UINT8 Desc;
+  UINT16 Len;
+  UINT8 ResType;
+  UINT8 GenFlag;
+  UINT8 SpecificFlag;
+  UINT64 AddrSpaceGranularity;
+  UINT64 AddrRangeMin;
+  UINT64 AddrRangeMax;
+  UINT64 AddrTranslationOffset;
+  UINT64 AddrLen;
+} EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR;
 struct MOCK_PCI_PROTOCOL {
   EFI_STATUS (*GetLocation)(EFI_PCI_IO_PROTOCOL *, UINTN *, UINTN *, UINTN *, UINTN *);
   GU_PCI_ACCESS Pci;
   void *context;
+  EFI_STATUS (*GetBarAttributes)(EFI_PCI_IO_PROTOCOL *, UINT8, UINT64 *, VOID **);
 };
 typedef struct MOCK_BOOT_SERVICES {
   EFI_STATUS (*LocateHandleBuffer)(int, EFI_GUID *, VOID *, UINTN *, EFI_HANDLE **);
@@ -41,7 +63,13 @@ typedef struct MOCK_BOOT_SERVICES {
   EFI_STATUS (*FreePool)(VOID *);
   EFI_STATUS (*AllocatePool)(int, UINTN, VOID **);
 } EFI_BOOT_SERVICES;
-typedef struct { EFI_BOOT_SERVICES *BootServices; } EFI_SYSTEM_TABLE;
+/* Runtime services are only used by the target-selection module; discovery
+ * never dereferences them, so they stay optional here. */
+typedef struct MOCK_RUNTIME_SERVICES EFI_RUNTIME_SERVICES;
+typedef struct {
+  EFI_BOOT_SERVICES *BootServices;
+  EFI_RUNTIME_SERVICES *RuntimeServices;
+} EFI_SYSTEM_TABLE;
 typedef struct {
   EFI_BOOT_SERVICES *bs;
   EFI_PCI_IO_PROTOCOL *pci;

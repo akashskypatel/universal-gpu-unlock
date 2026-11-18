@@ -107,6 +107,7 @@ typedef struct { int dummy; } EFI_GUID;
 #define EFI_S3_SAVE_STATE_PROTOCOL_GUID {0}
 #define EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE 11
 #define EfiBootScriptWidthUint32 3
+#define GU_BAR_MIN_BYTES 0x1000000ULL
 typedef struct MOCK_SCRIPT EFI_S3_SAVE_STATE_PROTOCOL;
 struct MOCK_SCRIPT {
   EFI_STATUS (*Write)(EFI_S3_SAVE_STATE_PROTOCOL *,int,int,UINT64,UINTN,const UINT32 *);

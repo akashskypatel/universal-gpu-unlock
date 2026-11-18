@@ -220,7 +220,7 @@ EFI_STATUS GuRegisterS3(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table)
   if(!owner||owner!=GuPlatformActive||!table||!table->BootServices||
      owner->bs!=table->BootServices||!GuSafeToReturnFor(owner)||owner->fault||
      !GuMsiReadyForWindows()||owner!=GuPlatformActive||owner->fault||
-     !owner->bar_base||owner->bar_size!=0x1000000ULL||
+     !owner->bar_base||owner->bar_size<GU_BAR_MIN_BYTES||
      owner->bar_base>~(UINT64)0-0x00823820ULL)return EFI_NOT_READY;
   if(owner->s3_script_attempted)return EFI_ALREADY_STARTED;
   if(!table->BootServices->LocateProtocol)return EFI_UNSUPPORTED;

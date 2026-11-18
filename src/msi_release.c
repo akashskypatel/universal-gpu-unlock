@@ -771,8 +771,11 @@ static EFI_STATUS Bar(VOID) {
   EFI_STATUS s=Gu.pci->GetBarAttributes(Gu.pci,0,&support,(VOID **)&d);
   s=ObservationOutput(s,(VOID **)&d);
   if(s==EFI_SUCCESS&&(!d||d->Desc!=0x8a||d->Len!=43||d->ResType||
-     d->AddrRangeMin!=Gu.bar_base||d->AddrRangeMax!=(Gu.bar_base+0xffffff)||
-     d->AddrTranslationOffset||d->AddrLen!=0x1000000))s=EFI_UNSUPPORTED;
+     d->AddrRangeMin!=Gu.bar_base||
+     d->AddrRangeMax!=(Gu.bar_base+Gu.bar_size-1)||
+     d->AddrTranslationOffset||d->AddrLen!=Gu.bar_size||
+     Gu.bar_size<GU_BAR_MIN_BYTES||
+     Gu.bar_size>~(UINT64)0-Gu.bar_base))s=EFI_UNSUPPORTED;
   return ReleaseObservation(Plan.table->BootServices,d,s);
 }
 /* The immutable original graph is the child inventory. An idle output
