@@ -744,8 +744,47 @@ int main(void) {
   return 0;
 }
 #elif defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+static int CheckPreparationTableLifetime(void) {
+  GU_GPU_EXEC_TARGET target={0};
+  size_t order=0;
+  GU_GPU_EXEC_SEQUENCE sequence={0};
+  sequence.targets=&target;sequence.order=&order;
+  sequence.count=sequence.capacity=sequence.selected_count=1;
+  ResetPair();context_allocs=context_frees=0;
+  target.identity.pci=&gpu[0].protocol;
+  fail_state_alloc=1;
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_OUT_OF_RESOURCES);
+  CHECK(!PreparedContexts&&!PreparedContextCount&&!UnreleasedPreparedContextTable);
+  CHECK(state_allocs==1&&!state_frees&&!context_allocs);
+  ResetPair();fail_state_alloc_with_output=1;
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_DEVICE_ERROR);
+  CHECK(uncertain_state&&UnreleasedPreparedContextTable==uncertain_state);
+  CHECK(!PreparedContexts&&!PreparedContextCount&&state_allocs==1&&!state_frees&&!context_allocs);
+  CHECK(uncertain_state_bytes==sizeof(GU_PLATFORM *));
+  for(UINTN i=0;i<uncertain_state_bytes;i++)
+    CHECK(((const unsigned char *)uncertain_state)[i]==0xa5);
+  fail_state_alloc_with_output=0;
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_ALREADY_STARTED);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(!locate_calls&&!resolve_calls&&!init_calls&&state_allocs==1&&!state_frees);
+  free(uncertain_state); /* Test-only boot termination. */
+  UnreleasedPreparedContextTable=NULL;
+  ResetPair();fail_state_alloc=2;fail_state_free=1;
+  /* Context allocation fails, then the confirmed table release is uncertain. */
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_NOT_READY);
+  CHECK(last_failed_free&&UnreleasedPreparedContextTable==last_failed_free);
+  CHECK(!PreparedContexts&&!PreparedContextCount&&state_allocs==2&&!state_frees&&!context_allocs);
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_ALREADY_STARTED);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(!locate_calls&&!resolve_calls&&!init_calls&&state_allocs==2&&!state_frees);
+  free(last_failed_free); /* Test-only boot termination. */
+  UnreleasedPreparedContextTable=NULL;
+  ResetPair();
+  return 0;
+}
 int main(void) {
   CHECK(CheckHandleBufferLifetime()==0);
+  CHECK(CheckPreparationTableLifetime()==0);
 #if GU_GPU_SELECTION_COUNT == 18
   ResetPair();ExpandInventory(20);
   gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;gpu[2].bus=9;
