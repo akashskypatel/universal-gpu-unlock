@@ -37,7 +37,7 @@ static size_t count;
 static unsigned init_calls, free_calls, log_calls, resolve_calls, locate_calls;
 static void *failed_handle_buffer;
 static unsigned prep_markers, prep_refusals, global_refusals;
-static int fail_pool_free, redirect_on_refresh, refuse_init;
+static int fail_pool_free, fail_locate, redirect_on_refresh, refuse_init;
 
 static GU_PLATFORM MockPrimaryPlatform;
 GU_PLATFORM *GuPlatformActive=&MockPrimaryPlatform;
@@ -101,7 +101,9 @@ static EFI_STATUS GetLocation(EFI_PCI_IO_PROTOCOL *io, UINTN *seg, UINTN *bus, U
 static EFI_STATUS Locate(int type, EFI_GUID *guid, VOID *key, UINTN *outCount, EFI_HANDLE **outHandles) {
   (void)type; (void)guid; (void)key;
   locate_calls++;
-  *outCount = count; *outHandles = handles; return EFI_SUCCESS;
+  *outCount = count;
+  *outHandles = fail_locate==1?NULL:handles;
+  return fail_locate?EFI_NOT_READY:EFI_SUCCESS;
 }
 static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
   (void)guid; resolve_calls++;
@@ -186,7 +188,7 @@ static void ResetPair(void) {
   GuPlatformActive=&MockPrimaryPlatform;
   memset(&Gu, 0, sizeof(Gu)); init_calls = free_calls = log_calls = 0;
   prep_markers = prep_refusals = global_refusals = 0;
-  fail_pool_free = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
+  fail_pool_free = fail_locate = redirect_on_refresh = refuse_init = 0; resolve_calls = 0; count = 2;
   state_allocs=state_frees=fail_state_alloc=fail_state_free=0;
   last_failed_free=NULL;
   /* Test-only boot reset. The production path never retries release. */
@@ -218,6 +220,22 @@ static int CheckHandleBufferLifetime(void) {
     CHECK(!prepared.inventory.count&&!prepared.selected_count);
     CHECK(locate_calls==1&&free_calls==1);
   }
+  /* Ordinary error without output must not poison the census. */
+  ResetPair();fail_locate=1;
+  EFI_HANDLE *out=NULL;UINTN n=0;
+  CHECK(LocatePciHandles(&system_table,&out,&n)==EFI_UNSUPPORTED&&!out&&!n);
+  CHECK(!UnreleasedPciHandles&&locate_calls==1&&!free_calls&&!resolve_calls);
+  /* Error with a nonnull address is not an owned allocation. */
+  ResetPair();fail_locate=2;
+  CHECK(LocatePciHandles(&system_table,&out,&n)==EFI_DEVICE_ERROR&&!out&&!n);
+  CHECK(UnreleasedPciHandles==handles&&locate_calls==1&&!free_calls&&!resolve_calls);
+  CHECK(!state_allocs&&!init_calls);
+  fail_locate=0;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  GU_GPU_PREPARED_SEQUENCE prepared;
+  CHECK(GuPrepareGpuSequence(&system_table,NULL,0,&prepared)==EFI_ALREADY_STARTED);
+  CHECK(!prepared.inventory.count&&!prepared.selected_count);
+  CHECK(locate_calls==1&&!free_calls&&!resolve_calls&&!state_allocs&&!init_calls);
   ResetPair();
   return 0;
 }

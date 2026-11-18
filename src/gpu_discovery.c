@@ -194,7 +194,15 @@ static EFI_STATUS LocatePciHandles(EFI_SYSTEM_TABLE *table,EFI_HANDLE **handles,
   *handles=NULL;*count=0;
   if(UnreleasedPciHandles)return EFI_ALREADY_STARTED;
   EFI_STATUS s=table->BootServices->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,count,handles);
-  if(s!=EFI_SUCCESS)return EFI_UNSUPPORTED;
+  if(s!=EFI_SUCCESS) {
+    /* Do not inspect or release an unverified output on service failure. */
+    if(*handles) {
+      UnreleasedPciHandles=*handles;
+      GuLog("PCI_HANDLE_BUFFER_LOCATE_STATUS=%#llx RETAINED=1\n",(unsigned long long)s);
+    }
+    *handles=NULL;*count=0;
+    return UnreleasedPciHandles?EFI_DEVICE_ERROR:EFI_UNSUPPORTED;
+  }
   if(!*handles||!*count||*count>GU_INVENTORY_MAX_HANDLES){
     (VOID)ReleasePciHandles(table->BootServices,handles);
     *count=0;

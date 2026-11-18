@@ -291,7 +291,15 @@ static EFI_STATUS LocateBootFilesystems(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handl
   if(UnreleasedFilesystemHandles||BootFileStatus!=EFI_SUCCESS)return EFI_NOT_READY;
   if(!bs||!bs->LocateHandleBuffer||!bs->FreePool)return EFI_UNSUPPORTED;
   EFI_STATUS s=bs->LocateHandleBuffer(ByProtocol,&FsGuid,NULL,count,handles);
-  if(s!=EFI_SUCCESS){*handles=NULL;*count=0;return s;}
+  if(s!=EFI_SUCCESS){
+    if(*handles) {
+      /* A failed enumeration does not transfer a verified pool buffer. */
+      UnreleasedFilesystemHandles=*handles;
+      GuLog("FILESYSTEM_HANDLE_BUFFER_LOCATE_STATUS=%#llx RETAINED=1\n",(unsigned long long)s);
+      s=EFI_DEVICE_ERROR;
+    }
+    *handles=NULL;*count=0;return s;
+  }
   if(!*handles||!*count||*count>128U) {
     s=ReleaseBootFilesystemHandles(bs,handles);
     *count=0;

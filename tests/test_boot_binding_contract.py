@@ -74,9 +74,9 @@ static EFI_STATUS Locate(int kind,void *guid,void *key,UINTN *count,EFI_HANDLE *
   (void)key;
   if(kind!=ByProtocol||guid!=&FsGuid)return EFI_INVALID_PARAMETER;
   locates++;
-  if(fail_locate)return EFI_NOT_FOUND;
+  if(fail_locate==1)return EFI_NOT_FOUND;
   *count=supplied;*out=null_buffer?NULL:fixture;
-  return EFI_SUCCESS;
+  return fail_locate?EFI_NOT_FOUND:EFI_SUCCESS;
 }
 static EFI_STATUS Free(void *p){
   frees++;released=p;
@@ -112,6 +112,14 @@ int main(void){
   CHECK(ReleaseBootFilesystemHandles(&bs,&h)==EFI_SUCCESS&&frees==4);
   saved_locates=locates;
   CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_NOT_READY&&locates==saved_locates);
+  /* New boot fixture: error with nonnull enumeration output. */
+  UnreleasedFilesystemHandles=NULL;fail_free=0;fail_locate=2;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_DEVICE_ERROR&&!h&&!n);
+  CHECK(UnreleasedFilesystemHandles==fixture&&frees==4);
+  fail_locate=0;saved_locates=locates;
+  CHECK(LocateBootFilesystems(&bs,&h,&n)==EFI_NOT_READY&&!h&&!n);
+  CHECK(locates==saved_locates&&frees==4);
+  CHECK(ReleaseBootFilesystemHandles(&bs,&h)==EFI_SUCCESS&&frees==4);
   return 0;
 }
 """
