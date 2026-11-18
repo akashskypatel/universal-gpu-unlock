@@ -72,7 +72,9 @@ struct pci_dev {
   EFI_HANDLE owner_handle;
   u64 mask_storage;
 };
-/* CPU-only transaction identity. No hardware admission or protocol claim. */
+/* CPU-only transaction identity. Reserve before release. Open only after
+ * existing ownership and cold-entry checks. Neither grants hardware admission. */
+EFI_STATUS GuCompatReserveDevice(VOID);
 EFI_STATUS GuCompatOpenDevice(struct pci_dev **out);
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *dev);
 BOOLEAN GuCompatPciMatches(const struct pci_dev *dev);

@@ -23,6 +23,10 @@ static EFI_STATUS GuExecuteUnlockCore(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
   s=GuMsiPreflight(table,image,Gu.handle);
   if(s!=EFI_SUCCESS||Gu.fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
+  *stage="compatibility-reserve";
+  s=GuCompatReserveDevice();
+  if(s!=EFI_SUCCESS||Gu.fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+
   *stage="driver-release";
   s=GuMsiRelease();
   if(s!=EFI_SUCCESS||Gu.fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
@@ -33,6 +37,7 @@ static EFI_STATUS GuExecuteUnlockCore(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
   Gu.display_ok=TRUE;
   Gu.armed=TRUE;
 
+  *stage="compatibility-open";
   s=GuCompatOpenDevice(&dev);
   if(s!=EFI_SUCCESS||Gu.fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 

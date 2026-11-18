@@ -34,18 +34,33 @@ static BOOLEAN GuCompatDeviceMatches(const struct device *D) {
   if(GuCompatIdentityValid(Gu.compat_device)&&D==&Gu.compat_device->dev)return TRUE;
   Gu.fault=TRUE;return FALSE;
 }
-EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
-  if(!out||*out)return EFI_INVALID_PARAMETER;
+/* Reserve CPU storage before driver release. No compatibility operation
+ * can use the record until the coordinator opens the scope. */
+EFI_STATUS GuCompatReserveDevice(VOID) {
   if(!Gu.bs||!Gu.pci||!Gu.handle||Gu.fault||Gu.retained)return EFI_NOT_READY;
   if(Gu.compat_device||Gu.compat_device_open||Gu.compat_device_closed)return EFI_ALREADY_STARTED;
+  if(Gu.started||Gu.owned||Gu.armed)return EFI_NOT_READY;
   struct pci_dev *D=GuAlloc(sizeof(*D));
   if(!D)return EFI_OUT_OF_RESOURCES;
   D->owner=&Gu;D->owner_bs=Gu.bs;D->owner_pci=Gu.pci;D->owner_handle=Gu.handle;
   D->vendor=0x10de;D->device=Gu.device_id;
   D->mask_storage=0xffffffffffffULL;
   D->dev.dma_mask=&D->mask_storage;D->dev.coherent_dma_mask=0xfffffffffULL;
+  Gu.compat_device=D;
+  return EFI_SUCCESS;
+}
+EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
+  if(!out||*out)return EFI_INVALID_PARAMETER;
+  if(Gu.fault||Gu.retained)return EFI_NOT_READY;
+  if(Gu.compat_device_open||Gu.compat_device_closed)return EFI_ALREADY_STARTED;
+  if(!Gu.compat_device||!Gu.owned||!Gu.armed||!Gu.display_ok)return EFI_NOT_READY;
+  struct pci_dev *D=Gu.compat_device;
+  if(!GuCompatRecordMatches(&Gu,D)||D->refs||D->dev.scope||
+     !list_empty(&D->dev.devres_head)) {
+    Gu.fault=TRUE;return EFI_ACCESS_DENIED;
+  }
   D->current_state=PCI_D0;D->pm_cap=Gu.pm_cap;D->refs=1;
-  Gu.compat_device=D;Gu.compat_device_open=TRUE;*out=D;
+  Gu.compat_device_open=TRUE;*out=D;
   return EFI_SUCCESS;
 }
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *D) {

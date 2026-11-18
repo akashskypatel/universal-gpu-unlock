@@ -25,8 +25,8 @@ def body(source,name):
 class SharedExecutionContract(unittest.TestCase):
     def test_complete_order(self):
         core=body(SHARED,"GuExecuteUnlockCore")
-        ops=["GuMsiPreflight(","GuMsiRelease(","GuMsiReleased(","GuAd104ColdEntry(",
-             "gpu_unlock_610_load_shared(","gpu_unlock_610_unlock(",
+        ops=["GuMsiPreflight(","GuCompatReserveDevice(","GuMsiRelease(","GuMsiReleased(","GuAd104ColdEntry(",
+             "GuCompatOpenDevice(","gpu_unlock_610_load_shared(","gpu_unlock_610_unlock(",
              "gpu_unlock_610_release_shared(","GuSafeToReturn(","GuMsiFinish(",
              "GuMsiReadyForWindows("]
         indices=[core.index(op) for op in ops]

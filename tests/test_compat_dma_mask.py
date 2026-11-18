@@ -93,7 +93,8 @@ typedef struct {int id;} EFI_PCI_IO_PROTOCOL;
 typedef struct {
   EFI_BOOT_SERVICES *bs;EFI_PCI_IO_PROTOCOL *pci;EFI_HANDLE handle;
   unsigned device_id,pm_cap;
-  int fault,retained,compat_device_open,compat_device_closed;
+  int fault,retained,started,owned,armed,display_ok;
+  int compat_device_open,compat_device_closed;
   struct pci_dev *compat_device;
 } GU_PLATFORM;
 static GU_PLATFORM platforms[2],*active=&platforms[0];
@@ -119,8 +120,21 @@ int main(void){
   }
   struct pci_dev *a=NULL,*b=NULL,*extra=NULL;
   CHECK(GuCompatOpenDevice(NULL)==EFI_INVALID_PARAMETER);
-  fail_alloc=1;CHECK(GuCompatOpenDevice(&a)==EFI_OUT_OF_RESOURCES&&!a&&!Gu.compat_device);
-  fail_alloc=0;CHECK(GuCompatOpenDevice(&a)==EFI_SUCCESS&&a&&Gu.compat_device==a);
+  CHECK(GuCompatOpenDevice(&a)==EFI_NOT_READY&&!a&&allocs==0);
+  Gu.owned=1;CHECK(GuCompatReserveDevice()==EFI_NOT_READY&&allocs==0);Gu.owned=0;
+  Gu.armed=1;CHECK(GuCompatReserveDevice()==EFI_NOT_READY&&allocs==0);Gu.armed=0;
+  Gu.started=1;CHECK(GuCompatReserveDevice()==EFI_NOT_READY&&allocs==0);Gu.started=0;
+  fail_alloc=1;CHECK(GuCompatReserveDevice()==EFI_OUT_OF_RESOURCES&&!a&&!Gu.compat_device);
+  fail_alloc=0;CHECK(GuCompatReserveDevice()==EFI_SUCCESS&&Gu.compat_device&&!Gu.compat_device_open);
+  CHECK(GuCompatReserveDevice()==EFI_ALREADY_STARTED&&allocs==2);
+  CHECK(!GuCompatCompletedPlatform(&Gu));
+  CHECK(GuCompatOpenDevice(&a)==EFI_NOT_READY&&!a&&allocs==2);
+  u16 early=0;CHECK(pci_read_config_word(Gu.compat_device,0,&early)==-EINVAL&&reads==0&&Gu.fault);
+  Gu.fault=0; /* Test-only reset. No production retry. */
+  Gu.owned=Gu.armed=Gu.display_ok=1;
+  Gu.pm_cap=9;
+  CHECK(GuCompatOpenDevice(&a)==EFI_SUCCESS&&a&&Gu.compat_device==a);
+  CHECK(a->pm_cap==9&&allocs==2);
   CHECK(a->owner==&Gu&&a->owner_bs==&bs&&a->owner_pci==&pci[0]&&a->owner_handle==&pci[0]);
   CHECK(GuCompatOpenDevice(&extra)==EFI_ALREADY_STARTED&&!extra);
   CHECK(a->dev.dma_mask==&a->mask_storage&&a->refs==1&&list_empty(&a->dev.devres_head));
@@ -137,7 +151,13 @@ int main(void){
   Gu.fault=0; /* Test-only reset; production fault is sticky. */
   CHECK(GuCompatOpenDevice(&extra)==EFI_ALREADY_STARTED&&!extra);
   active=&platforms[1];
-  CHECK(GuCompatOpenDevice(&b)==EFI_SUCCESS&&a!=b&&a->dev.dma_mask!=b->dev.dma_mask);
+  CHECK(GuCompatReserveDevice()==EFI_SUCCESS&&allocs==3);
+  CHECK(Gu.compat_device!=a&&!Gu.compat_device_open);
+  Gu.owned=Gu.armed=Gu.display_ok=1;
+  Gu.handle=&pci[0];
+  CHECK(GuCompatOpenDevice(&b)==EFI_ACCESS_DENIED&&!b&&Gu.fault&&allocs==3);
+  Gu.handle=&pci[1];Gu.fault=0; /* Test-only reset. */
+  CHECK(GuCompatOpenDevice(&b)==EFI_SUCCESS&&a!=b&&a->dev.dma_mask!=b->dev.dma_mask&&allocs==3);
   CHECK(GuCompatCompletedPlatform(&platforms[0])&&!GuCompatCompletedPlatform(&platforms[1]));
   CHECK(active==&platforms[1]);
   platforms[0].compat_device_closed=0;CHECK(!GuCompatCompletedPlatform(&platforms[0]));platforms[0].compat_device_closed=1;
@@ -181,6 +201,9 @@ int main(void){
                 self.assertEqual(built.returncode,0,built.stderr)
                 result=subprocess.run([str(exe)],capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertLess(execution.index("GuMsiPreflight("),execution.index("GuCompatReserveDevice()"))
+        self.assertLess(execution.index("GuCompatReserveDevice()"),execution.index("GuMsiRelease()"))
+        self.assertLess(execution.index("GuAd104ColdEntry()"),execution.index("GuCompatOpenDevice(&dev)"))
         self.assertLess(execution.index("GuCompatOpenDevice(&dev)"),execution.index("gpu_unlock_610_load_shared(dev,"))
         self.assertLess(execution.index("gpu_unlock_610_release_shared(&shared)"),execution.index("GuCompatCloseDevice(dev)"))
         self.assertLess(execution.index("GuCompatCloseDevice(dev)"),execution.index("GuMsiFinish()"))
