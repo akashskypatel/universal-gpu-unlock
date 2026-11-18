@@ -587,6 +587,106 @@ int main(void) {
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
 
+
+    def test_incomplete_text_output_observation_propagates(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        actual="static int ReportTextOutputOpeners("+source.split("static int ReportTextOutputOpeners(",1)[1].split("\n/* Read the current PCI controller opener graph.",1)[0]
+        self.assertEqual(source.count("unresolved_text+=!ReportTextOutputOpeners("),4)
+        self.assertIn("!unresolved_agents&&!unresolved_text&&!ObservationPoolFault",source)
+        self.assertIn("if(freed!=EFI_SUCCESS||!by_driver||unresolved_text||ObservationPoolFault)unresolved++;",source)
+        program=r"""
+#include <stdio.h>
+#include <stddef.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef int EFI_STATUS;
+typedef int EFI_GUID;
+typedef size_t UINTN;
+typedef int EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
+typedef struct {size_t length;} GU_TOPO_PATH;
+typedef struct {EFI_HANDLE ImageHandle;} EFI_DRIVER_BINDING_PROTOCOL;
+typedef struct {size_t ImageSize;const void *FilePath;} EFI_LOADED_IMAGE_PROTOCOL;
+typedef struct {unsigned Attributes,OpenCount;EFI_HANDLE AgentHandle,ControllerHandle;} EFI_OPEN_PROTOCOL_INFORMATION_ENTRY;
+#define EFI_SUCCESS 0
+#define EFI_UNSUPPORTED 1
+#define EFI_DEVICE_ERROR 2
+#define EFI_OPEN_PROTOCOL_BY_DRIVER 16U
+#define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 8U
+typedef struct EFI_BOOT_SERVICES {
+ EFI_STATUS (*HandleProtocol)(EFI_HANDLE,EFI_GUID *,VOID **);
+ EFI_STATUS (*OpenProtocolInformation)(EFI_HANDLE,EFI_GUID *,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **,UINTN *);
+ EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+static EFI_GUID TextOutGuid,DriverBindingGuid,LoadedGuid;
+static EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL text;
+static EFI_DRIVER_BINDING_PROTOCOL binding;
+static EFI_LOADED_IMAGE_PROTOCOL loaded;
+static EFI_OPEN_PROTOCOL_INFORMATION_ENTRY entry;
+static int mode,ObservationPoolFault,open_calls,release_calls,borrowed_reads;
+static void Say(const char *fmt,...){(void)fmt;}
+static void SayPath(const char *s,size_t n,const GU_TOPO_PATH *p){(void)s;(void)n;(void)p;}
+static int PathCopy(const void *p,GU_TOPO_PATH *path){(void)p;path->length=1;return mode!=12;}
+static void ReportSharedConsoleMappedText(EFI_HANDLE h,EFI_LOADED_IMAGE_PROTOCOL *p,const char *s){(void)h;(void)p;(void)s;}
+static EFI_STATUS Handle(EFI_HANDLE h,EFI_GUID *guid,VOID **out){
+ (void)h;borrowed_reads++;*out=NULL;
+ if(guid==&TextOutGuid){
+   if(mode==1)return EFI_UNSUPPORTED;
+   if(mode==2)return EFI_DEVICE_ERROR;
+   if(mode==3){*out=&text;return 3;}
+   if(mode==4)return EFI_SUCCESS;
+   *out=&text;return EFI_SUCCESS;
+ }
+ if(guid==&DriverBindingGuid){if(mode==9)return EFI_DEVICE_ERROR;*out=&binding;return EFI_SUCCESS;}
+ if(mode==10)return EFI_DEVICE_ERROR;
+ *out=&loaded;return EFI_SUCCESS;
+}
+static EFI_STATUS Open(EFI_HANDLE h,EFI_GUID *g,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out,UINTN *count){
+ (void)h;(void)g;open_calls++;*out=NULL;*count=0;
+ if(mode==6)return EFI_DEVICE_ERROR;
+ if(mode==0)return EFI_SUCCESS;
+ *out=&entry;*count=mode==7?257:1;return EFI_SUCCESS;
+}
+static EFI_STATUS Free(VOID *p){if(p!=&entry)return EFI_DEVICE_ERROR;release_calls++;return mode==13?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+static EFI_STATUS ObservationOpeners(EFI_BOOT_SERVICES *bs,EFI_HANDLE h,EFI_GUID *g,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out,UINTN *count,const VOID *outer,const char *stage){
+ (void)outer;(void)stage;return bs->OpenProtocolInformation(h,g,out,count);
+}
+static EFI_STATUS ObservationPoolRelease(EFI_BOOT_SERVICES *bs,VOID *p,const char *stage){(void)stage;return p?bs->FreePool(p):EFI_SUCCESS;}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode %d: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void){
+ EFI_BOOT_SERVICES bs={Handle,Open,Free};
+ binding.ImageHandle=&binding;loaded.FilePath=&loaded;
+ entry.Attributes=EFI_OPEN_PROTOCOL_BY_DRIVER;
+ for(mode=0;mode<=13;mode++){
+   open_calls=release_calls=borrowed_reads=0;ObservationPoolFault=0;
+   entry.AgentHandle=mode==8?NULL:&binding;
+   loaded.FilePath=mode==11?NULL:&loaded;
+   bs.OpenProtocolInformation=mode==5?NULL:Open;
+   CHECK(ReportTextOutputOpeners(&bs,"TEST",0,0,0,&text,"fixture",NULL)==(mode==0||mode==1));
+   CHECK(open_calls==(mode==0||mode>=6));
+   CHECK(release_calls==(mode>=7));
+   if(mode>=1&&mode<=5)CHECK(borrowed_reads==1);
+ }
+ mode=14;open_calls=release_calls=borrowed_reads=0;
+ CHECK(ReportTextOutputOpeners(&bs,"TEST",0,0,0,&text,"fixture",NULL));
+ CHECK(open_calls==1&&release_calls==1&&borrowed_reads==3);
+ ObservationPoolFault=1;
+ CHECK(!ReportTextOutputOpeners(&bs,"TEST",0,0,0,&text,"fixture",NULL));
+ CHECK(open_calls==1&&release_calls==1&&borrowed_reads==3);
+ return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"text_output.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(c),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_diagnostic_log_file_ownership(self):
         source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
         actual=source.split("static EFI_STATUS LogOpenResult(",1)[1].split("\n#endif",1)[0]

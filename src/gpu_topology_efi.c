@@ -1520,7 +1520,7 @@ static int ReportGopOpenerAgent(EFI_BOOT_SERVICES *bs,
  * Inspect both separately; this is not a BY_CHILD_CONTROLLER assertion.
  * Observational only: no DriverBinding callback and no protocol ownership
  * changes. Never use boot-local handle addresses in an admission policy. */
-static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
+static int ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
                                     size_t pci,size_t gop,size_t source_edge,
                                     EFI_HANDLE handle,const char *source,
                                     const VOID *outer) {
@@ -1529,21 +1529,23 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
   EFI_STATUS status,release;
   UINTN count=0,k;
   size_t driver_edges=0,unresolved=0;
-  if(ObservationPoolFault)return;
+  if(ObservationPoolFault)return 0;
   if(!handle) {
     Say("%s_TEXTOUT[%zu,%zu,%zu] SOURCE=%s HANDLE=0 STATUS=ABSENT\r\n",
          scope,pci,gop,source_edge,source);
-    return;
+    return 0;
   }
   status=bs->HandleProtocol(handle,&TextOutGuid,(VOID **)&text);
   Say("%s_TEXTOUT[%zu,%zu,%zu] SOURCE=%s HANDLE=%p TEXTOUT_STATUS=%#llx PRESENT=%u NOT_CHILD_EVIDENCE=1\r\n",
          scope,pci,gop,source_edge,source,handle,(unsigned long long)status,
-      (unsigned)(!EFI_ERROR(status)&&!!text));
-  if(EFI_ERROR(status)||!text)return;
+      (unsigned)(status==EFI_SUCCESS&&!!text));
+  /* A confirmed absent protocol is distinct from a failed observation. */
+  if(status==EFI_UNSUPPORTED && !text)return 1;
+  if(status!=EFI_SUCCESS || !text)return 0;
   if(!bs->OpenProtocolInformation||!bs->FreePool) {
     Say("%s_TEXTOUT[%zu,%zu,%zu] OPENERS_STATUS=UNKNOWN SERVICES_UNAVAILABLE=1\r\n",
          scope,pci,gop,source_edge);
-    return;
+    return 0;
   }
   status=ObservationOpeners(bs,handle,&TextOutGuid,&entries,&count,outer,"textout");
   if(status!=EFI_SUCCESS||count>256U||(count&&!entries)) {
@@ -1554,7 +1556,7 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
       Say("%s_TEXTOUT[%zu,%zu,%zu] FREE_STATUS=%#llx\r\n",
          scope,pci,gop,source_edge,(unsigned long long)release);
     }
-    return;
+    return 0;
   }
   Say("%s_TEXTOUT[%zu,%zu,%zu] OPENERS_STATUS=OBSERVED COUNT=%zu\r\n",
          scope,pci,gop,source_edge,(size_t)count);
@@ -1573,7 +1575,7 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
     driver_edges++;
     if(!e->AgentHandle) {unresolved++;continue;}
     bstat=bs->HandleProtocol(e->AgentHandle,&DriverBindingGuid,(VOID **)&binding);
-    if(EFI_ERROR(bstat)||!binding||!binding->ImageHandle) {
+    if(bstat!=EFI_SUCCESS||!binding||!binding->ImageHandle) {
       unresolved++;
       Say("%s_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] BINDING_STATUS=%#llx RESOLUTION=UNKNOWN\r\n",
          scope,pci,gop,source_edge,(size_t)k,(unsigned long long)bstat);
@@ -1583,7 +1585,7 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
     Say("%s_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] BINDING_STATUS=%#llx LOADED_STATUS=%#llx IMAGE_HANDLE=%p\r\n",
          scope,pci,gop,source_edge,(size_t)k,(unsigned long long)bstat,
         (unsigned long long)lstat,binding->ImageHandle);
-    if(EFI_ERROR(lstat)||!loaded) {unresolved++;continue;}
+    if(lstat!=EFI_SUCCESS||!loaded) {unresolved++;continue;}
     Say("%s_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] IMAGE_BYTES=%llu SIGNATURE_NOT_VERIFIED=1\r\n",
          scope,pci,gop,source_edge,(size_t)k,(unsigned long long)loaded->ImageSize);
     ReportSharedConsoleMappedText(binding->ImageHandle,loaded,"TEXTOUT_CONSUMER");
@@ -1592,6 +1594,7 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
          scope,pci,gop,source_edge,(size_t)k,path.length);
       SayPath("TEXTOUT_OWNER_FILE",k,&path);
     } else {
+      unresolved++;
       Say("%s_TEXTOUT_OWNER[%zu,%zu,%zu,%zu] FILE_PATH=UNKNOWN\r\n",
          scope,pci,gop,source_edge,(size_t)k);
     }
@@ -1600,6 +1603,7 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
   Say("%s_TEXTOUT_SUMMARY[%zu,%zu,%zu] DRIVER_EDGES=%zu UNRESOLVED=%zu FREE_STATUS=%#llx STATUS=%s NO_STOP_EVIDENCE=1\r\n",
          scope,pci,gop,source_edge,driver_edges,unresolved,(unsigned long long)release,
       (!unresolved&&release==EFI_SUCCESS)?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
+  return !unresolved&&release==EFI_SUCCESS;
 }
 
 /* Read the current PCI controller opener graph. A BY_CHILD_CONTROLLER
@@ -1689,7 +1693,7 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
       EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
       EFI_STATUS os,freed;
       UINTN n=0,k;
-      size_t by_driver_opens=0,unresolved_agents=0;
+      size_t by_driver_opens=0,unresolved_agents=0,unresolved_text=0;
       if(!Snapshot.gop[j].handle ||
          !GuTopoPathOnController(&p->path,&Snapshot.gop[j].path))continue;
       os=ObservationOpeners(bs,Snapshot.gop[j].handle,&GopGuid,&opens,&n,NULL,"nvidia-gop");
@@ -1711,19 +1715,19 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
               unresolved_agents++;
           }
           if(e->Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER && e->ControllerHandle)
-            ReportTextOutputOpeners(bs,"NVIDIA",i,j,k,e->ControllerHandle,"GOP_OPEN_CONTROLLER",opens);
+            unresolved_text+=!ReportTextOutputOpeners(bs,"NVIDIA",i,j,k,e->ControllerHandle,"GOP_OPEN_CONTROLLER",opens);
         }
       }
       /* The actual GOP handle and its open-record ControllerHandle are
        * independent candidates; neither is inferred to be a child. */
       if(!ObservationPoolFault)
-        ReportTextOutputOpeners(bs,"NVIDIA",i,j,256U,Snapshot.gop[j].handle,"GOP_HANDLE",opens);
+        unresolved_text+=!ReportTextOutputOpeners(bs,"NVIDIA",i,j,256U,Snapshot.gop[j].handle,"GOP_HANDLE",opens);
       freed=ObservationPoolRelease(bs,opens,"nvidia-gop");
-      Say("NVIDIA_GOP_OPENERS_SUMMARY[%zu,%zu] BY_DRIVER=%zu UNRESOLVED_AGENT_IMAGES=%zu OPEN_STATUS=%#llx FREE_STATUS=%#llx STATUS=%s\r\n",
-          i,(size_t)j,by_driver_opens,unresolved_agents,
+      Say("NVIDIA_GOP_OPENERS_SUMMARY[%zu,%zu] BY_DRIVER=%zu UNRESOLVED_AGENT_IMAGES=%zu UNRESOLVED_TEXTOUT=%zu OPEN_STATUS=%#llx FREE_STATUS=%#llx STATUS=%s\r\n",
+          i,(size_t)j,by_driver_opens,unresolved_agents,unresolved_text,
           (unsigned long long)os,(unsigned long long)freed,
           os==EFI_SUCCESS&&n<=256U&&(!n||opens)&&
-          freed==EFI_SUCCESS&&!unresolved_agents&&!ObservationPoolFault?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
+          freed==EFI_SUCCESS&&!unresolved_agents&&!unresolved_text&&!ObservationPoolFault?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
       if(freed!=EFI_SUCCESS)
         Say("NVIDIA_GOP_OPENERS[%zu,%zu] FREE_STATUS=%#llx INCOMPLETE=1\r\n",
             i,(size_t)j,(unsigned long long)freed);
@@ -1753,7 +1757,7 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
     EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
     EFI_STATUS status,freed;
     UINTN count=0;
-    size_t by_driver=0;
+    size_t by_driver=0,unresolved_text=0;
     /* Match the whole captured PCI graph, not a fixed BDF or handle value. */
     for(i=0;i<Snapshot.pci_count;i++) {
       const GU_TOPO_PCI *p=&Snapshot.pci[i];
@@ -1790,7 +1794,7 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
         j,(size_t)count);
     /* Do not report a duplicate TextOut opener graph for identical handles. */
     seen[seen_count++]=Snapshot.gop[j].handle;
-    ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,256U,Snapshot.gop[j].handle,
+    unresolved_text+=!ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,256U,Snapshot.gop[j].handle,
                             "GOP_HANDLE",opens);
     for(k=0;k<count && !ObservationPoolFault;k++) {
       const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[k];
@@ -1810,14 +1814,14 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
         continue;
       }
       seen[seen_count++]=candidate;
-      ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,k,candidate,
+      unresolved_text+=!ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,k,candidate,
                               "GOP_OPEN_CONTROLLER",opens);
     }
     freed=ObservationPoolRelease(bs,opens,"independent-gop");
-    if(freed!=EFI_SUCCESS||!by_driver||ObservationPoolFault)unresolved++;
-    Say("INDEPENDENT_GOP[%zu] DRIVER_EDGES=%zu DISTINCT_TEXTOUT_HANDLES=%zu FREE_STATUS=%#llx STATUS=%s NO_STOP_EVIDENCE=1\r\n",
-        j,by_driver,seen_count,(unsigned long long)freed,
-        (freed!=EFI_SUCCESS||!by_driver||ObservationPoolFault)?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
+    if(freed!=EFI_SUCCESS||!by_driver||unresolved_text||ObservationPoolFault)unresolved++;
+    Say("INDEPENDENT_GOP[%zu] DRIVER_EDGES=%zu DISTINCT_TEXTOUT_HANDLES=%zu UNRESOLVED_TEXTOUT=%zu FREE_STATUS=%#llx STATUS=%s NO_STOP_EVIDENCE=1\r\n",
+        j,by_driver,seen_count,unresolved_text,(unsigned long long)freed,
+        (freed!=EFI_SUCCESS||!by_driver||unresolved_text||ObservationPoolFault)?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
   }
   Say("INDEPENDENT_GOP_GRAPH_SUMMARY GOP_PATH_MATCHED=%zu UNRESOLVED=%zu STATUS=%s NO_STOP_EVIDENCE=1\r\n",
       observed,unresolved,ObservationPoolFault?"PARTIAL_OR_UNKNOWN":
