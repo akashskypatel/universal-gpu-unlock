@@ -120,6 +120,8 @@ int main(int argc, char **argv) {
   SimReportLine("SIM_RESULT=GuBootOpen STATUS=%llx", (unsigned long long)status);
   Check(status == EFI_SUCCESS, "GuBootOpen returned an error");
 
+  Check(SimLogContains("BOOT_STATE PRESENT="),
+        "the persisted boot record was not read at entry");
   SimReportLine("SIM_STAGE=GuDiscoverSingleGpu");
   status = GuDiscoverSingleGpu(SimImageHandle(), table);
   SimReportLine("SIM_RESULT=GuDiscoverSingleGpu STATUS=%llx", (unsigned long long)status);

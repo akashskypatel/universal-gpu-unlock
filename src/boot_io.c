@@ -7,6 +7,7 @@
 #include "gpu_windows_path.h"
 
 #include "boot_profile.h"
+#include "boot_state.h"
 
 #include "compat/compat.h"
 
@@ -207,6 +208,30 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   EFI_STATUS closed=CloseBootFile(&dir);
   if(closed!=EFI_SUCCESS){s=closed;goto failed;}
   if(s!=EFI_SUCCESS||!Log){if(s==EFI_SUCCESS)s=EFI_OUT_OF_RESOURCES;goto failed;}
+
+  /* The persisted record is the only state that survives a failed boot, so it
+   * is reported here, once, for every entrypoint. It stays inert: it never
+   * admits, refuses, skips or repeats a transaction. */
+  {
+    GU_BOOT_STATE previous;
+    EFI_STATUS read=GuBootStateRead(Table,&previous);
+    if(read==EFI_SUCCESS) {
+      GuLog("BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x "
+            "BDF=%04x:%02x:%02x.%x ARMED=%u\n",
+            (unsigned)previous.Phase,(unsigned)previous.BootCount,
+            (unsigned long long)previous.Status,(unsigned)previous.DeviceId,
+            (unsigned)previous.Segment,(unsigned)previous.Bus,
+            (unsigned)previous.Device,(unsigned)previous.Function,
+            (unsigned)previous.Armed);
+      if(previous.Phase==GU_BOOT_STATE_INTENT)
+        GuLog("BOOT_STATE WARNING=previous boot stopped during a transaction\n");
+    } else if(read==EFI_NOT_FOUND) {
+      GuLog("BOOT_STATE PRESENT=0\n");
+    } else {
+      GuLog("BOOT_STATE PRESENT=0 READ_STATUS=%#llx IGNORED=1\n",
+            (unsigned long long)read);
+    }
+  }
 
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
   /* Preparation reads PCI identity and writes only its removable USB log.

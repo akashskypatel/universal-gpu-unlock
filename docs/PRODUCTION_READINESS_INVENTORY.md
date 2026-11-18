@@ -126,6 +126,13 @@ whose stock values differ from the chosen variant, cannot use the same image.
 per-variant expectations and the same latching discipline
 (`profile.c:307-312`).
 
+**Status (2026-11-18): not fixed — deliberate.** The profile selects between
+code paths guarded by `#ifdef GU_ENTRY_LATCHED_SS1_FULL`/`_PRESERVE` across
+`port.c` (`:565`, `:570`, `:761`), not just a value. Turning it into a runtime
+choice is a behavioural change in the most destructive part of the path with no
+cold-state evidence behind it; guessing here would be exactly the failure mode
+the repository's own gates exist to prevent. See §11.7.
+
 ### A5. Architecture coverage is uneven and partly absent — **P0**
 * Turing is refused in prepare (`profile.c:268-271`) *and* ships no payload:
   `TU102-ASSETS/` contains only a README, while `profile.c:27-35` pins hash
@@ -140,6 +147,12 @@ per-variant expectations and the same latching discipline
 dumps, Turing either implemented with payloads and a signed-loader contract or
 refused at *build* time (not only at prepare).
 
+**Status (2026-11-18): not fixed — deliberate.** Turing is already refused at
+prepare (`profile.c:268-271`), which is fail-closed. The remaining work needs
+captured per-SKU register geometry and a signed-loader contract; emitting a
+Turing payload or an AD104/106/107 offset table from the current constants would
+be a guess. See §11.7.
+
 ### A6. Firmware assets must be re-read from removable media on every boot — **P0**
 `GuBootOpen` refuses any image not launched from USB (`boot_io.c:168`) and
 requires a writable `\AD102-UNLOCK` directory; `GuBootLoadAssets`
@@ -151,6 +164,11 @@ the runtime, not just the installer.
 *Exit criteria:* an install step that places assets on the ESP with an
 integrity check, or embedding, plus a defined story for the 84 MB payload.
 
+**Status (2026-11-18): not fixed — needs an installer and a signing story.**
+Hash equality is checked today; signature acceptance is C3/C4/D1. Installing
+84 MB of assets onto the ESP is an off-line install-step design, not a source
+edit. See §11.7.
+
 ### A7. Nothing persists across boots; the transaction is re-applied every boot — **P1**
 `dxe_main.c:18-21`, `:112-125` registers a `ReadyToBoot` event and runs the whole
 sequence each boot. There is no marker that the card was already processed, no
@@ -159,6 +177,14 @@ manages `Driver####`/`DriverOrder` entries. Whether the stock Windows driver
 accepts a re-modified card on the Nth boot is unverified.
 *Exit criteria:* a defined contract — either "always re-apply, and here is the
 evidence it is safe", or a persisted state record with a documented reset path.
+
+**Status (2026-11-18): partially fixed in source — the record exists, the
+contract does not.** Both entrypoints now write a fixed-size NVRAM record in two
+phases (`INTENT` before the first mutation, `OUTCOME` after) and report it at
+the next boot, so an interrupted transaction is visible instead of invisible.
+The record is deliberately **inert**: nothing branches on it, because whether
+re-application is safe is unproven. "Always re-apply" therefore remains the
+behaviour, and this item stays open until C1–C4 produce the evidence. See §11.8.
 
 ### A8. Recovery is physical only — **P1**
 `unlock_610.c:846-857` retains all firmware-visible memory whenever the engine
@@ -170,6 +196,13 @@ log.
 *Exit criteria:* documented, tested recovery matrix (mid-transaction power
 loss, Stop hang, FLR refusal, partial multi-GPU) with a software-visible state
 that survives the failure.
+
+**Status (2026-11-18): partly addressed, deliberately incomplete.** The
+software-visible state from A7 (above) now survives a failure. The watchdog is
+*still* disabled: arming a timer whose expiry is shorter than the worst-case
+transaction would reset a machine mid-write, which is strictly worse than the
+current hang, and no bound exists yet (C2/C6). Recovery itself remains physical.
+See §11.7.
 
 ---
 
@@ -417,6 +450,32 @@ ESP policy, because it models the asset volume and the Windows volume as two
 directories, so no single modelled volume carries both. The runtime rule is
 predicate-tested and compile-checked, not end-to-end tested, and has not been
 run on hardware.
+
+### 11.8 A7 — a record that survives a failed boot
+
+| What | Where |
+| --- | --- |
+| Fixed-size validated record, two phases | `src/boot_state.h`, `src/boot_state.c` |
+| Variable `GuBootState`, fork GUID `2a7d54c1-5b3e-4a19-8f60-9d21c4b7e803`, NV+BS+RT | `boot_state.c` |
+| Reported once per boot for every entrypoint | `boot_io.c` (`GuBootOpen`) |
+| Intent before the first mutation, outcome after the sequence | `app.c`, `dxe_main.c` |
+| Reset path | `GuBootStateDelete` (delete the variable) |
+
+Validation: exact size, magic, known phase, PCI field ranges, zero reserved
+bytes. A short, long, or corrupt record is `EFI_COMPROMISED_DATA`, logged as
+`BOOT_STATE PRESENT=0 READ_STATUS=... IGNORED=1`, and never repaired during
+boot. Write failures are cast to void at both call sites, so a record problem
+can never change a transaction's result.
+
+Evidence: `tests/test_boot_state.c` (41 checks: validation matrix, phase
+transitions, count advances only on outcome, write failure is inert, delete),
+`tests/test_boot_state_contract.py` (10 tests: no control transfer depends on
+the record, intent precedes the sequence, one read covers every entrypoint), and
+the simulator runs all 9 scenarios with the record linked and reported.
+
+What this does *not* do: it does not skip a card that was already processed, it
+does not roll anything back, and it does not make re-application safe. Those
+need the C1–C4 evidence.
 
 ### 11.7 Items deliberately not changed
 

@@ -20,6 +20,7 @@
 #include "s3_save.h"
 
 #include "driver_nvram.h"
+#include "boot_state.h"
 
 #ifdef GU_RUNTIME_SELECTION
 #include "gpu_selection.h"
@@ -142,6 +143,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   (void)secure;
 
   s=GuBootOpen(image,t);if(s!=EFI_SUCCESS)return s;
+
+  /* boot_io reported the previous boot's record when it opened; this read only
+   * carries the boot counter forward. It never changes the path. */
+  GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
+  boot_state_present=(GuBootStateRead(t,&boot_state)==EFI_SUCCESS);
 
   const char *stage="discover";CHAR16 choice=L'S';
 
@@ -277,7 +283,21 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     L"\r\nSelected GPU preparation passed. Driver release and firmware work will now begin.\r\n");
   GuLog("Operator U/P: ordered selected transactions; no automatic retry\n");
   GuBootSilence();
+  /* Name the card before the first mutation so a power loss leaves evidence. */
+  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+                          GU_BOOT_STATE_INTENT,0,owner->device_id,
+                          (UINT16)owner->discovery_identity.segment,
+                          (UINT16)owner->discovery_identity.bus,
+                          (UINT8)owner->discovery_identity.device,
+                          (UINT8)owner->discovery_identity.function,0);
   s=GuExecutePreparedSequence(owner,t,image,enable_s3?GU_S3_REQUIRED:GU_S3_DISABLED,&stage);
+  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+                          GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
+                          (UINT16)owner->discovery_identity.segment,
+                          (UINT16)owner->discovery_identity.bus,
+                          (UINT8)owner->discovery_identity.device,
+                          (UINT8)owner->discovery_identity.function,
+                          (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
   if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");

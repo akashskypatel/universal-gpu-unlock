@@ -89,6 +89,12 @@ jobs:
             done
             python3 -m unittest discover -s tests -p test_runtime_selection_contract.py -v
             python3 -m unittest discover -s tests -p test_runtime_esp_contract.py -v
+            # Persisted boot record: the only state that survives a failed boot.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_BOOT_STATE_HOST_TEST -Isrc -Itests tests/test_boot_state.c src/boot_state.c -o "$RUNNER_TEMP/test_boot_state_$compiler"
+              "$RUNNER_TEMP/test_boot_state_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_boot_state_contract.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v

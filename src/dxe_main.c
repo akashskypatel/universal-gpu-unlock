@@ -10,6 +10,7 @@
 #include "compat/compat.h"
 #include "vendor/unlock_610.h"
 #include "s3_save.h"
+#include "boot_state.h"
 
 /* UEFI ReadyToBoot event group: 7ce88fb3-4bd7-4679-87a8-a8d8dee50d2b.
  * Run when console and PCI bindings are initialized, instead of assuming
@@ -30,6 +31,13 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   EFI_STATUS s = GuBootOpen(image, t);
   if (s != EFI_SUCCESS) return s;
+
+  /* Report what the previous boot left behind. The record is inert: it never
+   * admits, refuses, skips or repeats a transaction. */
+  /* boot_io reported the previous boot's record when it opened; this read only
+   * carries the boot counter forward. It never changes the path. */
+  GU_BOOT_STATE boot_state; BOOLEAN boot_state_present = FALSE;
+  boot_state_present = (GuBootStateRead(t, &boot_state) == EFI_SUCCESS);
 
   const char *stage = "dxe-discover";
   s = GuDiscoverSingleGpu(image, t);
@@ -52,7 +60,21 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   s=GuPrepareBoundGpu(owner,&stage);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto finish;
+  /* Name the card before the first mutation so a power loss leaves evidence. */
+  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+                          GU_BOOT_STATE_INTENT,0,owner->device_id,
+                          (UINT16)owner->discovery_identity.segment,
+                          (UINT16)owner->discovery_identity.bus,
+                          (UINT8)owner->discovery_identity.device,
+                          (UINT8)owner->discovery_identity.function,0);
   s=GuExecutePreparedSequence(owner,t,image,GU_S3_OPTIONAL,&stage);
+  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+                          GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
+                          (UINT16)owner->discovery_identity.segment,
+                          (UINT16)owner->discovery_identity.bus,
+                          (UINT8)owner->discovery_identity.device,
+                          (UINT8)owner->discovery_identity.function,
+                          (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 
 finish:
