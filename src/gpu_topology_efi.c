@@ -1912,58 +1912,84 @@ static int RevalidateGop(EFI_BOOT_SERVICES *bs) {
 #ifdef GU_TOPO_SAVE_LOG
 /* Opt-in diagnostic file on the app's own EFI volume. Never overwrite an
  * earlier capture. The ONLY intended persistent mutation is this new file. */
+static EFI_STATUS LogOpenResult(EFI_STATUS status,EFI_FILE_PROTOCOL **out,
+                                const char *stage) {
+  if(status==EFI_SUCCESS)return *out?EFI_SUCCESS:EFI_DEVICE_ERROR;
+  if(*out) {
+    Say("LOG_OPEN_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,(VOID *)*out,(unsigned long long)status);
+    *out=NULL;
+    return EFI_DEVICE_ERROR;
+  }
+  return status;
+}
+
+static EFI_STATUS CloseLogFile(EFI_FILE_PROTOCOL **out,const char *stage) {
+  EFI_FILE_PROTOCOL *file=*out;
+  EFI_STATUS status;
+  *out=NULL;
+  if(!file)return EFI_SUCCESS;
+  status=file->Close?file->Close(file):EFI_UNSUPPORTED;
+  if(status!=EFI_SUCCESS)
+    Say("LOG_CLOSE_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,(VOID *)file,(unsigned long long)status);
+  return status;
+}
+
 static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
   EFI_FILE_PROTOCOL *root=NULL,*file=NULL,*prior=NULL;
-  EFI_STATUS s;
-  UINTN bytes;
+  EFI_STATUS s,closed;
+  UINTN bytes,attempt,chars=0;
+  CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
   if(LogOverflow || !LogUsed)return EFI_BAD_BUFFER_SIZE;
   s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
-  if(EFI_ERROR(s)||!li)return EFI_NOT_FOUND;
+  if(s!=EFI_SUCCESS||!li)return EFI_NOT_FOUND;
   s=table->BootServices->HandleProtocol(li->DeviceHandle,&FsGuid,(VOID **)&fs);
-  if(EFI_ERROR(s)||!fs||!fs->OpenVolume)return EFI_UNSUPPORTED;
+  if(s!=EFI_SUCCESS||!fs||!fs->OpenVolume)return EFI_UNSUPPORTED;
   s=fs->OpenVolume(fs,&root);
-  if(EFI_ERROR(s)||!root||!root->Open||!root->Close)return EFI_UNSUPPORTED;
-  /* Windows-GPU-UNLOCK style non-overwriting numbered captures: repeated
-   * USB boots must not block Windows merely because an older log exists. */
-  {
-    UINTN attempt;
-    CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
-    UINTN chars=0;
-    while(name[chars])chars++;
-    for(attempt=0;attempt<10000;attempt++) {
-      name[chars-8]=(CHAR16)('0'+attempt/1000);
-      name[chars-7]=(CHAR16)('0'+(attempt/100)%10);
-      name[chars-6]=(CHAR16)('0'+(attempt/10)%10);
-      name[chars-5]=(CHAR16)('0'+attempt%10);
-      prior=NULL;
-      s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
-      if(s==EFI_SUCCESS) {
-        if(!prior || !prior->Close || EFI_ERROR(prior->Close(prior))) {
-          (VOID)root->Close(root);return EFI_DEVICE_ERROR;
-        }
-        continue;
-      }
-      if(s!=EFI_NOT_FOUND) { (VOID)root->Close(root);return s; }
-      s=root->Open(root,&file,name,
-                   EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
-      if(EFI_ERROR(s) || !file || !file->Write || !file->Close) {
-        if(file && file->Close)(VOID)file->Close(file);
-        (VOID)root->Close(root);return EFI_DEVICE_ERROR;
-      }
-      Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
-      break;
+  s=LogOpenResult(s,&root,"volume");
+  if(s!=EFI_SUCCESS)return s;
+  if(!root->Open||!root->Close){s=EFI_UNSUPPORTED;goto finish;}
+  /* Preserve the existing non-overwriting numbered capture policy. */
+  while(name[chars])chars++;
+  for(attempt=0;attempt<10000;attempt++) {
+    name[chars-8]=(CHAR16)('0'+attempt/1000);
+    name[chars-7]=(CHAR16)('0'+(attempt/100)%10);
+    name[chars-6]=(CHAR16)('0'+(attempt/10)%10);
+    name[chars-5]=(CHAR16)('0'+attempt%10);
+    s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
+    s=LogOpenResult(s,&prior,"prior");
+    if(s==EFI_SUCCESS) {
+      if(prior==root){prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;}
+      s=CloseLogFile(&prior,"prior");
+      if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
+      continue;
     }
-    if(attempt==10000) {(VOID)root->Close(root);return EFI_VOLUME_FULL;}
+    if(s!=EFI_NOT_FOUND)goto finish;
+    s=root->Open(root,&file,name,
+                 EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    s=LogOpenResult(s,&file,"create");
+    if(s!=EFI_SUCCESS)goto finish;
+    if(file==root){file=NULL;s=EFI_COMPROMISED_DATA;goto finish;}
+    if(!file->Write||!file->Close){s=EFI_UNSUPPORTED;goto finish;}
+    Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
+    break;
   }
+  if(attempt==10000){s=EFI_VOLUME_FULL;goto finish;}
+  if(LogOverflow){s=EFI_BAD_BUFFER_SIZE;goto finish;}
   bytes=(UINTN)LogUsed;
   s=file->Write(file,&bytes,LogBytes);
-  if(!EFI_ERROR(s) && bytes!=(UINTN)LogUsed)s=EFI_DEVICE_ERROR;
-  if(!EFI_ERROR(s) && (!file->Flush || EFI_ERROR(file->Flush(file))))s=EFI_DEVICE_ERROR;
-  if(EFI_ERROR(file->Close(file)))s=EFI_DEVICE_ERROR;
-  if(EFI_ERROR(root->Close(root)))s=EFI_DEVICE_ERROR;
-  return s;
+  if(s==EFI_SUCCESS && bytes!=(UINTN)LogUsed)s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS && (!file->Flush || file->Flush(file)!=EFI_SUCCESS))s=EFI_DEVICE_ERROR;
+finish:
+  closed=CloseLogFile(&file,"file");
+  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  closed=CloseLogFile(&root,"volume");
+  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  /* UEFI warnings are not confirmed completion of the durable log. */
+  return s==EFI_SUCCESS?EFI_SUCCESS:EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
 }
 #endif
 

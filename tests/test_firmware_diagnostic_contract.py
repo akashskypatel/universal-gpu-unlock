@@ -550,6 +550,120 @@ int main(void) {
                     run=subprocess.run([str(binary)],capture_output=True,text=True)
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
+
+    def test_diagnostic_log_file_ownership(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        actual=source.split("static EFI_STATUS LogOpenResult(",1)[1].split("\n#endif",1)[0]
+        actual="static EFI_STATUS LogOpenResult("+actual
+        program=r"""
+#include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <wchar.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef uint64_t EFI_STATUS;
+typedef size_t UINTN;
+typedef wchar_t CHAR16;
+typedef int EFI_GUID;
+#define EFI_SUCCESS 0ULL
+#define EFI_ERROR(x) (((x)>>63)!=0)
+#define EFI_BAD_BUFFER_SIZE (0x8000000000000004ULL)
+#define EFI_DEVICE_ERROR (0x8000000000000007ULL)
+#define EFI_NOT_FOUND (0x8000000000000014ULL)
+#define EFI_UNSUPPORTED (0x8000000000000003ULL)
+#define EFI_COMPROMISED_DATA (0x8000000000000021ULL)
+#define EFI_VOLUME_FULL (0x800000000000000bULL)
+#define EFI_FILE_MODE_READ 1
+#define EFI_FILE_MODE_WRITE 2
+#define EFI_FILE_MODE_CREATE 4
+typedef struct file EFI_FILE_PROTOCOL;
+struct file {
+  EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,uint64_t,uint64_t);
+  EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *);
+  EFI_STATUS (*Write)(EFI_FILE_PROTOCOL *,UINTN *,VOID *);
+  EFI_STATUS (*Flush)(EFI_FILE_PROTOCOL *);
+};
+typedef struct fs EFI_SIMPLE_FILE_SYSTEM_PROTOCOL;
+struct fs{EFI_STATUS (*OpenVolume)(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *,EFI_FILE_PROTOCOL **);};
+typedef struct {EFI_HANDLE DeviceHandle;} EFI_LOADED_IMAGE_PROTOCOL;
+typedef struct {EFI_STATUS (*HandleProtocol)(EFI_HANDLE,EFI_GUID *,VOID **);} EFI_BOOT_SERVICES;
+typedef struct {EFI_BOOT_SERVICES *BootServices;} EFI_SYSTEM_TABLE;
+static EFI_GUID LoadedGuid,FsGuid;
+static unsigned LogOverflow;
+static size_t LogUsed=4;
+static char LogBytes[8]="log!";
+static unsigned mode,opens,creates,writes,flushes,root_closes,file_closes,prior_closes,foreign_closes;
+static EFI_FILE_PROTOCOL root,file,prior,foreign;
+static void Say(const char *format,...) {(void)format;}
+static EFI_STATUS Close(EFI_FILE_PROTOCOL *f) {
+  if(f==&root){root_closes++;return mode==8?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+  if(f==&file){file_closes++;return mode==7?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+  if(f==&prior){prior_closes++;return mode==5?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+  foreign_closes++;return EFI_DEVICE_ERROR;
+}
+static EFI_STATUS Open(EFI_FILE_PROTOCOL *f,EFI_FILE_PROTOCOL **out,CHAR16 *name,uint64_t flags,uint64_t attrs) {
+  (void)f;(void)name;(void)attrs;
+  opens++;
+  if(flags&EFI_FILE_MODE_CREATE){
+    creates++;
+    if(mode==3){*out=&foreign;return EFI_DEVICE_ERROR;}
+    if(mode==9){*out=&root;return EFI_SUCCESS;}
+    *out=&file;return EFI_SUCCESS;
+  }
+  if(mode==2){*out=&foreign;return EFI_NOT_FOUND;}
+  if(mode==6){*out=&root;return EFI_SUCCESS;}
+  if((mode==4||mode==5)&&opens==1){*out=&prior;return EFI_SUCCESS;}
+  return EFI_NOT_FOUND;
+}
+static EFI_STATUS Write(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *p) {
+  (void)f;(void)n;(void)p;writes++;return EFI_SUCCESS;
+}
+static EFI_STATUS Flush(EFI_FILE_PROTOCOL *f) {(void)f;flushes++;return EFI_SUCCESS;}
+static EFI_STATUS Volume(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs,EFI_FILE_PROTOCOL **out) {
+  (void)fs;
+  if(mode==1){*out=&foreign;return EFI_DEVICE_ERROR;}
+  *out=&root;return EFI_SUCCESS;
+}
+static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL fs={Volume};
+static EFI_LOADED_IMAGE_PROTOCOL li={(EFI_HANDLE)1};
+static EFI_STATUS Protocol(EFI_HANDLE h,EFI_GUID *guid,VOID **out) {
+  (void)h;
+  if(guid==&LoadedGuid)*out=&li;else *out=&fs;
+  return EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode %u: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void){
+  EFI_BOOT_SERVICES bs={Protocol};EFI_SYSTEM_TABLE table={&bs};
+  root=(EFI_FILE_PROTOCOL){Open,Close,NULL,NULL};
+  file=(EFI_FILE_PROTOCOL){NULL,Close,Write,Flush};
+  prior=(EFI_FILE_PROTOCOL){NULL,Close,NULL,NULL};
+  foreign=prior;
+  for(mode=0;mode<=9;mode++){
+    opens=creates=writes=flushes=root_closes=file_closes=prior_closes=foreign_closes=0;
+    EFI_STATUS s=SaveLog((EFI_HANDLE)1,&table);
+    CHECK((s==EFI_SUCCESS)==(mode==0||mode==4));
+    CHECK(!foreign_closes && root_closes==(mode!=1));
+    CHECK(file_closes==(mode==0||mode==4||mode==7||mode==8));
+    CHECK(prior_closes==(mode==4||mode==5));
+    CHECK(writes==file_closes&&flushes==writes);
+    CHECK(creates==(mode==0||mode==3||mode==4||mode==7||mode==8||mode==9));
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"log_ownership.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(c),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)
