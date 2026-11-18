@@ -2,6 +2,22 @@
 #include "gpu_inventory.h"
 #include <string.h>
 
+/* Half-open range comparison for caller-owned arrays. A range that could wrap
+ * the address space is reported as overlapping, never as independent. */
+static size_t SpanBytes(size_t count, size_t size) {
+  if (!count || !size) return 0;
+  if (count > SIZE_MAX / size) return SIZE_MAX;
+  return count * size;
+}
+
+static int RangesOverlap(const void *a, size_t a_bytes,
+                         const void *b, size_t b_bytes) {
+  size_t a0 = (size_t)(uintptr_t)a, b0 = (size_t)(uintptr_t)b;
+  if (!a || !b) return 0;
+  if (a0 > SIZE_MAX - a_bytes || b0 > SIZE_MAX - b_bytes) return 1;
+  return a0 < b0 + b_bytes && b0 < a0 + a_bytes;
+}
+
 static int SameLocation(const GU_GPU_RECORD *a, const GU_GPU_RECORD *b) {
   return a->segment == b->segment && a->bus == b->bus &&
          a->device == b->device && a->function == b->function;
@@ -12,10 +28,16 @@ int GuCollectGpuRecords(size_t handle_count, GU_GPU_READER reader,
                         size_t capacity, size_t *count) {
   size_t i, j;
   GU_GPU_RECORD record;
-  if (count) *count = 0;
-  if (!count || !records || !capacity ||
-      capacity > SIZE_MAX / sizeof(*records))
+  if (!count) return GU_INVENTORY_INVALID;
+  if (!records || !capacity || capacity > SIZE_MAX / sizeof(*records)) {
+    *count = 0;
     return GU_INVENTORY_INVALID;
+  }
+  /* Publishing a count into the record storage itself would corrupt the
+   * records this function is about to produce, so refuse without writing. */
+  if (RangesOverlap(records, capacity * sizeof(*records), count, sizeof(*count)))
+    return GU_INVENTORY_INVALID;
+  *count = 0;
   memset(records, 0, capacity * sizeof(*records));
   if (!reader || !handle_count || handle_count > GU_INVENTORY_MAX_HANDLES)
     return GU_INVENTORY_INVALID;
@@ -115,10 +137,20 @@ int GuFindGpuRecordSequence(const GU_GPU_RECORD *records, size_t record_count,
                             size_t *indices) {
   size_t i, j;
   int result;
+  size_t record_bytes, location_bytes, index_bytes;
   if (!indices || !locations || !records || !count ||
       count > GU_INVENTORY_MAX_HANDLES ||
       record_count > GU_INVENTORY_MAX_HANDLES)
     return GU_INVENTORY_INVALID;
+  /* The documented non-overlap precondition is established here, before any
+   * output byte is written, regardless of what the caller assumed. */
+  record_bytes = SpanBytes(record_count, sizeof(*records));
+  location_bytes = SpanBytes(count, sizeof(*locations));
+  index_bytes = SpanBytes(count, sizeof(*indices));
+  if (RangesOverlap(records, record_bytes, locations, location_bytes) ||
+      RangesOverlap(records, record_bytes, indices, index_bytes) ||
+      RangesOverlap(locations, location_bytes, indices, index_bytes))
+    return GU_INVENTORY_OVERLAP;
   memset(indices, 0, count * sizeof(*indices));
   for (i = 0; i < count; i++) {
     for (j = 0; j < i; j++)

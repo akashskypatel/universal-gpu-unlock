@@ -22,6 +22,16 @@ int GuTopoDriverOwnerStable(const GU_TOPO_PCI *before, size_t driver_count,
 
 static size_t Body(const GU_TOPO_PATH *p) { return p->length - 4U; }
 
+/* Half-open range comparison for caller-owned capture, report and storage.
+ * A range that could wrap the address space is treated as overlapping. */
+static int RangesOverlap(const void *a, size_t a_bytes,
+                         const void *b, size_t b_bytes) {
+  size_t a0 = (size_t)(uintptr_t)a, b0 = (size_t)(uintptr_t)b;
+  if (!a || !b) return 0;
+  if (a0 > SIZE_MAX - a_bytes || b0 > SIZE_MAX - b_bytes) return 1;
+  return a0 < b0 + b_bytes && b0 < a0 + a_bytes;
+}
+
 int GuTopoPathValid(const GU_TOPO_PATH *p) {
   size_t at = 0;
   if (!p || p->length < 4 || p->length > GU_TOPO_PATH_BYTES) return 0;
@@ -279,12 +289,25 @@ int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
  * GPU model, PCI slot ordering or assumption that root ports are distinct. */
 int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r,
                  GU_TOPO_GPU_REPORT *storage, size_t capacity) {
-  size_t i,j,count=0;
+  size_t i,j,count=0,storage_bytes=0;
   int bad=0,incomplete=0;
   if(!r)return GU_TOPO_INVALID;
+  /* The report and the per-GPU storage are independent caller-owned outputs.
+   * Verify that independence before the first output byte is written: a
+   * storage range inside the report or the live capture cannot be initialized
+   * or filled without destroying evidence the assessment still reads. */
+  if(capacity>GU_TOPO_MAX_PCI)return GU_TOPO_INVALID;
+  if(capacity && !storage)return GU_TOPO_INVALID;
+  if(capacity) {
+    if(capacity>SIZE_MAX/sizeof(*storage))return GU_TOPO_INVALID;
+    storage_bytes=capacity*sizeof(*storage);
+  }
+  if(RangesOverlap(r,sizeof(*r),s,sizeof(*s)) ||
+     RangesOverlap(storage,storage_bytes,r,sizeof(*r)) ||
+     RangesOverlap(storage,storage_bytes,s,sizeof(*s)))
+    return GU_TOPO_INVALID;
   memset(r,0,sizeof(*r));r->status=GU_TOPO_INVALID;
-  if(!CaptureValid(s) || capacity>GU_TOPO_MAX_PCI ||
-     (capacity && !storage))return r->status;
+  if(!CaptureValid(s))return r->status;
   for(i=0;i<s->pci_count;i++) {
     const GU_GPU_RECORD *id=&s->pci[i].identity;
     if((id->pci_id&0xffffU)==0x10deU && (id->class_code&0xff00U)==0x0300U)

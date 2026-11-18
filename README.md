@@ -135,6 +135,7 @@ compatibility, anti-cheat safety, or guaranteed speedup are established.
 - [Dual-GPU Windows 617.42 remediation plan](docs/DUAL_GPU_61742_REMEDIATION_PLAN.md)
 - [Read-only GPU topology diagnostic](docs/READ_ONLY_GPU_TOPOLOGY_DIAGNOSTIC.md)
 - [Preparation-only active source builds](docs/ACTIVE_GPU_PREPARATION.md)
+- [Dynamic multi-GPU refactor review and active-execution gate analysis](docs/MULTI_GPU_REFACTOR_REVIEW.md)
 - [Windows-GPU-UNLOCK authoritative execution map](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia_unlock_evidence_to_execution_map.md)
 - [Windows 617.42 cumulative reverse engineering notes](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia-tensor-core-unlock-investigation.md)
 

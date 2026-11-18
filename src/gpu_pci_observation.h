@@ -35,6 +35,7 @@ typedef enum {
 
 typedef struct {
   const VOID *address; /* Diagnostic evidence only; never dereference or retry. */
+  UINTN bytes;         /* Caller-declared extent; zero means unknown. */
   EFI_STATUS status;
   UINTN index;
   GU_PCI_OBS_STAGE stage;
@@ -46,8 +47,15 @@ typedef struct {
   EFI_STATUS locate_status,first_failure_status,free_status;
   GU_PCI_OBS_STAGE first_failure_stage;
   UINT8 truncated;
-  /* At most one uncertain nested buffer and one outer buffer per capture. */
-  UINTN uncertain_pool_count;
+  /* Exact EFI_SUCCESS is the only confirmed result. A UEFI warning is a
+   * success code without confirmed completion: it is counted here and the
+   * warned value is never published as observed evidence. */
+  UINTN warnings,first_warning_index;
+  EFI_STATUS first_warning_status;
+  GU_PCI_OBS_STAGE first_warning_stage;
+  /* At most one uncertain nested buffer and one outer buffer per capture.
+   * A repeated or capture-overlapping reference is counted, never published. */
+  UINTN uncertain_pool_count,uncertain_duplicate,uncertain_alias;
   GU_PCI_OBS_POOL_FAILURE uncertain_pool[2];
   GU_PCI_OBS_RECORD records[GU_PCI_OBS_MAX_RECORDS];
 } GU_PCI_OBS_CAPTURE;
@@ -55,5 +63,9 @@ typedef struct {
 /* Return 1 only for a complete bounded supplementary observation. Even then
  * it is NOT a validated topology snapshot and cannot authorize GPU writes.
  * Return 0 on any partial/failure, preserving records and the first stage.
+ * A UEFI warning result is not completion: it fails closed and is reported
+ * separately from an error. A pool reference that repeats an already
+ * uncertain address, or that overlaps this capture, is never published,
+ * dereferenced, freed or retried.
  * Caller provides a zero-initialized capture with stable storage. */
 int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out);

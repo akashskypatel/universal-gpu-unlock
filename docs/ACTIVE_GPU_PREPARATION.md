@@ -2,6 +2,12 @@
 
 **State: DYNAMIC ORDERED SOURCE AND HOST TESTS VERIFIED; PHYSICAL GPU ACTUATION BLOCKED.**
 
+The resource-ownership and diagnostic-completeness refactor items are tracked
+in [the refactor review](MULTI_GPU_REFACTOR_REVIEW.md), including a gate-by-gate
+analysis of every source-level block on active execution. That review changed
+no admission gate: this document's refusals, and the `GU_PREFLIGHT_ONLY` write,
+DMA and FLR refusals below, are unchanged.
+
 The interactive UEFI application and the Driver Execution Environment (DXE) driver use the same ordered execution coordinator. Neither production builder permits live GPU actuation.
 
 ## Dynamic selection and read-only preparation

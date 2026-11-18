@@ -197,6 +197,48 @@ int main(void) {
     CHECK(GuCollectGpuRecords(m.count,Reader,&m,NULL,m.count,&count)==GU_INVENTORY_INVALID && count==0);
   }
 
+  /* Successfully aliased caller storage is refused before any output is
+   * published; adjacent, distinct arrays stay valid. */
+  {
+    struct {
+      GU_GPU_RECORD records[4];
+      GU_GPU_LOCATION locations[4];
+      size_t indices[4];
+      size_t count;
+    } storage;
+    GU_GPU_LOCATION *locations=storage.locations;
+    size_t *indices=storage.indices;
+    Setup(&m);
+    memset(&storage,0,sizeof(storage));
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,storage.records,4,&storage.count)==GU_INVENTORY_OK);
+    CHECK(storage.count==2);
+    storage.locations[0]=(GU_GPU_LOCATION){0,3,0,0};
+    storage.locations[1]=(GU_GPU_LOCATION){1,7,4,1};
+    CHECK(GuFindGpuRecordSequence(storage.records,storage.count,locations,2,indices)==GU_INVENTORY_OK);
+    CHECK(indices[0]==0 && indices[1]==1);
+    /* A location array pointing into the record array is refused. */
+    CHECK(GuFindGpuRecordSequence(storage.records,storage.count,
+                                  (const GU_GPU_LOCATION *)(void *)storage.records,
+                                  2,indices)==GU_INVENTORY_OVERLAP);
+    CHECK(indices[0]==0 && indices[1]==1);
+    /* An index array pointing into the location array is refused. */
+    CHECK(GuFindGpuRecordSequence(storage.records,storage.count,locations,2,
+                                  (size_t *)(void *)storage.locations)==GU_INVENTORY_OVERLAP);
+    /* An index array pointing into the record array is refused. */
+    CHECK(GuFindGpuRecordSequence(storage.records,storage.count,locations,2,
+                                  (size_t *)(void *)&storage.records[1])==GU_INVENTORY_OVERLAP);
+    CHECK(indices[0]==0 && indices[1]==1);
+    /* A count output inside the record storage is refused without a write. */
+    CHECK(GuCollectGpuRecords(m.count,Reader,&m,storage.records,4,
+                              (size_t *)(void *)&storage.records[2])==GU_INVENTORY_INVALID);
+    CHECK(storage.count==2 && storage.records[2].handle==NULL);
+    CHECK(storage.indices[0]==0 && storage.indices[1]==1);
+    /* An unused neighbour entry is still a distinct, non-overlapping range. */
+    CHECK(GuFindGpuRecordSequence(storage.records,storage.count,
+                                  locations+2,1,indices+2)==GU_INVENTORY_NOT_FOUND);
+    CHECK(indices[2]==0 && indices[3]==0);
+  }
+
   Setup(&m);CHECK(GuCollectGpuInventory(0,Reader,&m,&inv)==GU_INVENTORY_INVALID);
   CHECK(GuCollectGpuInventory(GU_INVENTORY_MAX_HANDLES+1,Reader,&m,&inv)==GU_INVENTORY_INVALID);
   CHECK(GuCollectGpuInventory(2,NULL,&m,&inv)==GU_INVENTORY_INVALID);

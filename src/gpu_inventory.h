@@ -5,6 +5,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Resource bounds, not GPU-model or target-count limits. The 16-record
+ * compatibility inventory below exists only for bounded legacy callers:
+ * boot discovery allocates runtime-sized record storage and must not use
+ * GU_GPU_INVENTORY or GuCollectGpuInventory. */
 #define GU_INVENTORY_MAX_HANDLES 4096U
 #define GU_INVENTORY_MAX_NVIDIA 16U
 
@@ -22,6 +26,8 @@ typedef struct {
   uint32_t segment, bus, device, function;
 } GU_GPU_IDENTITY;
 
+/* Legacy fixed-capacity view for bounded callers only. Dynamic boot
+ * discovery uses GuCollectGpuRecords with caller-sized storage. */
 typedef struct {
   size_t count;
   GU_GPU_RECORD nvidia[GU_INVENTORY_MAX_NVIDIA];
@@ -35,7 +41,9 @@ enum {
   GU_INVENTORY_READ_FAILED = 2,
   GU_INVENTORY_TOO_MANY = 3,
   GU_INVENTORY_DUPLICATE = 4,
-  GU_INVENTORY_NOT_FOUND = 5
+  GU_INVENTORY_NOT_FOUND = 5,
+  /* Caller-supplied arrays overlap; no record or index is published. */
+  GU_INVENTORY_OVERLAP = 6
 };
 
 typedef struct {
@@ -43,7 +51,8 @@ typedef struct {
 } GU_GPU_LOCATION;
 
 /* Caller-owned read-only inventory storage. Capacity is a count of records,
- * not a GPU model or a fixed target count. On failure no records are published. */
+ * not a GPU model or a fixed target count. The count output must not overlap
+ * the record storage. On failure no records are published. */
 int GuCollectGpuRecords(size_t handle_count, GU_GPU_READER reader,
                         void *context, GU_GPU_RECORD *records,
                         size_t capacity, size_t *count);
@@ -59,9 +68,10 @@ int GuFindExactGpu(const GU_GPU_INVENTORY *inventory,
 int GuFindGpuAtLocation(const GU_GPU_INVENTORY *inventory,
                         const GU_GPU_LOCATION *location, size_t *index);
 
-/* Resolve an ordered set against caller-owned inventory storage. Input and
- * output arrays must not overlap. All count output indices are zero on
- * resolution failure after argument validation. */
+/* Resolve an ordered set against caller-owned inventory storage. The record,
+ * location and index arrays must not overlap; this is verified independently
+ * rather than assumed from the caller contract. All count output indices are
+ * zero on resolution failure after argument validation. */
 int GuFindGpuRecordSequence(const GU_GPU_RECORD *records, size_t record_count,
                             const GU_GPU_LOCATION *locations, size_t count,
                             size_t *indices);

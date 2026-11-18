@@ -7,6 +7,15 @@
 static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID;
 static EFI_GUID PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID;
 
+/* Half-open [base,base+bytes) comparison over caller-supplied addresses.
+ * Unknown extents (zero bytes) still detect a point inside the other range.
+ * An extent that could wrap the address space is treated as overlapping. */
+static int RangesOverlap(UINTN a,UINTN a_bytes,UINTN b,UINTN b_bytes) {
+  if(!a || !b)return 0;
+  if(a>~(UINTN)0-a_bytes || b>~(UINTN)0-b_bytes)return 1;
+  return a<b+b_bytes && b<a+a_bytes;
+}
+
 static void Problem(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
                     UINTN index,EFI_STATUS status) {
   if(!out->failures) {
@@ -17,11 +26,51 @@ static void Problem(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
   out->failures++;
 }
 
-static void PoolProblem(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
-                        UINTN index,EFI_STATUS status,const VOID *address) {
+/* A UEFI warning has no error bit but is not confirmed success. Keep it as
+ * its own evidence category instead of either accepting or hiding it. */
+static void Warn(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
+                 UINTN index,EFI_STATUS status) {
+  if(EFI_ERROR(status) || status==EFI_SUCCESS)return;
+  if(!out->warnings) {
+    out->first_warning_stage=stage;
+    out->first_warning_index=index;
+    out->first_warning_status=status;
+  }
+  out->warnings++;
+}
+
+/* Only an exact EFI_SUCCESS result is an observed value. */
+static void Outcome(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
+                    UINTN index,EFI_STATUS status) {
+  Warn(out,stage,index,status);
   Problem(out,stage,index,status);
+}
+
+static void PoolProblem(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
+                        UINTN index,EFI_STATUS status,const VOID *address,
+                        UINTN bytes) {
+  UINTN i;
+  /* An uncertain release can also be reported as a success warning. */
+  Warn(out,stage,index,status);
+  Problem(out,stage,index,status);
+  if(!address)return;
+  /* Never publish a reference into this capture: the caller-provided capture
+   * is live storage, so such a value cannot be independently released. */
+  if(RangesOverlap((UINTN)address,bytes,(UINTN)out,sizeof(*out))) {
+    out->uncertain_alias++;
+    return;
+  }
+  /* A repeated reference is one allocation, not a second owned buffer. */
+  for(i=0;i<out->uncertain_pool_count;i++)
+    if(RangesOverlap((UINTN)address,bytes,
+                     (UINTN)out->uncertain_pool[i].address,
+                     out->uncertain_pool[i].bytes)) {
+      out->uncertain_duplicate++;
+      return;
+    }
   if(out->uncertain_pool_count<sizeof(out->uncertain_pool)/sizeof(out->uncertain_pool[0]))
-    out->uncertain_pool[out->uncertain_pool_count++]=(GU_PCI_OBS_POOL_FAILURE){address,status,index,stage};
+    out->uncertain_pool[out->uncertain_pool_count++]=
+        (GU_PCI_OBS_POOL_FAILURE){address,bytes,status,index,stage};
 }
 
 /* Copy a single, complete EFI device path without guessing the pointer size.
@@ -61,12 +110,22 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
   out->locate_status=status;out->handle_count=count;
   if(status!=EFI_SUCCESS) {
     if(handles) {
-      PoolProblem(out,GuPciObsLocate,0,status,handles);
+      /* Only a bounded extent may be described; an unverifiable count leaves
+       * the extent unknown rather than guessing the allocation size. */
+      UINTN bytes=count && count<=GU_PCI_OBS_MAX_HANDLES?count*sizeof(*handles):0;
+      PoolProblem(out,GuPciObsLocate,0,status,handles,bytes);
       handles=NULL; /* No confirmed transfer on failure. */
     } else Problem(out,GuPciObsLocate,0,status);
     valid=0;
   } else if(!count || count>GU_PCI_OBS_MAX_HANDLES || !handles) {
     Problem(out,GuPciObsCount,0,EFI_BAD_BUFFER_SIZE);valid=0;
+  } else if(RangesOverlap((UINTN)handles,(UINTN)count*sizeof(*handles),
+                          (UINTN)out,sizeof(*out))) {
+    /* A handle array inside the live capture cannot be walked or released. */
+    out->uncertain_alias++;
+    Problem(out,GuPciObsCount,0,EFI_COMPROMISED_DATA);
+    handles=NULL;
+    valid=0;
   }
   if(valid)for(i=0;i<count;i++) {
     EFI_PCI_IO_PROTOCOL *io=NULL;
@@ -79,16 +138,16 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
     int target;
     s=boot->HandleProtocol(handles[i],&PciGuid,(VOID **)&io);
     if(s==EFI_NOT_FOUND || s==EFI_UNSUPPORTED)continue;
-    if(EFI_ERROR(s) || !io || !io->Pci.Read || !io->GetLocation) {
-      Problem(out,GuPciObsInterface,i,EFI_ERROR(s)?s:EFI_UNSUPPORTED);
+    if(s!=EFI_SUCCESS || !io || !io->Pci.Read || !io->GetLocation) {
+      Outcome(out,GuPciObsInterface,i,s!=EFI_SUCCESS?s:EFI_UNSUPPORTED);
       continue;
     }
     out->pci_protocol_count++;
     s=io->Pci.Read(io,EfiPciIoWidthUint32,0,16,config);
-    if(EFI_ERROR(s)) {Problem(out,GuPciObsRead,i,s);continue;}
+    if(s!=EFI_SUCCESS) {Outcome(out,GuPciObsRead,i,s);continue;}
     s=io->GetLocation(io,&segment,&bus,&device,&function);
-    if(EFI_ERROR(s) || segment>65535U || bus>255U || device>31U || function>7U) {
-      Problem(out,GuPciObsLocation,i,EFI_ERROR(s)?s:EFI_COMPROMISED_DATA);
+    if(s!=EFI_SUCCESS || segment>65535U || bus>255U || device>31U || function>7U) {
+      Outcome(out,GuPciObsLocation,i,s!=EFI_SUCCESS?s:EFI_COMPROMISED_DATA);
       continue;
     }
     /* Display GPUs and their PCI bridges are the only detailed records.
@@ -108,18 +167,20 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
     record->device=device;record->function=function;
     record->location_ok=1;memcpy(record->config,config,sizeof(config));
     s=boot->HandleProtocol(handles[i],&PathGuid,(VOID **)&path);
-    if(EFI_ERROR(s) || !CopyPath(path,record))
-      Problem(out,GuPciObsPath,i,EFI_ERROR(s)?s:EFI_COMPROMISED_DATA);
+    if(s!=EFI_SUCCESS || !CopyPath(path,record))
+      Outcome(out,GuPciObsPath,i,s!=EFI_SUCCESS?s:EFI_COMPROMISED_DATA);
     if(!boot->OpenProtocolInformation)
       Problem(out,GuPciObsOwners,i,EFI_UNSUPPORTED);
     else {
       s=boot->OpenProtocolInformation(handles[i],&PciGuid,&owners,&owner_count);
       if(s!=EFI_SUCCESS) {
         if(owners) {
-          PoolProblem(out,GuPciObsOwners,i,s,owners);
+          UINTN bytes=owner_count && owner_count<=GU_PCI_OBS_MAX_OPENERS?
+              owner_count*sizeof(*owners):0;
+          PoolProblem(out,GuPciObsOwners,i,s,owners,bytes);
           break; /* Do not inspect, release or retry an unconfirmed output. */
         }
-        Problem(out,GuPciObsOwners,i,s);
+        Outcome(out,GuPciObsOwners,i,s);
       } else if(owner_count>GU_PCI_OBS_MAX_OPENERS || (owner_count && !owners)) {
         Problem(out,GuPciObsOwners,i,EFI_COMPROMISED_DATA);
       } else {
@@ -132,7 +193,9 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
       if(owners) {
         release=boot->FreePool(owners);
         if(release!=EFI_SUCCESS) {
-          PoolProblem(out,GuPciObsFree,i,release,owners);
+          PoolProblem(out,GuPciObsFree,i,release,owners,
+                      owner_count<=GU_PCI_OBS_MAX_OPENERS?
+                          owner_count*sizeof(*owners):0);
           break; /* Stop new observations; release the confirmed outer buffer once. */
         }
       }
@@ -144,7 +207,8 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
   if(handles) {
     out->free_status=boot->FreePool(handles);
     if(out->free_status!=EFI_SUCCESS)
-      PoolProblem(out,GuPciObsFree,count,out->free_status,handles);
+      PoolProblem(out,GuPciObsFree,count,out->free_status,handles,
+                  count<=GU_PCI_OBS_MAX_HANDLES?count*sizeof(*handles):0);
   }
   return valid && !out->failures;
 }

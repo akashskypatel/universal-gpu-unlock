@@ -102,8 +102,10 @@ int GuTopoGopSnapshotsEqual(const GU_TOPO_GOP *before, size_t before_count,
 /* Complete PCI device-path prefix only; no root-port-only ownership inference. */
 int GuTopoPathOnController(const GU_TOPO_PATH *controller,
                            const GU_TOPO_PATH *candidate);
-/* Storage capacity is measured in GPU records, not PCI nodes. It must
- * remain valid until the caller finishes using the report. */
+/* Storage capacity is measured in GPU records, not PCI nodes. It must remain
+ * valid until the caller finishes using the report, and it must be independent
+ * of the capture and report storage: an overlapping range is rejected as
+ * GU_TOPO_INVALID before any output is written. */
 int GuTopoAssess(const GU_TOPO_CAPTURE *capture, GU_TOPO_REPORT *report,
                  GU_TOPO_GPU_REPORT *storage, size_t capacity);
 /* Classify ConOut/ErrOut paths against a structurally valid, already

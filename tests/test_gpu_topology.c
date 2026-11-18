@@ -587,6 +587,30 @@ int main(void) {
   snapshot.pci[20].first_owner_agent=NULL;
   CHECK(GuTopoAssess(&snapshot,&report,report_storage,18)==GU_TOPO_INCOMPLETE);
   CHECK(report.gpu_count==18);
+  /* The report and the per-GPU storage are independent caller-owned outputs.
+   * An overlapping range is refused before any output byte is written, so a
+   * partially initialized report can never be mistaken for an assessment. */
+  {
+    union { GU_TOPO_CAPTURE capture; GU_TOPO_REPORT report; } alias;
+    GU_TOPO_GPU_REPORT storage[GU_TOPO_MAX_PCI];
+    Baseline();
+    report.status=7777;report.gpu_count=99;
+    CHECK(GuTopoAssess(&snapshot,&report,(GU_TOPO_GPU_REPORT *)(void *)&report,1)==GU_TOPO_INVALID);
+    CHECK(report.status==7777 && report.gpu_count==99);
+    CHECK(GuTopoAssess(&snapshot,&report,(GU_TOPO_GPU_REPORT *)(void *)&snapshot,1)==GU_TOPO_INVALID);
+    CHECK(report.status==7777 && report.gpu_count==99);
+    memset(storage,0,sizeof(storage));
+    memset(&alias,0,sizeof(alias));
+    alias.capture=snapshot;
+    CHECK(GuTopoAssess(&alias.capture,(GU_TOPO_REPORT *)(void *)&alias.capture,
+                       storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
+    CHECK(storage[0].gpu_index==0 && storage[0].gop_count==0 && !storage[0].ancestry_verified);
+    CHECK(alias.capture.pci_count==snapshot.pci_count &&
+          alias.capture.pci[1].identity.pci_id==snapshot.pci[1].identity.pci_id);
+    /* Adjacent, distinct storage remains valid and fully populated. */
+    CHECK(GuTopoAssess(&snapshot,&report,storage,GU_TOPO_MAX_PCI)==GU_TOPO_COMPLETE);
+    CHECK(report.gpu_count==2 && report.gpus==storage);
+  }
   printf("PASS dynamic multi-GPU topology: %u checks; no EFI/hardware calls\n",checks);
   return 0;
 }

@@ -15,6 +15,9 @@ typedef struct {
 
 /* Copies precisely 1 MiB from BAR0 via 262144 individually checked reads.
  * A failed read clears the entire output; no partial success is published.
+ * The output window and the reader record/context must be independent: a
+ * reader record or context pointer that lies inside the output window is
+ * refused before the first write, and its storage is left untouched.
  * The reader callback is a capability: callers must independently establish
  * selected device identity, resource bounds and permitted MMIO semantics. */
 int GuPromCapture(const GU_PROM_READER *reader, uint8_t *output,

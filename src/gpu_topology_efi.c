@@ -82,15 +82,50 @@ static int LogOverflow;
 static EFI_GUID FsGuid=EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 #endif
 
+/* Number of formatted lines that could not be published. A dropped line is a
+ * diagnostic omission, so it is counted and reported instead of vanishing. */
+static size_t LogDropped;
+
+/* One bounded, format-free marker per capture. The rejected content is never
+ * partially published, and this routine cannot recurse through formatting. */
+static void SayDropped(void) {
+  static const char marker[]="DIAGNOSTIC_LINE_DROPPED=1 CONTENT_WITHHELD=1\r\n";
+  size_t i;
+  CHAR16 wide[sizeof(marker)];
+  if(LogDropped++)return;
+#ifdef GU_TOPO_SAVE_LOG
+  if(sizeof(marker)-1>sizeof(LogBytes)-LogUsed)LogOverflow=1;
+  else {memcpy(LogBytes+LogUsed,marker,sizeof(marker)-1);LogUsed+=sizeof(marker)-1;}
+#endif
+  for(i=0;i<sizeof(marker)-1;i++)wide[i]=(CHAR16)(unsigned char)marker[i];
+  wide[sizeof(marker)-1]=0;
+  if(System && System->ConOut && System->ConOut->OutputString)
+    (VOID)System->ConOut->OutputString(System->ConOut,wide);
+}
+
+/* Completeness is measured, not assumed: an invalid or oversized formatted
+ * line is refused and the durable log records that refusal. */
+static void Say(const char *format, ...);
+static void SayCompleteness(void) {
+  Say("DIAGNOSTIC_LOG_COMPLETENESS=%s DROPPED=%llu OVERFLOW=%u\r\n",
+      LogDropped?"INCOMPLETE":"COMPLETE",(unsigned long long)LogDropped,
+#ifdef GU_TOPO_SAVE_LOG
+      (unsigned)LogOverflow);
+#else
+      0U);
+#endif
+}
+
 static void Say(const char *format, ...) {
   char line[320];CHAR16 wide[321];size_t i,n;
   va_list ap;va_start(ap,format);n=GuFormatV(line,sizeof(line),format,ap);va_end(ap);
-  if(n==SIZE_MAX || n>=sizeof(line))return;
+  if(n==SIZE_MAX || n>=sizeof(line)) {SayDropped();return;}
 #ifdef GU_TOPO_SAVE_LOG
   if(n>sizeof(LogBytes)-LogUsed)LogOverflow=1;
   else {memcpy(LogBytes+LogUsed,line,n);LogUsed+=n;}
 #endif
-  for(i=0;i<n;i++)wide[i]=(CHAR16)(unsigned char)line[i];wide[n]=0;
+  for(i=0;i<n;i++)wide[i]=(CHAR16)(unsigned char)line[i];
+  wide[n]=0;
   if(System && System->ConOut && System->ConOut->OutputString)
     (VOID)System->ConOut->OutputString(System->ConOut,wide);
 }
@@ -1285,6 +1320,22 @@ static void ReportPciEvidence(EFI_BOOT_SERVICES *bs) {
       (unsigned)Supplemental.first_failure_stage,
       (size_t)Supplemental.first_failure_index,
       (unsigned long long)Supplemental.first_failure_status);
+  /* A UEFI warning is a success code without confirmed completion, and an
+   * aliased or repeated pool reference is not a second owned buffer. Both are
+   * reported instead of being folded into COMPLETE. */
+  Say("PCI_OBS_CLASSIFICATION WARNINGS=%zu FIRST_WARN_STAGE=%u FIRST_WARN_STATUS=%#llx UNCERTAIN_BUFFERS=%zu ALIASES=%zu DUPLICATES=%zu\r\n",
+      (size_t)Supplemental.warnings,(unsigned)Supplemental.first_warning_stage,
+      (unsigned long long)Supplemental.first_warning_status,
+      (size_t)Supplemental.uncertain_pool_count,
+      (size_t)Supplemental.uncertain_alias,
+      (size_t)Supplemental.uncertain_duplicate);
+  for(i=0;i<Supplemental.uncertain_pool_count;i++)
+    Say("PCI_OBS_POOL_UNCERTAIN[%zu] STAGE=%u INDEX=%zu ADDRESS=%p BYTES=%zu STATUS=%#llx NOT_FREED=1\r\n",
+        (size_t)i,(unsigned)Supplemental.uncertain_pool[i].stage,
+        (size_t)Supplemental.uncertain_pool[i].index,
+        Supplemental.uncertain_pool[i].address,
+        (size_t)Supplemental.uncertain_pool[i].bytes,
+        (unsigned long long)Supplemental.uncertain_pool[i].status);
   for(i=0;i<Supplemental.record_count;i++) {
     const GU_PCI_OBS_RECORD *p=&Supplemental.records[i];
     UINT32 id=p->config[0];
@@ -2242,6 +2293,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   Say("SUPPLEMENTARY_PROTOCOL_POOL_STATUS=%s NO_STOP_EVIDENCE=1\r\n",
       ObservationPoolFault?"UNCERTAIN":"NO_UNCERTAIN_RESULT_OBSERVED");
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
+  /* Emitted after every other line, before the durable write, so a consumer
+   * can distinguish a complete report from one with withheld lines. */
+  SayCompleteness();
 #ifdef GU_TOPO_WINDOWS_HANDOFF
   Say("WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write\r\n");
 #endif
