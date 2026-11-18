@@ -606,7 +606,7 @@ int main(void){
         append_start = SOURCE.index("static BOOLEAN SelectedGraph(")
         append_end = SOURCE.index("static EFI_STATUS Snapshot(", append_start)
         port=(Path(__file__).resolve().parents[1]/"src/port.c").read_text(encoding="utf-8")
-        pool=port[port.index("typedef struct GU_CPU_POOL {"):port.index("\nVOID GuStarted(")]
+        pool=port[port.index("typedef struct GU_CPU_POOL {"):port.index("\nVOID GuStartedFor(")]
         production = (pool + "\n" + SOURCE[graph_start:graph_end] + "\n" + SOURCE[left:right]
                       + SOURCE[append_start:append_end])
         # Include the real public state queries, not mock equivalents.
@@ -660,6 +660,13 @@ typedef struct {
   struct pci_dev *compat_device;
   BOOLEAN compat_device_open,compat_device_closed;
 } GU_PLATFORM;
+typedef struct GU_PLATFORM_ALLOCATION {
+  GU_PLATFORM platform;
+  int published,retired;
+  struct GU_PLATFORM_ALLOCATION *next;
+} GU_PLATFORM_ALLOCATION;
+static GU_PLATFORM_ALLOCATION *PlatformAllocations;
+static EFI_STATUS PlatformRegistryStatus;
 typedef GU_PLATFORM MOCK_PLATFORM;
 static MOCK_PLATFORM *platforms,*current;
 #define Gu (*current)
