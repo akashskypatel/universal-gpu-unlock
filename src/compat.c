@@ -47,10 +47,6 @@ static GU_PLATFORM *GuCompatDeviceOwner(const struct device *D) {
   GU_PLATFORM *owner=GuCompatOwner(pdev);
   return owner&&D==&pdev->dev?owner:NULL;
 }
-static BOOLEAN GuCompatDeviceMatches(const struct device *D) {
-  GU_PLATFORM *owner=GuCompatDeviceOwner(D);
-  return owner&&owner==GuPlatformActive;
-}
 /* Reserve CPU storage before driver release. No compatibility operation
  * can use the record until the coordinator opens the scope. */
 EFI_STATUS GuCompatReserveDevice(VOID) {
@@ -175,12 +171,17 @@ BOOLEAN GuCompatCopyFromIo(const struct pci_dev *D,VOID *Destination,const VOID 
 }
 void *dma_alloc_coherent(struct device *D,size_t N,dma_addr_t *Address,int Flags) {
   VOID *Cpu=NULL;(void)Flags;
-  if(!GuCompatDeviceMatches(D)||!D->dma_mask || *D->dma_mask!=0xffffffffULL || D->coherent_dma_mask!=0xffffffffULL)return NULL;
+  GU_PLATFORM *owner=GuCompatDeviceOwner(D);
+  if(!owner||owner!=GuPlatformActive||!D->dma_mask||
+     *D->dma_mask!=0xffffffffULL||D->coherent_dma_mask!=0xffffffffULL)return NULL;
   if(EFI_ERROR(GuDmaAllocate(N,&Cpu,Address)))return NULL;
   return Cpu;
 }
 void dma_free_coherent(struct device *D,size_t N,void *P,dma_addr_t A) {
-  (void)N;if(!GuCompatDeviceMatches(D))return;if(EFI_ERROR(GuDmaFree(P,A)))Gu.retained=TRUE;
+  (void)N;
+  GU_PLATFORM *owner=GuCompatDeviceOwner(D);
+  if(!owner||owner!=GuPlatformActive)return;
+  if(EFI_ERROR(GuDmaFree(P,A)))owner->retained=TRUE;
 }
 int dma_set_mask(struct device *D,u64 Mask) {
   if(!GuCompatDeviceOwner(D)||!D->dma_mask)return -EINVAL;

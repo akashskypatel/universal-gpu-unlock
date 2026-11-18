@@ -400,7 +400,6 @@ static struct pci_dev cards[2],*selected=&cards[0];
 #define Gu (*active)
 #define GuAssets (Gu.asset_entries)
 static int releases,opens,fail_release,invalid_assets;
-static GU_ASSET *GuAssetEntries(void){return GuAssets;}
 static int GuPlatformAssetsOwned(const GU_PLATFORM *p){
   return (p==&contexts[0]||p==&contexts[1])&&!invalid_assets;
 }
@@ -417,9 +416,6 @@ static GU_PLATFORM *GuCompatDeviceOwner(const struct device *d){
   if(d==&cards[0].dev)return &contexts[0];
   if(d==&cards[1].dev)return &contexts[1];
   return NULL;
-}
-static int GuCompatDeviceMatches(const struct device *d){
-  return d==&selected->dev&&GuCompatDeviceOwner(d)==active;
 }
 static int gpu_is_supported_device(int d){return d==1;}
 static const struct asset_names {const char *gsp;} names={"gsp"};
