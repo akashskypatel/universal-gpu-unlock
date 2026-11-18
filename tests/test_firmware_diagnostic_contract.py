@@ -609,9 +609,11 @@ static EFI_STATUS Open(EFI_FILE_PROTOCOL *f,EFI_FILE_PROTOCOL **out,CHAR16 *name
     creates++;
     if(mode==3){*out=&foreign;return EFI_DEVICE_ERROR;}
     if(mode==9){*out=&root;return EFI_SUCCESS;}
+    if(mode==12)return 1;
     *out=&file;return EFI_SUCCESS;
   }
   if(mode==2){*out=&foreign;return EFI_NOT_FOUND;}
+  if(mode==11)return 1;
   if(mode==6){*out=&root;return EFI_SUCCESS;}
   if((mode==4||mode==5)&&opens==1){*out=&prior;return EFI_SUCCESS;}
   return EFI_NOT_FOUND;
@@ -623,6 +625,7 @@ static EFI_STATUS Flush(EFI_FILE_PROTOCOL *f) {(void)f;flushes++;return EFI_SUCC
 static EFI_STATUS Volume(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs,EFI_FILE_PROTOCOL **out) {
   (void)fs;
   if(mode==1){*out=&foreign;return EFI_DEVICE_ERROR;}
+  if(mode==10)return 1;
   *out=&root;return EFI_SUCCESS;
 }
 static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL fs={Volume};
@@ -640,15 +643,16 @@ int main(void){
   file=(EFI_FILE_PROTOCOL){NULL,Close,Write,Flush};
   prior=(EFI_FILE_PROTOCOL){NULL,Close,NULL,NULL};
   foreign=prior;
-  for(mode=0;mode<=9;mode++){
+  for(mode=0;mode<=12;mode++){
     opens=creates=writes=flushes=root_closes=file_closes=prior_closes=foreign_closes=0;
     EFI_STATUS s=SaveLog((EFI_HANDLE)1,&table);
     CHECK((s==EFI_SUCCESS)==(mode==0||mode==4));
-    CHECK(!foreign_closes && root_closes==(mode!=1));
+    CHECK((s==EFI_SUCCESS)||EFI_ERROR(s));
+    CHECK(!foreign_closes && root_closes==(mode!=1&&mode!=10));
     CHECK(file_closes==(mode==0||mode==4||mode==7||mode==8));
     CHECK(prior_closes==(mode==4||mode==5));
     CHECK(writes==file_closes&&flushes==writes);
-    CHECK(creates==(mode==0||mode==3||mode==4||mode==7||mode==8||mode==9));
+    CHECK(creates==(mode==0||mode==3||mode==4||mode==7||mode==8||mode==9||mode==12));
   }
   return 0;
 }

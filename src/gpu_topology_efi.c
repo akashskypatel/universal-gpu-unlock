@@ -1921,7 +1921,7 @@ static EFI_STATUS LogOpenResult(EFI_STATUS status,EFI_FILE_PROTOCOL **out,
     *out=NULL;
     return EFI_DEVICE_ERROR;
   }
-  return status;
+  return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
 }
 
 static EFI_STATUS CloseLogFile(EFI_FILE_PROTOCOL **out,const char *stage) {
