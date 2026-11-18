@@ -37,10 +37,10 @@ class TargetBindTest(unittest.TestCase):
             "GuDmaFree(GU_PLATFORM *owner,",
             "GuWrite32(GU_PLATFORM *owner,",
             "GuConfigWrite(GU_PLATFORM *owner,",
-            "GuSavePci(GU_PLATFORM *owner)",
-            "GuRestorePci(GU_PLATFORM *owner)",
-            "GuFlr(GU_PLATFORM *owner)",
-            "GuClearMaster(GU_PLATFORM *owner)",
+            "GuSavePci(GU_PLATFORM *owner)",,
+            "GuRestorePci(GU_PLATFORM *owner)",,
+            "GuFlr(GU_PLATFORM *owner)",,
+            "GuClearMaster(GU_PLATFORM *owner)",,
             "GuEnableMaster(GU_PLATFORM *owner)",
         ):
             self.assertIn(signature, header)
