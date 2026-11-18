@@ -41,10 +41,10 @@ class AssetContract(unittest.TestCase):
         self.assertIn("GuAd104FwsecMatches(&fw)",x)
         self.assertIn("SIGNATURE_AUTHENTICATED=0",x)
     def test_profile_uses_exact_discovery_identity_and_refuses_failed_release(self):
-        config=P.split("static BOOLEAN Config(VOID) {",1)[1].split("static BOOLEAN TuringColdState",1)[0]
-        self.assertIn("id->handle!=Gu.handle",config)
-        self.assertIn("id->pci!=Gu.pci",config)
-        self.assertLess(config.index("b!=id->bus"),config.index("GuConfigRead("))
+        config=P.split("static BOOLEAN ConfigFor(GU_PLATFORM *platform) {",1)[1].split("static BOOLEAN TuringColdState",1)[0]
+        self.assertIn("id->handle!=platform->handle",config)
+        self.assertIn("id->pci!=platform->pci",config)
+        self.assertLess(config.index("b!=id->bus"),config.index("GuConfigReadFor(platform,"))
         for match in ("c[0]!=id->pci_id","c[11]!=id->subsystem_id","(c[2]>>16)!=id->class_code"):
             self.assertIn(match,config)
         prepare=P.split("EFI_STATUS GuAd104Prepare(VOID) {",1)[1]

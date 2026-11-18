@@ -143,7 +143,8 @@ void GuCompatWrite32(const struct pci_dev *D,u32 Value,void *P) {
 BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *D,const VOID *S,size_t N) {
   UINT64 Address=(UINTN)S,Offset;UINTN Done=0;
   if(D)memset(D,0,N);
-  if(!owner||owner!=&Gu){Gu.fault=TRUE;return FALSE;}
+  if(!owner)return FALSE;
+  if(owner!=GuPlatformActive){owner->fault=TRUE;return FALSE;}
   if(!D||owner->fault||owner->retained||!owner->pci||!owner->pci->Mem.Read||
      Address<owner->bar_base||Address-owner->bar_base>owner->bar_size||
      N>owner->bar_size-(Address-owner->bar_base)){owner->fault=TRUE;return FALSE;}
@@ -152,10 +153,9 @@ BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *D,const VOID *S,size_t N) {
   while(Done<N) {
     UINTN Count=N-Done<1024?N-Done:1024;
     EFI_STATUS status=pci->Mem.Read(pci,EfiPciIoWidthUint8,0,Offset+Done,Count,(UINT8 *)D+Done);
-    if(EFI_ERROR(status)||owner!=&Gu||owner->pci!=pci||owner->fault||owner->retained) {
-      memset(D,0,N);owner->fault=TRUE;
-      if(owner!=&Gu)Gu.fault=TRUE;
-      return FALSE;
+    if(EFI_ERROR(status)||owner!=GuPlatformActive||owner->pci!=pci||
+       owner->fault||owner->retained) {
+      memset(D,0,N);owner->fault=TRUE;return FALSE;
     }
     Done+=Count;
   }

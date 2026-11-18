@@ -285,7 +285,7 @@ int main(int argc,char **argv) {
         self.compile_run(source, range(13))
 
     def test_actual_profile_rejects_wrong_gpu_and_failed_preparation(self):
-        config=body(PROFILE,"static BOOLEAN Config(VOID) {","/* The TU10x PMC")
+        config=body(PROFILE,"static BOOLEAN ConfigFor(GU_PLATFORM *platform) {","/* The TU10x PMC")
         prepare=PROFILE[PROFILE.index("EFI_STATUS GuAd104Prepare(VOID) {"):]
         host=r"""
 #include <stdint.h>
@@ -328,15 +328,17 @@ typedef struct {
 } GU_PLATFORM;
 static GU_PLATFORM cards[2],*active=&cards[0];
 #define Gu (*active)
+#define GuPlatformActive active
 static mock_pci pci[2];
 static int locations,reads,parses,rom_checks,latches,free_fails,read_fails;
 static EFI_STATUS location(mock_pci *p,UINTN *s,UINTN *b,UINTN *d,UINTN *f) {
   locations++;*s=p->segment;*b=p->bus;*d=p->device;*f=p->function;return EFI_SUCCESS;
 }
-static EFI_STATUS GuConfigRead(int width,UINT32 off,UINT32 *out) {
+static EFI_STATUS GuConfigReadFor(GU_PLATFORM *platform,int width,UINT32 off,UINT32 *out) {
   (void)width;
-  if(Gu.fault)return EFI_DEVICE_ERROR;
-  reads++;*out=Gu.pci->config[off/4];return EFI_SUCCESS;
+  if(!platform||platform!=active){if(platform)platform->fault=1;return EFI_NOT_READY;}
+  if(platform->fault)return EFI_DEVICE_ERROR;
+  reads++;*out=platform->pci->config[off/4];return EFI_SUCCESS;
 }
 static BOOLEAN GuCheckConfig(UINT32 *c,UINTN s,UINTN b,UINTN d,UINTN f,GU_CAPS *caps) {
   (void)c;(void)s;(void)b;(void)d;(void)f;
@@ -344,7 +346,10 @@ static BOOLEAN GuCheckConfig(UINT32 *c,UINTN s,UINTN b,UINTN d,UINTN f,GU_CAPS *
 }
 static BOOLEAN GuIsSupportedPciId(UINT32 id){return id==0x268410deU||id==0x220a10deU;}
 static void GuLog(const char *fmt,...){(void)fmt;}
-static BOOLEAN Registers(UINT32 *a,UINT32 *b){*a=1;*b=2;return !Gu.fault;}
+static BOOLEAN RegistersFor(GU_PLATFORM *platform,UINT32 *a,UINT32 *b){
+  if(!platform||platform!=active){if(platform)platform->fault=1;return FALSE;}
+  *a=1;*b=2;return !platform->fault;
+}
 static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform){(void)platform;return TRUE;}
 static void *GuAlloc(size_t n){return malloc(n);}
 static void GuFree(void *p){free(p);if(free_fails)Gu.fault=Gu.retained=1;}
@@ -378,9 +383,12 @@ int main(int argc,char **argv){
     Gu.discovery_identity=(GU_GPU_RECORD){.pci_id=pci[i].config[0],.subsystem_id=pci[i].config[11],
       .class_code=0x0300,.segment=1,.bus=3+i,.device=2,.function=1,
       .handle=Gu.handle,.pci=Gu.pci};
-    CHECK(Config());
+    CHECK(ConfigFor(&Gu));
   }
   CHECK(locations==2&&reads==128);
+  unsigned before_reads=(unsigned)reads;
+  CHECK(!ConfigFor(&cards[0])&&cards[0].fault&&reads==(int)before_reads);
+  cards[0].fault=0;
   switch(mode){
     case 0:Gu.pci=&pci[0];break;
     case 1:Gu.handle=cards[0].handle;break;
@@ -398,7 +406,7 @@ int main(int argc,char **argv){
     default:return 2;
   }
   if(mode<10){
-    CHECK(!Config());
+    CHECK(!ConfigFor(&Gu));
     if(mode<6||mode==9)CHECK(reads==128);
     if(mode==0||mode==1||mode==9)CHECK(locations==2);
     CHECK(!parses&&!latches);

@@ -103,25 +103,24 @@ BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
          f->sig_bytes == (UINT32)f->sig_count * 384;
 }
 
-static BOOLEAN Config(VOID) {
+static BOOLEAN ConfigFor(GU_PLATFORM *platform) {
   UINT32 c[64];UINTN s,b,d,f;GU_CAPS caps;
-  const GU_GPU_RECORD *id=&Gu.discovery_identity;
-  if(!Gu.handle || !Gu.pci || id->handle!=Gu.handle || id->pci!=Gu.pci ||
-     id->pci_id!=(((UINT32)Gu.device_id<<16)|0x10deU) ||
-     !Gu.pci->GetLocation || !Gu.pci->Pci.Read ||
-     !Gu.bar_base || Gu.bar_size!=0x1000000 ||
-     EFI_ERROR(Gu.pci->GetLocation(Gu.pci,&s,&b,&d,&f))) {
-    GuLog("Config: invalid pci handle or location\n");
-    return FALSE;
+  if(!platform)return FALSE;
+  const GU_GPU_RECORD *id=&platform->discovery_identity;
+  if(platform!=GuPlatformActive){platform->fault=TRUE;return FALSE;}
+  if(!platform->handle||!platform->pci||id->handle!=platform->handle||id->pci!=platform->pci||
+     id->pci_id!=(((UINT32)platform->device_id<<16)|0x10deU)||
+     !platform->pci->GetLocation||!platform->pci->Pci.Read||
+     !platform->bar_base||platform->bar_size!=0x1000000||
+     EFI_ERROR(platform->pci->GetLocation(platform->pci,&s,&b,&d,&f))) {
+    GuLog("Config: invalid pci handle or location\n");return FALSE;
   }
   if(s!=id->segment||b!=id->bus||d!=id->device||f!=id->function) {
-    GuLog("Config: discovery location mismatch\n");
-    return FALSE;
+    GuLog("Config: discovery location mismatch\n");return FALSE;
   }
   for(UINTN i=0;i<64;i++) {
-    if(EFI_ERROR(GuConfigRead(EfiPciIoWidthUint32,(UINT32)i*4,&c[i]))) {
-      GuLog("Config: read failed at word %u\n", (unsigned)i);
-      return FALSE;
+    if(EFI_ERROR(GuConfigReadFor(platform,EfiPciIoWidthUint32,(UINT32)i*4,&c[i]))) {
+      GuLog("Config: read failed at word %u\n",(unsigned)i);return FALSE;
     }
   }
   BOOLEAN accepted=GuCheckConfig(c,s,b,d,f,&caps);
@@ -129,22 +128,24 @@ static BOOLEAN Config(VOID) {
   if(!accepted)accepted=GuCheckConfigInitialMaster(c,s,b,d,f,&caps);
 #endif
   if(!accepted) {
-    GuLog("Config: cold PCI policy refused (seg=%u bus=%u dev=%u fun=%u)\n", (unsigned)s, (unsigned)b, (unsigned)d, (unsigned)f);
-    return FALSE;
+    GuLog("Config: cold PCI policy refused (seg=%u bus=%u dev=%u fun=%u)\n",
+          (unsigned)s,(unsigned)b,(unsigned)d,(unsigned)f);return FALSE;
   }
-  if(c[0]!=id->pci_id||c[11]!=id->subsystem_id||(c[2]>>16)!=id->class_code ||
-     !GuIsSupportedPciId(c[0]) || ((c[2]>>16)!=0x0300U && (c[2]>>16)!=0x0302U) || (c[4]&~0xfU)!=Gu.bar_base) {
-    GuLog("Config: mismatch c0=0x%x c2=0x%x c4=0x%x bar_base=0x%llx\n", c[0], c[2], c[4], (unsigned long long)Gu.bar_base);
-    return FALSE;
+  if(c[0]!=id->pci_id||c[11]!=id->subsystem_id||(c[2]>>16)!=id->class_code||
+     !GuIsSupportedPciId(c[0])||((c[2]>>16)!=0x0300U&&(c[2]>>16)!=0x0302U)||
+     (c[4]&~0xfU)!=platform->bar_base) {
+    GuLog("Config: mismatch c0=0x%x c2=0x%x c4=0x%x bar_base=0x%llx\n",
+          c[0],c[2],c[4],(unsigned long long)platform->bar_base);return FALSE;
   }
-  if(!(caps.pm==Gu.pm_cap && caps.pcie==Gu.pcie_cap && caps.pcie_version==Gu.pcie_version && caps.msi==Gu.msi_cap && caps.msix==Gu.msix_cap)) {
+  if(!(caps.pm==platform->pm_cap&&caps.pcie==platform->pcie_cap&&
+       caps.pcie_version==platform->pcie_version&&caps.msi==platform->msi_cap&&
+       caps.msix==platform->msix_cap)) {
     GuLog("Config: caps mismatch: pm=%u/%u pcie=%u/%u pcie_ver=%u/%u msi=%u/%u msix=%u/%u\n",
-          caps.pm, Gu.pm_cap, caps.pcie, Gu.pcie_cap, caps.pcie_version, Gu.pcie_version,
-          caps.msi, Gu.msi_cap, caps.msix, Gu.msix_cap);
-    return FALSE;
+          caps.pm,platform->pm_cap,caps.pcie,platform->pcie_cap,
+          caps.pcie_version,platform->pcie_version,caps.msi,platform->msi_cap,
+          caps.msix,platform->msix_cap);return FALSE;
   }
-  GuLog("Config: OK\n");
-  return TRUE;
+  GuLog("Config: OK\n");return TRUE;
 }
 /* The TU10x PMC architecture nibble identifies the Turing cold state.
  * TU102 does not expose Ada/Ampere speed-select registers. This is a
@@ -154,50 +155,56 @@ static BOOLEAN TuringColdState(UINT32 pmc, UINT32 wpr2_hi) {
          (pmc&0xffff0000U)!=0xbadf0000U &&
          ((pmc>>24)&0x0fU)==0x06U && (wpr2_hi>>4)==0;
 }
-static BOOLEAN Registers(UINT32 *Ss0,UINT32 *Ss1) {
-  UINT32 pmc = GuRead32(0);
-  if (Gu.fault || pmc == 0xffffffff || (pmc & 0xffff0000) == 0xbadf0000) {
-    GuLog("Registers: BAR0 PMC read failed (0x%x)\n", pmc);
+static BOOLEAN RegistersFor(GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1) {
+  if(!platform||platform!=GuPlatformActive) {
+    if(platform)platform->fault=TRUE;
     return FALSE;
   }
-  UINT32 wpr2_hi = GuRead32(0x1fa828);
-  if (Gu.fault || (wpr2_hi >> 4) != 0) {
-    GuLog("Registers: WPR2 already active (hi=0x%x), cold reboot required\n", wpr2_hi);
+  UINT32 pmc=GuRead32For(platform,0);
+  if(platform->fault||pmc==0xffffffffU||(pmc&0xffff0000U)==0xbadf0000U) {
+    GuLog("Registers: BAR0 PMC read failed (0x%x)\n",pmc);return FALSE;
+  }
+  UINT32 wpr2_hi=GuRead32For(platform,0x1fa828);
+  if(platform->fault||(wpr2_hi>>4)!=0) {
+    GuLog("Registers: WPR2 already active (hi=0x%x), cold reboot required\n",wpr2_hi);
     return FALSE;
   }
-  if(Gu.is_turing) {
+  if(platform->is_turing) {
     if(!TuringColdState(pmc,wpr2_hi)) {
-      GuLog("TURING_COLD=REFUSED PMC=%#x WPR2_HI=%#x\n",pmc,wpr2_hi);
-      return FALSE;
+      GuLog("TURING_COLD=REFUSED PMC=%#x WPR2_HI=%#x\n",pmc,wpr2_hi);return FALSE;
     }
-    /* No synthetic selector values may be interpreted as unlock state. */
     *Ss0=*Ss1=0;
     GuLog("TURING_COLD=PASSIVE PMC=%#x WPR2_HI=%#x SELECTORS_UNMAPPED=1 ACTIVE_ALLOWED=0\n",
           pmc,wpr2_hi);
-    return !Gu.fault;
+    return !platform->fault;
   }
-  *Ss0=GuRead32(0x82381c);*Ss1=GuRead32(0x823820);
-  GuLog("Selectors: SS0=0x%x, SS1=0x%x (fault=%u)\n", *Ss0, *Ss1, (unsigned)Gu.fault);
-  if(*Ss0==0xffffffff || (*Ss0&0xffff0000)==0xbadf0000 || *Ss0==0x88888888 || (*Ss1 > 7)) {
-    GuLog("Selectors invalid: SS0=0x%x, SS1=0x%x (expected SS1 <= 7)\n", *Ss0, *Ss1);
+  *Ss0=GuRead32For(platform,0x82381c);*Ss1=GuRead32For(platform,0x823820);
+  GuLog("Selectors: SS0=0x%x, SS1=0x%x (fault=%u)\n",
+        *Ss0,*Ss1,(unsigned)platform->fault);
+  if(*Ss0==0xffffffffU||(*Ss0&0xffff0000U)==0xbadf0000U||
+     *Ss0==0x88888888U||*Ss1>7) {
+    GuLog("Selectors invalid: SS0=0x%x, SS1=0x%x (expected SS1 <= 7)\n",*Ss0,*Ss1);
     return FALSE;
   }
-  GuLog("Registers: cold state verified (PMC=0x%x, SS0=0x%x, SS1=%u)\n", pmc, *Ss0, *Ss1);
-  return !Gu.fault;
+  GuLog("Registers: cold state verified (PMC=0x%x, SS0=0x%x, SS1=%u)\n",
+        pmc,*Ss0,*Ss1);
+  return !platform->fault;
 }
-BOOLEAN GuAd104ColdEntry(VOID) {
+BOOLEAN GuAd104ColdEntryFor(GU_PLATFORM *platform) {
   UINT32 ss0,ss1;
-  return !Gu.started && !Gu.fault && !Gu.retained && Config() &&
-    Registers(&ss0,&ss1) && GuEntrySelectorsMatch(ss0,ss1);
+  return platform&&platform==GuPlatformActive&&!platform->started&&!platform->fault&&
+    !platform->retained&&ConfigFor(platform)&&RegistersFor(platform,&ss0,&ss1)&&
+    GuEntrySelectorsMatchFor(platform,ss0,ss1);
 }
+BOOLEAN GuAd104ColdEntry(VOID) {return GuAd104ColdEntryFor(&Gu);}
 /* A read-only firmware and selector report; never set qualification latches. */
 EFI_STATUS GuDiagnosticScan(VOID) {
   UINT32 before0=0,before1=0,after0=0,after1=0;
   struct gpu_unlock_fwsec fw;
   if(Gu.started||Gu.owned||Gu.retained||Gu.profile_verified||Gu.fault)
     return EFI_NOT_READY;
-  BOOLEAN config_ok=Config();
-  BOOLEAN regs_ok=config_ok&&Registers(&before0,&before1);
+  BOOLEAN config_ok=ConfigFor(&Gu);
+  BOOLEAN regs_ok=config_ok&&RegistersFor(&Gu,&before0,&before1);
   BOOLEAN assets_ok=GuAd104AssetsValid(&Gu);
   GuLog("DIAGNOSTIC CONFIG=%u REGISTERS=%u PINNED_ASSETS=%u\n",
         (unsigned)config_ok,(unsigned)regs_ok,(unsigned)assets_ok);
@@ -208,8 +215,8 @@ EFI_STATUS GuDiagnosticScan(VOID) {
   BOOLEAN prom_ok=copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576U);
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
-  BOOLEAN cfg2=Config();
-  BOOLEAN reg2=cfg2&&Registers(&after0,&after1);
+  BOOLEAN cfg2=ConfigFor(&Gu);
+  BOOLEAN reg2=cfg2&&RegistersFor(&Gu,&after0,&after1);
   BOOLEAN stable=cfg2&&reg2&&before0==after0&&before1==after1;
   GuLog("DIAGNOSTIC PROM=%u FWSEC_PARSE=%d FWSEC_MATCH=%u STABLE=%u SIGNATURE_AUTHENTICATED=0\n",
         (unsigned)prom_ok,parsed,(unsigned)fw_ok,(unsigned)stable);
@@ -233,11 +240,11 @@ EFI_STATUS GuAd104Prepare(VOID) {
           Gu.started, Gu.fault, Gu.retained, (void *)Gu.allocations, Gu.profile_verified, Gu.prom_verified);
     return EFI_NOT_READY;
   }
-  if(!Config()) {
+  if(!ConfigFor(&Gu)) {
     GuLog("GuAd104Prepare: Config() returned FALSE\n");
     return EFI_NOT_READY;
   }
-  if(!Registers(&ss0,&ss1)) {
+  if(!RegistersFor(&Gu,&ss0,&ss1)) {
     GuLog("GuAd104Prepare: Registers() returned FALSE\n");
     return EFI_NOT_READY;
   }
@@ -254,8 +261,8 @@ EFI_STATUS GuAd104Prepare(VOID) {
   BOOLEAN prom_match = copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576);
   int fwsec_res = prom_match?gpu_unlock_vbios_fwsec(prom,1048576,&fw):-1;
   BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
-  BOOLEAN cfg2 = Config();
-  BOOLEAN reg2 = Registers(&after0,&after1);
+  BOOLEAN cfg2 = ConfigFor(&Gu);
+  BOOLEAN reg2 = cfg2&&RegistersFor(&Gu,&after0,&after1);
   BOOLEAN valid = !Gu.fault && prom_match && fwsec_match && cfg2 && reg2 && ss0==after0 && ss1==after1;
   GuLog("GuAd104Prepare: prom_match=%u fwsec_res=%d fwsec_match=%u cfg2=%u reg2=%u ss0_stable=%u\n",
         prom_match, fwsec_res, fwsec_match, cfg2, reg2, (ss0==after0 && ss1==after1));

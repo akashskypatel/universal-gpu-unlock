@@ -362,6 +362,8 @@ int main(void){
         self.assertNotIn("GuStarted();",vendor)
         self.assertNotIn("GuQuiesced();",vendor)
         self.assertNotIn("GuEntrySelectorsMatch(",vendor)
+        self.assertIn("GuAd104ColdEntryFor(owner)",vendor)
+        self.assertNotIn("GuAd104ColdEntry()",vendor)
         self.assertLess(run.index("GuCompatOwner(pdev)"),run.index("pdev->device"))
         self.assertIn("shared->owner!=pdev",run)
         self.assertIn("if(!result&&released)result=released;",execution)

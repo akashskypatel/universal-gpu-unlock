@@ -500,15 +500,18 @@ EFI_STATUS GuDmaFree(VOID *C, UINT64 D) {
   GuFree(Entry);
   return Gu.cpu_pool_failure_status;
 }
-UINT32 GuRead32(UINT32 O) {
+UINT32 GuRead32For(GU_PLATFORM *platform,UINT32 O) {
   UINT32 Value=0xffffffffU;
-  if(Gu.fault)return Value;
-  if(!Gu.pci || (O&3) || (UINT64)O+4>Gu.bar_size ||
-     EFI_ERROR(Gu.pci->Mem.Read(Gu.pci,EfiPciIoWidthUint32,0,O,1,&Value))) {
-    Gu.fault=TRUE;return 0xffffffffU;
+  if(!platform)return Value;
+  if(platform!=GuPlatformActive){platform->fault=TRUE;return Value;}
+  if(platform->fault)return Value;
+  if(!platform->pci||(O&3)||(UINT64)O+4>platform->bar_size||
+     EFI_ERROR(platform->pci->Mem.Read(platform->pci,EfiPciIoWidthUint32,0,O,1,&Value))) {
+    platform->fault=TRUE;return 0xffffffffU;
   }
   return Value;
 }
+UINT32 GuRead32(UINT32 O) {return GuRead32For(&Gu,O);}
 VOID GuWrite32(UINT32 O, UINT32 V) {
   if(Gu.fault)return;
 #ifdef GU_ENTRY_LATCHED_SS1_PRESERVE
@@ -530,10 +533,21 @@ static EFI_STATUS RawRead(EFI_PCI_IO_PROTOCOL_WIDTH W, UINT32 O, VOID *V) {
   if(!Gu.pci || W>EfiPciIoWidthUint32 || O>256-((UINT32)1<<W))return EFI_INVALID_PARAMETER;
   return Gu.pci->Pci.Read(Gu.pci,W,O,1,V);
 }
-EFI_STATUS GuConfigRead(EFI_PCI_IO_PROTOCOL_WIDTH W, UINT32 O, VOID *V) {
+EFI_STATUS GuConfigReadFor(GU_PLATFORM *platform,EFI_PCI_IO_PROTOCOL_WIDTH W,
+                              UINT32 O,VOID *V) {
   EFI_STATUS Status;
-  if(Gu.fault)return EFI_DEVICE_ERROR;
-  Status=RawRead(W,O,V);if(EFI_ERROR(Status))Gu.fault=TRUE;return Status;
+  if(!platform)return EFI_INVALID_PARAMETER;
+  if(platform!=GuPlatformActive){platform->fault=TRUE;return EFI_ACCESS_DENIED;}
+  if(platform->fault)return EFI_DEVICE_ERROR;
+  if(!platform->pci||W>EfiPciIoWidthUint32||O>256-((UINT32)1<<W)) {
+    platform->fault=TRUE;return EFI_INVALID_PARAMETER;
+  }
+  Status=platform->pci->Pci.Read(platform->pci,W,O,1,V);
+  if(EFI_ERROR(Status))platform->fault=TRUE;
+  return Status;
+}
+EFI_STATUS GuConfigRead(EFI_PCI_IO_PROTOCOL_WIDTH W,UINT32 O,VOID *V) {
+  return GuConfigReadFor(&Gu,W,O,V);
 }
 EFI_STATUS GuConfigWrite(EFI_PCI_IO_PROTOCOL_WIDTH W, UINT32 O, VOID *V) {
   EFI_STATUS Status;

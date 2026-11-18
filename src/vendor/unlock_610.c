@@ -1843,7 +1843,7 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
         !owner->prom_verified || !owner->profile_verified || !owner->owned || !owner->armed ||
         !owner->display_ok || !owner->display_check || !owner->display_check() ||
         GuCompatOwner(pdev)!=owner || owner->fault ||
-        owner->started || owner->allocations || owner->retained || !GuAd104ColdEntry() ||
+        owner->started || owner->allocations || owner->retained || !GuAd104ColdEntryFor(owner) ||
         GuCompatOwner(pdev)!=owner) return -ENODEV;
     owner->transaction_attempted=TRUE;
 	work = GuCompatAlloc(pdev, 1, sizeof(*work));
