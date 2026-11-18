@@ -282,7 +282,8 @@ static EFI_GUID GopGuid,PathGuid;
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_PATH paths[40];
 static int protocols[40],allocs,frees,fail_alloc,fail_read,alias,drift,fail_free;
-static int fail_locate,uncertain_frees,reads;
+static int fail_locate,uncertain_frees,reads,allocation_alias,enumeration_alias;
+static EFI_HANDLE *located;
 static EFI_HANDLE uncertain_handles[40];
 static GU_TOPO_GOP uncertain_records[40];
 static UINTN total=40;
@@ -290,6 +291,8 @@ static EFI_STATUS Allocate(int kind,UINTN size,VOID **out) {
   (void)kind;
   if(fail_alloc==2) {*out=uncertain_records;return 1;}
   if(fail_alloc)return 1;
+  if(allocation_alias==1){*out=located;return EFI_SUCCESS;}
+  if(allocation_alias==2){*out=Snapshot.gop;return EFI_SUCCESS;}
   *out=calloc(1,size);
   if(!*out)return 1;
   allocs++;return EFI_SUCCESS;
@@ -303,12 +306,14 @@ static EFI_STATUS Locate(int kind,EFI_GUID *guid,VOID *key,UINTN *n,EFI_HANDLE *
   (void)kind;(void)guid;(void)key;
   *n=total;
   if(fail_locate) {*out=uncertain_handles;return 1;}
+  if(enumeration_alias){*out=(EFI_HANDLE *)(void *)Snapshot.gop;return EFI_SUCCESS;}
   if(!total)return EFI_SUCCESS;
   if(total>40)return 1;
   *out=calloc(total,sizeof(**out));
   if(!*out)return 1;
   allocs++;
   for(size_t i=0;i<total;i++)(*out)[i]=&paths[i];
+  located=*out;
   return EFI_SUCCESS;
 }
 static EFI_STATUS Handle(EFI_HANDLE handle,EFI_GUID *guid,VOID **out) {
@@ -338,6 +343,18 @@ int main(void) {
   CHECK(Snapshot.gop_count==40 && Snapshot.gop_capacity==40 && allocs-frees==1);
   CHECK(!CaptureGop(&bs) && allocs-frees==1);
   CHECK(RevalidateGop(&bs) && allocs-frees==1);
+  GU_TOPO_GOP original[40];
+  memcpy(original,Snapshot.gop,sizeof(original));
+  reads=0;enumeration_alias=1;
+  CHECK(!RevalidateGop(&bs)&&!reads&&allocs-frees==1);
+  CHECK(!memcmp(original,Snapshot.gop,sizeof(original)));
+  enumeration_alias=0;allocation_alias=2;
+  CHECK(!RevalidateGop(&bs)&&!reads&&allocs-frees==1);
+  CHECK(!memcmp(original,Snapshot.gop,sizeof(original)));
+  allocation_alias=1;
+  CHECK(!RevalidateGop(&bs)&&!reads&&allocs-frees==1);
+  CHECK(!memcmp(original,Snapshot.gop,sizeof(original)));
+  allocation_alias=0;
   paths[39].bytes[5]=1;
   CHECK(!RevalidateGop(&bs) && allocs-frees==1);
   paths[39].bytes[5]=39;
@@ -345,7 +362,9 @@ int main(void) {
   CHECK(!RevalidateGop(&bs) && allocs-frees==1);
   drift=0;free(Snapshot.gop);frees++;
   memset(&Snapshot,0,sizeof(Snapshot));
-  fail_alloc=1;
+  allocation_alias=1;reads=0;
+  CHECK(!CaptureGop(&bs)&&!Snapshot.gop&&allocs==frees&&!reads);
+  allocation_alias=0;fail_alloc=1;
   CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
   fail_alloc=2;
   memset(uncertain_records,0xa5,sizeof(uncertain_records));

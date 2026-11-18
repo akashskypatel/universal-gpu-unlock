@@ -1837,6 +1837,10 @@ static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
     }
     okay=0;
   } else if(count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
+  if(handles && (VOID *)handles==(VOID *)Snapshot.gop) {
+    Say("GOP_HANDLES_ALIAS ADDRESS=%p\r\n",(VOID *)handles);
+    handles=NULL;okay=0;
+  }
   if(okay && count) {
     status=bs->AllocatePool(EfiLoaderData,count*sizeof(*records),(VOID **)&records);
     if(status!=EFI_SUCCESS) {
@@ -1847,6 +1851,10 @@ static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
       }
       okay=0;
     } else if(!records)okay=0;
+    if(records && ((VOID *)records==(VOID *)handles || records==Snapshot.gop)) {
+      Say("GOP_STORAGE_ALIAS ADDRESS=%p\r\n",(VOID *)records);
+      records=NULL;okay=0;
+    }
   }
   if(okay)for(i=0;i<count;i++) {
     EFI_DEVICE_PATH_PROTOCOL *path=NULL;
