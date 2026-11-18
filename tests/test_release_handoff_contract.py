@@ -189,6 +189,9 @@ class HandoverOrderTests(unittest.TestCase):
         start = SOURCE.index("#define MAX_SURVIVOR_PATH_BYTES")
         end = SOURCE.index("#define GRAPH_EDGE_LIMIT", start)
         records = SOURCE[start:end]
+        pool_start=SOURCE.index("static EFI_STATUS ObservationOutput(")
+        pool_end=SOURCE.index("/* Validate the enclosing owner",pool_start)
+        observation=SOURCE[pool_start:pool_end]
         owner = ("static BOOLEAN SurvivorStorageOwned(const GU_PLATFORM *platform,const PLAN *plan) {" +
                 function_body("SurvivorStorageOwned") + "}\n")
         body = ("static EFI_STATUS GopOnTarget(EFI_HANDLE gop,BOOLEAN *target) {" +
@@ -248,9 +251,11 @@ typedef struct {
   BOOLEAN headless,survivor_baseline_valid;
   void *pool_record;size_t pool_bytes;
   EFI_STATUS cpu_pool_failure_status;
+  void *cpu_pool_failure_address;
+  int fault,retained;
 } PLAN;
 typedef PLAN GU_PLATFORM;
-static PLAN first_plan,second_plan,failed_plan,duplicate_plan;
+static PLAN first_plan,second_plan,failed_plan,duplicate_plan,output_failed,release_failed;
 static PLAN *active=&first_plan;
 #define Plan (*active)
 #define Gu (*active)
@@ -265,7 +270,8 @@ typedef struct {
 static NODE nodes[N];
 static EFI_HANDLE order[N];
 static UINTN visible=N,allocations;
-static int fail_alloc;
+static int fail_alloc,fail_locate,fail_release,free_calls;
+static void *last_returned;
 static EFI_GUID GopGuid=1,PathGuid=2;
 static EFI_STATUS Locate(int kind,EFI_GUID *guid,VOID *key,UINTN *count,EFI_HANDLE **out) {
   (void)key;
@@ -273,8 +279,8 @@ static EFI_STATUS Locate(int kind,EFI_GUID *guid,VOID *key,UINTN *count,EFI_HAND
   *count=visible;
   *out=malloc(visible*sizeof(**out));
   if(!*out)return EFI_OUT_OF_RESOURCES;
-  memcpy(*out,order,visible*sizeof(**out));
-  return EFI_SUCCESS;
+  memcpy(*out,order,visible*sizeof(**out));last_returned=*out;
+  return fail_locate?EFI_NOT_FOUND:EFI_SUCCESS;
 }
 static EFI_STATUS Allocate(int kind,UINTN size,VOID **out) {
   if(kind!=EfiLoaderData||fail_alloc)return EFI_OUT_OF_RESOURCES;
@@ -283,7 +289,15 @@ static EFI_STATUS Allocate(int kind,UINTN size,VOID **out) {
   allocations++;
   return EFI_SUCCESS;
 }
-static EFI_STATUS Free(VOID *p) {free(p);return EFI_SUCCESS;}
+static EFI_STATUS Free(VOID *p) {
+  free_calls++;free(p);return fail_release?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static void GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
+  if(!Gu.cpu_pool_failure_status){
+    Gu.cpu_pool_failure_status=status;Gu.cpu_pool_failure_address=address;
+  }
+  Gu.fault=Gu.retained=1;
+}
 static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *guid,VOID **out) {
   NODE *node=h;
   if(!node)return EFI_NOT_FOUND;
@@ -300,8 +314,8 @@ static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *address,size_t bytes){
   return p&&address&&p->pool_record==address&&p->pool_bytes==bytes&&!p->cpu_pool_failure_status;
 }
 """ + owner + r"""
-static BOOLEAN ReleaseOwnerMatches(void){return SurvivorStorageOwned(&Gu,&Plan);}
-""" + body + r"""
+static BOOLEAN ReleaseOwnerMatches(void){return !Gu.fault&&SurvivorStorageOwned(&Gu,&Plan);}
+""" + observation + body + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(void){
   EFI_BOOT_SERVICES bs={Locate,Allocate,Free};
@@ -370,8 +384,25 @@ int main(void){
   nodes[1].interface=&nodes[20].gop;
   CHECK(Gops(TRUE)==EFI_COMPROMISED_DATA && !Plan.survivor_baseline_valid);
   CHECK(Gops(FALSE)==EFI_NOT_READY);
+  /* An error with a nonnull output is not an owned enumeration. */
+  active=&output_failed;Plan.table=&table;Plan.pci=&nodes[0];
+  int prior=free_calls;fail_locate=1;
+  CHECK(Gops(TRUE)==EFI_DEVICE_ERROR&&free_calls==prior);
+  CHECK(Gu.retained&&Gu.fault&&Gu.cpu_pool_failure_status==EFI_NOT_FOUND);
+  CHECK(Gu.cpu_pool_failure_address==last_returned&&!Plan.survivors);
+  CHECK(Gops(TRUE)==EFI_NOT_READY&&free_calls==prior);
+  free(last_returned); /* Fixture teardown only. */
+  fail_locate=0;nodes[1].interface=&nodes[1].gop;
+  active=&release_failed;Plan.table=&table;Plan.pci=&nodes[0];
+  fail_release=1;prior=free_calls;
+  CHECK(Gops(TRUE)==EFI_DEVICE_ERROR&&free_calls==prior+1);
+  CHECK(Gu.retained&&Gu.fault&&Gu.cpu_pool_failure_status==EFI_DEVICE_ERROR);
+  CHECK(Gu.cpu_pool_failure_address==last_returned&&!Plan.survivor_baseline_valid);
+  CHECK(Gops(TRUE)==EFI_NOT_READY&&free_calls==prior+1);
+  CHECK(!first_plan.fault&&!second_plan.fault);
+  fail_release=0;
   free(first_plan.survivors);free(second_plan.survivors);
-  free(duplicate_plan.survivors);
+  free(duplicate_plan.survivors);free(release_failed.survivors);
   return 0;
 }
 """

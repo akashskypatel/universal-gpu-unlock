@@ -328,7 +328,7 @@ BOOLEAN GuCpuPoolCompatEmpty(const GU_PLATFORM *platform) {
     if(entry->owner!=platform||entry->bs!=platform->bs||!entry->bytes||entry->scope)return FALSE;
   return TRUE;
 }
-static VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
+VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
   if(Gu.cpu_pool_failure_status==EFI_SUCCESS) {
     Gu.cpu_pool_failure_status=status;
     Gu.cpu_pool_failure_address=address;

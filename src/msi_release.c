@@ -149,6 +149,26 @@ static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *g,VOID **p) {
   *p=NULL;EFI_STATUS s=Plan.table->BootServices->HandleProtocol(h,g,p);
   return s==EFI_SUCCESS&&!*p?EFI_COMPROMISED_DATA:s;
 }
+/* A service error with a nonnull output does not prove a valid allocation.
+ * Do not inspect or release that output. Independently known outer buffers
+ * still need their one release attempt even after a nested failure. */
+static EFI_STATUS ObservationOutput(EFI_STATUS status,VOID **out) {
+  if(status!=EFI_SUCCESS && *out) {
+    GuRecordCpuPoolFailure(status,*out);
+    *out=NULL;
+    return EFI_DEVICE_ERROR;
+  }
+  return status;
+}
+static EFI_STATUS ReleaseObservation(EFI_BOOT_SERVICES *bs,VOID *address,EFI_STATUS prior) {
+  if(!address)return prior;
+  EFI_STATUS status=bs&&bs->FreePool?bs->FreePool(address):EFI_UNSUPPORTED;
+  if(status!=EFI_SUCCESS) {
+    GuRecordCpuPoolFailure(status,address);
+    return EFI_DEVICE_ERROR;
+  }
+  return prior;
+}
 /* Validate the enclosing owner before accessing either graph. */
 static BOOLEAN SelectedGraph(GRAPH *g) {
   return ReleaseOwnerMatches()&&(g==&Original||g==&Current);
@@ -182,15 +202,18 @@ static EFI_STATUS Snapshot(GRAPH *g) {
   if(!SelectedGraph(g))return EFI_ACCESS_DENIED;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_HANDLE *handles=NULL;UINTN count=0;g->count=0;
   EFI_STATUS s=b->LocateHandleBuffer(AllHandles,NULL,NULL,&count,&handles);
+  s=ObservationOutput(s,(VOID **)&handles);
   if(s==EFI_SUCCESS&&(!handles||!count||count>4096))s=EFI_BAD_BUFFER_SIZE;
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
     EFI_GUID **protocols=NULL;UINTN pc=0;
     s=b->ProtocolsPerHandle(handles[i],&protocols,&pc);
+    s=ObservationOutput(s,(VOID **)&protocols);
     if(s==EFI_SUCCESS&&(!protocols||!pc||pc>64))s=EFI_BAD_BUFFER_SIZE;
     for(UINTN j=0;s==EFI_SUCCESS&&j<pc;j++) {
       EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;UINTN ec=0;
       if(!protocols[j]){s=EFI_COMPROMISED_DATA;break;}
       s=b->OpenProtocolInformation(handles[i],protocols[j],&entries,&ec);
+      s=ObservationOutput(s,(VOID **)&entries);
       if(s==EFI_SUCCESS&&(ec>128||(ec&&!entries)))s=EFI_BAD_BUFFER_SIZE;
       for(UINTN k=0;s==EFI_SUCCESS&&k<ec;k++) {
         EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&entries[k];
@@ -200,11 +223,11 @@ static EFI_STATUS Snapshot(GRAPH *g) {
         if(!e->AgentHandle||(!e->ControllerHandle&&!own)||!e->OpenCount){s=EFI_COMPROMISED_DATA;break;}
         s=GraphAppend(b,g,(EDGE){handles[i],e->AgentHandle,e->ControllerHandle,*protocols[j],e->Attributes,e->OpenCount,FALSE,FALSE});
       }
-      if(entries&&b->FreePool(entries)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+      s=ReleaseObservation(b,entries,s);
     }
-    if(protocols&&b->FreePool(protocols)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+    s=ReleaseObservation(b,protocols,s);
   }
-  if(handles&&b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  s=ReleaseObservation(b,handles,s);
   /* An incomplete capture must never appear to be a complete graph. */
   if(s!=EFI_SUCCESS)g->count=0;
   return s;
@@ -472,6 +495,7 @@ static EFI_STATUS Gops(BOOLEAN first) {
                 !Plan.survivor_capacity||Plan.survivor_capacity>4096u))
     return EFI_NOT_READY;
   EFI_STATUS s=b->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
+  s=ObservationOutput(s,(VOID **)&handles);
   if(s==EFI_NOT_FOUND && !handles && !first && Plan.stage>=3 && !Plan.survivor_count)
     return EFI_SUCCESS;
   if(s==EFI_SUCCESS&&(!count||!handles||count>4096u))s=EFI_BAD_BUFFER_SIZE;
@@ -558,7 +582,7 @@ static EFI_STATUS Gops(BOOLEAN first) {
       }
     }
   }
-  if(handles && b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  s=ReleaseObservation(b,handles,s);
   if(s!=EFI_SUCCESS)return s;
   if(first){
     Plan.headless=target_count==0;
@@ -634,9 +658,11 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
      !b->LocateHandleBuffer||!b->AllocatePool||!b->FreePool)
     return EFI_NOT_READY;
   s=b->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
+  s=ObservationOutput(s,(VOID **)&handles);
   if(s==EFI_SUCCESS&&(!handles||!count||count>GU_DISPLAY_OWNER_MAX))s=EFI_BAD_BUFFER_SIZE;
   if(s==EFI_SUCCESS) {
     s=b->AllocatePool(EfiLoaderData,count*sizeof(*owners),(VOID **)&owners);
+    s=ObservationOutput(s,(VOID **)&owners);
     if(s==EFI_SUCCESS&&!owners)s=EFI_OUT_OF_RESOURCES;
   }
   for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
@@ -677,8 +703,8 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   }
   if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ConOut",owners,display_count);
   if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ErrOut",owners,display_count);
-  if(owners&&b->FreePool(owners)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
-  if(handles&&b->FreePool(handles)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  s=ReleaseObservation(b,owners,s);
+  s=ReleaseObservation(b,handles,s);
   return s;
 }
 /* Require graph evidence that the currently bound text console actually
@@ -743,11 +769,11 @@ static EFI_STATUS Bar(VOID) {
   EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *d=NULL;UINT64 support=0;
   if(!Gu.pci->GetBarAttributes)return EFI_UNSUPPORTED;
   EFI_STATUS s=Gu.pci->GetBarAttributes(Gu.pci,0,&support,(VOID **)&d);
+  s=ObservationOutput(s,(VOID **)&d);
   if(s==EFI_SUCCESS&&(!d||d->Desc!=0x8a||d->Len!=43||d->ResType||
      d->AddrRangeMin!=Gu.bar_base||d->AddrRangeMax!=(Gu.bar_base+0xffffff)||
      d->AddrTranslationOffset||d->AddrLen!=0x1000000))s=EFI_UNSUPPORTED;
-  if(d&&Plan.table->BootServices->FreePool(d)!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
-  return s;
+  return ReleaseObservation(Plan.table->BootServices,d,s);
 }
 /* The immutable original graph is the child inventory. An idle output
  * must belong to this controller and have exactly one relationship.
