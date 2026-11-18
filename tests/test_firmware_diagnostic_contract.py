@@ -705,6 +705,120 @@ int main(void){
                     run=subprocess.run([str(binary)],capture_output=True,text=True)
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
+
+    def test_isolated_capture_file_ownership(self):
+        source=(P/"gpu_prom_capture_efi.c").read_text(encoding="utf-8")
+        actual="EFI_STATUS GuPromSaveNew("+source.split("EFI_STATUS GuPromSaveNew(",1)[1]
+        program=r"""
+#include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <wchar.h>
+typedef uint8_t UINT8;
+typedef uint32_t UINT32;
+typedef uint64_t EFI_STATUS;
+typedef size_t UINTN;
+typedef wchar_t CHAR16;
+typedef void VOID;
+typedef struct {UINT32 segment,bus,device,function;} GU_GPU_RECORD;
+#define GU_PROM_CAPTURE_BYTES 16U
+#define EFI_SUCCESS 0ULL
+#define EFIERR(n) ((1ULL<<63)|(n))
+#define EFI_ERROR(s) (((s)>>63)!=0)
+#define EFI_INVALID_PARAMETER EFIERR(2)
+#define EFI_UNSUPPORTED EFIERR(3)
+#define EFI_DEVICE_ERROR EFIERR(7)
+#define EFI_NOT_FOUND EFIERR(14)
+#define EFI_ALREADY_STARTED EFIERR(20)
+#define EFI_END_OF_FILE EFIERR(31)
+#define EFI_COMPROMISED_DATA EFIERR(33)
+#define EFI_FILE_MODE_READ 1ULL
+#define EFI_FILE_MODE_WRITE 2ULL
+#define EFI_FILE_MODE_CREATE 4ULL
+typedef struct file EFI_FILE_PROTOCOL;
+struct file {
+ EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,uint64_t,uint64_t);
+ EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *);
+ EFI_STATUS (*Write)(EFI_FILE_PROTOCOL *,UINTN *,VOID *);
+ EFI_STATUS (*Flush)(EFI_FILE_PROTOCOL *);
+ EFI_STATUS (*Delete)(EFI_FILE_PROTOCOL *);
+};
+static EFI_FILE_PROTOCOL root,file,prior,foreign;
+static int mode,creates,writes,flushes,deletes,prior_closes,file_closes,invalid;
+static EFI_STATUS Close(EFI_FILE_PROTOCOL *p){
+ if(p==&prior){prior_closes++;return mode==5?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+ if(p==&file){file_closes++;return mode==11?1:EFI_SUCCESS;}
+ invalid++;return EFI_DEVICE_ERROR;
+}
+static EFI_STATUS Open(EFI_FILE_PROTOCOL *p,EFI_FILE_PROTOCOL **out,CHAR16 *name,uint64_t flags,uint64_t attr){
+ (void)name;(void)attr;
+ if(p!=&root){invalid++;return EFI_DEVICE_ERROR;}
+ if(flags&EFI_FILE_MODE_CREATE){
+  creates++;
+  if(mode==6){*out=&foreign;return EFI_DEVICE_ERROR;}
+  if(mode==7)return 1;
+  if(mode==8){*out=&root;return EFI_SUCCESS;}
+  if(mode==13)return EFI_SUCCESS;
+  *out=&file;return EFI_SUCCESS;
+ }
+ if(mode==1||mode==5){*out=&prior;return EFI_SUCCESS;}
+ if(mode==2){*out=&foreign;return EFI_NOT_FOUND;}
+ if(mode==3)return 1;
+ if(mode==4){*out=&root;return EFI_SUCCESS;}
+ if(mode==12)return EFI_SUCCESS;
+ return EFI_NOT_FOUND;
+}
+static EFI_STATUS Write(EFI_FILE_PROTOCOL *p,UINTN *n,VOID *data){
+ (void)n;(void)data;
+ if(p!=&file)invalid++;
+ writes++;
+ if(mode==9||mode==10)return EFI_DEVICE_ERROR;
+ return mode==14?1:EFI_SUCCESS;
+}
+static EFI_STATUS Flush(EFI_FILE_PROTOCOL *p){
+ if(p!=&file)invalid++;
+ flushes++;return mode==15?1:EFI_SUCCESS;
+}
+static EFI_STATUS Delete(EFI_FILE_PROTOCOL *p){
+ if(p!=&file)invalid++;
+ deletes++;return mode==10?1:EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode %d: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void){
+ GU_GPU_RECORD target={0};
+ UINT8 data[GU_PROM_CAPTURE_BYTES]={0};
+ root=(EFI_FILE_PROTOCOL){Open,Close,NULL,NULL,NULL};
+ file=(EFI_FILE_PROTOCOL){NULL,Close,Write,Flush,Delete};
+ prior=(EFI_FILE_PROTOCOL){NULL,Close,NULL,NULL,NULL};
+ foreign=prior;
+ for(mode=0;mode<=15;mode++){
+  creates=writes=flushes=deletes=prior_closes=file_closes=invalid=0;
+  EFI_STATUS s=GuPromSaveNew(&root,&target,data,sizeof(data));
+  CHECK(mode==0?s==EFI_SUCCESS:EFI_ERROR(s));
+  if(mode==1)CHECK(s==EFI_ALREADY_STARTED);
+  CHECK(!invalid);
+  CHECK(prior_closes==(mode==1||mode==5));
+  CHECK(creates==(mode==0||(mode>=6&&mode<=11)||mode>=13));
+  CHECK(writes==(mode==0||mode==9||mode==10||mode==11||mode==14||mode==15));
+  CHECK(flushes==(mode==0||mode==11||mode==15));
+  CHECK(deletes==(mode==9||mode==10||mode==14||mode==15));
+  CHECK(file_closes==(mode==0||mode==11));
+ }
+ return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"capture_file.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(c),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_diagnostic_log_file_ownership(self):
         source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
         actual=source.split("static EFI_STATUS LogOpenResult(",1)[1].split("\n#endif",1)[0]

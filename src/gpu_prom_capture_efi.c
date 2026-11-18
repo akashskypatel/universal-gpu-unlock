@@ -110,28 +110,34 @@ EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root, const GU_GPU_RECORD *target,
   }
   name[17]=(CHAR16)(L'0'+target->function);
   status=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
-  if(status!=EFI_NOT_FOUND || prior) {
-    if(prior && prior->Close)(VOID)prior->Close(prior);
-    return status==EFI_SUCCESS?EFI_ALREADY_STARTED:
-           status==EFI_NOT_FOUND?EFI_COMPROMISED_DATA:status;
+  if(status==EFI_SUCCESS) {
+    if(!prior || prior==root)return EFI_COMPROMISED_DATA;
+    if(!prior->Close)return EFI_UNSUPPORTED;
+    closed=prior->Close(prior);
+    return closed==EFI_SUCCESS?EFI_ALREADY_STARTED:EFI_DEVICE_ERROR;
   }
+  /* A failed open does not establish ownership of its output. */
+  if(prior)return EFI_DEVICE_ERROR;
+  if(status!=EFI_NOT_FOUND)return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
   status=root->Open(root,&file,name,
                     EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
-  if(EFI_ERROR(status) || !file)return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
+  if(status!=EFI_SUCCESS)return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
+  if(!file || file==root)return EFI_COMPROMISED_DATA;
   if(!file->Write || !file->Close)status=EFI_UNSUPPORTED;
   else {
     written=output_size;
     status=file->Write(file,&written,(VOID *)output);
-    if(!EFI_ERROR(status) && written!=output_size)status=EFI_END_OF_FILE;
-    if(!EFI_ERROR(status) &&
-       (!file->Flush || EFI_ERROR(file->Flush(file))))status=EFI_DEVICE_ERROR;
+    if(status==EFI_SUCCESS && written!=output_size)status=EFI_END_OF_FILE;
+    if(status==EFI_SUCCESS &&
+       (!file->Flush || file->Flush(file)!=EFI_SUCCESS))status=EFI_DEVICE_ERROR;
+    if(status!=EFI_SUCCESS && !EFI_ERROR(status))status=EFI_DEVICE_ERROR;
   }
   if(EFI_ERROR(status) && file->Delete) {
-    (VOID)file->Delete(file); /* Best effort; deleted handle is invalid. */
-    return status;
+    closed=file->Delete(file); /* Existing best-effort removal consumes the handle. */
+    return closed==EFI_SUCCESS?status:EFI_DEVICE_ERROR;
   }
   if(!file->Close)return EFI_UNSUPPORTED;
   closed=file->Close(file);
-  if(!EFI_ERROR(status))status=closed;
+  if(closed!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
   return status;
 }
