@@ -275,15 +275,61 @@ BOOLEAN GuSafeToReturn(VOID) {
   return !Gu.retained && !Gu.allocations && !Gu.dma_count && !Gu.master_attributes_pending &&
     (!Gu.started || (Gu.quiesced && !Gu.fault));
 }
-VOID *GuAlloc(size_t N) {
-  VOID *Memory=NULL;
-  if(!N || !Gu.bs || !Gu.bs->AllocatePool ||
-     EFI_ERROR(Gu.bs->AllocatePool(EfiLoaderData,N,&Memory)) || !Memory)return NULL;
-  memset(Memory,0,N);return Memory;
+/* CPU pool records belong to a single platform. The payload follows a
+ * naturally aligned header (four machine words on the supported x64 ABI).
+ * Resolve a release through the owner's list, not an untrusted payload. */
+typedef struct GU_CPU_POOL {
+  struct GU_CPU_POOL *next;
+  GU_PLATFORM *owner;
+  EFI_BOOT_SERVICES *bs;
+  size_t bytes;
+} GU_CPU_POOL;
+
+static VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
+  if(Gu.cpu_pool_failure_status==EFI_SUCCESS) {
+    Gu.cpu_pool_failure_status=status;
+    Gu.cpu_pool_failure_address=address;
+  }
+  Gu.fault=TRUE;
+  Gu.retained=TRUE;
 }
+
+VOID *GuAlloc(size_t N) {
+  GU_CPU_POOL *entry=NULL;
+  if(!N||N>(size_t)-1-sizeof(*entry)||Gu.retained||
+     Gu.cpu_pool_failure_status!=EFI_SUCCESS||!Gu.bs||
+     !Gu.bs->AllocatePool||!Gu.bs->FreePool)return NULL;
+  EFI_STATUS status=Gu.bs->AllocatePool(EfiLoaderData,sizeof(*entry)+N,(VOID **)&entry);
+  if(status!=EFI_SUCCESS) {
+    if(entry)GuRecordCpuPoolFailure(status,entry);
+    return NULL;
+  }
+  if(!entry)return NULL;
+  entry->next=Gu.cpu_pool;
+  entry->owner=&Gu;
+  entry->bs=Gu.bs;
+  entry->bytes=N;
+  Gu.cpu_pool=entry;
+  VOID *memory=entry+1;
+  memset(memory,0,N);
+  return memory;
+}
+
 VOID GuFree(VOID *Memory) {
-  /* Pool scratch is CPU-only; DMA uses GuDmaFree's separate lifetime guard. */
-  if(Memory && !Gu.retained)Gu.bs->FreePool(Memory);
+  if(!Memory||Gu.retained||Gu.cpu_pool_failure_status!=EFI_SUCCESS)return;
+  GU_CPU_POOL **link=&Gu.cpu_pool;
+  while(*link&&(VOID *)(*link+1)!=Memory)link=&(*link)->next;
+  GU_CPU_POOL *entry=*link;
+  if(!entry||entry->owner!=&Gu||entry->bs!=Gu.bs||
+     !entry->bs||!entry->bs->FreePool) {
+    GuRecordCpuPoolFailure(EFI_ACCESS_DENIED,Memory);
+    return;
+  }
+  /* Unlink before attempting release. On error retain its address only;
+   * the firmware may already have consumed the original pool memory. */
+  *link=entry->next;
+  EFI_STATUS status=entry->bs->FreePool(entry);
+  if(status!=EFI_SUCCESS)GuRecordCpuPoolFailure(status,entry);
 }
 VOID GuStarted(VOID) {Gu.started=TRUE;Gu.quiesced=FALSE;}
 VOID GuQuiesced(VOID) {if(!Gu.fault)Gu.quiesced=TRUE;}

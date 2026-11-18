@@ -874,9 +874,9 @@ int main(int argc,char **argv) {
                                      result.stdout + result.stderr)
 
     def test_scratch_pool_rejects_null_service_and_null_success(self):
-        """Run production GuAlloc with invalid and valid firmware callbacks."""
-        start = SOURCE.index("VOID *GuAlloc(size_t N) {")
-        end = SOURCE.index("\nVOID GuFree(", start)
+        """Compile the real CPU pool allocation and release paths."""
+        start = SOURCE.index("typedef struct GU_CPU_POOL {")
+        end = SOURCE.index("\nVOID GuStarted(", start)
         actual = SOURCE[start:end]
         host = r"""
 #include <stdint.h>
@@ -888,38 +888,110 @@ typedef void VOID;
 typedef int EFI_STATUS;
 #define EFI_SUCCESS 0
 #define EFI_OUT_OF_RESOURCES 2
-#define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
+#define EFI_ACCESS_DENIED 3
+#define EFI_DEVICE_ERROR 4
 #define EfiLoaderData 1
+#define TRUE 1
 typedef struct {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
 } EFI_BOOT_SERVICES;
-static struct {EFI_BOOT_SERVICES *bs;} Gu;
-static int mode,calls;
+typedef struct {
+  EFI_BOOT_SERVICES *bs;
+  struct GU_CPU_POOL *cpu_pool;
+  VOID *cpu_pool_failure_address;
+  EFI_STATUS cpu_pool_failure_status;
+  int fault,retained;
+} GU_PLATFORM;
+static GU_PLATFORM platforms[2],*active=&platforms[0];
+#define Gu (*active)
+static int mode,calls,frees,free_error;
+static void *allocated,*released;
 static EFI_STATUS Allocate(int kind,size_t n,VOID **out) {
   if(kind!=EfiLoaderData || !n)return EFI_OUT_OF_RESOURCES;
   calls++;
   if(mode==3)return EFI_OUT_OF_RESOURCES;
   if(mode==2)return EFI_SUCCESS; /* Misbehaving successful null output. */
-  *out=malloc(n);
+  *out=allocated=malloc(n);
+  if(mode==8)return EFI_OUT_OF_RESOURCES; /* Error with a nonnull output. */
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
+static EFI_STATUS Free(VOID *p){
+  frees++;released=p;
+  if(free_error)return EFI_DEVICE_ERROR;
+  free(p);return EFI_SUCCESS;
 }
 """ + actual + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d mode %d: %s\n",__LINE__,mode,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
-  EFI_BOOT_SERVICES bs={Allocate};
+  EFI_BOOT_SERVICES bs={Allocate,Free};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0 || mode>4)return 3;
-  if(mode!=0)Gu.bs=&bs;
+  if(mode<0||mode>10)return 3;
+  if(mode)Gu.bs=&bs;
   if(mode==1)bs.AllocatePool=NULL;
-  VOID *ptr=GuAlloc(32);
-  if(mode<4) {
-    CHECK(ptr==NULL);
+  if(mode==9)bs.FreePool=NULL;
+  if(mode==0||mode==1||mode==2||mode==3||mode==9){
+    CHECK(GuAlloc(32)==NULL);
     CHECK(calls==(mode==2||mode==3));
-  } else {
-    CHECK(ptr!=NULL && calls==1);
-    const unsigned char *bytes=(const unsigned char *)ptr;
-    for(size_t i=0;i<32;i++)CHECK(bytes[i]==0);
-    free(ptr);
+    CHECK(!Gu.cpu_pool&&!Gu.fault&&!Gu.retained);
+  }else if(mode==4){
+    VOID *ptr=GuAlloc(32);
+    CHECK(ptr&&calls==1&&Gu.cpu_pool==allocated&&Gu.cpu_pool->owner==&Gu);
+    CHECK(Gu.cpu_pool->bytes==32&&ptr==(VOID *)(Gu.cpu_pool+1));
+    for(size_t i=0;i<32;i++)CHECK(((unsigned char *)ptr)[i]==0);
+    VOID *another=GuAlloc(7);
+    CHECK(another&&Gu.cpu_pool->next==(GU_CPU_POOL *)((unsigned char *)ptr-sizeof(GU_CPU_POOL)));
+    void *head=Gu.cpu_pool;
+    void *first=Gu.cpu_pool->next;
+    GuFree(ptr);CHECK(frees==1&&released==first&&Gu.cpu_pool==head&&!Gu.cpu_pool->next);
+    GuFree(another);CHECK(frees==2&&released==head&&!Gu.cpu_pool&&!Gu.fault);
+    GuFree(NULL);CHECK(frees==2);
+  }else if(mode==5){
+    VOID *a=GuAlloc(32);CHECK(a);
+    GU_CPU_POOL *a_base=Gu.cpu_pool;
+    active=&platforms[1];Gu.bs=&bs;
+    VOID *b=GuAlloc(16);CHECK(b);
+    GU_CPU_POOL *b_base=Gu.cpu_pool;
+    GuFree(a);
+    CHECK(!frees&&Gu.fault&&Gu.retained&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED);
+    CHECK(Gu.cpu_pool==b_base&&Gu.cpu_pool_failure_address==a);
+    CHECK(platforms[0].cpu_pool==a_base&&!platforms[0].fault&&!platforms[0].retained);
+    GuFree(b);CHECK(!frees);
+    active=&platforms[0];GuFree(a);
+    CHECK(frees==1&&released==a_base&&!Gu.cpu_pool&&!Gu.fault);
+    free(b_base); /* Host fixture teardown, not a production release retry. */
+  }else if(mode==6){
+    VOID *a=GuAlloc(32);CHECK(a);
+    GU_CPU_POOL *base=Gu.cpu_pool;
+    VOID *b=GuAlloc(16);CHECK(b);
+    GU_CPU_POOL *remaining=Gu.cpu_pool;
+    free_error=1;GuFree(a);
+    CHECK(frees==1&&released==base&&Gu.cpu_pool_failure_address==base);
+    CHECK(Gu.cpu_pool==remaining&&!Gu.cpu_pool->next);
+    CHECK(Gu.cpu_pool_failure_status==EFI_DEVICE_ERROR&&Gu.fault&&Gu.retained);
+    free_error=0;GuFree(a);GuFree(b);
+    CHECK(frees==1&&GuAlloc(4)==NULL&&calls==2);
+    free(base);free(remaining); /* End of simulated boot only. */
+  }else if(mode==7){
+    EFI_BOOT_SERVICES foreign={Allocate,Free};
+    VOID *p=GuAlloc(16);CHECK(p);
+    GU_CPU_POOL *base=Gu.cpu_pool;
+    Gu.bs=&foreign;GuFree(p);
+    CHECK(!frees&&Gu.cpu_pool==base&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED);
+    CHECK(Gu.cpu_pool_failure_address==p&&Gu.retained&&Gu.fault);
+    free(base);
+  }else if(mode==8){
+    CHECK(GuAlloc(32)==NULL&&allocated&&calls==1);
+    CHECK(!Gu.cpu_pool&&Gu.cpu_pool_failure_address==allocated&&Gu.retained&&Gu.fault);
+    CHECK(Gu.cpu_pool_failure_status==EFI_OUT_OF_RESOURCES&&!frees);
+    CHECK(GuAlloc(8)==NULL&&calls==1);
+    free(allocated);
+  }else{
+    CHECK(GuAlloc((size_t)-1)==NULL&&!calls);
+    VOID *p=GuAlloc(1);CHECK(p);
+    void *base=Gu.cpu_pool;
+    GuFree(p);CHECK(frees==1&&released==base);
+    GuFree(p);CHECK(frees==1&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED);
   }
   CHECK(GuAlloc(0)==NULL);
   return 0;
@@ -935,7 +1007,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            for mode in range(5):
+            for mode in range(11):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(binary), str(mode)],
                                             capture_output=True, text=True)

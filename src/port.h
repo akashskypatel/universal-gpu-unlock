@@ -125,6 +125,11 @@ typedef struct {
   UINT16 master_last_command;
   UINT32 flrs, mmio_writes, dma_count;
   GU_DMA *allocations;
+  /* CPU-only pool allocations are distinct from device-visible DMA buffers.
+   * Keep their ownership and first uncertain release with this platform. */
+  struct GU_CPU_POOL *cpu_pool;
+  VOID *cpu_pool_failure_address;
+  EFI_STATUS cpu_pool_failure_status;
   /* These resources belong to this platform, not to the active selector. */
   struct GU_MSI_OWNED_STATE *release_state;
   BOOLEAN release_state_reserved, release_owner_invalid;
