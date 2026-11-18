@@ -17,7 +17,8 @@ typedef struct {
  * assets only; it does not establish Windows 617.42 signature acceptance. */
 const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id);
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID);
-EFI_STATUS GuDiagnosticScan(VOID);
+/* Read-only report; reject a null, inactive or unbound owner. */
+EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner);
 BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform);
 /* CPU-only ownership proof; no content validation or hardware dispatch. */
 BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *platform);

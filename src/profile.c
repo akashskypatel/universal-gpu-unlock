@@ -206,9 +206,9 @@ static BOOLEAN DiagnosticOwnerMatches(GU_PLATFORM *owner,EFI_BOOT_SERVICES *bs,
   owner->fault=TRUE;owner->retained=TRUE;
   return FALSE;
 }
-EFI_STATUS GuDiagnosticScan(VOID) {
-  GU_PLATFORM *owner=GuPlatformActive;
-  if(!owner)return EFI_NOT_READY;
+EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
+  if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
+  if(!owner->bs||!owner->pci||!owner->handle)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *bs=owner->bs;
   EFI_PCI_IO_PROTOCOL *pci=owner->pci;
   EFI_HANDLE handle=owner->handle;

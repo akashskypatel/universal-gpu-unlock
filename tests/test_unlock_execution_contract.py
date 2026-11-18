@@ -268,9 +268,9 @@ static EFI_STATUS GuBootLoadAssets(void){
   if(current==failed_at&&scenario==2)Gu.fault=1;
   return EFI_SUCCESS;
 }
-static EFI_STATUS GuDiagnosticScan(void){
+static EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner){
   diagnostics++;
-  if(!Gu.assets||Gu.diagnostic||Gu.completed)violations++;
+  if(owner!=active||!Gu.assets||Gu.diagnostic||Gu.completed)violations++;
   Gu.diagnostic=1;
   if(current==failed_at&&scenario==3)Gu.fault=1;
   return EFI_SUCCESS;

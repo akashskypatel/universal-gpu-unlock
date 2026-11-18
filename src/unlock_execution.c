@@ -123,7 +123,7 @@ EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage) {
   EFI_STATUS s=GuBootLoadAssets();
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
   *stage="read-only-diagnostic";
-  (VOID)GuDiagnosticScan();
+  (VOID)GuDiagnosticScan(owner);
   if(owner!=GuPlatformActive||owner->fault)return EFI_DEVICE_ERROR;
   *stage="read-only-cold-profile";
   s=GuAd104Prepare();

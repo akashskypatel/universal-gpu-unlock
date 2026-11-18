@@ -36,7 +36,7 @@ class AssetContract(unittest.TestCase):
         self.assertNotIn("GuPlatformActive",ownership)
         self.assertNotIn("ada_sizes",load)
     def test_diagnostics_are_read_only(self):
-        x=P.split("EFI_STATUS GuDiagnosticScan(VOID) {",1)[1].split("EFI_STATUS GuAd104Prepare(VOID) {",1)[0]
+        x=P.split("EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {",1)[1].split("EFI_STATUS GuAd104Prepare(VOID) {",1)[0]
         for write in ("GuWrite32(","GuEnableMaster(","GuFlr(","GuMsiRelease(",
                       "GuLatchEntrySelectors(","Gu.profile_verified=TRUE"):
             self.assertNotIn(write,x)
@@ -141,13 +141,22 @@ int main(int argc,char **argv){
   p[0].bs=p[1].bs=&services[0];
   p[0].pci=&interfaces[0];p[1].pci=&interfaces[1];
   p[0].handle=&p[0];p[1].handle=&p[1];p[0].bar_base=0x1000;
-  EFI_STATUS status=GuDiagnosticScan();
+  GU_PLATFORM *requested=&p[0];
+  if(mode==13)requested=NULL;
+  if(mode==14)requested=&p[1];
+  if(mode==15)p[0].bs=NULL;
+  if(mode==16)p[0].pci=NULL;
+  if(mode==17)p[0].handle=NULL;
+  EFI_STATUS status=GuDiagnosticScan(requested);
   CHECK(!wrong&&!p[1].fault&&!p[1].retained&&!p[1].profile_verified&&!p[0].profile_verified);
   if(mode==0){
     CHECK(status==EFI_SUCCESS&&allocs==1&&frees==1&&copies==1&&configs==2&&registers==2);
     CHECK(!p[0].fault&&!p[0].retained);
   }else if(mode==10){
     CHECK(status==EFI_OUT_OF_RESOURCES&&allocs==1&&!frees&&!copies&&!p[0].fault);
+  }else if(mode>=13&&mode<=17){
+    CHECK(status==EFI_NOT_READY&&!configs&&!registers&&!logs&&!allocs&&!copies&&!frees);
+    CHECK(!p[0].fault&&!p[0].retained&&GuPlatformActive==&p[0]&&!buffer);
   }else{
     CHECK(status==EFI_DEVICE_ERROR&&p[0].fault&&p[0].retained);
     if(mode<=3)CHECK(!allocs&&!copies&&!frees);
@@ -168,7 +177,7 @@ int main(int argc,char **argv){
             source.write_text(host,encoding="utf-8")
             result=subprocess.run(["gcc","-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            for mode in range(13):
+            for mode in range(18):
                 with self.subTest(mode=mode):
                     result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True)
                     self.assertEqual(result.returncode,0,result.stderr)
@@ -185,8 +194,8 @@ int main(int argc,char **argv){
     def test_diagnostics_run_before_preparation(self):
         shared=(R/"unlock_execution.c").read_text(encoding="utf-8")
         prep=shared.split("EFI_STATUS GuPrepareBoundGpu(",1)[1].split("EFI_STATUS GuExecutePreparedSequence(",1)[0]
-        self.assertLess(prep.index("GuBootLoadAssets()"),prep.index("GuDiagnosticScan()"))
-        self.assertLess(prep.index("GuDiagnosticScan()"),prep.index("GuAd104Prepare()"))
+        self.assertLess(prep.index("GuBootLoadAssets()"),prep.index("GuDiagnosticScan(owner)"))
+        self.assertLess(prep.index("GuDiagnosticScan(owner)"),prep.index("GuAd104Prepare()"))
         for src in (A,D):
             self.assertLess(src.index("GuPrepareBoundGpu("),src.index("GuExecutePreparedSequence("))
 if __name__=="__main__":unittest.main()
