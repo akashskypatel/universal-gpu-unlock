@@ -175,14 +175,20 @@ static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_REPORT Report;
 static GU_TOPO_GPU_REPORT gpu_reports[GU_GPU_SELECTION_COUNT];
 static int fail_alloc,fail_free,allocs,frees,steps;
+static GU_GPU_RECORD uncertain_inventory;
+static int uncertain_frees;
 static EFI_STATUS Allocate(int type,size_t bytes,VOID **out) {
+  if(fail_alloc==2) {*out=&uncertain_inventory;return 1;}
   if(type!=EfiLoaderData || fail_alloc)return 1;
   *out=calloc(1,bytes);
   if(!*out)return 1;
   allocs++;
   return EFI_SUCCESS;
 }
-static EFI_STATUS Free(VOID *p) {free(p);frees++;return fail_free?1:EFI_SUCCESS;}
+static EFI_STATUS Free(VOID *p) {
+  if(p==&uncertain_inventory) {uncertain_frees++;return 1;}
+  free(p);frees++;return fail_free?1:EFI_SUCCESS;
+}
 static void Say(const char *fmt,...) {
   if(strstr(fmt,"=BEGIN BDF="))steps++;
 }
@@ -204,6 +210,13 @@ int main(void) {
   steps=0;fail_alloc=1;
   CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
   CHECK(!steps && allocs==1 && frees==1);
+  memset(&uncertain_inventory,0xa5,sizeof(uncertain_inventory));
+  GU_GPU_RECORD original_uncertain;
+  memcpy(&original_uncertain,&uncertain_inventory,sizeof(original_uncertain));
+  fail_alloc=2;
+  CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
+  CHECK(!steps && allocs==1 && frees==1 && !uncertain_frees);
+  CHECK(!memcmp(&original_uncertain,&uncertain_inventory,sizeof(original_uncertain)));
   fail_alloc=0;fail_free=1;
   CHECK(!ReportPassiveSelections(&bs,1,GU_TOPO_COMPLETE));
   CHECK(!steps && allocs==2 && frees==2);
@@ -269,21 +282,27 @@ static EFI_GUID GopGuid,PathGuid;
 static GU_TOPO_CAPTURE Snapshot;
 static GU_TOPO_PATH paths[40];
 static int protocols[40],allocs,frees,fail_alloc,fail_read,alias,drift,fail_free;
+static int fail_locate,uncertain_frees,reads;
+static EFI_HANDLE uncertain_handles[40];
+static GU_TOPO_GOP uncertain_records[40];
 static UINTN total=40;
 static EFI_STATUS Allocate(int kind,UINTN size,VOID **out) {
   (void)kind;
+  if(fail_alloc==2) {*out=uncertain_records;return 1;}
   if(fail_alloc)return 1;
   *out=calloc(1,size);
   if(!*out)return 1;
   allocs++;return EFI_SUCCESS;
 }
 static EFI_STATUS Free(VOID *p) {
+  if(p==uncertain_records || p==uncertain_handles) {uncertain_frees++;return 1;}
   free(p);frees++;
   return fail_free?1:EFI_SUCCESS;
 }
 static EFI_STATUS Locate(int kind,EFI_GUID *guid,VOID *key,UINTN *n,EFI_HANDLE **out) {
   (void)kind;(void)guid;(void)key;
   *n=total;
+  if(fail_locate) {*out=uncertain_handles;return 1;}
   if(!total)return EFI_SUCCESS;
   if(total>40)return 1;
   *out=calloc(total,sizeof(**out));
@@ -293,7 +312,10 @@ static EFI_STATUS Locate(int kind,EFI_GUID *guid,VOID *key,UINTN *n,EFI_HANDLE *
   return EFI_SUCCESS;
 }
 static EFI_STATUS Handle(EFI_HANDLE handle,EFI_GUID *guid,VOID **out) {
-  size_t i=(GU_TOPO_PATH *)handle-paths;
+  size_t i;
+  reads++;
+  if(fail_locate || fail_alloc==2)return 1;
+  i=(GU_TOPO_PATH *)handle-paths;
   if(fail_read && i==39)return 1;
   if(guid==&GopGuid)*out=&protocols[(alias&&i==39)?0:(drift&&i==39)?38:i];
   else *out=&paths[i];
@@ -325,7 +347,16 @@ int main(void) {
   memset(&Snapshot,0,sizeof(Snapshot));
   fail_alloc=1;
   CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
-  fail_alloc=0;fail_read=1;
+  fail_alloc=2;
+  memset(uncertain_records,0xa5,sizeof(uncertain_records));
+  GU_TOPO_GOP original_uncertain[40];
+  memcpy(original_uncertain,uncertain_records,sizeof(original_uncertain));
+  reads=0;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees && !reads && !uncertain_frees);
+  CHECK(!memcmp(original_uncertain,uncertain_records,sizeof(original_uncertain)));
+  fail_alloc=0;fail_locate=1;
+  CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees && !reads && !uncertain_frees);
+  fail_locate=0;fail_read=1;
   CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);
   fail_read=0;alias=1;
   CHECK(!CaptureGop(&bs) && !Snapshot.gop && allocs==frees);

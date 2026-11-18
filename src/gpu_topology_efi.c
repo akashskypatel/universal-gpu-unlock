@@ -770,6 +770,11 @@ static int ReportPassiveSelections(EFI_BOOT_SERVICES *bs, int pci_ok,
      bs && bs->AllocatePool && bs->FreePool) {
     EFI_STATUS allocated=bs->AllocatePool(EfiLoaderData,
         Snapshot.pci_count*sizeof(*inventory),(VOID **)&inventory);
+    if(allocated!=EFI_SUCCESS && inventory) {
+      Say("SELECTION_STORAGE_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+          (VOID *)inventory,(unsigned long long)allocated);
+      inventory=NULL; /* No confirmed pool ownership. */
+    }
     if(allocated==EFI_SUCCESS && inventory) {
       status=GuCollectGpuRecords(Snapshot.pci_count,SelectionRead,&Snapshot,
                                  inventory,Snapshot.pci_count,&inventory_count);
@@ -794,8 +799,14 @@ static int ReportPassiveSelections(EFI_BOOT_SERVICES *bs, int pci_ok,
       }
       nodes[i]=node;
     }
-    if(inventory && bs->FreePool(inventory)!=EFI_SUCCESS)
-      status=GU_INVENTORY_INVALID;
+    if(inventory) {
+      EFI_STATUS released=bs->FreePool(inventory);
+      if(released!=EFI_SUCCESS) {
+        Say("SELECTION_STORAGE_FREE_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+            (VOID *)inventory,(unsigned long long)released);
+        status=GU_INVENTORY_INVALID;
+      }
+    }
   }
   if(status!=GU_INVENTORY_OK) {
     if(GU_GPU_SELECTION_COUNT==1)
@@ -1734,10 +1745,24 @@ static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
   if(!bs || !bs->LocateHandleBuffer || !bs->HandleProtocol ||
      !bs->AllocatePool || !bs->FreePool)return 0;
   EFI_STATUS status=bs->LocateHandleBuffer(ByProtocol,&GopGuid,NULL,&count,&handles);
-  if(EFI_ERROR(status) || count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
+  if(status!=EFI_SUCCESS) {
+    if(handles) {
+      Say("GOP_HANDLES_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+          (VOID *)handles,(unsigned long long)status);
+      handles=NULL; /* No confirmed pool ownership. */
+    }
+    okay=0;
+  } else if(count>GU_TOPO_MAX_GOPS || (count&&!handles))okay=0;
   if(okay && count) {
     status=bs->AllocatePool(EfiLoaderData,count*sizeof(*records),(VOID **)&records);
-    if(status!=EFI_SUCCESS || !records)okay=0;
+    if(status!=EFI_SUCCESS) {
+      if(records) {
+        Say("GOP_STORAGE_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+            (VOID *)records,(unsigned long long)status);
+        records=NULL;
+      }
+      okay=0;
+    } else if(!records)okay=0;
   }
   if(okay)for(i=0;i<count;i++) {
     EFI_DEVICE_PATH_PROTOCOL *path=NULL;
@@ -1751,10 +1776,21 @@ static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
     records[i].protocol=gop;
   }
   if(okay && !GuTopoGopSnapshotsEqual(records,count,records,count))okay=0;
-  if(handles && bs->FreePool(handles)!=EFI_SUCCESS)okay=0;
+  if(handles) {
+    EFI_STATUS released=bs->FreePool(handles);
+    if(released!=EFI_SUCCESS) {
+      Say("GOP_HANDLES_FREE_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+          (VOID *)handles,(unsigned long long)released);
+      okay=0;
+    }
+  }
   if(!okay) {
-    if(records && bs->FreePool(records)!=EFI_SUCCESS)
-      Say("GOP_CAPTURE_STORAGE_FREE=FAILED\r\n");
+    if(records) {
+      EFI_STATUS released=bs->FreePool(records);
+      if(released!=EFI_SUCCESS)
+        Say("GOP_STORAGE_FREE_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+            (VOID *)records,(unsigned long long)released);
+    }
     return 0;
   }
   *out=records;*out_count=(size_t)count;
@@ -1776,7 +1812,14 @@ static int RevalidateGop(EFI_BOOT_SERVICES *bs) {
   int captured=CaptureGopRecords(bs,&current,&count);
   int okay=captured && GuTopoGopSnapshotsEqual(Snapshot.gop,Snapshot.gop_count,
                                                 current,count);
-  if(current && bs->FreePool(current)!=EFI_SUCCESS)okay=0;
+  if(current) {
+    EFI_STATUS released=bs->FreePool(current);
+    if(released!=EFI_SUCCESS) {
+      Say("GOP_RECHECK_FREE_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+          (VOID *)current,(unsigned long long)released);
+      okay=0;
+    }
+  }
   Say("GOP_CAPTURE_RECHECK STABLE=%u ORIGINAL=%zu CURRENT=%zu NON_ATOMIC=1 NO_STOP_EVIDENCE=1 CAPTURE_OK=%u\r\n",
       (unsigned)okay,Snapshot.gop_count,count,(unsigned)captured);
   return okay;
@@ -1920,6 +1963,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     EFI_STATUS allocated=bs->AllocatePool?
         bs->AllocatePool(EfiLoaderData,Snapshot.pci_count*sizeof(*report_storage),
                          (VOID **)&report_storage):EFI_UNSUPPORTED;
+    if(allocated!=EFI_SUCCESS && report_storage) {
+      Say("TOPOLOGY_REPORT_STORAGE_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+          (VOID *)report_storage,(unsigned long long)allocated);
+      report_storage=NULL;
+    }
     if(allocated==EFI_SUCCESS && report_storage)
       result=GuTopoAssess(&Snapshot,&Report,report_storage,Snapshot.pci_count);
     else
