@@ -43,7 +43,8 @@ class AssetLifetimeTests(unittest.TestCase):
             compiled = subprocess.run(
                 [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
                  "-Werror", "-pedantic", "-I", str(ROOT / "src"),
-                 str(source), "-o", str(binary)],
+                 str(source), str(ROOT / "src/gpu_sku_geometry.c"),
+                 "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             for case in cases:
@@ -299,6 +300,7 @@ int main(int argc,char **argv) {
 #include <stdio.h>
 #include <stdlib.h>
 #include "gpu_inventory.h"
+#include "gpu_sku_geometry.h"
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef size_t UINTN;
@@ -417,6 +419,9 @@ int main(int argc,char **argv){
     case 10:free_fails=1;break;
     case 11:read_fails=1;break;
     case 12:break;
+    /* An Ada id the device list admits but whose geometry was never captured:
+     * the refusal must cost no hardware read at all. */
+    case 13:Gu.device_id=0x2786U;break;
     default:return 2;
   }
   if(mode<10){
@@ -425,8 +430,13 @@ int main(int argc,char **argv){
     if(mode==0||mode==1||mode==9)CHECK(locations==2);
     CHECK(!parses&&!latches);
   }else{
+    unsigned pre_reads=(unsigned)reads;
     EFI_STATUS s=GuAd104Prepare();
-    if(mode==12){
+    if(mode==13){
+      /* A SKU gate: refused, nothing read, nothing latched, nothing retained. */
+      CHECK(s==EFI_UNSUPPORTED&&reads==(int)pre_reads&&!parses&&!latches&&!rom_checks);
+      CHECK(!Gu.profile_verified&&!Gu.prom_verified&&!Gu.fault&&!Gu.retained&&!Gu.started);
+    }else if(mode==12){
       CHECK(s==EFI_SUCCESS&&Gu.profile_verified&&Gu.prom_verified&&latches==1&&parses==1);
     }else{
       CHECK(s==EFI_DEVICE_ERROR&&!Gu.profile_verified&&!Gu.prom_verified&&!latches);
@@ -438,7 +448,7 @@ int main(int argc,char **argv){
   return 0;
 }
 """
-        self.compile_run(host,range(13))
+        self.compile_run(host,range(14))
 
     def test_parent_supported_reference_manifests(self):
         source = r'''

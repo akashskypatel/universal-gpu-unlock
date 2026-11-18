@@ -95,6 +95,12 @@ jobs:
               "$RUNNER_TEMP/test_boot_state_$compiler"
             done
             python3 -m unittest discover -s tests -p test_boot_state_contract.py -v
+            # Per-SKU geometry: an uncaptured Ada part is refused, not assumed.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_sku_geometry.c src/gpu_sku_geometry.c -o "$RUNNER_TEMP/test_sku_geometry_$compiler"
+              "$RUNNER_TEMP/test_sku_geometry_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_sku_geometry_contract.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v

@@ -147,11 +147,13 @@ the repository's own gates exist to prevent. See §11.7.
 dumps, Turing either implemented with payloads and a signed-loader contract or
 refused at *build* time (not only at prepare).
 
-**Status (2026-11-18): not fixed — deliberate.** Turing is already refused at
-prepare (`profile.c:268-271`), which is fail-closed. The remaining work needs
-captured per-SKU register geometry and a signed-loader contract; emitting a
-Turing payload or an AD104/106/107 offset table from the current constants would
-be a guess. See §11.7.
+**Status (2026-11-18): partly fixed — the unsafe half is now refused.** The
+actuation paths refuse every Ada id whose register geometry was never captured
+(`src/gpu_sku_geometry.[ch]`), so an AD104/106/107 card can no longer be driven
+with AD102 offsets; the read-only diagnostic deliberately still runs, because
+capturing that geometry is the work needed to add a row. Turing is unchanged
+(refused at prepare, no payload). What remains open is the data: a captured
+table per SKU, and a Turing payload plus a signed-loader contract. See §11.9.
 
 ### A6. Firmware assets must be re-read from removable media on every boot — **P0**
 `GuBootOpen` refuses any image not launched from USB (`boot_io.c:168`) and
@@ -477,10 +479,44 @@ What this does *not* do: it does not skip a card that was already processed, it
 does not roll anything back, and it does not make re-application safe. Those
 need the C1–C4 evidence.
 
+### 11.9 A5 — one chip's offsets are not every chip's offsets
+
+| What | Where |
+| --- | --- |
+| Captured-geometry table, one row per admitted Ada id | `src/gpu_sku_geometry.c` |
+| `Refuses()` — the only predicate the gates use | `gpu_sku_geometry.h` |
+| Refused at prepare, before any BAR access | `profile.c`, `GuAd104Prepare` |
+| Refused in the vendor core before the one-shot attempt is consumed | `unlock_610.c`, `gpu_unlock_610_unlock` |
+| AD102-only branches require a captured table | `unlock_610.c`, `is_ad102` |
+
+The table classifies all 11 Ada ids the image admits. Only the reference AD102
+pair (`0x2684`, `0x2685`) is marked captured; every AD103/104/106/107 id is
+refused, and the device is not driven with offsets taken from another chip. The
+refusal is reported as
+`SKU_GEOMETRY=REFUSED DEVICE=2786 CHIP=AD104 SKU=RTX 4070 REASON=NO_CAPTURED_REGISTER_TABLE DIAGNOSTIC_ALLOWED=1`,
+returns `EFI_UNSUPPORTED`, and leaves the platform untouched
+(`PROFILE_VERIFIED=0 PROM_VERIFIED=0`, zero BAR writes, zero FLR, WPR2 unopened).
+The read-only diagnostic does not consult the table: it is the mechanism by which
+the missing capture is obtained.
+
+Evidence: `tests/test_sku_geometry.c` (330 checks: table covers exactly
+`GU_ADA_DEVICE_IDS`, complements hold, non-Ada ids are not answered by the gate,
+no duplicate rows), `tests/test_sku_geometry_contract.py` (21 tests: refusal
+precedes every hardware read and the state check, the vendor path refuses before
+consuming the attempt, the diagnostic stays open, build wiring), the simulator
+scenario `prepare ad104-sku` (`SIM_VERIFY=PASS SCENARIOS=10`), and host case 13 in
+`tests/test_gpu_asset_lifetime.py` (the refusal costs zero reads).
+
+What this does *not* do: it does not make any captured table a verified
+transaction. `ACTUATION_VERIFIED=0` still holds for the reference AD102, and the
+AD104/106/107 rows stay empty until a dump exists. Ampere keeps its documented
+generic path, unchanged by this gate.
+
 ### 11.7 Items deliberately not changed
 
-* **A4 (stock profile)** and **A5 (Turing payload)** need per-SKU cold-state
-  evidence that this repository does not contain. Choosing a profile or
+* **A4 (stock profile)** and **A5 (Turing payload, per-SKU tables)** need
+  per-SKU cold-state evidence that this repository does not contain; A5 now
+  refuses what it cannot drive (§11.9). Choosing a profile or
   emitting a Turing patch from the current constants would be a guess in the
   most destructive part of the path, so nothing was changed there.
 * **A8 (watchdog)**: the transaction re-enables no timer today because nobody

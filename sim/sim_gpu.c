@@ -964,6 +964,17 @@ void SimGpuBarWrite(SIM_GPU *gpu, UINT32 offset, UINT32 value) {
   Wr32(gpu->bar, offset, value);
 }
 
+/* Model a different SKU: the live config space and the PROM's PCIR record must
+ * agree, because the identity checks compare one against the other. The BAR0
+ * model is shared by every Ada SKU, which is exactly the assumption the
+ * geometry gate refuses to make on the image side. */
+void SimGpuSetDeviceId(SIM_GPU *gpu, UINT16 device) {
+  if (!gpu) return;
+  Wr16(gpu->config, 0x02, device);
+  Wr16(gpu->prom, 0x40 + 0x06, device);         /* PCIR device id */
+  memcpy(gpu->bar + SIM_PROM_OFFSET, gpu->prom, SIM_PROM_BYTES);
+}
+
 const UINT8 *SimGpuProm(SIM_GPU *gpu) { return gpu ? gpu->prom : NULL; }
 UINTN SimGpuFlrCount(SIM_GPU *gpu) { return gpu ? gpu->flr_count : 0; }
 UINTN SimGpuBarWrites(SIM_GPU *gpu) { return gpu ? gpu->bar_writes : 0; }

@@ -25,7 +25,7 @@ INCLUDE = BUILD / "include"
 APP_SOURCES = [
     "app.c", "driver_nvram.c", "boot_io.c", "msi_release.c", "unlock_execution.c",
     "port.c", "compat.c", "checks.c", "gpu_inventory.c", "gpu_discovery.c",
-    "gpu_execution_state.c", "gpu_windows_path.c", "profile.c", "gpu_selection.c", "boot_state.c", "sha256.c",
+    "gpu_execution_state.c", "gpu_windows_path.c", "profile.c", "gpu_selection.c", "gpu_sku_geometry.c", "boot_state.c", "sha256.c",
     "runtime.c", "format.c", "vendor/unlock_610.c", "vendor/prep_610.c",
     "vendor/layout_610.c", "vendor/vbios_610.c", "vendor/gfw_eval.c",
 ]
@@ -145,7 +145,7 @@ def build() -> Path:
 
 
 VARIANTS = ("nominal", "msi-enabled", "flr-refused", "dma-high", "rebar",
-            "bar-above-4g", "runtime-target", "runtime-absent")
+            "bar-above-4g", "runtime-target", "runtime-absent", "ad104-sku")
 
 # Scenario matrix: every row must pass, and the two negative rows are the
 # documented refusal and abort paths.
@@ -160,6 +160,8 @@ SCENARIOS = (
     # Target selection resolved from the operator variable, not from the build.
     ("prepare", "runtime-target"),
     ("prepare", "runtime-absent"),
+    # An Ada SKU admitted by the id list but with no captured register table.
+    ("prepare", "ad104-sku"),
 )
 
 

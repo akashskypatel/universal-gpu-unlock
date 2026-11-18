@@ -18,6 +18,7 @@
 #include "aperture_compat.h"
 #include "gfw_eval.h"
 #include "prep_610.h"
+#include "../gpu_sku_geometry.h"
 #include "unlock_610.h"
 #include "vbios_610.h"
 #include "../profile.h"
@@ -350,9 +351,14 @@ static bool inaccessible(u32 value)
 	return value == ~0u || (value & 0xffff0000u) == 0xbadf0000u;
 }
 
+/* The AD102-specific branches (permission table, engine marker, readout) are
+ * one captured chip geometry. Only a part with its own captured table may
+ * take them; prepare refuses every other Ada id, and this is the second gate
+ * in case a caller reaches the transaction without it. */
 static bool is_ad102(const struct unlock_transaction_work *work)
 {
-	return gpu_is_ada_device(work->pdev->device);
+	return gpu_is_ada_device(work->pdev->device) &&
+	       GuSkuGeometryAdaCaptured(work->pdev->device);
 }
 
 static int poll_falcon_engine_halt(struct unlock_transaction_work *work, const struct falcon_eng *eng,
@@ -1839,6 +1845,15 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
     GU_PLATFORM *owner = GuCompatOwner(pdev);
     if (!owner || !GuCompatPciMatches(pdev)) return -ENODEV;
     if (owner->transaction_attempted) return -EALREADY;
+    /* Refuse before consuming the one-shot attempt: an id we cannot drive is
+     * not a failed attempt at driving it. */
+    if (GuSkuGeometryRefuses(pdev->device)) {
+        dev_err(&pdev->dev,
+                "SKU_GEOMETRY=REFUSED DEVICE=%04x CHIP=%s REASON=NO_CAPTURED_REGISTER_TABLE\n",
+                (unsigned)pdev->device,
+                GuSkuGeometryChip(pdev->device) ? GuSkuGeometryChip(pdev->device) : "unknown");
+        return -EOPNOTSUPP;
+    }
     if (!gpu_is_supported_device(pdev->device) ||
         !shared || shared->owner!=pdev || shared->gsp!=&owner->asset_entries[2].firmware || !GuAd104AssetsValid(owner) ||
         !owner->prom_verified || !owner->profile_verified || !owner->owned || !owner->armed ||

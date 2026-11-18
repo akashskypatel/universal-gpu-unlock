@@ -7,6 +7,7 @@
 #include "compat/compat.h"
 #include "port.h"
 #include "prom_identity.h"
+#include "gpu_sku_geometry.h"
 
 static const GU_ARCH_ASSETS AdaAssets={{
     {L"\\AD102-ASSETS\\booter_load_ad102.bin","gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672U},
@@ -267,6 +268,16 @@ EFI_STATUS GuAd104Prepare(VOID) {
    * Turing falcon loader/selector contract is not verified in this fork. */
   if(Gu.is_turing) {
     GuLog("TURING_PREPARE=REFUSED REASON=SIGNED_LOADER_NOT_VERIFIED\n");
+    return EFI_UNSUPPORTED;
+  }
+  /* The pinned offsets are one chip's geometry. An Ada part without its own
+   * captured table must be refused before the first BAR access rather than
+   * driven with AD102 offsets; the read-only diagnostic stays available so
+   * the missing table can still be captured. */
+  if(GuSkuGeometryRefuses(Gu.device_id)) {
+    const GU_SKU_GEOMETRY *row=GuSkuGeometryFor(Gu.device_id);
+    GuLog("SKU_GEOMETRY=REFUSED DEVICE=%04x CHIP=%s SKU=%s REASON=NO_CAPTURED_REGISTER_TABLE DIAGNOSTIC_ALLOWED=1\n",
+          (unsigned)Gu.device_id,row&&row->Chip?row->Chip:"unknown",row&&row->Sku?row->Sku:"unknown");
     return EFI_UNSUPPORTED;
   }
   if(Gu.started || Gu.fault || Gu.retained || Gu.allocations || Gu.profile_verified || Gu.prom_verified) {

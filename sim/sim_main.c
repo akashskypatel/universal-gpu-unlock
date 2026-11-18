@@ -57,12 +57,13 @@ int main(int argc, char **argv) {
   int bar_high = strcmp(variant, "bar-above-4g") == 0;
   int runtime_target = strcmp(variant, "runtime-target") == 0;
   int runtime_absent = strcmp(variant, "runtime-absent") == 0;
+  int ad104_sku = strcmp(variant, "ad104-sku") == 0;
 
   SimReportLine("SIM_VARIANT=%s", variant);
   if (!esp || !windows) {
     fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir> "
             "[nominal|msi-enabled|flr-refused|dma-high|rebar|bar-above-4g|"
-            "runtime-target|runtime-absent]\n",
+            "runtime-target|runtime-absent|ad104-sku]\n",
             argv[0]);
     return 2;
   }
@@ -81,6 +82,9 @@ int main(int argc, char **argv) {
   SIM_GPU *gpu = SimPrimaryGpu();
   if (msi_enabled) SimGpuEnableMsi(gpu, 1);
   if (flr_refused) SimGpuSetFlrSupported(gpu, 0);
+  /* An AD104 part: admitted by the device-id list, but with no captured
+   * register table of its own. */
+  if (ad104_sku) SimGpuSetDeviceId(gpu, 0x2786);
   if (dma_high) SimGpuForceHighDma(gpu, 1);
   /* Firmware is free to place BAR0 above 4 GiB, and Resizable BAR makes the
    * window larger than the 16 MiB of registers this code addresses. */
@@ -191,6 +195,36 @@ int main(int argc, char **argv) {
   status = GuPrepareBoundGpu(owner, &prepare_stage);
   SimReportLine("SIM_RESULT=GuPrepareBoundGpu STATUS=%llx STAGE=%s",
                 (unsigned long long)status, prepare_stage);
+  if (ad104_sku) {
+    /* An Ada part with no captured register geometry must be refused at
+     * prepare -- before the first BAR access -- and the refusal must name the
+     * chip, so an operator with an AD104 card learns why instead of seeing a
+     * generic abort. */
+    Check(status != EFI_SUCCESS, "an Ada SKU without captured geometry was prepared");
+    Check(SimLogContains("SKU_GEOMETRY=REFUSED DEVICE=2786 CHIP=AD104"),
+          "the SKU refusal did not name the chip");
+    Check(SimLogContains("REASON=NO_CAPTURED_REGISTER_TABLE"),
+          "the SKU refusal did not state the reason");
+    Check(SimLogContains("DIAGNOSTIC_ALLOWED=1"),
+          "the SKU refusal did not keep the diagnostic path available");
+    Check(!owner->profile_verified, "a refused SKU still latched a verified profile");
+    Check(!owner->prom_verified, "a refused SKU still accepted a PROM readout");
+    Check(SimGpuBarWrites(gpu) == 0, "a refused SKU saw BAR0 writes");
+    Check(SimGpuPromWrites(gpu) == 0, "a refused SKU saw PROM window writes");
+    Check(SimGpuFlrCount(gpu) == 0, "a refused SKU was reset");
+    Check(SimGpuWpr2Opens() == 0, "a refused SKU opened WPR2");
+    SimReportLine("SIM_ABORT=sku REFUSED=1 DEVICE=2786 CHIP=AD104 "
+                  "BAR_WRITES=%zu FLR=%zu STATUS=%llx",
+                  SimGpuBarWrites(gpu), SimGpuFlrCount(gpu),
+                  (unsigned long long)status);
+    SimReportLine("SIM_RESULT=%s CHECKS_FAILED=%d",
+                  SimFailures() ? "FAIL" : "PASS", SimFailures());
+    int refused = SimFailures();
+    SimWorldShutdown();
+    free(before);
+    if (refused) printf("%s", SimLogText());
+    return refused ? 1 : 0;
+  }
   Check(status == EFI_SUCCESS, "pre-execution preparation failed");
   Check(owner->profile_verified != 0, "profile was not verified");
   Check(owner->prom_verified != 0, "PROM readout was not accepted");
