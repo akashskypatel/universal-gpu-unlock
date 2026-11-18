@@ -133,10 +133,11 @@ u32 GuCompatRead32(const struct pci_dev *D,const void *P) {
   return GuRead32((UINT32)(Address-Gu.bar_base));
 }
 void GuCompatWrite32(const struct pci_dev *D,u32 Value,void *P) {
-  if(!GuCompatPciMatches(D))return;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner||owner!=GuPlatformActive)return;
   UINT64 Address=(UINTN)P;
-  if(Address<Gu.bar_base || Address-Gu.bar_base>0xffffffffULL){Gu.fault=TRUE;return;}
-  GuWrite32((UINT32)(Address-Gu.bar_base),Value);
+  if(Address<owner->bar_base || Address-owner->bar_base>0xffffffffULL){owner->fault=TRUE;return;}
+  GuWrite32(owner,(UINT32)(Address-owner->bar_base),Value);
 }
 /* The read-only profile binds this operation to its selected owner before
  * a compatibility scope exists. Never switch protocols within a read. */
@@ -174,14 +175,14 @@ void *dma_alloc_coherent(struct device *D,size_t N,dma_addr_t *Address,int Flags
   GU_PLATFORM *owner=GuCompatDeviceOwner(D);
   if(!owner||owner!=GuPlatformActive||!D->dma_mask||
      *D->dma_mask!=0xffffffffULL||D->coherent_dma_mask!=0xffffffffULL)return NULL;
-  if(EFI_ERROR(GuDmaAllocate(N,&Cpu,Address)))return NULL;
+  if(EFI_ERROR(GuDmaAllocate(owner,N,&Cpu,Address)))return NULL;
   return Cpu;
 }
 void dma_free_coherent(struct device *D,size_t N,void *P,dma_addr_t A) {
   (void)N;
   GU_PLATFORM *owner=GuCompatDeviceOwner(D);
   if(!owner||owner!=GuPlatformActive)return;
-  if(EFI_ERROR(GuDmaFree(P,A)))owner->retained=TRUE;
+  if(EFI_ERROR(GuDmaFree(owner,P,A)))owner->retained=TRUE;
 }
 int dma_set_mask(struct device *D,u64 Mask) {
   if(!GuCompatDeviceOwner(D)||!D->dma_mask)return -EINVAL;
@@ -192,13 +193,14 @@ int dma_set_coherent_mask(struct device *D,u64 Mask) {
   D->coherent_dma_mask=Mask;return 0;
 }
 void GuCompatDmaBarrier(const struct pci_dev *D) {
-  if(!GuCompatPciMatches(D))return;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner||owner!=GuPlatformActive)return;
 #if defined(_MSC_VER)
   _ReadWriteBarrier();
 #else
   __atomic_thread_fence(__ATOMIC_SEQ_CST);
 #endif
-  if(Gu.pci->Flush && EFI_ERROR(Gu.pci->Flush(Gu.pci)))Gu.fault=TRUE;
+  if(owner->pci->Flush && EFI_ERROR(owner->pci->Flush(owner->pci)))owner->fault=TRUE;
 }
 void *GuCompatAlloc(const struct pci_dev *D,size_t N,size_t S) {
   if(!GuCompatPciMatches(D)||!S||N>(size_t)-1/S)return NULL;
@@ -234,8 +236,9 @@ int pci_read_config_dword(struct pci_dev *D,int O,u32 *V) {
   return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint32,(UINT32)O,V))?-EIO:0;
 }
 int pci_write_config_word(struct pci_dev *D,int O,u16 V) {
-  if(!GuCompatPciMatches(D))return -EINVAL;
-  return EFI_ERROR(GuConfigWrite(EfiPciIoWidthUint16,(UINT32)O,&V))?-EIO:0;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner||owner!=GuPlatformActive)return -EINVAL;
+  return EFI_ERROR(GuConfigWrite(owner,EfiPciIoWidthUint16,(UINT32)O,&V))?-EIO:0;
 }
 int pcie_capability_read_word(struct pci_dev *D,int O,u16 *V) {
   if(!GuCompatPciMatches(D))return -EINVAL;
@@ -264,13 +267,29 @@ void *pci_iomap(struct pci_dev *D,int Bar,unsigned long N) {
   (void)N;return GuCompatPciMatches(D)&&!Bar && Gu.owned && !Gu.fault?(VOID *)(UINTN)Gu.bar_base:NULL;
 }
 void pci_iounmap(struct pci_dev *D,void *P) {(VOID)GuCompatPciMatches(D);(void)P;}
-int pci_save_state(struct pci_dev *D) {if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuSavePci())?-EIO:0;}
-void pci_restore_state(struct pci_dev *D) {if(!GuCompatPciMatches(D))return;if(EFI_ERROR(GuRestorePci()))Gu.fault=TRUE;}
-void pci_set_master(struct pci_dev *D) {
-  if(GuCompatPciMatches(D))(void)GuEnableMaster();
+int pci_save_state(struct pci_dev *D) {
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner||owner!=GuPlatformActive)return -EINVAL;
+  return EFI_ERROR(GuSavePci(owner))?-EIO:0;
 }
-void pci_clear_master(struct pci_dev *D) {if(GuCompatPciMatches(D))(void)GuClearMaster();}
-int pcie_flr(struct pci_dev *D) {if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuFlr())?-EIO:0;}
+void pci_restore_state(struct pci_dev *D) {
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner||owner!=GuPlatformActive)return;
+  if(EFI_ERROR(GuRestorePci(owner)))owner->fault=TRUE;
+}
+void pci_set_master(struct pci_dev *D) {
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(owner&&owner==GuPlatformActive)(void)GuEnableMaster(owner);
+}
+void pci_clear_master(struct pci_dev *D) {
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(owner&&owner==GuPlatformActive)(void)GuClearMaster(owner);
+}
+int pcie_flr(struct pci_dev *D) {
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner||owner!=GuPlatformActive)return -EINVAL;
+  return EFI_ERROR(GuFlr(owner))?-EIO:0;
+}
 /* The coordinator's base reference survives until the end of this boot.
  * A failed borrow/release must not change its count or revive a bad record. */
 struct pci_dev *pci_dev_get(struct pci_dev *D) {

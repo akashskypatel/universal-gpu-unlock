@@ -202,24 +202,24 @@ BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1);
 #endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
 /* The full policy owns the only permitted SS1 write phase. */
-BOOLEAN GuSelectorPhase(UINT32 Phase);
+BOOLEAN GuSelectorPhaseFor(GU_PLATFORM *platform,UINT32 Phase);
 #endif
 BOOLEAN GuTargetConfig(const UINT32 *Config, UINTN Segment, UINTN Bus, UINTN Device, UINTN Function);
 BOOLEAN GuSafeToReturnFor(const GU_PLATFORM *platform);
 BOOLEAN GuSafeToReturn(VOID);
-EFI_STATUS GuDmaAllocate(UINTN Bytes, VOID **Cpu, UINT64 *Dma);
-EFI_STATUS GuDmaFree(VOID *Cpu, UINT64 Dma);
+EFI_STATUS GuDmaAllocate(GU_PLATFORM *owner,UINTN Bytes,VOID **Cpu,UINT64 *Dma);
+EFI_STATUS GuDmaFree(GU_PLATFORM *owner,VOID *Cpu,UINT64 Dma);
 UINT32 GuRead32For(GU_PLATFORM *platform,UINT32 Offset);
 UINT32 GuRead32(UINT32 Offset);
-VOID GuWrite32(UINT32 Offset, UINT32 Value);
-EFI_STATUS GuSavePci(VOID);
-EFI_STATUS GuRestorePci(VOID);
-EFI_STATUS GuFlr(VOID);
-EFI_STATUS GuClearMaster(VOID);
-EFI_STATUS GuEnableMaster(VOID);
+VOID GuWrite32(GU_PLATFORM *owner,UINT32 Offset,UINT32 Value);
+EFI_STATUS GuSavePci(GU_PLATFORM *owner);
+EFI_STATUS GuRestorePci(GU_PLATFORM *owner);
+EFI_STATUS GuFlr(GU_PLATFORM *owner);
+EFI_STATUS GuClearMaster(GU_PLATFORM *owner);
+EFI_STATUS GuEnableMaster(GU_PLATFORM *owner);
 EFI_STATUS GuConfigReadFor(GU_PLATFORM *platform,EFI_PCI_IO_PROTOCOL_WIDTH Width,UINT32 Offset,VOID *Value);
 EFI_STATUS GuConfigRead(EFI_PCI_IO_PROTOCOL_WIDTH Width, UINT32 Offset, VOID *Value);
-EFI_STATUS GuConfigWrite(EFI_PCI_IO_PROTOCOL_WIDTH Width, UINT32 Offset, VOID *Value);
+EFI_STATUS GuConfigWrite(GU_PLATFORM *owner,EFI_PCI_IO_PROTOCOL_WIDTH Width,UINT32 Offset,VOID *Value);
 VOID GuStartedFor(GU_PLATFORM *platform);
 VOID GuQuiescedFor(GU_PLATFORM *platform);
 VOID GuStarted(VOID);
@@ -241,4 +241,4 @@ BOOLEAN GuCpuPoolFreeScoped(const struct pci_dev *scope,VOID *memory);
 BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform);
 VOID *GuAlloc(size_t Bytes);
 VOID GuFree(VOID *Memory);
-VOID GuStall(UINTN Microseconds);
+VOID GuStall(GU_PLATFORM *owner,UINTN Microseconds);

@@ -30,9 +30,25 @@ def function(name):
 
 
 class TargetBindTest(unittest.TestCase):
+    def test_mutating_low_level_api_requires_platform_owner(self):
+        header=(ROOT / "src/port.h").read_text(encoding="utf-8")
+        for signature in (
+            "GuDmaAllocate(GU_PLATFORM *owner,",
+            "GuDmaFree(GU_PLATFORM *owner,",
+            "GuWrite32(GU_PLATFORM *owner,",
+            "GuConfigWrite(GU_PLATFORM *owner,",
+            "GuSavePci(GU_PLATFORM *owner)",
+            "GuRestorePci(GU_PLATFORM *owner)",
+            "GuFlr(GU_PLATFORM *owner)",
+            "GuClearMaster(GU_PLATFORM *owner)",
+            "GuEnableMaster(GU_PLATFORM *owner)",
+        ):
+            self.assertIn(signature, header)
+        self.assertIn("owner!=GuPlatformActive", SOURCE)
+
     def test_selected_card_owns_the_one_use_selector_write(self):
         first = SOURCE.index("VOID GuWrite32(")
-        last = SOURCE.index("\nstatic EFI_STATUS RawRead(", first)
+        last = SOURCE.index("\nstatic EFI_STATUS RawReadFor(", first)
         actual = SOURCE[first:last]
         host = r"""
 #include <stdint.h>
@@ -82,18 +98,21 @@ int main(void) {
   a.armed=b.armed=a.owned=b.owned=TRUE;
   a.display_ok=b.display_ok=TRUE;
   a.selector_phase=GU_SELECTOR_PHASE_SS1_WRITE;
-  GuWrite32(0x823820U,8U);
+  GuWrite32(GuPlatformActive,0x823820U,8U);
   CHECK(!a.fault && a.ss1_write_consumed && io0.writes==1);
-  GuWrite32(0x823820U,8U);
+  GuWrite32(GuPlatformActive,0x823820U,8U);
   CHECK(a.fault && io0.writes==1);
   GuPlatformActive=&b;
-  GuWrite32(0x823820U,8U);
+  a.fault=FALSE;
+  GuWrite32(&a,0x823820U,8U);
+  CHECK(a.fault && !b.fault && io1.writes==0);
+  GuWrite32(GuPlatformActive,0x823820U,8U);
   CHECK(b.fault && !b.ss1_write_consumed && io1.writes==0);
   b.fault=FALSE;b.selector_phase=GU_SELECTOR_PHASE_SS1_WRITE;
   io1.fail=1;
-  GuWrite32(0x823820U,8U);
+  GuWrite32(GuPlatformActive,0x823820U,8U);
   CHECK(b.fault && b.ss1_write_consumed && io1.writes==1);
-  GuWrite32(0x823820U,8U);
+  GuWrite32(GuPlatformActive,0x823820U,8U);
   CHECK(io1.writes==1);
   GuPlatformActive=&a;
   CHECK(a.fault && a.ss1_write_consumed && io0.writes==1);
@@ -120,7 +139,7 @@ int main(void) {
         middle = SOURCE.index("#endif\n#ifdef GU_ENTRY_LATCHED_SS1_FULL", first)
         last = SOURCE.index("#endif\nEFI_STATUS GuInit(", middle)
         actual_latch = SOURCE[first:middle]
-        actual_phase = SOURCE[SOURCE.index("BOOLEAN GuSelectorPhase(", middle):last]
+        actual_phase = SOURCE[SOURCE.index("BOOLEAN GuSelectorPhaseFor(", middle):last]
         host = r"""
 #include <stdint.h>
 #include <stdio.h>
@@ -140,8 +159,8 @@ typedef struct {
 static GU_PLATFORM a,b;
 static GU_PLATFORM *GuPlatformActive=&a;
 #define Gu (*GuPlatformActive)
-static UINT32 GuRead32(UINT32 offset) {
-  return offset==0x82381cU?Gu.mmio_ss0:Gu.mmio_ss1;
+static UINT32 GuRead32For(GU_PLATFORM *platform,UINT32 offset) {
+  return offset==0x82381cU?platform->mmio_ss0:platform->mmio_ss1;
 }
 """ + actual_latch + actual_phase + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
@@ -160,16 +179,16 @@ int main(void) {
   CHECK(!GuLatchEntrySelectors(0x03000062U,2));
   a.profile_verified=a.armed=a.owned=1;
   a.mmio_ss0=0x88888888U;a.mmio_ss1=2U;
-  CHECK(GuSelectorPhase(GU_SELECTOR_PHASE_SS0_WRITTEN));
+  CHECK(GuSelectorPhaseFor(GuPlatformActive,GU_SELECTOR_PHASE_SS0_WRITTEN));
   CHECK(a.selector_phase==GU_SELECTOR_PHASE_SS0_WRITTEN);
   GuPlatformActive=&b;
   CHECK(b.selector_phase==GU_SELECTOR_PHASE_ENTRY);
-  CHECK(!GuSelectorPhase(GU_SELECTOR_PHASE_TARGET) && b.fault);
+  CHECK(!GuSelectorPhaseFor(GuPlatformActive,GU_SELECTOR_PHASE_TARGET) && b.fault);
   GuPlatformActive=&a;
   CHECK(!a.fault && a.selector_phase==GU_SELECTOR_PHASE_SS0_WRITTEN);
-  CHECK(GuSelectorPhase(GU_SELECTOR_PHASE_SS1_WRITE));
+  CHECK(GuSelectorPhaseFor(GuPlatformActive,GU_SELECTOR_PHASE_SS1_WRITE));
   a.ss1_write_consumed=TRUE;a.mmio_ss1=8U;
-  CHECK(GuSelectorPhase(GU_SELECTOR_PHASE_TARGET));
+  CHECK(GuSelectorPhaseFor(GuPlatformActive,GU_SELECTOR_PHASE_TARGET));
   CHECK(a.selector_phase==GU_SELECTOR_PHASE_TARGET);
   return 0;
 }
@@ -1166,7 +1185,7 @@ int main(int argc,char **argv) {
 
     def test_real_flr_never_skips_failed_firmware_delay(self):
         """Test the production reset and stall functions with fake EFI calls."""
-        stall_start = SOURCE.index("VOID GuStall(UINTN Microseconds) {")
+        stall_start = SOURCE.index("VOID GuStall(GU_PLATFORM *owner,UINTN Microseconds) {")
         stall_end = SOURCE.index("\nEFI_STATUS GuEnableMaster(", stall_start)
         actual = SOURCE[stall_start:stall_end] + "\n" + function("GuFlr")
         host = r"""
@@ -1191,13 +1210,15 @@ typedef struct {EFI_STATUS (*Stall)(UINTN);} EFI_BOOT_SERVICES;
 #define GU_PREFLIGHT_ONLY 0
 #define EfiPciIoWidthUint32 3
 #define EfiPciIoWidthUint16 2
-static struct {
+typedef struct GU_PLATFORM {
   EFI_BOOT_SERVICES *bs;
   UINTN ticks;
   UINT16 pcie_cap;
   int profile_verified,saved,flrs,fault,owned,armed,display_ok;
   int retained,started;
-} Gu;
+} GU_PLATFORM;
+static GU_PLATFORM Gu;
+#define GuPlatformActive (&Gu)
 static int mode,stall_calls,wait_ms_calls,reset_calls,raw_reads,pending_reads;
 static EFI_STATUS FakeStall(UINTN us) {
   stall_calls++;
@@ -1207,7 +1228,8 @@ static EFI_STATUS FakeStall(UINTN us) {
   if(mode==4 && us==1000 && reset_calls)return EFI_DEVICE_ERROR;
   return EFI_SUCCESS;
 }
-static EFI_STATUS GuConfigRead(int width,UINT32 offset,VOID *out) {
+static EFI_STATUS GuConfigReadFor(GU_PLATFORM *owner,int width,UINT32 offset,VOID *out) {
+  (void)owner;
   if(width==EfiPciIoWidthUint32 && offset==0) {
     *(UINT32 *)out=0x268410deU;return EFI_SUCCESS;
   }
@@ -1226,20 +1248,22 @@ static EFI_STATUS GuConfigRead(int width,UINT32 offset,VOID *out) {
   }
   return EFI_DEVICE_ERROR;
 }
-static EFI_STATUS GuConfigWrite(int width,UINT32 offset,VOID *value) {
+static EFI_STATUS GuConfigWrite(GU_PLATFORM *owner,int width,UINT32 offset,VOID *value) {
+  (void)owner;
   if(width!=EfiPciIoWidthUint16 || offset!=0x48 ||
      !(*(UINT16 *)value & 0x8000U))return EFI_DEVICE_ERROR;
   reset_calls++;
   return mode==6?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
-static EFI_STATUS RawRead(int width,UINT32 offset,VOID *out) {
+static EFI_STATUS RawReadFor(GU_PLATFORM *owner,int width,UINT32 offset,VOID *out) {
+  (void)owner;
   if(width!=EfiPciIoWidthUint32 || offset!=0)return EFI_DEVICE_ERROR;
   raw_reads++;
   *(UINT32 *)out=(mode==4 && raw_reads==1)?0xffffffffU:0x268410deU;
   return EFI_SUCCESS;
 }
 static int GuIsSupportedPciId(UINT32 id) {return id==0x268410deU;}
-static void GuStarted(VOID) {Gu.started=1;}
+static void GuStartedFor(GU_PLATFORM *owner) {owner->started=1;}
 """ + actual + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d mode %d: %s\n",__LINE__,mode,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
@@ -1252,14 +1276,14 @@ int main(int argc,char **argv) {
   if(mode==1 || mode==7)service.Stall=NULL;
   if(mode==5)Gu.bs=NULL;
   if(mode==7 || mode==8) {
-    GuStall(1000);
+    GuStall(&Gu,1000);
     CHECK(Gu.fault==(mode==7));
     CHECK(Gu.retained==(mode==7));
     CHECK(stall_calls==(mode==8));
     CHECK(Gu.ticks==(unsigned)(mode==8?1000:0));
     return 0;
   }
-  EFI_STATUS status=GuFlr();
+  EFI_STATUS status=GuFlr(&Gu);
   if(mode==0) {
     CHECK(status==EFI_SUCCESS);
     CHECK(reset_calls==1 && raw_reads==1 && Gu.flrs==1);
@@ -1347,12 +1371,14 @@ struct EFI_PCI_IO_PROTOCOL {
   EFI_STATUS (*Unmap)(EFI_PCI_IO_PROTOCOL *,VOID *);
   EFI_STATUS (*FreeBuffer)(EFI_PCI_IO_PROTOCOL *,UINTN,VOID *);
 };
-static struct {
+typedef struct GU_PLATFORM {
   EFI_PCI_IO_PROTOCOL *pci;
   GU_DMA *allocations;
   int profile_verified,armed,display_ok,fault,retained,owned;
   unsigned dma_count;
-} Gu;
+} GU_PLATFORM;
+static GU_PLATFORM Gu;
+#define GuPlatformActive (&Gu)
 static unsigned char gpu_buffer[8192];
 static int mapping_token,mode;
 static unsigned pool_frees,buffer_frees,unmaps;
@@ -1405,7 +1431,7 @@ int main(int argc,char **argv) {
   Gu.profile_verified=Gu.armed=Gu.display_ok=Gu.owned=TRUE;
   VOID *cpu=(VOID *)(uintptr_t)1;
   UINT64 dma=1;
-  EFI_STATUS result=GuDmaAllocate(4096,&cpu,&dma);
+  EFI_STATUS result=GuDmaAllocate(&Gu,4096,&cpu,&dma);
   EFI_STATUS expected=mode==2?EFI_OUT_OF_RESOURCES:
                       mode==7||mode==8||mode==9?EFI_UNSUPPORTED:
                       mode==10?EFI_SUCCESS:EFI_DEVICE_ERROR;
@@ -1474,13 +1500,15 @@ struct EFI_PCI_IO_PROTOCOL {
   EFI_STATUS (*Unmap)(EFI_PCI_IO_PROTOCOL *,VOID *);
   EFI_STATUS (*FreeBuffer)(EFI_PCI_IO_PROTOCOL *,UINTN,VOID *);
 };
-static struct {
+typedef struct GU_PLATFORM {
   EFI_PCI_IO_PROTOCOL *pci;
   GU_DMA *allocations;
   unsigned dma_count;
   int retained,master_attributes_pending,started,quiesced,fault;
   EFI_STATUS cpu_pool_failure_status;
-} Gu;
+} GU_PLATFORM;
+static GU_PLATFORM Gu;
+#define GuPlatformActive (&Gu)
 static int mode,unmaps,buffer_frees,pool_frees;
 static int buffer,mapping;
 static EFI_STATUS Unmap(EFI_PCI_IO_PROTOCOL *io,VOID *token){
@@ -1503,13 +1531,13 @@ int main(void){
     Gu.retained=Gu.master_attributes_pending=Gu.started=Gu.fault=0;
     Gu.quiesced=1;Gu.cpu_pool_failure_status=EFI_SUCCESS;unmaps=buffer_frees=pool_frees=0;
     if(mode==4)Gu.retained=1;
-    EFI_STATUS s=GuDmaFree(&buffer,0x1000);
+    EFI_STATUS s=GuDmaFree(&Gu,&buffer,0x1000);
     CHECK(s==(mode==0?EFI_SUCCESS:mode==4?EFI_ACCESS_DENIED:EFI_DEVICE_ERROR));
     CHECK(unmaps==(mode!=4)&&buffer_frees==(mode==0||mode==2||mode==3));
     CHECK(pool_frees==(mode==0||mode==3));
     if(mode==0||mode==3){
       CHECK(!Gu.allocations&&!Gu.dma_count);
-      CHECK(GuDmaFree(&buffer,0x1000)==EFI_NOT_FOUND);
+      CHECK(GuDmaFree(&Gu,&buffer,0x1000)==EFI_NOT_FOUND);
       CHECK(unmaps==1&&buffer_frees==1&&pool_frees==1);
       CHECK(Gu.retained==(mode==3));
     }else CHECK(Gu.allocations==&entry&&Gu.dma_count==1&&Gu.retained);

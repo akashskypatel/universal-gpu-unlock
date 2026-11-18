@@ -196,7 +196,7 @@ failed:
 
     /* Fault-independent containment, no freeing of unverified live mappings. */
 
-    if((Gu.started&&Gu.owned)||Gu.master_attributes_pending)(VOID)GuClearMaster();
+    if((Gu.started&&Gu.owned)||Gu.master_attributes_pending)(VOID)GuClearMaster(&Gu);
 
     (VOID)GuBootClose();GuBootHalt();return EFI_ABORTED;
 

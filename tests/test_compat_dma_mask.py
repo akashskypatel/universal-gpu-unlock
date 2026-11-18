@@ -127,7 +127,7 @@ static EFI_STATUS Stall(UINTN us){
   return fail_stall?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 static UINT32 GuRead32(UINT32 offset){mmio_reads++;last_io_owner=Gu.pci->id;return offset;}
-static void GuWrite32(UINT32 offset,UINT32 value){(void)offset;(void)value;mmio_writes++;last_io_owner=Gu.pci->id;}
+static void GuWrite32(GU_PLATFORM *owner,UINT32 offset,UINT32 value){(void)offset;(void)value;mmio_writes++;last_io_owner=owner->pci->id;}
 static int fail_copy_at;
 static EFI_STATUS ReadMemory(EFI_PCI_IO_PROTOCOL *pci,int width,UINT8 bar,UINT64 offset,UINTN n,VOID *dst){
   if(width!=EfiPciIoWidthUint8||bar||offset>0x4000||n>1024||n>0x4000-offset)return EFI_DEVICE_ERROR;

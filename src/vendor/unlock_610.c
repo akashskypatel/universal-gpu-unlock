@@ -1544,12 +1544,13 @@ static int write_selector(struct unlock_transaction_work *work, const char *name
 static int unlock_transaction_selector(struct unlock_transaction_work *work)
 {
     int ret;
-    if (!work->payload_verified || check_entry_selectors(work)) return GU_RESULT(-EPROTO);
+    GU_PLATFORM *owner=GuCompatOwner(work->pdev);
+    if (!owner || !work->payload_verified || check_entry_selectors(work)) return GU_RESULT(-EPROTO);
     ret=write_selector(work,"SS0",GU_FEAT_SS0_OFFSET,GU_SS0_UNLOCK);
-    if (ret || !GuSelectorPhase(GU_SELECTOR_PHASE_SS0_WRITTEN) ||
-        !GuSelectorPhase(GU_SELECTOR_PHASE_SS1_WRITE)) return GU_RESULT(-EIO);
+    if (ret || !GuSelectorPhaseFor(owner,GU_SELECTOR_PHASE_SS0_WRITTEN) ||
+        !GuSelectorPhaseFor(owner,GU_SELECTOR_PHASE_SS1_WRITE)) return GU_RESULT(-EIO);
     ret=write_selector(work,"SS1",GU_FEAT_SS1_OFFSET,GU_SS1_UNLOCK);
-    if (ret || !GuSelectorPhase(GU_SELECTOR_PHASE_TARGET)) return GU_RESULT(-EIO);
+    if (ret || !GuSelectorPhaseFor(owner,GU_SELECTOR_PHASE_TARGET)) return GU_RESULT(-EIO);
     return is_ad102(work) ? ad102_readout(work,"selectors-applied",true) : 0;
 }
 
