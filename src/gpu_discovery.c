@@ -785,7 +785,7 @@ static size_t PreparedContextCount;
 /* An uncertain table address is diagnostic evidence, not an owned array. */
 static VOID *UnreleasedPreparedContextTable;
 /* Do not publish, inspect or dispose of a failed candidate output. */
-static GU_PLATFORM *UnconfirmedPreparedContext;
+static UINTN UnconfirmedPreparedContextAddress;
 
 static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
                                           const GU_GPU_EXEC_SEQUENCE *sequence) {
@@ -795,7 +795,7 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
      sequence->capacity>GU_INVENTORY_MAX_HANDLES ||
      !sequence->selected_count || sequence->selected_count>sequence->count)
     return EFI_INVALID_PARAMETER;
-  if(PreparedContexts||UnreleasedPreparedContextTable||UnconfirmedPreparedContext)
+  if(PreparedContexts||UnreleasedPreparedContextTable||UnconfirmedPreparedContextAddress)
     return EFI_ALREADY_STARTED;
   size_t count=sequence->selected_count;
   /* The sequence was checked by GuGpuExecCheckNext. Confirm all indices
@@ -831,7 +831,7 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
     status=GuAllocatePlatform(bs,pci,&candidate);
     if(status!=EFI_SUCCESS) {
       if(candidate) {
-        UnconfirmedPreparedContext=candidate;
+        UnconfirmedPreparedContextAddress=(UINTN)candidate;
         GuLog("ACTIVE_CONTEXT[%zu]_ALLOCATION_UNCERTAIN ADDRESS=%p STATUS=%#llx\n",
               i,(VOID *)candidate,(unsigned long long)status);
         status=EFI_DEVICE_ERROR;
@@ -839,10 +839,10 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
       break;
     }
     if(!candidate){status=EFI_OUT_OF_RESOURCES;break;}
-    BOOLEAN alias=candidate==GuPlatformActive;
+    int alias=candidate==GuPlatformActive;
     for(size_t j=0;j<i;j++)if(contexts[j]==candidate)alias=TRUE;
     if(alias || candidate->bs!=bs || candidate->pci!=pci) {
-      UnconfirmedPreparedContext=candidate;
+      UnconfirmedPreparedContextAddress=(UINTN)candidate;
       GuLog("ACTIVE_CONTEXT[%zu]_OWNER_UNCONFIRMED ADDRESS=%p ALIAS=%u\n",
             i,(VOID *)candidate,(unsigned)alias);
       status=EFI_DEVICE_ERROR;
@@ -891,7 +891,7 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   if(!image||!table||!table->BootServices)return EFI_INVALID_PARAMETER;
   if(UnreleasedDiscoveryAllocation||UnreleasedPciHandles)return EFI_ALREADY_STARTED;
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
-  if(PreparedContexts||UnreleasedPreparedContextTable||UnconfirmedPreparedContext)
+  if(PreparedContexts||UnreleasedPreparedContextTable||UnconfirmedPreparedContextAddress)
     return EFI_ALREADY_STARTED;
 #endif
   EFI_STATUS s=LocatePciHandles(table,&handles,&handle_count);

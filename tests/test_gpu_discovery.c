@@ -794,7 +794,7 @@ static int CheckPreparationTableLifetime(void) {
   free(last_failed_free); /* Test-only boot termination. */
   UnreleasedPreparedContextTable=NULL;
   ResetPair();
-  GU_GPU_EXEC_TARGET targets[2]={{0}};
+  GU_GPU_EXEC_TARGET targets[2]={0};
   size_t orders[2]={0,1};
   targets[0].identity.pci=&gpu[0].protocol;
   targets[1].identity.pci=&gpu[1].protocol;
@@ -803,7 +803,7 @@ static int CheckPreparationTableLifetime(void) {
   context_allocs=context_frees=discard_calls=0;
   fail_state_alloc_with_output=3; /* Table and first context succeed. */
   CHECK(PreparePlatformContexts(&services,&sequence)==EFI_DEVICE_ERROR);
-  CHECK(UnconfirmedPreparedContext==uncertain_state && uncertain_state_bytes==sizeof(GU_PLATFORM));
+  CHECK(UnconfirmedPreparedContextAddress==(UINTN)uncertain_state && uncertain_state_bytes==sizeof(GU_PLATFORM));
   CHECK(!PreparedContexts&&!PreparedContextCount&&!UnreleasedPreparedContextTable);
   CHECK(context_allocs==1&&context_frees==1&&discard_calls==1&&state_allocs==3&&state_frees==2);
   for(UINTN i=0;i<uncertain_state_bytes;i++)
@@ -811,25 +811,25 @@ static int CheckPreparationTableLifetime(void) {
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
   CHECK(!locate_calls&&!init_calls&&discard_calls==1);
   free(uncertain_state); /* Test-only boot termination. */
-  UnconfirmedPreparedContext=NULL;
+  UnconfirmedPreparedContextAddress=0;
 
   /* A duplicate output cannot acquire a second disposal obligation. */
   ResetPair();context_allocs=context_frees=discard_calls=0;
   last_candidate=NULL;candidate_alias=1;
   CHECK(PreparePlatformContexts(&services,&sequence)==EFI_DEVICE_ERROR);
-  CHECK(UnconfirmedPreparedContext!=NULL&&!PreparedContexts&&!PreparedContextCount);
+  CHECK(UnconfirmedPreparedContextAddress!=0&&!PreparedContexts&&!PreparedContextCount);
   CHECK(context_allocs==1&&context_frees==1&&discard_calls==1&&state_frees==2);
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
   CHECK(!locate_calls&&!init_calls&&discard_calls==1);
-  UnconfirmedPreparedContext=NULL;
+  UnconfirmedPreparedContextAddress=0;
   ResetPair();context_allocs=context_frees=discard_calls=0;
   last_candidate=NULL;candidate_alias=2;
   GU_PLATFORM original=Gu;
   CHECK(PreparePlatformContexts(&services,&sequence)==EFI_DEVICE_ERROR);
-  CHECK(UnconfirmedPreparedContext==GuPlatformActive&&!PreparedContexts);
+  CHECK(UnconfirmedPreparedContextAddress==(UINTN)GuPlatformActive&&!PreparedContexts);
   CHECK(!context_allocs&&!context_frees&&!discard_calls&&state_frees==1);
   CHECK(!memcmp(&original,&Gu,sizeof(Gu)));
-  UnconfirmedPreparedContext=NULL;candidate_alias=0;last_candidate=NULL;
+  UnconfirmedPreparedContextAddress=0;candidate_alias=0;last_candidate=NULL;
   ResetPair();
   return 0;
 }
