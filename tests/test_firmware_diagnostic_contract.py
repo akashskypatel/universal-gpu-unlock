@@ -706,6 +706,96 @@ int main(void){
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
 
+
+    def test_isolated_descriptor_pool_ownership(self):
+        source=(P/"gpu_prom_capture_efi.c").read_text(encoding="utf-8")
+        actual="static UINTN UncertainBarResourceAddress;"+source.split("static UINTN UncertainBarResourceAddress;",1)[1].split("\nEFI_STATUS GuPromCapturePrepared(",1)[0]
+        program=r"""
+#include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+typedef uint8_t UINT8;
+typedef uint32_t UINT32;
+typedef uint64_t UINT64;
+typedef uintptr_t UINTN;
+typedef uint64_t EFI_STATUS;
+typedef void VOID;
+#define EFI_SUCCESS 0ULL
+#define EFI_DEVICE_ERROR (0x8000000000000007ULL)
+#define ACPI_ADDRESS_SPACE_DESCRIPTOR 0x8a
+#define ACPI_END_TAG_DESCRIPTOR 0x79
+typedef struct {
+ UINT8 Desc,ResType;
+ unsigned Len,AddrSpaceGranularity;
+ UINT64 AddrRangeMin,AddrLen,AddrTranslationOffset,AddrRangeMax;
+} EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR;
+typedef struct {EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR descriptor;UINT8 end[2];} RESOURCE;
+typedef struct io EFI_PCI_IO_PROTOCOL;
+struct io{
+ EFI_STATUS (*GetBarAttributes)(EFI_PCI_IO_PROTOCOL *,unsigned,VOID *,VOID **);
+ struct {int (*Read)(void);} Mem;
+};
+typedef struct {EFI_STATUS (*FreePool)(VOID *);} EFI_BOOT_SERVICES;
+typedef struct {EFI_BOOT_SERVICES *BootServices;} EFI_SYSTEM_TABLE;
+static RESOURCE resource;
+static UINT8 unconfirmed[sizeof(RESOURCE)];
+static int mode,gets,frees,foreign_frees;
+static int NeverRead(void){return 0;}
+static EFI_STATUS Attributes(EFI_PCI_IO_PROTOCOL *io,unsigned bar,VOID *supports,VOID **raw){
+ (void)io;(void)bar;(void)supports;
+ gets++;
+ if(mode==1||mode==2){*raw=unconfirmed;return mode==1?EFI_DEVICE_ERROR:1;}
+ if(mode==3)return EFI_DEVICE_ERROR;
+ if(mode==4)return EFI_SUCCESS;
+ *raw=&resource.descriptor;return EFI_SUCCESS;
+}
+static EFI_STATUS Release(VOID *p){
+ if(p!=&resource.descriptor){foreign_frees++;return EFI_DEVICE_ERROR;}
+ frees++;return mode==5?EFI_DEVICE_ERROR:mode==6?1:EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode %d: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void){
+ EFI_BOOT_SERVICES bs={Release};EFI_SYSTEM_TABLE table={&bs};
+ EFI_PCI_IO_PROTOCOL io={Attributes,{NeverRead}};
+ UINT32 config[64]={0};config[1]=2;config[4]=0x1000000;
+ resource.descriptor.Desc=ACPI_ADDRESS_SPACE_DESCRIPTOR;
+ resource.descriptor.Len=sizeof(resource.descriptor)-3U;
+ resource.descriptor.AddrSpaceGranularity=32;
+ resource.descriptor.AddrRangeMin=config[4];
+ resource.descriptor.AddrLen=0x1000000U;
+ resource.descriptor.AddrRangeMax=0xffffffU;
+ resource.end[0]=ACPI_END_TAG_DESCRIPTOR;
+ memset(unconfirmed,0xa5,sizeof(unconfirmed));
+ for(mode=0;mode<=7;mode++){
+  gets=frees=foreign_frees=0;UncertainBarResourceAddress=0;UncertainBarResourceStatus=0;
+  resource.descriptor.ResType=mode==7?1:0;
+  CHECK(BarEnvelope(&table,&io,config)==(mode==0));
+  CHECK(gets==1&&!foreign_frees&&frees==(mode==0||mode>=5));
+  int uncertain=(mode==1||mode==2||mode==5||mode==6);
+  CHECK((UncertainBarResourceAddress!=0)==uncertain);
+  CHECK((UncertainBarResourceStatus!=0)==uncertain);
+  if(uncertain){
+   CHECK(!BarEnvelope(&table,&io,config));
+   CHECK(gets==1&&!foreign_frees&&frees==(mode>=5));
+  }
+  for(size_t i=0;i<sizeof(unconfirmed);i++)CHECK(unconfirmed[i]==0xa5);
+ }
+ return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"capture_descriptor.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(c),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_isolated_capture_file_ownership(self):
         source=(P/"gpu_prom_capture_efi.c").read_text(encoding="utf-8")
         actual="EFI_STATUS GuPromSaveNew("+source.split("EFI_STATUS GuPromSaveNew(",1)[1]

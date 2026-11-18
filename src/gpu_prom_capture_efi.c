@@ -20,18 +20,31 @@ static int Read32(void *opaque, uint32_t offset, uint32_t *word) {
 
 /* Original probe's stricter 16-MiB MEM/BME0 BAR0 resource envelope.
  * This is necessary but not sufficient for authorization of MMIO. */
+/* Retain only the address and status when the descriptor lifetime is uncertain.
+ * The isolated adapter must not inspect, free or retry that output. */
+static UINTN UncertainBarResourceAddress;
+static EFI_STATUS UncertainBarResourceStatus;
+
 static int BarEnvelope(EFI_SYSTEM_TABLE *table, EFI_PCI_IO_PROTOCOL *io,
                        const UINT32 config[64]) {
   VOID *raw=NULL;
   EFI_STATUS status, released=EFI_SUCCESS;
   int valid=0;
-  if (!table || !table->BootServices || !table->BootServices->FreePool ||
+  if (UncertainBarResourceAddress || UncertainBarResourceStatus!=EFI_SUCCESS ||
+      !table || !table->BootServices || !table->BootServices->FreePool ||
       !io || !io->GetBarAttributes || !io->Mem.Read || !config ||
       (config[1]&6U)!=2U || !config[4] ||
       (config[4]&0xffffffU)!=0)
     return 0;
   status=io->GetBarAttributes(io,0,NULL,&raw);
-  if(status==EFI_SUCCESS && raw) {
+  if(status!=EFI_SUCCESS) {
+    if(raw) {
+      UncertainBarResourceAddress=(UINTN)raw;
+      UncertainBarResourceStatus=status;
+    }
+    return 0;
+  }
+  if(raw) {
     const EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *d=
         (const EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *)raw;
     const UINT8 *end=(const UINT8 *)(d+1);
@@ -52,7 +65,11 @@ static int BarEnvelope(EFI_SYSTEM_TABLE *table, EFI_PCI_IO_PROTOCOL *io,
   }
   if(raw) {
     released=table->BootServices->FreePool(raw);
-    if(EFI_ERROR(released))valid=0;
+    if(released!=EFI_SUCCESS) {
+      UncertainBarResourceAddress=(UINTN)raw;
+      UncertainBarResourceStatus=released;
+      valid=0;
+    }
   }
   return valid;
 }
