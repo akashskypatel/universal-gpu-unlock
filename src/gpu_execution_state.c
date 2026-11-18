@@ -2,8 +2,8 @@
 #include "gpu_execution_state.h"
 #include <string.h>
 
-static int Same(const GU_GPU_RECORD *a,const GU_GPU_RECORD *b) {
-  return a->pci_id==b->pci_id && a->subsystem_id==b->subsystem_id &&
+int GuGpuRecordMatches(const GU_GPU_RECORD *a,const GU_GPU_RECORD *b) {
+  return a && b && a->pci_id==b->pci_id && a->subsystem_id==b->subsystem_id &&
     a->class_code==b->class_code && a->segment==b->segment &&
     a->bus==b->bus && a->device==b->device && a->function==b->function &&
     a->handle==b->handle && a->pci==b->pci;
@@ -62,7 +62,7 @@ static int Verify(const GU_GPU_EXEC_SEQUENCE *s,
                   size_t changing) {
   if(!s || !all || !s->count || count!=s->count)return GU_GPU_EXEC_INVALID;
   for(size_t i=0;i<count;i++) {
-    if(!Valid(&all[i]) || !Same(&s->targets[i].identity,&all[i].identity))
+    if(!Valid(&all[i]) || !GuGpuRecordMatches(&s->targets[i].identity,&all[i].identity))
       return GU_GPU_EXEC_DRIFT;
     if(i!=changing &&
        memcmp(s->targets[i].expected_config,all[i].config,

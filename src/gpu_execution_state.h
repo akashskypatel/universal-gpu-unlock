@@ -37,6 +37,8 @@ enum {
   GU_GPU_EXEC_OK=0, GU_GPU_EXEC_INVALID=1,
   GU_GPU_EXEC_DRIFT=2, GU_GPU_EXEC_BLOCKED=3
 };
+/* Compare all boot-local PCI identity fields; no protocol calls. */
+int GuGpuRecordMatches(const GU_GPU_RECORD *a,const GU_GPU_RECORD *b);
 /* The caller supplies two arrays of capacity elements. Their storage must
  * remain valid and independent of the input arrays for the sequence lifetime.
  * Do not copy a sequence to create another independent owner. */

@@ -1,6 +1,7 @@
 /* Modified 2026-10-19/20 for Windows GPU UNLOCK; changes documented in CHANGES.md. */ #include "port.h"
 #ifdef GU_ACTIVE_SINGLE_TARGET
 #include "msi_release.h"
+#include "profile.h"
 #endif
 VOID *memset(VOID *, int, size_t);
 VOID *memcpy(VOID *, const VOID *, size_t);
@@ -192,10 +193,14 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
     if(platform->bs!=bs||platform->pci!=entry->pci||
        platform->handle!=record->identity.handle||!platform->image||
        platform->image!=Gu.image||
+       !GuGpuRecordMatches(&platform->discovery_identity,&record->identity)||
+       platform->device_id!=(UINT16)(record->identity.pci_id>>16)||
        !platform->profile_verified||!platform->prom_verified||
        !platform->release_state_reserved||platform->release_owner_invalid||
        !platform->release_state||platform->release_state!=record->owners.release_plan||
-       !platform->asset_entries_reserved||platform->asset_entries!=record->owners.firmware_assets||
+       !platform->asset_entries_reserved||!platform->asset_load_attempted||
+       platform->asset_entries!=record->owners.firmware_assets||
+       !GuPlatformAssetsOwned(platform)||
        platform->fault||platform->retained||platform->owned||
        platform->allocations||platform->dma_count||platform->master_attributes_pending||
        !platform->quiesced||platform->flrs!=1||
@@ -311,7 +316,7 @@ BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t byte
      platform->cpu_pool_failure_status!=EFI_SUCCESS)return FALSE;
   for(const GU_CPU_POOL *entry=platform->cpu_pool;entry;entry=entry->next)
     if((const VOID *)(entry+1)==memory)
-      return entry->owner==platform&&entry->bs==platform->bs&&entry->bytes==bytes;
+      return entry->owner==platform&&entry->bs==platform->bs&&entry->bytes==bytes&&!entry->scope;
   return FALSE;
 }
 

@@ -433,16 +433,16 @@ typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN byt
 typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
 struct firmware {size_t size;const unsigned char *data;};
 typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
-typedef struct {int is_turing,is_ampere;UINT16 device_id;GU_ASSET assets[GU_ASSET_COUNT];} GU_PLATFORM;
+typedef struct {int is_turing,is_ampere;UINT16 device_id;GU_ASSET asset_entries[GU_ASSET_COUNT];} GU_PLATFORM;
 static GU_PLATFORM platforms[2],*active=&platforms[0];
 #define Gu (*active)
-#define GuAssets (Gu.assets)
+#define GuAssets (Gu.asset_entries)
 static unsigned char data[2][GU_ASSET_COUNT];
 static int hash_calls;
 static int GuCpuPoolOwns(const GU_PLATFORM *owner,const void *p,size_t bytes) {
     unsigned index=(unsigned)(owner-platforms);
     for(unsigned i=0;i<GU_ASSET_COUNT;i++)
-        if(p==&data[index][i]&&bytes==owner->assets[i].firmware.size)return 1;
+        if(p==&data[index][i]&&bytes==owner->asset_entries[i].firmware.size)return 1;
     return 0;
 }
 static int GuHashMatches(const void *p,size_t bytes,const char *hash) {
@@ -495,10 +495,20 @@ int main(void) {
     CHECK(GuAd104AssetsValid());
   }
   CHECK(hash_calls==10);
+  CHECK(GuPlatformAssetsOwned(&platforms[0])&&GuPlatformAssetsOwned(&platforms[1]));
+  CHECK(active==&platforms[1]&&hash_calls==10);
   const unsigned char *own=GuAssets[0].firmware.data;
-  GuAssets[0].firmware.data=platforms[0].assets[0].firmware.data;
+  GuAssets[0].firmware.data=platforms[0].asset_entries[0].firmware.data;
   CHECK(!GuAd104AssetsValid()&&hash_calls==10); /* reject before content access */
+  CHECK(!GuPlatformAssetsOwned(&platforms[1])&&GuPlatformAssetsOwned(&platforms[0]));
   GuAssets[0].firmware.data=own;
+  const char *name=platforms[0].asset_entries[0].name;
+  platforms[0].asset_entries[0].name=(const char *)(uintptr_t)1;
+  CHECK(!GuPlatformAssetsOwned(&platforms[0])&&GuPlatformAssetsOwned(&platforms[1]));
+  platforms[0].asset_entries[0].name=name;
+  platforms[0].asset_entries[0].firmware.size--;
+  CHECK(!GuPlatformAssetsOwned(&platforms[0])&&active==&platforms[1]&&hash_calls==10);
+  platforms[0].asset_entries[0].firmware.size++;
   CHECK(GuAd104AssetsValid()&&hash_calls==15);
   active=&platforms[0];CHECK(GuAd104AssetsValid()&&hash_calls==20);
   return 0;

@@ -39,23 +39,38 @@ const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id) {
   if(GuIsTuringDeviceId(dev))return &TuringAssets;
   return NULL;
 }
-const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {
+static const GU_ARCH_ASSETS *PlatformManifest(const GU_PLATFORM *platform) {
+  if(!platform)return NULL;
   const GU_ARCH_ASSETS *assets=GuGetArchAssetsForPciId(
-      ((UINT32)Gu.device_id<<16)|0x10deU);
+      ((UINT32)platform->device_id<<16)|0x10deU);
   if(!assets ||
-     (!!Gu.is_turing)!=(assets==&TuringAssets) ||
-     (!!Gu.is_ampere)!=(assets==&AmpereAssets))return NULL;
+     (!!platform->is_turing)!=(assets==&TuringAssets) ||
+     (!!platform->is_ampere)!=(assets==&AmpereAssets))return NULL;
   return assets;
 }
-BOOLEAN GuAd104AssetsValid(VOID) {
-  const GU_ARCH_ASSETS *arch=GuGetArchAssets();
+const GU_ARCH_ASSETS *GuGetArchAssets(VOID) {return PlatformManifest(&Gu);}
+/* Inspect an explicitly supplied owner, including a retired platform.
+ * The loader publishes canonical manifest names. Do not dereference
+ * unproved names or firmware pointers and do not change the active slot. */
+BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *platform) {
+  const GU_ARCH_ASSETS *arch=PlatformManifest(platform);
   if(!arch)return FALSE;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
-    if(!GuAssets[i].name||strcmp(GuAssets[i].name,a->name)||
-       GuAssets[i].firmware.size!=a->bytes||!GuAssets[i].firmware.data||
-       !GuCpuPoolOwns(&Gu,GuAssets[i].firmware.data,a->bytes)||
-       !GuHashMatches(GuAssets[i].firmware.data,a->bytes,a->sha256))
+    const GU_ASSET *entry=&platform->asset_entries[i];
+    if(entry->name!=a->name||entry->firmware.size!=a->bytes||
+       !GuCpuPoolOwns(platform,entry->firmware.data,a->bytes))return FALSE;
+    for(UINTN j=0;j<i;j++)
+      if(entry->firmware.data==platform->asset_entries[j].firmware.data)return FALSE;
+  }
+  return TRUE;
+}
+BOOLEAN GuAd104AssetsValid(VOID) {
+  const GU_ARCH_ASSETS *arch=GuGetArchAssets();
+  if(!arch||!GuPlatformAssetsOwned(&Gu))return FALSE;
+  for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
+    const GU_ARCH_ASSET *a=&arch->entries[i];
+    if(!GuHashMatches(GuAssets[i].firmware.data,a->bytes,a->sha256))
       return FALSE;
   }
   return TRUE;

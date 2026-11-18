@@ -26,7 +26,12 @@ class AssetContract(unittest.TestCase):
         self.assertIn("GuAd104AssetsValid()",load)
         self.assertIn("GuGetArchAssets()",verify)
         self.assertIn("GuHashMatches(",verify)
-        self.assertLess(verify.index("GuCpuPoolOwns(&Gu,"),verify.index("GuHashMatches("))
+        ownership=P.split("BOOLEAN GuPlatformAssetsOwned(",1)[1].split("BOOLEAN GuAd104AssetsValid(",1)[0]
+        self.assertIn("GuCpuPoolOwns(platform,",ownership)
+        self.assertIn("entry->name!=a->name",ownership)
+        self.assertLess(verify.index("GuPlatformAssetsOwned(&Gu)"),verify.index("GuHashMatches("))
+        self.assertNotIn("GuHashMatches(",ownership)
+        self.assertNotIn("GuPlatformActive",ownership)
         self.assertNotIn("ada_sizes",load)
     def test_diagnostics_are_read_only(self):
         x=P.split("EFI_STATUS GuDiagnosticScan(VOID) {",1)[1].split("EFI_STATUS GuAd104Prepare(VOID) {",1)[0]

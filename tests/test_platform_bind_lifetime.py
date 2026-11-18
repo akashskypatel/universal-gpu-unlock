@@ -484,6 +484,7 @@ int main(int argc,char **argv) {
 typedef void VOID;
 typedef int BOOLEAN;
 typedef uintptr_t EFI_STATUS;
+typedef uint16_t UINT16;
 typedef struct {int a;} EFI_PCI_IO_PROTOCOL;
 typedef struct EFI_BOOT_SERVICES {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
@@ -494,8 +495,10 @@ typedef struct {
   EFI_PCI_IO_PROTOCOL *pci;
   VOID *handle,*image,*allocations,*release_state;
   unsigned char asset_entries[5];
+  GU_GPU_RECORD discovery_identity;
+  uint16_t device_id;
   int profile_verified,prom_verified,release_state_reserved,release_owner_invalid;
-  int asset_entries_reserved,fault,retained,owned,quiesced;
+  int asset_entries_reserved,asset_load_attempted,fault,retained,owned,quiesced;
   unsigned dma_count,master_attributes_pending,flrs;
 } GU_PLATFORM;
 #define TRUE 1
@@ -514,7 +517,8 @@ static GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 static const GU_PLATFORM EmptyPlatform;
 static unsigned ready_calls;
 static int ready=1;
-static const GU_PLATFORM *invalid_proof,*invalid_compat;
+static const GU_PLATFORM *invalid_proof,*invalid_compat,*invalid_assets;
+static int GuPlatformAssetsOwned(const GU_PLATFORM *platform){return platform!=invalid_assets;}
 static int GuCompatCompletedPlatform(const GU_PLATFORM *platform){return platform!=invalid_compat;}
 static int GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token){
   return platform!=invalid_proof && platform->release_state==token;
@@ -558,8 +562,10 @@ int main(void) {
     size_t i=requested[step];
     CHECK(GuPlatformActive==saved[i]&&Gu.pci==&pci[i]);
     Gu.handle=&handles[i];Gu.image=&image;
+    Gu.discovery_identity=observed[i].identity;
+    Gu.device_id=(uint16_t)(observed[i].identity.pci_id>>16);
     Gu.profile_verified=Gu.prom_verified=Gu.release_state_reserved=
-      Gu.asset_entries_reserved=1;
+      Gu.asset_entries_reserved=Gu.asset_load_attempted=1;
     Gu.release_state=&release[i];
     CHECK(GuGpuExecBeginOwned(&sequence,step,observed,4,&Gu,Gu.release_state,
                              Gu.asset_entries)==GU_GPU_EXEC_OK);
@@ -590,6 +596,12 @@ int main(void) {
       invalid_compat=saved[1];
       CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
       invalid_compat=NULL;
+      invalid_assets=saved[1];
+      CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+      invalid_assets=NULL;
+      saved[1]->discovery_identity.bus^=1;
+      CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+      saved[1]->discovery_identity.bus^=1;
       saved[1]->fault=1;
       CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
       saved[1]->fault=0;
@@ -623,6 +635,26 @@ int main(void) {
     CHECK(GuPlatformActive==saved[2]);
   }
   invalid_compat=NULL;
+  for(size_t i=0;i<3;i++){
+    GU_PLATFORM *p=saved[requested[i]];
+    GU_GPU_RECORD identity=p->discovery_identity;
+    invalid_assets=p;
+    CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+    invalid_assets=NULL;
+    p->asset_load_attempted=0;
+    CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+    p->asset_load_attempted=1;
+    p->discovery_identity.subsystem_id^=1;
+    CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+    p->discovery_identity=identity;
+    p->discovery_identity.pci=saved[3]->pci;
+    CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+    p->discovery_identity=identity;
+    p->device_id^=1;
+    CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+    p->device_id^=1;
+    CHECK(GuPlatformActive==saved[2]);
+  }
   saved[0]->fault=1;
   CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
   saved[0]->fault=0;
