@@ -189,6 +189,8 @@ class HandoverOrderTests(unittest.TestCase):
         start = SOURCE.index("#define MAX_SURVIVOR_PATH_BYTES")
         end = SOURCE.index("#define GRAPH_EDGE_LIMIT", start)
         records = SOURCE[start:end]
+        owner = ("static BOOLEAN SurvivorStorageOwned(const GU_PLATFORM *platform,const PLAN *plan) {" +
+                function_body("SurvivorStorageOwned") + "}\n")
         body = ("static EFI_STATUS GopOnTarget(EFI_HANDLE gop,BOOLEAN *target) {" +
                 function_body("GopOnTarget") + "}\n" +
                 "static EFI_STATUS Gops(BOOLEAN first) {" +
@@ -244,10 +246,14 @@ typedef struct {
   SURVIVOR_GOP *survivors;
   UINTN survivor_count,survivor_capacity,stage;
   BOOLEAN headless,survivor_baseline_valid;
+  void *pool_record;size_t pool_bytes;
+  EFI_STATUS cpu_pool_failure_status;
 } PLAN;
+typedef PLAN GU_PLATFORM;
 static PLAN first_plan,second_plan,failed_plan,duplicate_plan;
 static PLAN *active=&first_plan;
 #define Plan (*active)
+#define Gu (*active)
 enum { N=21 };
 typedef struct {
   unsigned char path[10];
@@ -286,6 +292,15 @@ static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *guid,VOID **out) {
 }
 static BOOLEAN Equal(const VOID *a,const VOID *b,UINTN n){return !memcmp(a,b,n);}
 static void GuLog(const char *format,...){(void)format;}
+static void *GuAlloc(size_t bytes){
+  if(Plan.table->BootServices->AllocatePool(EfiLoaderData,bytes,&Gu.pool_record)!=EFI_SUCCESS)return NULL;
+  Gu.pool_bytes=bytes;return Gu.pool_record;
+}
+static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *address,size_t bytes){
+  return p&&address&&p->pool_record==address&&p->pool_bytes==bytes&&!p->cpu_pool_failure_status;
+}
+""" + owner + r"""
+static BOOLEAN ReleaseOwnerMatches(void){return SurvivorStorageOwned(&Gu,&Plan);}
 """ + body + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(void){
@@ -333,6 +348,16 @@ int main(void){
   CHECK(Gops(TRUE)==EFI_SUCCESS && allocations==2);
   CHECK(Plan.survivors!=first_plan.survivors && Plan.survivor_count==20);
   CHECK(Plan.gop==&nodes[1] && first_plan.gop==&nodes[0]);
+  CHECK(Gops(FALSE)==EFI_SUCCESS);
+  SURVIVOR_GOP *owned=Plan.survivors;
+  Plan.survivors=first_plan.survivors;
+  CHECK(Gops(FALSE)==EFI_NOT_READY&&allocations==2);
+  Plan.survivors=(SURVIVOR_GOP *)(uintptr_t)1;
+  CHECK(Gops(FALSE)==EFI_NOT_READY&&allocations==2);
+  Plan.survivors=owned;
+  Plan.survivor_capacity--;
+  CHECK(Gops(FALSE)==EFI_NOT_READY&&allocations==2);
+  Plan.survivor_capacity++;
   CHECK(Gops(FALSE)==EFI_SUCCESS);
   active=&first_plan;
   CHECK(Gops(FALSE)==EFI_SUCCESS && first_plan.survivors[0].handle==&nodes[1]);
@@ -584,7 +609,9 @@ typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
 #define EFI_DEVICE_ERROR 7
 #define EFI_ACCESS_DENIED 8
 #define EfiLoaderData 7
-typedef struct {void *table,*pci,*self; int mutated,claimed,ready,stage,master_normalized,hardware_verified;} PLAN;
+typedef struct {EFI_HANDLE handle;} SURVIVOR_GOP;
+typedef struct {void *table,*pci,*self; int mutated,claimed,ready,stage,master_normalized,hardware_verified;
+  SURVIVOR_GOP *survivors;size_t survivor_count,survivor_capacity;int survivor_baseline_valid;} PLAN;
 typedef struct {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
   EFI_STATUS (*FreePool)(VOID *);
@@ -702,9 +729,23 @@ int main(void) {
     saved->release_state->plan.stage=3;
     saved->release_state->plan.master_normalized=1;
     saved->release_state->plan.hardware_verified=1;
+    Plan.survivors=GuAlloc(2*sizeof(*Plan.survivors));
+    CHECK(Plan.survivors);
+    Plan.survivor_capacity=2;Plan.survivor_count=1;Plan.survivor_baseline_valid=1;
     current=&platforms[1];
     CHECK(GuMsiCompletedPlatform(saved,token));
     CHECK(current==&platforms[1]);
+    PLAN *prior=&saved->release_state->plan;
+    prior->survivor_baseline_valid=0;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    prior->survivor_baseline_valid=1;
+    SURVIVOR_GOP *own_survivors=prior->survivors;
+    prior->survivors=(SURVIVOR_GOP *)(uintptr_t)1;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    prior->survivors=own_survivors;
+    prior->survivor_capacity++;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    prior->survivor_capacity--;
     saved->release_state->plan.hardware_verified=0;
     CHECK(!GuMsiCompletedPlatform(saved,token));
     saved->release_state->plan.hardware_verified=1;

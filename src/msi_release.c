@@ -78,6 +78,14 @@ static BOOLEAN GraphStorageOwned(const GU_PLATFORM *platform,const GRAPH *g) {
      !!g->edges!=!!g->capacity)return FALSE;
   return !g->capacity||GuCpuPoolOwns(platform,g->edges,g->capacity*sizeof(*g->edges));
 }
+/* The saved display baseline is a separate allocation of the same owner. */
+static BOOLEAN SurvivorStorageOwned(const GU_PLATFORM *platform,const PLAN *plan) {
+  if(plan->survivor_count>plan->survivor_capacity||plan->survivor_capacity>4096u||
+     !!plan->survivors!=!!plan->survivor_capacity)return FALSE;
+  if(!plan->survivor_capacity)return !plan->survivor_baseline_valid;
+  return GuCpuPoolOwns(platform,plan->survivors,
+                       plan->survivor_capacity*sizeof(*plan->survivors));
+}
 /* Prove pool membership before dereferencing a retained release record.
  * This also works on a completed inactive platform without rebinding it. */
 static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
@@ -89,7 +97,13 @@ static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
     state->owner_pci==platform->pci&&state->owner_handle==platform->handle&&
     state->owner_image==platform->image&&
     GraphStorageOwned(platform,&state->original)&&GraphStorageOwned(platform,&state->current)&&
-    (!state->original.edges||state->original.edges!=state->current.edges);
+    SurvivorStorageOwned(platform,&state->plan)&&
+    (const VOID *)state->original.edges!=state&&(const VOID *)state->current.edges!=state&&
+    (const VOID *)state->plan.survivors!=state&&
+    (!state->original.edges||state->original.edges!=state->current.edges)&&
+    (!state->plan.survivors||
+     ((const VOID *)state->plan.survivors!=state->original.edges&&
+      (const VOID *)state->plan.survivors!=state->current.edges));
 }
 /* A lost or substituted context is an unsafe state, not an unused context. */
 static BOOLEAN ReleaseOwnerMatches(VOID) {
@@ -444,6 +458,7 @@ static EFI_STATUS GopOnTarget(EFI_HANDLE gop,BOOLEAN *target) {
   return EFI_SUCCESS;
 }
 static EFI_STATUS Gops(BOOLEAN first) {
+  if(!ReleaseOwnerMatches())return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   EFI_HANDLE *handles=NULL;
   UINTN count=0,physical=0,target_count=0;
@@ -461,11 +476,10 @@ static EFI_STATUS Gops(BOOLEAN first) {
     return EFI_SUCCESS;
   if(s==EFI_SUCCESS&&(!count||!handles||count>4096u))s=EFI_BAD_BUFFER_SIZE;
   if(s==EFI_SUCCESS && first) {
-    SURVIVOR_GOP *records=NULL;
-    s=b->AllocatePool(EfiLoaderData,count*sizeof(*records),(VOID **)&records);
-    if(s==EFI_SUCCESS&&!records)s=EFI_OUT_OF_RESOURCES;
-    if(s==EFI_SUCCESS) {
-      memset(records,0,count*sizeof(*records));
+    SURVIVOR_GOP *records=GuAlloc(count*sizeof(*records));
+    if(!records)s=Gu.cpu_pool_failure_status!=EFI_SUCCESS?
+      Gu.cpu_pool_failure_status:EFI_OUT_OF_RESOURCES;
+    else {
       Plan.survivors=records;
       Plan.survivor_capacity=count;
     }
@@ -1178,6 +1192,7 @@ BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {
   const PLAN *plan=&platform->release_state->plan;
   return plan->table && plan->pci==platform->handle && plan->self==platform->image &&
     plan->ready && plan->mutated && plan->stage==3 &&
+    plan->survivor_baseline_valid &&
     !plan->claimed && plan->master_normalized && plan->hardware_verified;
 }
 

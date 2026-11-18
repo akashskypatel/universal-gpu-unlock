@@ -880,7 +880,10 @@ typedef struct {EFI_BOOT_SERVICES *bs;EFI_HANDLE handle,image;
   EFI_STATUS cpu_pool_failure_status;
 } GU_PLATFORM;
 static GU_PLATFORM Gu;
-typedef struct {VOID *table;int mutated,claimed,ready;} PLAN;
+typedef struct {int dummy;} SURVIVOR_GOP;
+typedef struct {VOID *table;int mutated,claimed,ready;
+  SURVIVOR_GOP *survivors;size_t survivor_count,survivor_capacity;
+  int survivor_baseline_valid;} PLAN;
 #define GRAPH_EDGE_LIMIT 16384
 typedef struct {size_t count,capacity;int *edges;} GRAPH;
 #define EfiLoaderData 1
