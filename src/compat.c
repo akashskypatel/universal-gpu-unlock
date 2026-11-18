@@ -1,5 +1,6 @@
 #include "compat/compat.h"
 #include "profile.h"
+#include <limits.h>
 
 /* The current serialized platform owns exactly one compatibility record.
  * Compare the registered address before examining a caller's reference.
@@ -231,5 +232,15 @@ void pci_set_master(struct pci_dev *D) {
 }
 void pci_clear_master(struct pci_dev *D) {if(GuCompatPciMatches(D))(void)GuClearMaster();}
 int pcie_flr(struct pci_dev *D) {if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuFlr())?-EIO:0;}
-struct pci_dev *pci_dev_get(struct pci_dev *D) {if(!GuCompatPciMatches(D))return NULL;D->refs++;return D;}
-void pci_dev_put(struct pci_dev *D) {if(GuCompatPciMatches(D))D->refs--;}
+/* The coordinator's base reference survives until the end of this boot.
+ * A failed borrow/release must not change its count or revive a bad record. */
+struct pci_dev *pci_dev_get(struct pci_dev *D) {
+  if(!GuCompatPciMatches(D))return NULL;
+  if(D->refs<1||D->refs==INT_MAX){Gu.fault=TRUE;return NULL;}
+  D->refs++;return D;
+}
+void pci_dev_put(struct pci_dev *D) {
+  if(!GuCompatPciMatches(D))return;
+  if(D->refs<=1){Gu.fault=TRUE;return;}
+  D->refs--;
+}

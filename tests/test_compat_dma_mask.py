@@ -71,6 +71,7 @@ int main(void) {
 #include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 typedef void VOID;
@@ -255,6 +256,18 @@ int main(void){
   Gu.pci=&pci[0];CHECK(!GuCompatPciMatches(b));Gu.pci=&pci[1];
   Gu.handle=&pci[0];CHECK(!GuCompatPciMatches(b));Gu.handle=&pci[1];
   CHECK(GuCompatPciMatches(b));
+  /* Inject independent boundary cases without changing the completed peer. */
+  Gu.fault=0;
+  pci_dev_put(b);CHECK(b->refs==1&&Gu.fault&&a->refs==1);
+  Gu.fault=0;b->refs=INT_MAX;
+  CHECK(!pci_dev_get(b)&&b->refs==INT_MAX&&Gu.fault&&a->refs==1);
+  Gu.fault=0;b->refs=0;
+  CHECK(!pci_dev_get(b)&&b->refs==0&&Gu.fault);
+  Gu.fault=0;b->refs=-1;
+  pci_dev_put(b);CHECK(b->refs==-1&&Gu.fault);
+  Gu.fault=0;b->refs=1; /* Independent host input, never a production reset. */
+  CHECK(pci_dev_get(b)==b&&b->refs==2);
+  pci_dev_put(b);CHECK(b->refs==1&&!Gu.fault);
   CHECK(pci_dev_get(b)==b&&b->refs==2);
   CHECK(GuCompatCloseDevice(b)==EFI_DEVICE_ERROR&&!Gu.compat_device_open&&!Gu.compat_device_closed);
   CHECK(!GuCompatCompletedPlatform(&platforms[1])&&GuCompatCompletedPlatform(&platforms[0]));
