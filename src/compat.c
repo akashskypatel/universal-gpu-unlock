@@ -54,14 +54,26 @@ EFI_STATUS GuCompatReserveDevice(GU_PLATFORM *owner) {
   if(!owner->bs||!owner->pci||!owner->handle||owner->fault||owner->retained)return EFI_NOT_READY;
   if(owner->compat_device||owner->compat_device_open||owner->compat_device_closed)return EFI_ALREADY_STARTED;
   if(owner->started||owner->owned||owner->armed)return EFI_NOT_READY;
-  struct pci_dev *D=GuAlloc(sizeof(*D));
-  if(owner!=GuPlatformActive||(D&&!GuCpuPoolOwns(owner,D,sizeof(*D)))) {
+  EFI_BOOT_SERVICES *bs=owner->bs;
+  EFI_PCI_IO_PROTOCOL *pci=owner->pci;
+  EFI_HANDLE handle=owner->handle;
+  UINT32 device_id=owner->device_id;
+  struct pci_dev *D=GuAllocFor(owner,sizeof(*D));
+  if(owner!=GuPlatformActive||owner->bs!=bs||owner->pci!=pci||
+     owner->handle!=handle||owner->device_id!=device_id||
+     owner->compat_device||owner->compat_device_open||owner->compat_device_closed||
+     owner->started||owner->owned||owner->armed||
+     (D&&!GuCpuPoolOwns(owner,D,sizeof(*D)))) {
     owner->fault=TRUE;owner->retained=TRUE;
     return EFI_ACCESS_DENIED;
   }
+  if(owner->fault||owner->retained) {
+    if(D) {owner->fault=TRUE;owner->retained=TRUE;}
+    return EFI_DEVICE_ERROR;
+  }
   if(!D)return EFI_OUT_OF_RESOURCES;
-  D->owner=owner;D->owner_bs=owner->bs;D->owner_pci=owner->pci;D->owner_handle=owner->handle;
-  D->vendor=0x10de;D->device=owner->device_id;
+  D->owner=owner;D->owner_bs=bs;D->owner_pci=pci;D->owner_handle=handle;
+  D->vendor=0x10de;D->device=device_id;
   D->mask_storage=0xffffffffffffULL;
   D->dev.dma_mask=&D->mask_storage;D->dev.coherent_dma_mask=0xfffffffffULL;
   owner->compat_device=D;
