@@ -96,6 +96,46 @@ static void Say(const char *format, ...) {
 }
 
 
+/* The supplementary protocol walks share this capture-local fault.
+ * A failed service does not transfer ownership of a nonnull output.
+ * Release only independently confirmed buffers; never retry a failed release. */
+static int ObservationPoolFault;
+
+static int ObservationPoolConfirmed(EFI_STATUS status,const VOID *address,
+                                    const char *stage) {
+  if(status==EFI_SUCCESS)return 1;
+  if(address) {
+    ObservationPoolFault=1;
+    Say("OBSERVATION_POOL_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,address,(unsigned long long)status);
+  }
+  return 0;
+}
+
+static EFI_STATUS ObservationOpeners(EFI_BOOT_SERVICES *bs,EFI_HANDLE handle,
+                                    EFI_GUID *guid,
+                                    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out,
+                                    UINTN *count,const char *stage) {
+  EFI_STATUS status;
+  *out=NULL;*count=0;
+  if(ObservationPoolFault)return EFI_DEVICE_ERROR;
+  status=bs->OpenProtocolInformation(handle,guid,out,count);
+  if(!ObservationPoolConfirmed(status,*out,stage))*out=NULL;
+  return status;
+}
+
+static EFI_STATUS ObservationPoolRelease(EFI_BOOT_SERVICES *bs,VOID *address,
+                                        const char *stage) {
+  EFI_STATUS status;
+  if(!address)return EFI_SUCCESS;
+  status=bs->FreePool(address);
+  if(status!=EFI_SUCCESS) {
+    ObservationPoolFault=1;
+    Say("OBSERVATION_POOL_FREE_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,address,(unsigned long long)status);
+  }
+  return status;
+}
 
 #ifdef GU_MSI_B850_FUSE_VERSION
 /* Linux nova-core GA102+: GSP ucode ID 9 selects BAR0+0x8241e0.
@@ -289,7 +329,7 @@ static EFI_GUID MsiB850NvidiaControllerGuid =
 static void ReportMsiB850PrivateBindings(EFI_BOOT_SERVICES *bs) {
   size_t i;
   Say("MSI_B850_PRIVATE_BEGIN SCOPE=EXACT_TWO_NVIDIA READ_ONLY=1 NO_VENDOR_CALLBACK=1\r\n");
-  for(i=0;i<Snapshot.pci_count;i++) {
+  for(i=0;i<Snapshot.pci_count && !ObservationPoolFault;i++) {
     const GU_TOPO_PCI *node=&Snapshot.pci[i];
     EFI_HANDLE h=(EFI_HANDLE)node->identity.handle;
     EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)node->identity.pci;
@@ -315,11 +355,11 @@ static void ReportMsiB850PrivateBindings(EFI_BOOT_SERVICES *bs) {
       Say("MSI_B850_PRIVATE_OPENS GPU=%s STATUS=UNSUPPORTED\r\n",gpu);
       continue;
     }
-    os=bs->OpenProtocolInformation(h,&MsiB850NvidiaControllerGuid,&opens,&count);
+    os=ObservationOpeners(bs,h,&MsiB850NvidiaControllerGuid,&opens,&count,"msi-private");
     Say("MSI_B850_PRIVATE_OPENS GPU=%s STATUS=%#llx COUNT=%llu CAP=%u\r\n",
         gpu,(unsigned long long)os,(unsigned long long)count,
         (unsigned)GU_MSI_B850_PRIVATE_OPEN_LIMIT);
-    if(!EFI_ERROR(os)) {
+    if(os==EFI_SUCCESS) {
       if(!GuMsiB850PrivateOpensValid((size_t)count,opens)) {
         Say("MSI_B850_PRIVATE_OPENS GPU=%s RESULT=INVALID_OR_OVER_CAP NO_ENTRIES_READ=1\r\n",gpu);
       } else {
@@ -334,11 +374,12 @@ static void ReportMsiB850PrivateBindings(EFI_BOOT_SERVICES *bs) {
       }
     }
     if(opens) {
-      EFI_STATUS fs=bs->FreePool(opens);
+      EFI_STATUS fs=ObservationPoolRelease(bs,opens,"msi-private");
       Say("MSI_B850_PRIVATE_OPENS_FREE GPU=%s STATUS=%#llx\r\n",gpu,(unsigned long long)fs);
     }
   }
-  Say("MSI_B850_PRIVATE_END NO_PRIVATE_METHOD=1 NO_ROM_DEREFERENCE=1 NO_RELEASE=1\r\n");
+  Say("MSI_B850_PRIVATE_END NO_PRIVATE_METHOD=1 NO_ROM_DEREFERENCE=1 NO_RELEASE=1 POOL_UNCERTAIN=%u\r\n",
+      (unsigned)ObservationPoolFault);
 }
 
 /* The loaded image's ParentHandle records the parent supplied to LoadImage.
@@ -655,6 +696,10 @@ static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
   VOID *head_forward=NULL,*head_backward=NULL;
   const UINT8 *head;
   Say("MSI_B850_BDS_POLICY_BEGIN READ_ONLY=1 VENDOR_CALLS=0 ENTRIES_NOT_WALKED=1\r\n");
+  if(ObservationPoolFault) {
+    Say("MSI_B850_BDS_POLICY STATE=SKIPPED POOL_UNCERTAIN=1\r\n");
+    goto done;
+  }
   if(!bs || !bs->LocateProtocol || !bs->LocateHandleBuffer ||
      !bs->HandleProtocol || !bs->FreePool || !bs->GetMemoryMap) {
     Say("MSI_B850_BDS_POLICY STATE=SKIPPED BOOT_SERVICES_UNAVAILABLE=1\r\n");
@@ -668,7 +713,8 @@ static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
     goto done;
   }
   status=bs->LocateHandleBuffer(ByProtocol,&LoadedGuid,NULL,&count,&handles);
-  if(EFI_ERROR(status) || !count || count>1024U || !handles) {
+  if(!ObservationPoolConfirmed(status,handles,"msi-bds-handles"))handles=NULL;
+  if(status!=EFI_SUCCESS || !count || count>1024U || !handles) {
     Say("MSI_B850_BDS_POLICY STATE=SKIPPED LOADED_IMAGES_UNAVAILABLE=1 COUNT=%zu\r\n",
         (size_t)count);
     goto done;
@@ -722,10 +768,11 @@ static void ReportMsiB850BdsPolicyState(EFI_BOOT_SERVICES *bs) {
       (const VOID *)head,head_forward,head_backward);
 done:
   if(handles && bs && bs->FreePool) {
-    EFI_STATUS freed=bs->FreePool(handles);
+    EFI_STATUS freed=ObservationPoolRelease(bs,handles,"msi-bds-handles");
     Say("MSI_B850_BDS_POLICY FREE_STATUS=%#llx\r\n",(unsigned long long)freed);
   }
-  Say("MSI_B850_BDS_POLICY_END NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1 NO_GPU_ACTION=1\r\n");
+  Say("MSI_B850_BDS_POLICY_END NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1 NO_GPU_ACTION=1 POOL_UNCERTAIN=%u\r\n",
+      (unsigned)ObservationPoolFault);
 }
 
 static void ReportMsiB850RomVariables(EFI_SYSTEM_TABLE *table, int pci_ok) {
@@ -1474,6 +1521,7 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
   EFI_STATUS status,release;
   UINTN count=0,k;
   size_t driver_edges=0,unresolved=0;
+  if(ObservationPoolFault)return;
   if(!handle) {
     Say("%s_TEXTOUT[%zu,%zu,%zu] SOURCE=%s HANDLE=0 STATUS=ABSENT\r\n",
          scope,pci,gop,source_edge,source);
@@ -1489,12 +1537,12 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
          scope,pci,gop,source_edge);
     return;
   }
-  status=bs->OpenProtocolInformation(handle,&TextOutGuid,&entries,&count);
-  if(EFI_ERROR(status)||count>256U||(count&&!entries)) {
+  status=ObservationOpeners(bs,handle,&TextOutGuid,&entries,&count,"textout");
+  if(status!=EFI_SUCCESS||count>256U||(count&&!entries)) {
     Say("%s_TEXTOUT[%zu,%zu,%zu] OPENERS_STATUS=UNKNOWN_OR_OVERFLOW EFI_STATUS=%#llx COUNT=%zu\r\n",
          scope,pci,gop,source_edge,(unsigned long long)status,(size_t)count);
     if(entries) {
-      release=bs->FreePool(entries);
+      release=ObservationPoolRelease(bs,entries,"textout");
       Say("%s_TEXTOUT[%zu,%zu,%zu] FREE_STATUS=%#llx\r\n",
          scope,pci,gop,source_edge,(unsigned long long)release);
     }
@@ -1540,10 +1588,10 @@ static void ReportTextOutputOpeners(EFI_BOOT_SERVICES *bs,const char *scope,
          scope,pci,gop,source_edge,(size_t)k);
     }
   }
-  release=entries?bs->FreePool(entries):EFI_SUCCESS;
+  release=ObservationPoolRelease(bs,entries,"textout");
   Say("%s_TEXTOUT_SUMMARY[%zu,%zu,%zu] DRIVER_EDGES=%zu UNRESOLVED=%zu FREE_STATUS=%#llx STATUS=%s NO_STOP_EVIDENCE=1\r\n",
          scope,pci,gop,source_edge,driver_edges,unresolved,(unsigned long long)release,
-      (!unresolved&&!EFI_ERROR(release))?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
+      (!unresolved&&release==EFI_SUCCESS)?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
 }
 
 /* Read the current PCI controller opener graph. A BY_CHILD_CONTROLLER
@@ -1556,8 +1604,12 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
     Say("NVIDIA_GOP_GRAPH=UNAVAILABLE NO_OPEN_PROTOCOL_INFORMATION=1\r\n");
     return;
   }
+  if(ObservationPoolFault) {
+    Say("NVIDIA_GOP_GRAPH=UNKNOWN POOL_UNCERTAIN=1\r\n");
+    return;
+  }
   Say("NVIDIA_GOP_GRAPH=READ_ONLY NO_DRIVER_CALLBACKS=1 NO_DETACH=1\r\n");
-  for(i=0;i<Snapshot.pci_count;i++) {
+  for(i=0;i<Snapshot.pci_count && !ObservationPoolFault;i++) {
     const GU_TOPO_PCI *p=&Snapshot.pci[i];
     const GU_GPU_RECORD *id=&p->identity;
     EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *edges=NULL;
@@ -1568,12 +1620,12 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
     int complete=1,owner_stable;
     if((id->pci_id&0xffffU)!=0x10deU ||
        (id->class_code&0xff00U)!=0x0300U)continue;
-    status=bs->OpenProtocolInformation(id->handle,&PciGuid,&edges,&count);
-    if(EFI_ERROR(status) || count>256U || (count && !edges)) {
+    status=ObservationOpeners(bs,id->handle,&PciGuid,&edges,&count,"nvidia-pci");
+    if(status!=EFI_SUCCESS || count>256U || (count && !edges)) {
       Say("NVIDIA_GOP_GRAPH[%zu] PCI_OPEN_STATUS=%#llx OPENERS=%zu GRAPH=UNKNOWN_OR_OVERFLOW\r\n",
           i,(unsigned long long)status,(size_t)count);
       if(edges) {
-        release=bs->FreePool(edges);
+        release=ObservationPoolRelease(bs,edges,"nvidia-pci");
         Say("NVIDIA_GOP_GRAPH[%zu] FREE_STATUS=%#llx\r\n",i,
             (unsigned long long)release);
       }
@@ -1616,8 +1668,8 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
             path_matches,handle_matches,(unsigned long long)gs,(unsigned long long)ps);
       }
     }
-    release=edges?bs->FreePool(edges):EFI_SUCCESS;
-    if(EFI_ERROR(release))complete=0;
+    release=ObservationPoolRelease(bs,edges,"nvidia-pci");
+    if(release!=EFI_SUCCESS)complete=0;
     owner_stable=GuTopoDriverOwnerStable(p,by_driver,first_driver_agent);
     if(!owner_stable)complete=0;
     Say("NVIDIA_GOP_GRAPH[%zu] PCI_DRIVER_OPENS=%zu EXPECTED=%u CHILD_EDGES=%zu GOP_CHILDREN=%zu MATCHED_GOP_CHILDREN=%zu OWNER_SUMMARY_STABLE=%u FREE_STATUS=%#llx GRAPH_STATUS=%s\r\n",
@@ -1625,21 +1677,21 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
         (unsigned long long)release,complete?"OBSERVED_ONLY":"PARTIAL_OR_DRIFT");
     /* Enumerate each mapped GOP handle's own protocol openers; empty lists
      * are valid observations, not evidence that NVIDIA Stop is reversible. */
-    for(j=0;j<Snapshot.gop_count;j++) {
+    for(j=0;j<Snapshot.gop_count && !ObservationPoolFault;j++) {
       EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
       EFI_STATUS os,freed;
       UINTN n=0,k;
       size_t by_driver_opens=0,unresolved_agents=0;
       if(!Snapshot.gop[j].handle ||
          !GuTopoPathOnController(&p->path,&Snapshot.gop[j].path))continue;
-      os=bs->OpenProtocolInformation(Snapshot.gop[j].handle,&GopGuid,&opens,&n);
-      if(EFI_ERROR(os) || n>256U || (n && !opens)) {
+      os=ObservationOpeners(bs,Snapshot.gop[j].handle,&GopGuid,&opens,&n,"nvidia-gop");
+      if(os!=EFI_SUCCESS || n>256U || (n && !opens)) {
         Say("NVIDIA_GOP_OPENERS[%zu,%zu] STATUS=%#llx COUNT=%zu UNKNOWN_OR_OVERFLOW=1\r\n",
             i,(size_t)j,(unsigned long long)os,(size_t)n);
       } else {
         Say("NVIDIA_GOP_OPENERS[%zu,%zu] STATUS=0 COUNT=%zu\r\n",
             i,(size_t)j,(size_t)n);
-        for(k=0;k<n;k++) {
+        for(k=0;k<n && !ObservationPoolFault;k++) {
           const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[k];
           Say("NVIDIA_GOP_EDGE[%zu,%zu,%zu] ATTR=%#x COUNT=%u AGENT=%p CHILD=%p SAME_PCI_DRIVER=%u CONTROLLER_IS_CHILD_ONLY_IF_BY_CHILD=1\r\n",
               i,(size_t)j,(size_t)k,(unsigned)e->Attributes,
@@ -1656,14 +1708,15 @@ static void ReportNvidiaGopGraph(EFI_BOOT_SERVICES *bs) {
       }
       /* The actual GOP handle and its open-record ControllerHandle are
        * independent candidates; neither is inferred to be a child. */
-      ReportTextOutputOpeners(bs,"NVIDIA",i,j,256U,Snapshot.gop[j].handle,"GOP_HANDLE");
-      freed=opens?bs->FreePool(opens):EFI_SUCCESS;
+      if(!ObservationPoolFault)
+        ReportTextOutputOpeners(bs,"NVIDIA",i,j,256U,Snapshot.gop[j].handle,"GOP_HANDLE");
+      freed=ObservationPoolRelease(bs,opens,"nvidia-gop");
       Say("NVIDIA_GOP_OPENERS_SUMMARY[%zu,%zu] BY_DRIVER=%zu UNRESOLVED_AGENT_IMAGES=%zu OPEN_STATUS=%#llx FREE_STATUS=%#llx STATUS=%s\r\n",
           i,(size_t)j,by_driver_opens,unresolved_agents,
           (unsigned long long)os,(unsigned long long)freed,
-          !EFI_ERROR(os)&&n<=256U&&(!n||opens)&&
-          !EFI_ERROR(freed)&&!unresolved_agents?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
-      if(EFI_ERROR(freed))
+          os==EFI_SUCCESS&&n<=256U&&(!n||opens)&&
+          freed==EFI_SUCCESS&&!unresolved_agents&&!ObservationPoolFault?"OBSERVED_ONLY":"PARTIAL_OR_UNKNOWN");
+      if(freed!=EFI_SUCCESS)
         Say("NVIDIA_GOP_OPENERS[%zu,%zu] FREE_STATUS=%#llx INCOMPLETE=1\r\n",
             i,(size_t)j,(unsigned long long)freed);
     }
@@ -1681,8 +1734,12 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
     Say("INDEPENDENT_GOP_GRAPH=UNKNOWN SERVICES_UNAVAILABLE=1 NO_STOP_EVIDENCE=1\r\n");
     return;
   }
+  if(ObservationPoolFault) {
+    Say("INDEPENDENT_GOP_GRAPH=UNKNOWN POOL_UNCERTAIN=1 NO_STOP_EVIDENCE=1\r\n");
+    return;
+  }
   Say("INDEPENDENT_GOP_GRAPH=READ_ONLY NO_DRIVER_CALLBACKS=1 NO_DETACH=1\r\n");
-  for(j=0;j<Snapshot.gop_count;j++) {
+  for(j=0;j<Snapshot.gop_count && !ObservationPoolFault;j++) {
     size_t i,match=0,pci=0,seen_count=0,k,foreign=0;
     EFI_HANDLE seen[257];
     EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
@@ -1709,12 +1766,12 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
     observed++;
     Say("INDEPENDENT_GOP[%zu] PCI_INDEX=%zu GOP_HANDLE=%p PCI_MATCHES=1 STATUS=PATH_MATCHED_ONLY\r\n",
         j,pci,Snapshot.gop[j].handle);
-    status=bs->OpenProtocolInformation(Snapshot.gop[j].handle,&GopGuid,&opens,&count);
-    if(EFI_ERROR(status)||count>256U||(count&&!opens)) {
+    status=ObservationOpeners(bs,Snapshot.gop[j].handle,&GopGuid,&opens,&count,"independent-gop");
+    if(status!=EFI_SUCCESS||count>256U||(count&&!opens)) {
       Say("INDEPENDENT_GOP[%zu] GOP_OPEN_STATUS=%#llx COUNT=%zu STATUS=UNKNOWN_OR_OVERFLOW\r\n",
           j,(unsigned long long)status,(size_t)count);
       if(opens) {
-        freed=bs->FreePool(opens);
+        freed=ObservationPoolRelease(bs,opens,"independent-gop");
         Say("INDEPENDENT_GOP[%zu] FREE_STATUS=%#llx\r\n",
             j,(unsigned long long)freed);
       }
@@ -1727,7 +1784,7 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
     seen[seen_count++]=Snapshot.gop[j].handle;
     ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,256U,Snapshot.gop[j].handle,
                             "GOP_HANDLE");
-    for(k=0;k<count;k++) {
+    for(k=0;k<count && !ObservationPoolFault;k++) {
       const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[k];
       EFI_HANDLE candidate=e->ControllerHandle;
       size_t t;
@@ -1748,14 +1805,15 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
       ReportTextOutputOpeners(bs,"INDEPENDENT",pci,j,k,candidate,
                               "GOP_OPEN_CONTROLLER");
     }
-    freed=opens?bs->FreePool(opens):EFI_SUCCESS;
-    if(EFI_ERROR(freed)||!by_driver)unresolved++;
+    freed=ObservationPoolRelease(bs,opens,"independent-gop");
+    if(freed!=EFI_SUCCESS||!by_driver||ObservationPoolFault)unresolved++;
     Say("INDEPENDENT_GOP[%zu] DRIVER_EDGES=%zu DISTINCT_TEXTOUT_HANDLES=%zu FREE_STATUS=%#llx STATUS=%s NO_STOP_EVIDENCE=1\r\n",
         j,by_driver,seen_count,(unsigned long long)freed,
-        (EFI_ERROR(freed)||!by_driver)?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
+        (freed!=EFI_SUCCESS||!by_driver||ObservationPoolFault)?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
   }
   Say("INDEPENDENT_GOP_GRAPH_SUMMARY GOP_PATH_MATCHED=%zu UNRESOLVED=%zu STATUS=%s NO_STOP_EVIDENCE=1\r\n",
-      observed,unresolved,!observed?"NO_NON_NVIDIA_GOP_OBSERVED":
+      observed,unresolved,ObservationPoolFault?"PARTIAL_OR_UNKNOWN":
+      !observed?"NO_NON_NVIDIA_GOP_OBSERVED":
       unresolved?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
 }
 
@@ -2090,6 +2148,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       result=GU_TOPO_INVALID;
     }
   }
+  Say("SUPPLEMENTARY_PROTOCOL_POOL_STATUS=%s NO_STOP_EVIDENCE=1\r\n",
+      ObservationPoolFault?"UNCERTAIN":"NO_UNCERTAIN_RESULT_OBSERVED");
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
 #ifdef GU_TOPO_WINDOWS_HANDOFF
   Say("WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write\r\n");

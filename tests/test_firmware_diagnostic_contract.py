@@ -475,6 +475,81 @@ int main(void) {
                     run=subprocess.run([str(binary)],capture_output=True,text=True)
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
+
+    def test_supplementary_protocol_pool_ownership(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        helpers=source.split("static int ObservationPoolFault;",1)[1].split("\n#ifdef GU_MSI_B850_FUSE_VERSION",1)[0]
+        helpers="static int ObservationPoolFault;"+helpers
+        for stage in ("msi-private","textout","nvidia-pci","nvidia-gop","independent-gop"):
+            self.assertRegex(source, r'ObservationOpeners\([^;]*"'+stage+r'"\);')
+            self.assertRegex(source, r'ObservationPoolRelease\([^;]*"'+stage+r'"\);')
+        self.assertIn('if(!ObservationPoolConfirmed(status,handles,"msi-bds-handles"))handles=NULL;',source)
+        self.assertIn('ObservationPoolRelease(bs,handles,"msi-bds-handles")',source)
+        program=r"""
+#include <stdio.h>
+#include <stddef.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef int EFI_GUID;
+typedef int EFI_STATUS;
+typedef size_t UINTN;
+#define EFI_SUCCESS 0
+#define EFI_DEVICE_ERROR 1
+typedef struct {unsigned marker;} EFI_OPEN_PROTOCOL_INFORMATION_ENTRY;
+typedef struct {
+    EFI_STATUS (*OpenProtocolInformation)(EFI_HANDLE,EFI_GUID *,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **,UINTN *);
+    EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+static EFI_OPEN_PROTOCOL_INFORMATION_ENTRY outer={42}, uncertain={99};
+static int mode,calls,releases,foreign_frees,fail_release,logs;
+static void Say(const char *format,...) {(void)format;logs++;}
+static EFI_STATUS Open(EFI_HANDLE h,EFI_GUID *g,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out,UINTN *count) {
+    (void)h;(void)g;calls++;
+    if(mode==1){*out=&uncertain;*count=1;return 1;}
+    if(mode==2)return 1;
+    if(mode==3){*out=&uncertain;*count=1;return 2;}
+    *out=&outer;*count=1;return 0;
+}
+static EFI_STATUS Release(VOID *p) {
+    if(p!=&outer){foreign_frees++;return 1;}
+    releases++;return fail_release?1:0;
+}
+""" + helpers + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void) {
+    EFI_BOOT_SERVICES bs={Open,Release};
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *p=NULL,*nested=NULL;
+    UINTN count=0,n=0;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"outer")==0 && p==&outer && count==1);
+    mode=1;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&nested,&n,"nested")==1 && !nested && ObservationPoolFault && logs==1);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&nested,&n,"later")==1 && !nested && !n && calls==2);
+    CHECK(ObservationPoolRelease(&bs,nested,"nested")==0 && releases==0);
+    CHECK(ObservationPoolRelease(&bs,p,"outer")==0 && releases==1 && !foreign_frees && outer.marker==42 && uncertain.marker==99);
+    ObservationPoolFault=0;mode=2;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"ordinary")==1 && !p && !ObservationPoolFault);
+    mode=0;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"normal")==0 && p==&outer);
+    fail_release=1;
+    CHECK(ObservationPoolRelease(&bs,p,"normal")==1 && ObservationPoolFault && releases==2);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"blocked")==1 && !p && !count && calls==4);
+    ObservationPoolFault=0;mode=3;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"warning")==2 && !p && ObservationPoolFault);
+    CHECK(!foreign_frees && releases==2 && uncertain.marker==99);
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"protocol_pool.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(c),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)
