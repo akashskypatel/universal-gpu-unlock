@@ -1064,7 +1064,7 @@ static EFI_STATUS Free(VOID *p){
 int main(int argc,char **argv) {
   EFI_BOOT_SERVICES bs={Allocate,Free};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>22)return 3;
+  if(mode<0||mode>24)return 3;
   foreign=bs;platforms[1].bs=&bs;
   if(mode)Gu.bs=&bs;
   if(mode==1)bs.AllocatePool=NULL;
@@ -1162,6 +1162,22 @@ int main(int argc,char **argv) {
     active=&platforms[0];Gu.bs=&bs;CHECK(!GuCpuPoolFreeScoped(scope,temporary)&&frees==1);
     if(free_error)free(base);
     free(remaining); /* Test fixture teardown only. */
+  }else if(mode==23||mode==24){
+    GU_PLATFORM *first=&platforms[0],*second=&platforms[1];
+    CHECK(!GuAllocFor(NULL,8)&&!GuAllocFor(second,8)&&!calls);
+    CHECK(!GuFreeFor(NULL,NULL)&&!GuFreeFor(second,NULL)&&!frees);
+    VOID *a=GuAllocFor(first,32);CHECK(a&&calls==1&&GuCpuPoolOwns(first,a,32));
+    if(mode==23){
+      CHECK(GuFreeFor(first,a)&&frees==1&&!first->cpu_pool&&!first->fault);
+    }else{
+      active=second;
+      VOID *b=GuAllocFor(second,16);CHECK(b&&calls==2&&GuCpuPoolOwns(second,b,16));
+      CHECK(!GuAllocFor(first,8)&&!GuFreeFor(first,a)&&!GuFreeFor(first,b));
+      CHECK(calls==2&&!frees&&GuCpuPoolOwns(first,a,32)&&GuCpuPoolOwns(second,b,16));
+      CHECK(!first->fault&&!first->retained&&!second->fault&&!second->retained);
+      CHECK(GuFreeFor(second,b)&&frees==1&&!second->cpu_pool);
+      active=first;CHECK(GuFreeFor(first,a)&&frees==2&&!first->cpu_pool);
+    }
   }else{
     struct pci_dev *scope=(struct pci_dev *)GuAlloc(8);
     CHECK(scope);Gu.compat_device=scope;Gu.compat_device_open=1;
@@ -1206,7 +1222,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            for mode in range(23):
+            for mode in range(25):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(binary), str(mode)],
                                             capture_output=True, text=True)

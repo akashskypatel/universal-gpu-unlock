@@ -232,7 +232,7 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
         (unsigned)config_ok,(unsigned)regs_ok,(unsigned)assets_ok);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!config_ok||!regs_ok||!assets_ok)return EFI_NOT_READY;
-  VOID *prom=GuAlloc(1048576U);
+  VOID *prom=GuAllocFor(owner,1048576U);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!prom)return owner->fault||owner->retained?EFI_DEVICE_ERROR:EFI_OUT_OF_RESOURCES;
   if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
@@ -252,8 +252,10 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
         (unsigned)prom_ok,parsed,(unsigned)fw_ok,(unsigned)stable);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
-  GuFree(prom);
-  if(!DiagnosticOwnerMatches(owner,bs,pci,handle)||owner->fault||owner->retained)return EFI_DEVICE_ERROR;
+  BOOLEAN released=GuFreeFor(owner,prom);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  if(!released){owner->fault=TRUE;owner->retained=TRUE;return EFI_DEVICE_ERROR;}
+  if(owner->fault||owner->retained)return EFI_DEVICE_ERROR;
   if(parsed==0 && fw.descriptor_version==2)
     return EFI_UNSUPPORTED; /* V2 lacks active signature metadata. */
   return !owner->fault&&prom_ok&&fw_ok&&stable?EFI_SUCCESS:EFI_COMPROMISED_DATA;

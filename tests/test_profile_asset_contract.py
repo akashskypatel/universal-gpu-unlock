@@ -112,8 +112,8 @@ static void GuLog(const char *fmt,...){
   if(mode==8&&logs==2)drift();
   if(mode==20&&logs==2)buffer_owner=&p[1];
 }
-static VOID *GuAlloc(size_t n){
-  allocs++;if(GuPlatformActive!=&p[0])wrong++;
+static VOID *GuAllocFor(GU_PLATFORM *o,size_t n){
+  allocs++;if(o!=&p[0]||o!=GuPlatformActive)wrong++;
   if(mode==10)return NULL;
   if(mode==22){p[0].fault=p[0].retained=1;return NULL;}
   buffer=malloc(n);
@@ -122,10 +122,12 @@ static VOID *GuAlloc(size_t n){
   if(mode==4)drift();
   return buffer;
 }
-static VOID GuFree(VOID *m){
-  frees++;if(GuPlatformActive!=&p[0]||m!=buffer)wrong++;
+static BOOLEAN GuFreeFor(GU_PLATFORM *o,VOID *m){
+  frees++;if(o!=&p[0]||o!=GuPlatformActive||m!=buffer)wrong++;
+  if(mode==23)return FALSE;
   free(m);buffer=NULL;
   if(mode==9)drift();
+  return TRUE;
 }
 static BOOLEAN GuCopyFromIo(GU_PLATFORM *o,VOID *dst,const VOID *src,size_t n){
   (void)src;(void)n;copies++;
@@ -180,6 +182,7 @@ int main(int argc,char **argv){
     if(mode==19)CHECK(allocs==1&&copies==1&&!parses&&!frees&&configs==1);
     if(mode==20)CHECK(allocs==1&&copies==1&&parses==1&&!frees&&configs==2);
     if(mode==22)CHECK(allocs==1&&!buffer&&!copies&&!parses&&!frees);
+    if(mode==23)CHECK(allocs==1&&copies==1&&parses==1&&frees==1&&buffer);
     free(buffer); /* Host fixture teardown, not production recovery. */
   }
   return 0;
@@ -191,7 +194,7 @@ int main(int argc,char **argv){
             source.write_text(host,encoding="utf-8")
             result=subprocess.run(["gcc","-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            for mode in range(23):
+            for mode in range(24):
                 with self.subTest(mode=mode):
                     result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True)
                     self.assertEqual(result.returncode,0,result.stderr)

@@ -239,6 +239,9 @@ BOOLEAN GuCpuPoolCompatEmpty(const GU_PLATFORM *platform);
 VOID *GuCpuPoolAllocScoped(const struct pci_dev *scope,size_t bytes);
 BOOLEAN GuCpuPoolFreeScoped(const struct pci_dev *scope,VOID *memory);
 BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform);
+/* General CPU memory for an explicitly identified active platform. */
+VOID *GuAllocFor(GU_PLATFORM *owner,size_t Bytes);
+BOOLEAN GuFreeFor(GU_PLATFORM *owner,VOID *Memory);
 VOID *GuAlloc(size_t Bytes);
 VOID GuFree(VOID *Memory);
 VOID GuStall(GU_PLATFORM *owner,UINTN Microseconds);

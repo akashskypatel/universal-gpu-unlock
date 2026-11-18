@@ -426,6 +426,14 @@ static BOOLEAN PoolFree(GU_PLATFORM *owner,const struct pci_dev *scope,VOID *Mem
   }
   return status==EFI_SUCCESS;
 }
+/* CPU-only access for callers with an already identified active owner. */
+VOID *GuAllocFor(GU_PLATFORM *owner,size_t N) {
+  return PoolAllocate(owner,NULL,N);
+}
+BOOLEAN GuFreeFor(GU_PLATFORM *owner,VOID *Memory) {
+  if(!owner||owner!=GuPlatformActive)return FALSE;
+  return PoolFree(owner,NULL,Memory);
+}
 VOID *GuAlloc(size_t N) {return PoolAllocate(&Gu,NULL,N);}
 VOID GuFree(VOID *Memory) {(VOID)PoolFree(&Gu,NULL,Memory);}
 static BOOLEAN PoolScopeMatches(GU_PLATFORM *owner,const struct pci_dev *scope) {
