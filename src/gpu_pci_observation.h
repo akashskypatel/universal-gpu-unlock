@@ -34,11 +34,21 @@ typedef enum {
 } GU_PCI_OBS_STAGE;
 
 typedef struct {
+  const VOID *address; /* Diagnostic evidence only; never dereference or retry. */
+  EFI_STATUS status;
+  UINTN index;
+  GU_PCI_OBS_STAGE stage;
+} GU_PCI_OBS_POOL_FAILURE;
+
+typedef struct {
   UINTN handle_count,pci_protocol_count,relevant_count,record_count,failures;
   UINTN first_failure_index;
   EFI_STATUS locate_status,first_failure_status,free_status;
   GU_PCI_OBS_STAGE first_failure_stage;
   UINT8 truncated;
+  /* At most one uncertain nested buffer and one outer buffer per capture. */
+  UINTN uncertain_pool_count;
+  GU_PCI_OBS_POOL_FAILURE uncertain_pool[2];
   GU_PCI_OBS_RECORD records[GU_PCI_OBS_MAX_RECORDS];
 } GU_PCI_OBS_CAPTURE;
 

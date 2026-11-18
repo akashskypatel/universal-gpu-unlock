@@ -17,6 +17,13 @@ static void Problem(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
   out->failures++;
 }
 
+static void PoolProblem(GU_PCI_OBS_CAPTURE *out,GU_PCI_OBS_STAGE stage,
+                        UINTN index,EFI_STATUS status,const VOID *address) {
+  Problem(out,stage,index,status);
+  if(out->uncertain_pool_count<sizeof(out->uncertain_pool)/sizeof(out->uncertain_pool[0]))
+    out->uncertain_pool[out->uncertain_pool_count++]=(GU_PCI_OBS_POOL_FAILURE){address,status,index,stage};
+}
+
 /* Copy a single, complete EFI device path without guessing the pointer size.
  * Malformed or multi-instance paths remain UNKNOWN and are never normalized. */
 static int CopyPath(const VOID *path, GU_PCI_OBS_RECORD *record) {
@@ -52,8 +59,12 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
   }
   status=boot->LocateHandleBuffer(AllHandles,NULL,NULL,&count,&handles);
   out->locate_status=status;out->handle_count=count;
-  if(EFI_ERROR(status)) {
-    Problem(out,GuPciObsLocate,0,status);valid=0;
+  if(status!=EFI_SUCCESS) {
+    if(handles) {
+      PoolProblem(out,GuPciObsLocate,0,status,handles);
+      handles=NULL; /* No confirmed transfer on failure. */
+    } else Problem(out,GuPciObsLocate,0,status);
+    valid=0;
   } else if(!count || count>GU_PCI_OBS_MAX_HANDLES || !handles) {
     Problem(out,GuPciObsCount,0,EFI_BAD_BUFFER_SIZE);valid=0;
   }
@@ -103,9 +114,14 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
       Problem(out,GuPciObsOwners,i,EFI_UNSUPPORTED);
     else {
       s=boot->OpenProtocolInformation(handles[i],&PciGuid,&owners,&owner_count);
-      if(EFI_ERROR(s) || owner_count>GU_PCI_OBS_MAX_OPENERS ||
-         (owner_count && !owners)) {
-        Problem(out,GuPciObsOwners,i,EFI_ERROR(s)?s:EFI_COMPROMISED_DATA);
+      if(s!=EFI_SUCCESS) {
+        if(owners) {
+          PoolProblem(out,GuPciObsOwners,i,s,owners);
+          break; /* Do not inspect, release or retry an unconfirmed output. */
+        }
+        Problem(out,GuPciObsOwners,i,s);
+      } else if(owner_count>GU_PCI_OBS_MAX_OPENERS || (owner_count && !owners)) {
+        Problem(out,GuPciObsOwners,i,EFI_COMPROMISED_DATA);
       } else {
         record->owners_known=1;
         for(j=0;j<owner_count;j++)if(owners[j].Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER) {
@@ -115,7 +131,10 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
       }
       if(owners) {
         release=boot->FreePool(owners);
-        if(EFI_ERROR(release))Problem(out,GuPciObsFree,i,release);
+        if(release!=EFI_SUCCESS) {
+          PoolProblem(out,GuPciObsFree,i,release,owners);
+          break; /* Stop new observations; release the confirmed outer buffer once. */
+        }
       }
     }
   }
@@ -124,8 +143,8 @@ int GuPciObserveReadOnly(EFI_BOOT_SERVICES *boot, GU_PCI_OBS_CAPTURE *out) {
   if(out->truncated)Problem(out,GuPciObsCount,out->record_count,EFI_BAD_BUFFER_SIZE);
   if(handles) {
     out->free_status=boot->FreePool(handles);
-    if(EFI_ERROR(out->free_status))
-      Problem(out,GuPciObsFree,count,out->free_status);
+    if(out->free_status!=EFI_SUCCESS)
+      PoolProblem(out,GuPciObsFree,count,out->free_status,handles);
   }
   return valid && !out->failures;
 }

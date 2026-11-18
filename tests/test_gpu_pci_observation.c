@@ -12,14 +12,17 @@ static UINT8 path[20]={2,1,12,0,0xd0,0x41,3,0x0a,0,0,0,0,0x7f,0xff,4,0};
 static unsigned handle_count=5,locate_failure,read_failure,location_failure;
 static unsigned path_failure,owner_failure,free_failure,oversize;
 static unsigned pci_read_calls,owner_calls,free_calls,locate_calls;
+static VOID *uncertain_locate,*uncertain_owners,*failed_frees[2];
+static unsigned failed_free_count;
 static EFI_STATUS locate(int type,EFI_GUID *g,VOID *p,UINTN *n,EFI_HANDLE **out) {
   (void)g;(void)p;locate_calls++;
   if(type!=AllHandles)return EFI_COMPROMISED_DATA;
-  if(locate_failure)return EFI_DEVICE_ERROR;
+  if(locate_failure==1)return EFI_DEVICE_ERROR;
   *n=oversize?GU_PCI_OBS_MAX_HANDLES+1:handle_count;
   *out=(EFI_HANDLE *)malloc((*n)*sizeof(**out));
   if(!*out)return EFI_DEVICE_ERROR;
   for(UINTN i=0;i<*n;i++)(*out)[i]=(EFI_HANDLE)(uintptr_t)(i+1);
+  if(locate_failure==2){uncertain_locate=*out;return EFI_DEVICE_ERROR;}
   return EFI_SUCCESS;
 }
 static EFI_STATUS read_pci(EFI_PCI_IO_PROTOCOL *io,int width,UINT32 offset,UINTN count,VOID *value) {
@@ -54,21 +57,24 @@ static EFI_STATUS owners(EFI_HANDLE h,EFI_GUID *g,
  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out,UINTN *n) {
   (void)g;
   owner_calls++;
-  if(owner_failure && (size_t)(uintptr_t)h==1)return EFI_DEVICE_ERROR;
+  if(owner_failure==1 && (size_t)(uintptr_t)h==1)return EFI_DEVICE_ERROR;
   *n=1;*out=malloc(sizeof(**out));
   if(!*out)return EFI_DEVICE_ERROR;
   (*out)[0].AgentHandle=(EFI_HANDLE)(uintptr_t)88;
   (*out)[0].Attributes=EFI_OPEN_PROTOCOL_BY_DRIVER;
+  if(owner_failure==2 && (size_t)(uintptr_t)h==1){uncertain_owners=*out;return EFI_DEVICE_ERROR;}
   return EFI_SUCCESS;
 }
 static EFI_STATUS free_pool(VOID *p) {
-  free_calls++;free(p);
-  return free_failure?EFI_DEVICE_ERROR:EFI_SUCCESS;
+  free_calls++;
+  if(free_failure){if(failed_free_count<2)failed_frees[failed_free_count++]=p;return EFI_DEVICE_ERROR;}
+  free(p);return EFI_SUCCESS;
 }
 static void setup(void) {
   handle_count=5;locate_failure=read_failure=location_failure=0;
   path_failure=owner_failure=free_failure=oversize=0;
   pci_read_calls=owner_calls=free_calls=locate_calls=0;
+  uncertain_locate=uncertain_owners=NULL;failed_free_count=0;
   for(unsigned i=0;i<110;i++) {
     cards[i].index=i;cards[i].Pci.Read=read_pci;cards[i].GetLocation=location;
   }
@@ -103,9 +109,33 @@ int main(void) {
   setup();free_failure=1;
   CHECK(!GuPciObserveReadOnly(&boot,&capture));
   CHECK(capture.first_failure_stage==GuPciObsFree && capture.failures>=1);
+  CHECK(owner_calls==1 && pci_read_calls==1 && free_calls==2 && failed_free_count==2);
+  CHECK(capture.uncertain_pool_count==2);
+  CHECK(capture.uncertain_pool[0].address==failed_frees[0] &&
+        capture.uncertain_pool[0].stage==GuPciObsFree &&
+        capture.uncertain_pool[0].index==0 && capture.uncertain_pool[0].status==EFI_DEVICE_ERROR);
+  CHECK(capture.uncertain_pool[1].address==failed_frees[1] &&
+        capture.uncertain_pool[1].index==5 && capture.free_status==EFI_DEVICE_ERROR);
+  free(failed_frees[0]);free(failed_frees[1]); /* Test teardown only. */
   setup();locate_failure=1;
   CHECK(!GuPciObserveReadOnly(&boot,&capture));
   CHECK(capture.first_failure_stage==GuPciObsLocate && capture.pci_protocol_count==0);
+  CHECK(!capture.uncertain_pool_count && !free_calls);
+  setup();locate_failure=2;
+  CHECK(!GuPciObserveReadOnly(&boot,&capture));
+  CHECK(capture.first_failure_stage==GuPciObsLocate && !pci_read_calls && !owner_calls && !free_calls);
+  CHECK(uncertain_locate && capture.uncertain_pool_count==1 &&
+        capture.uncertain_pool[0].address==uncertain_locate &&
+        capture.uncertain_pool[0].status==EFI_DEVICE_ERROR);
+  free(uncertain_locate); /* Test teardown only. */
+  setup();owner_failure=2;
+  CHECK(!GuPciObserveReadOnly(&boot,&capture));
+  CHECK(capture.first_failure_stage==GuPciObsOwners && !capture.records[0].owners_known);
+  CHECK(uncertain_owners && capture.uncertain_pool_count==1 &&
+        capture.uncertain_pool[0].address==uncertain_owners &&
+        capture.uncertain_pool[0].index==0 && capture.uncertain_pool[0].status==EFI_DEVICE_ERROR);
+  CHECK(owner_calls==1 && pci_read_calls==1 && free_calls==1);
+  free(uncertain_owners); /* Test teardown only. */
   setup();oversize=1;
   CHECK(!GuPciObserveReadOnly(&boot,&capture));
   CHECK(capture.first_failure_stage==GuPciObsCount && capture.pci_protocol_count==0);
