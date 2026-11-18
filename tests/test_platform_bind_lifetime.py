@@ -881,6 +881,7 @@ typedef struct {EFI_BOOT_SERVICES *bs;EFI_HANDLE handle,image;
 } GU_PLATFORM;
 static GU_PLATFORM Gu;
 typedef struct {VOID *table;int mutated,claimed,ready;} PLAN;
+#define GRAPH_EDGE_LIMIT 16384
 typedef struct {size_t count,capacity;int *edges;} GRAPH;
 #define EfiLoaderData 1
 #define EFI_SUCCESS 0

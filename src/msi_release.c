@@ -71,6 +71,13 @@ typedef struct GU_MSI_OWNED_STATE {
 #define Original (CurrentMsi->original)
 #define Current (CurrentMsi->current)
 
+/* A graph buffer is part of this owner's CPU pool, not a shared resource.
+ * The caller has already validated the enclosing release record. */
+static BOOLEAN GraphStorageOwned(const GU_PLATFORM *platform,const GRAPH *g) {
+  if(g->count>g->capacity||g->capacity>GRAPH_EDGE_LIMIT||
+     !!g->edges!=!!g->capacity)return FALSE;
+  return !g->capacity||GuCpuPoolOwns(platform,g->edges,g->capacity*sizeof(*g->edges));
+}
 /* Prove pool membership before dereferencing a retained release record.
  * This also works on a completed inactive platform without rebinding it. */
 static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
@@ -80,7 +87,9 @@ static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
   return GuCpuPoolOwns(platform,state,sizeof(*state))&&
     state->owner==platform&&state->owner_bs==platform->bs&&
     state->owner_pci==platform->pci&&state->owner_handle==platform->handle&&
-    state->owner_image==platform->image;
+    state->owner_image==platform->image&&
+    GraphStorageOwned(platform,&state->original)&&GraphStorageOwned(platform,&state->current)&&
+    (!state->original.edges||state->original.edges!=state->current.edges);
 }
 /* A lost or substituted context is an unsafe state, not an unused context. */
 static BOOLEAN ReleaseOwnerMatches(VOID) {
@@ -126,32 +135,37 @@ static EFI_STATUS Interface(EFI_HANDLE h,EFI_GUID *g,VOID **p) {
   *p=NULL;EFI_STATUS s=Plan.table->BootServices->HandleProtocol(h,g,p);
   return s==EFI_SUCCESS&&!*p?EFI_COMPROMISED_DATA:s;
 }
-/* The graph owns CPU-only pool storage. Keep its previous allocation on
- * growth failure; never publish a replacement before the old pool is released. */
+/* Validate the enclosing owner before accessing either graph. */
+static BOOLEAN SelectedGraph(GRAPH *g) {
+  return ReleaseOwnerMatches()&&(g==&Original||g==&Current);
+}
+/* Keep the old graph if allocation fails with no uncertain ownership.
+ * Consume its reference before attempting release. Never retry an uncertain
+ * release or publish the candidate graph after an allocator failure. */
 static EFI_STATUS GraphAppend(EFI_BOOT_SERVICES *b,GRAPH *g,EDGE edge) {
-  if(!b||!b->AllocatePool||!b->FreePool||!g)return EFI_INVALID_PARAMETER;
-  if(g->count>g->capacity||g->capacity>GRAPH_EDGE_LIMIT||
-     !!g->edges!=!!g->capacity)return EFI_COMPROMISED_DATA;
+  if(!b||b!=Gu.bs||!b->AllocatePool||!b->FreePool||!g)return EFI_INVALID_PARAMETER;
+  if(!SelectedGraph(g))return EFI_ACCESS_DENIED;
   if(g->count==GRAPH_EDGE_LIMIT)return EFI_BAD_BUFFER_SIZE;
   if(g->count==g->capacity) {
     UINTN capacity=g->capacity?g->capacity*2u:GRAPH_INITIAL_CAPACITY;
     if(capacity>GRAPH_EDGE_LIMIT)capacity=GRAPH_EDGE_LIMIT;
-    EDGE *grown=NULL;
-    EFI_STATUS s=b->AllocatePool(EfiLoaderData,capacity*sizeof(*grown),(VOID **)&grown);
-    if(s!=EFI_SUCCESS)return s;
-    if(!grown)return EFI_OUT_OF_RESOURCES;
-    if(g->count)memcpy(grown,g->edges,g->count*sizeof(*grown));
-    if(g->edges&&b->FreePool(g->edges)!=EFI_SUCCESS) {
-      /* Refuse the snapshot even if releasing the candidate also fails. */
-      if(b->FreePool(grown)!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
+    EDGE *grown=GuAlloc(capacity*sizeof(*grown));
+    if(!grown)return Gu.cpu_pool_failure_status!=EFI_SUCCESS?
+      Gu.cpu_pool_failure_status:EFI_OUT_OF_RESOURCES;
+    UINTN used=g->count;
+    if(used)memcpy(grown,g->edges,used*sizeof(*grown));
+    EDGE *previous=g->edges;
+    g->edges=NULL;g->capacity=0;g->count=0;
+    GuFree(previous);
+    if(Gu.cpu_pool_failure_status!=EFI_SUCCESS||Gu.retained)
       return EFI_DEVICE_ERROR;
-    }
-    g->edges=grown;g->capacity=capacity;
+    g->edges=grown;g->capacity=capacity;g->count=used;
   }
   g->edges[g->count++]=edge;
   return EFI_SUCCESS;
 }
 static EFI_STATUS Snapshot(GRAPH *g) {
+  if(!SelectedGraph(g))return EFI_ACCESS_DENIED;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_HANDLE *handles=NULL;UINTN count=0;g->count=0;
   EFI_STATUS s=b->LocateHandleBuffer(AllHandles,NULL,NULL,&count,&handles);
   if(s==EFI_SUCCESS&&(!handles||!count||count>4096))s=EFI_BAD_BUFFER_SIZE;

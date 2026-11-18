@@ -547,9 +547,11 @@ int main(void){
         right = SOURCE.index("static EFI_GUID PciGuid=", left)
         graph_start = SOURCE.index("#define GRAPH_EDGE_LIMIT")
         graph_end = SOURCE.index("\ntypedef struct {\n  EFI_SYSTEM_TABLE", graph_start)
-        append_start = SOURCE.index("static EFI_STATUS GraphAppend(")
+        append_start = SOURCE.index("static BOOLEAN SelectedGraph(")
         append_end = SOURCE.index("static EFI_STATUS Snapshot(", append_start)
-        production = (SOURCE[graph_start:graph_end] + "\n" + SOURCE[left:right]
+        port=(Path(__file__).resolve().parents[1]/"src/port.c").read_text(encoding="utf-8")
+        pool=port[port.index("typedef struct GU_CPU_POOL {"):port.index("\nVOID GuStarted(")]
+        production = (pool + "\n" + SOURCE[graph_start:graph_end] + "\n" + SOURCE[left:right]
                       + SOURCE[append_start:append_end])
         # Include the real public state queries, not mock equivalents.
         production += "BOOLEAN GuMsiMutated(VOID) {" + function_body("GuMsiMutated") + "}\n"
@@ -580,6 +582,7 @@ typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
 #define EFI_COMPROMISED_DATA 5
 #define EFI_BAD_BUFFER_SIZE 6
 #define EFI_DEVICE_ERROR 7
+#define EFI_ACCESS_DENIED 8
 #define EfiLoaderData 7
 typedef struct {void *table,*pci,*self; int mutated,claimed,ready,stage,master_normalized,hardware_verified;} PLAN;
 typedef struct {
@@ -594,28 +597,26 @@ typedef struct {
   struct GU_MSI_OWNED_STATE *release_state;
   BOOLEAN release_state_reserved,release_owner_invalid;
   EFI_STATUS cpu_pool_failure_status;
-  void *pool_record;size_t pool_bytes;
+  VOID *cpu_pool_failure_address;
+  struct GU_CPU_POOL *cpu_pool;
+  struct pci_dev *compat_device;
+  BOOLEAN compat_device_open,compat_device_closed;
 } GU_PLATFORM;
 typedef GU_PLATFORM MOCK_PLATFORM;
 static MOCK_PLATFORM *platforms,*current;
 #define Gu (*current)
-static int fail_alloc,fail_free_once;
+static int fail_alloc,fail_free_once,alloc_calls,free_calls;
 static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
+  alloc_calls++;
   if(kind!=EfiLoaderData || fail_alloc) return EFI_OUT_OF_RESOURCES;
   *out=calloc(1,size);
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
 }
 static EFI_STATUS Free(VOID *p) {
+  free_calls++;
+  free(p); /* Model firmware consuming memory even on failure. */
   if(fail_free_once){fail_free_once=0;return EFI_DEVICE_ERROR;}
-  free(p);return EFI_SUCCESS;
-}
-static void *GuAlloc(size_t bytes){
-  if(Gu.pool_record)return NULL;
-  if(Gu.bs->AllocatePool(EfiLoaderData,bytes,&Gu.pool_record)!=EFI_SUCCESS)return NULL;
-  Gu.pool_bytes=bytes;return Gu.pool_record;
-}
-static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *address,size_t bytes){
-  return p&&address&&address==p->pool_record&&bytes==p->pool_bytes&&!p->cpu_pool_failure_status;
+  return EFI_SUCCESS;
 }
 """ + production + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
@@ -650,10 +651,7 @@ int main(void) {
   CHECK(GraphAppend(&bs,&Original,edge)==EFI_OUT_OF_RESOURCES);
   CHECK(Original.edges==before && Original.capacity==capacity && Original.count==capacity);
   CHECK(Original.edges[0].usb_baseline && Original.edges[0].handle==&pci[0]);
-  fail_alloc=0;fail_free_once=1;
-  CHECK(GraphAppend(&bs,&Original,edge)==EFI_DEVICE_ERROR);
-  CHECK(Original.edges==before && Original.capacity==capacity && Original.count==capacity);
-  CHECK(!fail_free_once && Original.edges[0].usb_baseline);
+  fail_alloc=0;
   while(Original.count<large)CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
   CHECK(Original.count==large && Original.capacity>=large && Original.edges[0].usb_baseline);
   CHECK(!Original.edges[large-1].usb_baseline);
@@ -720,9 +718,19 @@ int main(void) {
     saved->release_state=(void *)(uintptr_t)1;
     CHECK(!GuMsiCompletedPlatform(saved,saved->release_state));
     saved->release_state=own;
-    saved->pool_bytes--;
+    GU_CPU_POOL *root=(GU_CPU_POOL *)own-1;
+    root->bytes--;
     CHECK(!GuMsiCompletedPlatform(saved,token));
-    saved->pool_bytes++;
+    root->bytes++;
+    GRAPH original=own->original;
+    own->original=current->release_state->original;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    own->original=own->current;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    own->original=original;
+    own->original.edges=(EDGE *)(uintptr_t)1;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    own->original=original;
     saved->release_state->owner_handle=current->handle;
     CHECK(!GuMsiCompletedPlatform(saved,token));
     saved->release_state->owner_handle=saved->handle;
@@ -773,11 +781,33 @@ int main(void) {
   while(Current.count<GRAPH_EDGE_LIMIT)CHECK(GraphAppend(&bs,&Current,edge)==EFI_SUCCESS);
   CHECK(GraphAppend(&bs,&Current,edge)==EFI_BAD_BUFFER_SIZE);
   CHECK(Current.count==GRAPH_EDGE_LIMIT && Original.count==large && Original.edges[0].usb_baseline);
+  /* A separate failed boot context: the old pool may already be consumed. */
+  GU_PLATFORM failed={0};
+  failed.bs=&bs;failed.pci=&pci[0];failed.image=&bs;failed.handle=&failed;
+  failed.profile_verified=failed.prom_verified=1;
+  current=&failed;
+  CHECK(GuMsiReserveSelectedState(&bs)==EFI_SUCCESS);
+  CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
+  while(Original.count<Original.capacity)CHECK(GraphAppend(&bs,&Original,edge)==EFI_SUCCESS);
+  GU_MSI_OWNED_STATE *bad=CurrentMsi;
+  int allocated_before=alloc_calls,released_before=free_calls;
+  fail_free_once=1;
+  CHECK(GraphAppend(&bs,&Original,edge)==EFI_DEVICE_ERROR);
+  CHECK(Gu.fault&&Gu.retained&&Gu.cpu_pool_failure_status==EFI_DEVICE_ERROR);
+  CHECK(!bad->original.edges&&!bad->original.capacity&&!bad->original.count);
+  CHECK(alloc_calls==allocated_before+1&&free_calls==released_before+1);
+  CHECK(GraphAppend(&bs,&bad->original,edge)==EFI_ACCESS_DENIED);
+  CHECK(alloc_calls==allocated_before+1&&free_calls==released_before+1);
+  CHECK(!GuMsiPlanOwnerToken()&&GuMsiMutated());
+  CHECK(!GuMsiCompletedPlatform(&failed,bad));
+  current=&platforms[0];
+  CHECK(GuMsiPlanOwnerToken()==first&&Original.count==large&&!Gu.fault);
+  /* Host fixture teardown only: do not retry a firmware release. */
   for(size_t i=0;i<count;i++) {
-    free(platforms[i].release_state->original.edges);
-    free(platforms[i].release_state->current.edges);
-    free(platforms[i].release_state);
+    while(platforms[i].cpu_pool){GU_CPU_POOL *p=platforms[i].cpu_pool;
+      platforms[i].cpu_pool=p->next;free(p);}
   }
+  while(failed.cpu_pool){GU_CPU_POOL *p=failed.cpu_pool;failed.cpu_pool=p->next;free(p);}
   free(platforms);
   return 0;
 }
