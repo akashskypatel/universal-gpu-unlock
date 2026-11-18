@@ -1012,11 +1012,53 @@ static int PciCaptureFailure(const char *stage, EFI_STATUS status) {
       stage,(unsigned long long)status);
   return 0;
 }
+/* Owner records belong to the successful observation call, not to the GPU.
+ * Never inspect or release a service output without confirmed pool ownership. */
+static int ReadPciOpeners(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
+  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
+  EFI_HANDLE first_agent=NULL;
+  UINTN count=0,i;
+  unsigned by_driver=0;
+  EFI_STATUS status;
+  int valid;
+  if(!bs->OpenProtocolInformation)return 1;
+  status=bs->OpenProtocolInformation(h,&PciGuid,&entries,&count);
+  if(status!=EFI_SUCCESS) {
+    if(entries) {
+      Say("PCI_OPENERS_UNCERTAIN HANDLE=%p ADDRESS=%p STATUS=%#llx\r\n",
+          h,(VOID *)entries,(unsigned long long)status);
+      return PciCaptureFailure("pci-openers-unconfirmed",status);
+    }
+    return 1; /* An ordinary failed observation leaves ownership unknown. */
+  }
+  if(entries && !bs->FreePool)
+    return PciCaptureFailure("pci-openers-free-unavailable",EFI_UNSUPPORTED);
+  valid=count<=1024U && (!count || entries);
+  if(valid)for(i=0;i<count;i++) {
+    if(entries[i].Attributes&EFI_OPEN_PROTOCOL_BY_DRIVER) {
+      if(!by_driver)first_agent=entries[i].AgentHandle;
+      by_driver++;
+    }
+  }
+  if(entries) {
+    status=bs->FreePool(entries);
+    if(status!=EFI_SUCCESS) {
+      Say("PCI_OPENERS_FREE_UNCERTAIN HANDLE=%p ADDRESS=%p STATUS=%#llx\r\n",
+          h,(VOID *)entries,(unsigned long long)status);
+      return PciCaptureFailure("pci-openers-free",status);
+    }
+  }
+  if(!valid)return PciCaptureFailure("pci-openers-invalid",EFI_COMPROMISED_DATA);
+  node->by_driver=by_driver;
+  node->first_owner_agent=first_agent;
+  node->openers_known=1;
+  return 1;
+}
+
 static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   EFI_PCI_IO_PROTOCOL *io=NULL;
   EFI_DEVICE_PATH_PROTOCOL *path=NULL;
-  EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *entries=NULL;
-  UINTN count=0,s=0,b=0,d=0,f=0,i;
+  UINTN s=0,b=0,d=0,f=0,i;
   UINT32 cfg[64],verify[64],classifier[3],classifier_check[3];
   EFI_STATUS status;
   memset(node,0,sizeof(*node));
@@ -1064,28 +1106,7 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
     node->root_port=(UINT8)PcieRootPort(cfg);
   }
   /* Only inspect owner records; never Open/Close with BY_DRIVER. */
-  if(bs->OpenProtocolInformation) {
-    status=bs->OpenProtocolInformation(h,&PciGuid,&entries,&count);
-    if(!EFI_ERROR(status)) {
-      node->openers_known=1;
-      if(count>1024 || (count && !entries)) {
-        if(entries && bs->FreePool)(VOID)bs->FreePool(entries);
-        return PciCaptureFailure("pci-openers-invalid",EFI_COMPROMISED_DATA);
-      }
-      for(i=0;i<count;i++) {
-        if(entries[i].Attributes & EFI_OPEN_PROTOCOL_BY_DRIVER) {
-          if(!node->by_driver)node->first_owner_agent=entries[i].AgentHandle;
-          node->by_driver++;
-        }
-      }
-    }
-    if(entries) {
-      if(!bs->FreePool)
-        return PciCaptureFailure("pci-openers-free-unavailable",EFI_UNSUPPORTED);
-      status=bs->FreePool(entries);
-      if(EFI_ERROR(status))return PciCaptureFailure("pci-openers-free",status);
-    }
-  }
+  if(!ReadPciOpeners(bs,h,node))return 0;
   /* Fail closed if re-resolved protocols or the *entire* snapshot drift.
    * Do not weaken any stability assertion until the reason is known. */
   {
@@ -1142,8 +1163,13 @@ static int CapturePci(EFI_BOOT_SERVICES *bs) {
   Say("PCI_LOCATE_STATUS=%#llx PCI_HANDLE_COUNT=%zu PCI_LIMIT=%u PCI_NODE_LIMIT=%u\r\n",
       (unsigned long long)status,(size_t)count,(unsigned)GU_TOPO_MAX_HANDLES,
       (unsigned)GU_TOPO_MAX_PCI);
-  if(EFI_ERROR(status)) {
+  if(status!=EFI_SUCCESS) {
     Say("PCI_ENUM_FAILURE STAGE=locate-handles\r\n");okay=0;
+    if(handles) {
+      Say("PCI_HANDLES_UNCERTAIN ADDRESS=%p STATUS=%#llx\r\n",
+          (VOID *)handles,(unsigned long long)status);
+      handles=NULL;
+    }
   } else if(count==0) {
     Say("PCI_ENUM_FAILURE STAGE=zero-handles\r\n");okay=0;
   } else if(count>GU_TOPO_MAX_HANDLES) {
@@ -1172,9 +1198,9 @@ static int CapturePci(EFI_BOOT_SERVICES *bs) {
       Say("PCI_ENUM_FAILURE STAGE=handles-free-unavailable\r\n");okay=0;
     } else {
       status=bs->FreePool(handles);
-      if(EFI_ERROR(status)) {
-        Say("PCI_ENUM_FAILURE STAGE=handles-free EFI_STATUS=%#llx\r\n",
-            (unsigned long long)status);okay=0;
+      if(status!=EFI_SUCCESS) {
+        Say("PCI_ENUM_FAILURE STAGE=handles-free EFI_STATUS=%#llx ADDRESS=%p\r\n",
+            (unsigned long long)status,(VOID *)handles);okay=0;
       }
     }
   }

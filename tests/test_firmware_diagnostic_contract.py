@@ -379,6 +379,102 @@ int main(void) {
                     run=subprocess.run([str(binary)],capture_output=True,text=True)
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
+
+    def test_strict_pci_observation_pool_ownership(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        openers=source.split("static int ReadPciOpeners(",1)[1].split("\nstatic int ReadPci(",1)[0]
+        openers="static int ReadPciOpeners("+openers
+        capture=source.split("static int CapturePci(",1)[1].split("\n/* Adapt the bounded AllHandles",1)[0]
+        capture="static int CapturePci("+capture
+        self.assertIn("if(!ReadPciOpeners(bs,h,node))return 0;",source)
+        program = r"""
+#include "gpu_topology.h"
+#include <stdio.h>
+#include <string.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef int EFI_STATUS;
+typedef int EFI_GUID;
+#define EFI_SUCCESS 0
+#define EFI_UNSUPPORTED 1
+#define EFI_COMPROMISED_DATA 2
+#define EFI_OPEN_PROTOCOL_BY_DRIVER 16U
+#define ByProtocol 1
+typedef struct { EFI_HANDLE AgentHandle; unsigned Attributes; } EFI_OPEN_PROTOCOL_INFORMATION_ENTRY;
+typedef struct {
+  EFI_STATUS (*OpenProtocolInformation)(EFI_HANDLE,EFI_GUID *,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **,UINTN *);
+  EFI_STATUS (*LocateHandleBuffer)(int,EFI_GUID *,VOID *,UINTN *,EFI_HANDLE **);
+  EFI_STATUS (*FreePool)(VOID *);
+} EFI_BOOT_SERVICES;
+static EFI_GUID PciGuid;
+static GU_TOPO_CAPTURE Snapshot;
+static EFI_OPEN_PROTOCOL_INFORMATION_ENTRY entries[2],uncertain;
+static EFI_HANDLE handles[2],uncertain_handles[2];
+static int mode,reads,frees,foreign_frees,failures;
+static void Say(const char *fmt,...) {(void)fmt;}
+static int PciCaptureFailure(const char *stage,EFI_STATUS status) {(void)stage;(void)status;failures++;return 0;}
+static EFI_STATUS Openers(EFI_HANDLE h,EFI_GUID *guid,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **p,UINTN *n) {
+  (void)h;(void)guid;
+  if(mode==1) {*p=&uncertain;*n=1;return 1;}
+  if(mode==2)return 1;
+  if(mode==3) {*p=entries;*n=1025;return 0;}
+  if(mode==4) {*n=1;return 0;}
+  *p=entries;*n=2;return 0;
+}
+static EFI_STATUS Locate(int search,EFI_GUID *guid,VOID *key,UINTN *n,EFI_HANDLE **p) {
+  (void)search;(void)guid;(void)key;
+  *n=2;
+  if(mode==6) {*p=uncertain_handles;return 1;}
+  if(mode==7)return 1;
+  *p=handles;
+  if(mode==8)*n=0;
+  return 0;
+}
+static EFI_STATUS Release(VOID *p) {
+  if(p==&uncertain || p==uncertain_handles){foreign_frees++;return 1;}
+  frees++;return mode==5?1:0;
+}
+static int ReadPci(EFI_BOOT_SERVICES *bs,EFI_HANDLE h,GU_TOPO_PCI *node) {
+  (void)bs;(void)h;
+  reads++;memset(node,0,sizeof(*node));return 1;
+}
+""" + openers + capture + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void) {
+  EFI_BOOT_SERVICES bs={Openers,Locate,Release};
+  GU_TOPO_PCI node={0};
+  entries[0].Attributes=EFI_OPEN_PROTOCOL_BY_DRIVER;
+  entries[0].AgentHandle=&node;
+  CHECK(ReadPciOpeners(&bs,&node,&node) && node.openers_known && node.by_driver==1 && node.first_owner_agent==&node && frees==1);
+  for(mode=1;mode<=5;mode++) {
+    memset(&node,0,sizeof(node));frees=failures=0;
+    CHECK(ReadPciOpeners(&bs,&node,&node)==(mode==2));
+    CHECK(!node.openers_known && !node.by_driver && !node.first_owner_agent && !foreign_frees);
+    CHECK(frees==(mode==3 || mode==5) && failures==(mode!=2));
+  }
+  for(mode=6;mode<=8;mode++) {
+    memset(&Snapshot,0,sizeof(Snapshot));reads=frees=0;
+    CHECK(!CapturePci(&bs) && !Snapshot.pci_count && !reads && !foreign_frees && frees==(mode==8));
+  }
+  mode=5;reads=frees=0;
+  CHECK(!CapturePci(&bs) && reads==2 && frees==1);
+  mode=0;reads=frees=0;memset(&Snapshot,0,sizeof(Snapshot));
+  CHECK(CapturePci(&bs) && Snapshot.pci_count==2 && reads==2 && frees==1);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            c=Path(tmp)/"pci_observation.c"
+            c.write_text(program,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                with self.subTest(compiler=compiler):
+                    binary=Path(tmp)/compiler
+                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic","-I",str(P),str(c),"-o",str(binary)],capture_output=True,text=True)
+                    self.assertEqual(build.returncode,0,build.stderr)
+                    run=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(run.returncode,0,run.stdout+run.stderr)
+
     def test_version_does_not_claim_parent_release(self):
         self.assertIn("GPU-Unlock fork: experimental",V)
         self.assertIn("GU_FORK_VERSION_WIDE",B)
