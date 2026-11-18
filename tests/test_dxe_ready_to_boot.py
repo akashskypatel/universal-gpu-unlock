@@ -42,6 +42,16 @@ class ReadyToBootOrderTests(unittest.TestCase):
         self.assertLess(notify.index("DxeExecuted=TRUE"), notify.index("GuDxeRun("))
         self.assertLess(notify.index("CloseEvent("), notify.index("GuDxeRun("))
 
+    def test_failed_success_path_close_reaches_containment(self):
+        body = function_body("GuDxeRun")
+        close = body.index("s=GuBootClose();")
+        success = body.index("if(s==EFI_SUCCESS)return s;",close)
+        failure = body.index("if (s != EFI_SUCCESS)",success)
+        self.assertLess(close,success)
+        self.assertLess(success,failure)
+        self.assertLess(failure,body.index("GuExecutionNeedsContainment()",failure))
+        self.assertIn('stage="dxe-close-USB-log";',body)
+
     def test_original_active_guards_retained_in_actual_work(self):
         body = function_body("GuDxeRun")
         self.assertIn("GU_ACTIVE_SEQUENCE_PREPARE_ONLY", body)

@@ -65,6 +65,7 @@ typedef struct {
 } EFI_BOOT_SERVICES;
 static EFI_HANDLE fixture[129];
 static EFI_HANDLE *UnreleasedFilesystemHandles;
+static EFI_STATUS BootFileStatus;
 static int FsGuid,locates,frees,fail_free,fail_locate,null_buffer;
 static UINTN supplied=2;
 static void *released;
@@ -130,7 +131,8 @@ int main(void){
         windows=BOOT.split("EFI_STATUS GuBootLoadWindows(",1)[1].split("EFI_STATUS GuBootChoose(",1)[0]
         self.assertIn("UnreleasedFilesystemHandles",windows)
         self.assertIn("LocateBootFilesystems(b,&h,&count)",windows)
-        release=windows.index("s=ReleaseBootFilesystemHandles(b,&h);")
+        release=windows.index("released=ReleaseBootFilesystemHandles(b,&h);")
+        self.assertLess(release,windows.index("if(released!=EFI_SUCCESS)s=released;"))
         refusal=windows.index("return s==EFI_SUCCESS?EFI_NOT_FOUND:s;",release)
         self.assertLess(refusal,windows.index("ReadWindowsBinary("))
         self.assertLess(refusal,windows.index("b->LoadImage("))
@@ -141,8 +143,8 @@ int main(void){
         end = BOOT.index("static EFI_STATUS ReadFile(", begin)
         opened = BOOT[begin:end]
         guard = opened.index("#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY")
-        finish_log = opened.index("if(closed!=EFI_SUCCESS)return closed;")
-        watchdog = opened.index("if(!b->SetWatchdogTimer)return EFI_UNSUPPORTED;")
+        finish_log = opened.index("if(closed!=EFI_SUCCESS){s=closed;goto failed;}")
+        watchdog = opened.index("if(!b->SetWatchdogTimer){s=EFI_UNSUPPORTED;goto failed;}")
         self.assertLess(finish_log, guard)
         self.assertLess(guard, watchdog)
         self.assertEqual(
@@ -152,15 +154,78 @@ int main(void){
             "   * Do not change the firmware watchdog or any active boot state. */\n"
             "  return EFI_SUCCESS;\n"
             "#endif")
-        self.assertIn("return b->SetWatchdogTimer(0,0,0,NULL);", opened[watchdog:])
+        self.assertIn("s=b->SetWatchdogTimer(0,0,0,NULL);", opened[watchdog:])
+        self.assertIn("EFI_STATUS released=GuBootClose();",opened[watchdog:])
         for source in (APP, DXE):
             self.assertIn("/DGU_ACTIVE_SEQUENCE_PREPARE_ONLY", source)
+
+    def test_shared_file_close_failure_is_sticky(self):
+        """Exercise actual close helpers, including failure after log flush."""
+        close = BOOT.split("static EFI_STATUS CloseBootFile(",1)[1].split("\nEFI_STATUS GuBootOpen(",1)[0]
+        boot_close=BOOT.split("EFI_STATUS GuBootClose(VOID) {",1)[1].split("\nEFI_STATUS GuBootWindows(",1)[0]
+        actual="static EFI_STATUS CloseBootFile("+close+"\nEFI_STATUS GuBootClose(VOID) {"+boot_close
+        host=r"""
+#include <stddef.h>
+#include <stdio.h>
+#define VOID void
+typedef size_t UINTN;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+#define EFI_DEVICE_ERROR 1
+#define EFI_UNSUPPORTED 2
+typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+struct EFI_FILE_PROTOCOL {
+  EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *);
+  EFI_STATUS (*Flush)(EFI_FILE_PROTOCOL *);
+  int failed,flush_failed,closes,flushes;
+};
+static EFI_FILE_PROTOCOL *Root,*Log;
+static EFI_FILE_PROTOCOL *UnreleasedBootFiles[5];
+static UINTN UnreleasedBootFileCount;
+static EFI_STATUS BootFileStatus;
+static EFI_STATUS Close(EFI_FILE_PROTOCOL *f){f->closes++;return f->failed?EFI_UNSUPPORTED:EFI_SUCCESS;}
+static EFI_STATUS Flush(EFI_FILE_PROTOCOL *f){f->flushes++;return f->flush_failed?EFI_UNSUPPORTED:EFI_SUCCESS;}
+""" +actual+r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void){
+  for(unsigned flags=0;flags<8;flags++){
+    EFI_FILE_PROTOCOL root={Close,Flush,(int)(flags&1),0,0,0};
+    EFI_FILE_PROTOCOL log={Close,Flush,(int)(flags&2),(int)(flags&4),0,0};
+    Root=&root;Log=&log;BootFileStatus=EFI_SUCCESS;UnreleasedBootFileCount=0;
+    EFI_STATUS expected=flags?EFI_DEVICE_ERROR:EFI_SUCCESS;
+    CHECK(GuBootClose()==expected);
+    CHECK(!Root&&!Log&&root.closes==1&&log.closes==1&&log.flushes==1);
+    CHECK(UnreleasedBootFileCount==(UINTN)(!!(flags&1)+!!(flags&2)));
+    if(flags&2)CHECK(UnreleasedBootFiles[0]==&log);
+    if(flags&1)CHECK(UnreleasedBootFiles[UnreleasedBootFileCount-1]==&root);
+    CHECK(GuBootClose()==expected);
+    CHECK(root.closes==1&&log.closes==1&&log.flushes==1);
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"file_close.c"
+            path.write_text(host,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                binary=Path(directory)/compiler
+                built=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(path),"-o",str(binary)],capture_output=True,text=True)
+                self.assertEqual(built.returncode,0,built.stderr)
+                result=subprocess.run([str(binary)],capture_output=True,text=True)
+                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        windows=BOOT.split("EFI_STATUS GuBootLoadWindows(",1)[1].split("EFI_STATUS GuBootChoose(",1)[0]
+        self.assertIn("s=CloseBootFile(&tf);\n            if(s!=EFI_SUCCESS)break;",windows)
+        self.assertIn("if(closed!=EFI_SUCCESS)s=closed;",windows)
+        self.assertIn("if(released!=EFI_SUCCESS)s=released;",windows)
+        self.assertLess(windows.index("if(s!=EFI_SUCCESS||matches<1"),windows.index("b->LoadImage("))
+        self.assertIn("BootFileStatus!=EFI_SUCCESS",BOOT.split("EFI_STATUS GuBootWindows(",1)[1])
 
     def test_windows_binary_reader_rejects_invalid_info_lengths(self):
         """Run the actual boot-file reader with independent fake EFI file services."""
         source = BOOT.split("static EFI_STATUS ReadWindowsBinary(", 1)[1].split(
             "\nEFI_STATUS GuBootLoadWindows(", 1)[0]
-        production = "static EFI_STATUS ReadWindowsBinary(" + source
+        close = BOOT.split("static EFI_STATUS CloseBootFile(",1)[1].split("\nEFI_STATUS GuBootOpen(",1)[0]
+        production = "static EFI_STATUS CloseBootFile(" + close + "\nstatic EFI_STATUS ReadWindowsBinary(" + source
         host = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -181,6 +246,7 @@ typedef struct {UINT64 Size,FileSize,PhysicalSize;
 #define EFI_OUT_OF_RESOURCES 3
 #define EFI_DEVICE_ERROR 4
 #define EFI_NOT_FOUND 5
+#define EFI_UNSUPPORTED 6
 #define EFI_FILE_MODE_READ 1
 #define EFI_FILE_DIRECTORY 0x10
 static int InfoGuid,mode,open_calls,info_calls,read_calls,close_calls,alloc_calls;
@@ -192,6 +258,9 @@ struct EFI_FILE_PROTOCOL {
   EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *);
 };
 static EFI_FILE_PROTOCOL file;
+static EFI_FILE_PROTOCOL *UnreleasedBootFiles[5];
+static UINTN UnreleasedBootFileCount;
+static EFI_STATUS BootFileStatus;
 static void *GuAlloc(size_t n) {alloc_calls++;return malloc(n);}
 static void GuFree(void *p) {free(p);}
 static EFI_STATUS Open(EFI_FILE_PROTOCOL *r,EFI_FILE_PROTOCOL **f,CHAR16 *name,
@@ -243,6 +312,11 @@ int main(int argc,char **argv) {
                        mode==8?EFI_DEVICE_ERROR:EFI_COMPROMISED_DATA);
   CHECK(s==expected);
   CHECK(open_calls==1 && info_calls==1 && close_calls==1);
+  if(mode==10) {
+    CHECK(BootFileStatus==EFI_DEVICE_ERROR&&UnreleasedBootFileCount==1&&UnreleasedBootFiles[0]==&file);
+    CHECK(ReadWindowsBinary(&root,name,&size,&bytes)==EFI_DEVICE_ERROR);
+    CHECK(open_calls==1&&close_calls==1);
+  }
   if(mode==0) {
     CHECK(size==65536 && bytes!=NULL && read_calls==1 && alloc_calls==1);
     GuFree(bytes);

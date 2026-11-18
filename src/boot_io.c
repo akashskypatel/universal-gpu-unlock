@@ -30,6 +30,11 @@ static EFI_HANDLE Self,Windows,OwnVolume,TargetEspVolume;
 
 static EFI_FILE_PROTOCOL *Root,*Log;
 static EFI_HANDLE *UnreleasedFilesystemHandles;
+/* At most five live file references: USB root/log, retained match root,
+ * current candidate root and candidate file. Stop opening on failure. */
+static EFI_FILE_PROTOCOL *UnreleasedBootFiles[5];
+static UINTN UnreleasedBootFileCount;
+static EFI_STATUS BootFileStatus;
 static CHAR16 ActiveLogPath[]=L"\\AD102-UNLOCK\\RUN0000.TXT";
 
 static BOOLEAN Silent;
@@ -109,6 +114,22 @@ BOOLEAN GuBootLogOpen(VOID){return Log!=NULL;}
 EFI_HANDLE GuBootGetTargetEspVolume(VOID){return TargetEspVolume;}
 const CHAR16 *GuBootGetLogPath(VOID){return Log?ActiveLogPath:NULL;}
 
+/* Consume each local reference once. Retain failed reference addresses
+ * for diagnosis only; never dereference or retry them. */
+static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **file) {
+  if(!file||!*file)return EFI_SUCCESS;
+  EFI_FILE_PROTOCOL *f=*file;
+  *file=NULL;
+  EFI_STATUS s=f->Close?f->Close(f):EFI_UNSUPPORTED;
+  if(s!=EFI_SUCCESS) {
+    if(UnreleasedBootFileCount<sizeof(UnreleasedBootFiles)/sizeof(UnreleasedBootFiles[0]))
+      UnreleasedBootFiles[UnreleasedBootFileCount++]=f;
+    BootFileStatus=EFI_DEVICE_ERROR;
+    return EFI_DEVICE_ERROR;
+  }
+  return EFI_SUCCESS;
+}
+
 EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(Table)return EFI_ALREADY_STARTED;
@@ -133,13 +154,13 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   s=b->HandleProtocol(OwnVolume,&FsGuid,(VOID **)&fs);if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
 
-  s=fs->OpenVolume(fs,&Root);if(s!=EFI_SUCCESS||!Root)return EFI_DEVICE_ERROR;
+  s=fs->OpenVolume(fs,&Root);if(s!=EFI_SUCCESS||!Root){s=EFI_DEVICE_ERROR;goto failed;}
 
   EFI_FILE_PROTOCOL *dir=NULL;
 
   s=Root->Open(Root,&dir,L"\\AD102-UNLOCK",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,EFI_FILE_DIRECTORY);
 
-  if(s!=EFI_SUCCESS||!dir)return EFI_DEVICE_ERROR;
+  if(s!=EFI_SUCCESS||!dir){s=EFI_DEVICE_ERROR;goto failed;}
 
   for(UINTN slot=1;slot<=9999;slot++) {
 
@@ -149,7 +170,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     EFI_FILE_PROTOCOL *existing=NULL;s=dir->Open(dir,&existing,name,EFI_FILE_MODE_READ,0);
 
-    if(s==EFI_SUCCESS&&existing){s=existing->Close(existing);if(s!=EFI_SUCCESS)break;continue;}
+    if(s==EFI_SUCCESS&&existing){s=CloseBootFile(&existing);if(s!=EFI_SUCCESS)break;continue;}
 
     if(s!=EFI_NOT_FOUND)break;
 
@@ -161,24 +182,29 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   }
 
-  EFI_STATUS closed=dir->Close(dir);if(s!=EFI_SUCCESS||!Log)return s==EFI_SUCCESS?EFI_OUT_OF_RESOURCES:s;
-
-  if(closed!=EFI_SUCCESS)return closed;
+  EFI_STATUS closed=CloseBootFile(&dir);
+  if(closed!=EFI_SUCCESS){s=closed;goto failed;}
+  if(s!=EFI_SUCCESS||!Log){if(s==EFI_SUCCESS)s=EFI_OUT_OF_RESOURCES;goto failed;}
 
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
   /* Preparation reads PCI identity and writes only its removable USB log.
    * Do not change the firmware watchdog or any active boot state. */
   return EFI_SUCCESS;
 #endif
-  if(!b->SetWatchdogTimer)return EFI_UNSUPPORTED;
-
-  return b->SetWatchdogTimer(0,0,0,NULL);
-
+  if(!b->SetWatchdogTimer){s=EFI_UNSUPPORTED;goto failed;}
+  s=b->SetWatchdogTimer(0,0,0,NULL);
+  if(s==EFI_SUCCESS)return s;
+failed:
+  {
+    EFI_STATUS released=GuBootClose();
+    return released==EFI_SUCCESS?s:released;
+  }
 }
 
 static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expected,VOID **data) {
 
   *data=NULL;EFI_FILE_PROTOCOL *f=NULL;UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
+  if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
 
   EFI_STATUS s=root->Open(root,&f,(CHAR16 *)name,EFI_FILE_MODE_READ,0);
 
@@ -206,7 +232,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
 
   if(s==EFI_SUCCESS){UINT8 tail;UINTN n=1;s=f->Read(f,&n,&tail);if(s==EFI_SUCCESS&&n)s=EFI_COMPROMISED_DATA;}
 
-  EFI_STATUS closed=f->Close(f);if(s==EFI_SUCCESS)s=closed;
+  EFI_STATUS closed=CloseBootFile(&f);if(closed!=EFI_SUCCESS)s=closed;
 
   if(s!=EFI_SUCCESS){GuFree(p);return s;}*data=p;return EFI_SUCCESS;
 
@@ -230,7 +256,7 @@ static EFI_STATUS ReleaseBootFilesystemHandles(EFI_BOOT_SERVICES *bs,EFI_HANDLE 
 static EFI_STATUS LocateBootFilesystems(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handles,UINTN *count) {
   if(!handles||!count)return EFI_INVALID_PARAMETER;
   *handles=NULL;*count=0;
-  if(UnreleasedFilesystemHandles)return EFI_NOT_READY;
+  if(UnreleasedFilesystemHandles||BootFileStatus!=EFI_SUCCESS)return EFI_NOT_READY;
   if(!bs||!bs->LocateHandleBuffer||!bs->FreePool)return EFI_UNSUPPORTED;
   EFI_STATUS s=bs->LocateHandleBuffer(ByProtocol,&FsGuid,NULL,count,handles);
   if(s!=EFI_SUCCESS){*handles=NULL;*count=0;return s;}
@@ -275,8 +301,8 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
   s=fs->OpenVolume(fs,&root);
   if(s!=EFI_SUCCESS||!root)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
   s=ReadFile(root,path,asset->bytes,out);
-  EFI_STATUS closed=root->Close(root);
-  if(s==EFI_SUCCESS&&closed!=EFI_SUCCESS)s=closed;
+  EFI_STATUS closed=CloseBootFile(&root);
+  if(closed!=EFI_SUCCESS)s=closed;
   if(s==EFI_SUCCESS&&!GuHashMatches(*out,asset->bytes,asset->sha256))
     s=EFI_CRC_ERROR;
   if(s!=EFI_SUCCESS&&*out){GuFree(*out);*out=NULL;}
@@ -284,7 +310,7 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
 }
 
 EFI_STATUS GuBootLoadAssets(VOID) {
-  if(!Root||UnreleasedFilesystemHandles||Gu.started||Gu.fault||Gu.retained||Gu.asset_load_attempted)
+  if(!Root||UnreleasedFilesystemHandles||BootFileStatus!=EFI_SUCCESS||Gu.started||Gu.fault||Gu.retained||Gu.asset_load_attempted)
     return EFI_NOT_READY;
   /* Do not overwrite or silently free data published by another owner. */
   for(UINTN i=0;i<GU_ASSET_COUNT;i++)
@@ -338,6 +364,7 @@ EFI_STATUS GuBootLoadAssets(VOID) {
 static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN *file_size,VOID **data) {
 
   *data=NULL;*file_size=0;EFI_FILE_PROTOCOL *f=NULL;UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
+  if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
 
   EFI_STATUS s=root->Open(root,&f,(CHAR16 *)name,EFI_FILE_MODE_READ,0);
 
@@ -368,7 +395,7 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
 
   }
 
-  EFI_STATUS closed=f->Close(f);if(s==EFI_SUCCESS)s=closed;
+  EFI_STATUS closed=CloseBootFile(&f);if(closed!=EFI_SUCCESS)s=closed;
 
   if(s!=EFI_SUCCESS){GuFree(p);return s;}
 
@@ -379,7 +406,7 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
 }
 
 EFI_STATUS GuBootLoadWindows(VOID) {
-  if(Windows||!Table||UnreleasedFilesystemHandles||Gu.started||TargetEspVolume)return EFI_NOT_READY;
+  if(Windows||!Table||UnreleasedFilesystemHandles||BootFileStatus!=EFI_SUCCESS||Gu.started||TargetEspVolume)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Table->BootServices;EFI_HANDLE *h=NULL,volume=NULL;UINTN count=0,matches=0,path_bytes=0;
   EFI_DEVICE_PATH_PROTOCOL *base=NULL;
   const CHAR16 *selected_name=NULL;
@@ -398,7 +425,8 @@ EFI_STATUS GuBootLoadWindows(VOID) {
         for(UINTN c_idx=0;c_idx<sizeof(WindowsCandidates)/sizeof(WindowsCandidates[0]);c_idx++) {
           EFI_FILE_PROTOCOL *tf=NULL;
           if(troot->Open(troot,&tf,(CHAR16 *)WindowsCandidates[c_idx],EFI_FILE_MODE_READ,0)==EFI_SUCCESS&&tf) {
-            tf->Close(tf);
+            s=CloseBootFile(&tf);
+            if(s!=EFI_SUCCESS)break;
             found_name=WindowsCandidates[c_idx];
             break;
           }
@@ -411,25 +439,28 @@ EFI_STATUS GuBootLoadWindows(VOID) {
           matches++;
           GuLog("GuBootLoadWindows: candidate %zu volume=%p found '%ls' (match #%zu)\n", i, (void *)h[i], found_name, matches);
         }
-        if(troot) troot->Close(troot);
+        EFI_STATUS closed=CloseBootFile(&troot);
+        if(closed!=EFI_SUCCESS)s=closed;
       }
     }
   }
-  s=ReleaseBootFilesystemHandles(b,&h);
+  EFI_STATUS released=ReleaseBootFilesystemHandles(b,&h);
+  if(released!=EFI_SUCCESS)s=released;
   if(s!=EFI_SUCCESS||matches<1||!volume||!matched_root||!selected_name) {
-    if(matched_root) matched_root->Close(matched_root);
+    EFI_STATUS closed=CloseBootFile(&matched_root);
+    if(closed!=EFI_SUCCESS)s=closed;
     GuLog("GuBootLoadWindows failed: matches=%zu volume=%p s=%#llx\n", (size_t)matches, (void *)volume, (unsigned long long)s);
     return s==EFI_SUCCESS?EFI_NOT_FOUND:s;
   }
   if(matches!=1) {
     GuLog("GuBootLoadWindows refused: pinned partition maps to %zu distinct filesystem handles\n",(size_t)matches);
-    if(matched_root)matched_root->Close(matched_root);
-    return EFI_UNSUPPORTED;
+    EFI_STATUS closed=CloseBootFile(&matched_root);
+    return closed==EFI_SUCCESS?EFI_UNSUPPORTED:closed;
   }
   EFI_FILE_PROTOCOL *root=matched_root;
   VOID *bytes=NULL;UINTN actual_size=0;
   s=ReadWindowsBinary(root,selected_name,&actual_size,&bytes);
-  EFI_STATUS closed=root->Close(root);if(s==EFI_SUCCESS)s=closed;
+  EFI_STATUS closed=CloseBootFile(&root);if(closed!=EFI_SUCCESS)s=closed;
   UINTN name_bytes=(GuStrLen(selected_name)+1)*sizeof(CHAR16);
   UINTN node_bytes=4+name_bytes,total=path_bytes-4+node_bytes+4;
   UINT8 *path=NULL;
@@ -516,19 +547,19 @@ EFI_STATUS GuBootChoose(CHAR16 *choice) {
 
 EFI_STATUS GuBootClose(VOID) {
 
-  EFI_STATUS s=EFI_SUCCESS;
-
-  if(Log){s=Log->Flush(Log);EFI_STATUS closed=Log->Close(Log);Log=NULL;if(s==EFI_SUCCESS)s=closed;}
-
-  if(Root){EFI_STATUS closed=Root->Close(Root);Root=NULL;if(s==EFI_SUCCESS)s=closed;}
-
-  return s;
+  if(Log){
+    EFI_STATUS flushed=Log->Flush?Log->Flush(Log):EFI_UNSUPPORTED;
+    if(flushed!=EFI_SUCCESS)BootFileStatus=EFI_DEVICE_ERROR;
+    (VOID)CloseBootFile(&Log);
+  }
+  (VOID)CloseBootFile(&Root);
+  return BootFileStatus;
 
 }
 
 EFI_STATUS GuBootWindows(VOID) {
 
-  if(!Windows)return EFI_NOT_READY;
+  if(!Windows||!Table||Root||Log||UnreleasedFilesystemHandles||BootFileStatus!=EFI_SUCCESS)return EFI_NOT_READY;
 
   return Table->BootServices->StartImage(Windows,NULL,NULL);
 

@@ -53,6 +53,12 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
 finish:
   if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;
+  if (s == EFI_SUCCESS) {
+    stage="dxe-close-USB-log";
+    GuLog("DXE-DRIVER: final transaction checks passed; closing boot resources.\n");
+    s=GuBootClose();
+    if(s==EFI_SUCCESS)return s;
+  }
   if (s != EFI_SUCCESS) {
     GuLog("DXE-DRIVER: STOP stage=%s status=%#llx mutated=%u retained=%u started=%u fault=%u\n",
           stage, (unsigned long long)s, GuMsiMutated(), Gu.retained, Gu.started, Gu.fault);
@@ -68,11 +74,9 @@ finish:
       GuBootHalt();
       return EFI_ABORTED;
     }
-  } else {
-    GuLog("DXE-DRIVER: Pre-OS transaction completed; post-boot benchmark is still required.\n");
   }
-  (VOID)GuBootClose();
-  return s;
+  EFI_STATUS closed=GuBootClose();
+  return closed==EFI_SUCCESS?s:closed;
 }
 
 /* Signal once, close the event, then execute the existing checked path. */
