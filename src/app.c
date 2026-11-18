@@ -52,31 +52,34 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   s=EFI_UNSUPPORTED;goto failed;
 #endif
 
-  if (Gu.is_ampere) {
+  /* Pin the discovered owner through preparation and transaction entry. */
+  GU_PLATFORM *owner=GuPlatformActive;
+  if(!owner){s=EFI_NOT_READY;goto failed;}
+  if (owner->is_ampere) {
 
-    GuLog("Ampere GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
+    GuLog("Ampere GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
 
     GuLog("%s: GA102, volatile RAM-only attempt, no VBIOS flash\n",GU_FORK_VERSION);
 
-  } else if (Gu.is_turing) {
+  } else if (owner->is_turing) {
 
-    GuLog("Turing GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
+    GuLog("Turing GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
 
     GuLog("%s: TU10X assets not authenticated for this owner\n",GU_FORK_VERSION);
 
   } else {
 
-    GuLog("Ada Lovelace GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
+    GuLog("Ada Lovelace GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
 
     GuLog("%s: AD10X, volatile RAM-only attempt, no VBIOS flash\n",GU_FORK_VERSION);
 
   }
 
-  s=GuPrepareBoundGpu(&stage);if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  s=GuPrepareBoundGpu(owner,&stage);if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 
-  stage="stage-windows-image";s=GuBootLoadWindows();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  stage="stage-windows-image";s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 
-  stage="manual-choice";s=GuBootChoose(&choice);if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  stage="manual-choice";s=GuBootChoose(&choice);if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 
   if (choice == L'I') {
 
@@ -156,7 +159,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     GuLog("Operator skipped: no GPU transaction, no driver release; stock Windows\n");
 
-    if(Gu.fault||GuBootClose()!=EFI_SUCCESS)return EFI_DEVICE_ERROR;
+    if(owner!=GuPlatformActive||owner->fault||GuBootClose()!=EFI_SUCCESS||owner!=GuPlatformActive)return EFI_DEVICE_ERROR;
 
     return GuBootWindows();
 
@@ -166,7 +169,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     L"\r\nSelected GPU preparation passed. Driver release and firmware work will now begin.\r\n");
   GuLog("Operator U/P: ordered selected transactions; no automatic retry\n");
   GuBootSilence();
-  s=GuExecutePreparedSequence(t,image,enable_s3?GU_S3_REQUIRED:GU_S3_DISABLED,&stage);
+  s=GuExecutePreparedSequence(owner,t,image,enable_s3?GU_S3_REQUIRED:GU_S3_DISABLED,&stage);
   if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");

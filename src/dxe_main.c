@@ -39,17 +39,20 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   s = EFI_UNSUPPORTED; goto finish;
 #endif
 
-  if (Gu.is_ampere) {
-    GuLog("DXE-DRIVER: Ampere GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
-  } else if (Gu.is_turing) {
-    GuLog("DXE-DRIVER: Turing GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
+  /* Pin the discovered owner through preparation and transaction entry. */
+  GU_PLATFORM *owner=GuPlatformActive;
+  if(!owner){s=EFI_NOT_READY;goto finish;}
+  if (owner->is_ampere) {
+    GuLog("DXE-DRIVER: Ampere GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
+  } else if (owner->is_turing) {
+    GuLog("DXE-DRIVER: Turing GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
   } else {
-    GuLog("DXE-DRIVER: Ada Lovelace GPU detected: Device ID 0x%04x\n", (unsigned)Gu.device_id);
+    GuLog("DXE-DRIVER: Ada Lovelace GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
   }
 
-  s=GuPrepareBoundGpu(&stage);
-  if(s!=EFI_SUCCESS||Gu.fault)goto finish;
-  s=GuExecutePreparedSequence(t,image,GU_S3_OPTIONAL,&stage);
+  s=GuPrepareBoundGpu(owner,&stage);
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto finish;
+  s=GuExecutePreparedSequence(owner,t,image,GU_S3_OPTIONAL,&stage);
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 
 finish:
