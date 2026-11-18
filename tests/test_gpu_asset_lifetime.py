@@ -282,6 +282,138 @@ int main(int argc,char **argv) {
 '''
         self.compile_run(source, range(13))
 
+    def test_actual_profile_rejects_wrong_gpu_and_failed_preparation(self):
+        config=body(PROFILE,"static BOOLEAN Config(VOID) {","/* The TU10x PMC")
+        prepare=PROFILE[PROFILE.index("EFI_STATUS GuAd104Prepare(VOID) {"):]
+        host=r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "gpu_inventory.h"
+typedef uint32_t UINT32;
+typedef uint16_t UINT16;
+typedef size_t UINTN;
+typedef void VOID;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 1
+#define EFI_DEVICE_ERROR 2
+#define EFI_UNSUPPORTED 3
+#define EFI_CRC_ERROR 4
+#define EFI_OUT_OF_RESOURCES 5
+#define EFI_COMPROMISED_DATA 6
+#define EFI_ERROR(x) ((x)!=EFI_SUCCESS)
+#define EfiPciIoWidthUint32 1
+typedef struct mock_pci mock_pci;
+struct mock_pci {
+  EFI_STATUS (*GetLocation)(mock_pci *,UINTN *,UINTN *,UINTN *,UINTN *);
+  struct {int Read;} Pci;
+  UINT32 config[64];
+  UINTN segment,bus,device,function;
+};
+typedef struct {int pm,pcie,pcie_version,msi,msix;} GU_CAPS;
+typedef struct {
+  mock_pci *pci;void *handle;GU_GPU_RECORD discovery_identity;
+  UINT16 device_id;
+  uint64_t bar_base,bar_size;
+  int pm_cap,pcie_cap,pcie_version,msi_cap,msix_cap;
+  int fault,retained,started,is_turing,profile_verified,prom_verified;
+  void *allocations;
+} GU_PLATFORM;
+static GU_PLATFORM cards[2],*active=&cards[0];
+#define Gu (*active)
+static mock_pci pci[2];
+static int locations,reads,parses,rom_checks,latches,free_fails,read_fails;
+static EFI_STATUS location(mock_pci *p,UINTN *s,UINTN *b,UINTN *d,UINTN *f) {
+  locations++;*s=p->segment;*b=p->bus;*d=p->device;*f=p->function;return EFI_SUCCESS;
+}
+static EFI_STATUS GuConfigRead(int width,UINT32 off,UINT32 *out) {
+  (void)width;
+  if(Gu.fault)return EFI_DEVICE_ERROR;
+  reads++;*out=Gu.pci->config[off/4];return EFI_SUCCESS;
+}
+static BOOLEAN GuCheckConfig(UINT32 *c,UINTN s,UINTN b,UINTN d,UINTN f,GU_CAPS *caps) {
+  (void)c;(void)s;(void)b;(void)d;(void)f;
+  *caps=(GU_CAPS){1,2,3,4,5};return TRUE;
+}
+static BOOLEAN GuIsSupportedPciId(UINT32 id){return id==0x268410deU||id==0x220a10deU;}
+static void GuLog(const char *fmt,...){(void)fmt;}
+static BOOLEAN Registers(UINT32 *a,UINT32 *b){*a=1;*b=2;return !Gu.fault;}
+static BOOLEAN GuAd104AssetsValid(void){return TRUE;}
+static void *GuAlloc(size_t n){return malloc(n);}
+static void GuFree(void *p){free(p);if(free_fails)Gu.fault=Gu.retained=1;}
+static void GuCopyFromIo(void *p,const void *source,size_t bytes){
+  (void)p;(void)source;(void)bytes;
+  if(read_fails)Gu.fault=1;
+}
+static BOOLEAN GuAd104PromMatches(const void *p,size_t bytes){
+  (void)p;(void)bytes;rom_checks++;return TRUE;
+}
+struct gpu_unlock_fwsec {int valid;};
+static int gpu_unlock_vbios_fwsec(const void *p,size_t n,struct gpu_unlock_fwsec *fw){
+  (void)p;(void)n;parses++;fw->valid=1;return 0;
+}
+static BOOLEAN GuAd104FwsecMatches(struct gpu_unlock_fwsec *fw){return fw->valid;}
+static BOOLEAN GuLatchEntrySelectors(UINT32 a,UINT32 b){(void)a;(void)b;latches++;return TRUE;}
+""" + config + prepare + r"""
+#define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(int argc,char **argv){
+  int mode=argc>1?atoi(argv[1]):-1;
+  for(unsigned i=0;i<2;i++){
+    active=&cards[i];pci[i].GetLocation=location;pci[i].Pci.Read=1;
+    pci[i].segment=1;pci[i].bus=3+i;pci[i].device=2;pci[i].function=1;
+    pci[i].config[0]=0x268410deU;pci[i].config[11]=0x123410deU;
+    pci[i].config[2]=0x03000000U;pci[i].config[4]=0x80000000U;
+    Gu.pci=&pci[i];Gu.handle=&cards[i];Gu.device_id=0x2684U;
+    Gu.bar_base=0x80000000U;Gu.bar_size=0x1000000U;
+    Gu.pm_cap=1;Gu.pcie_cap=2;Gu.pcie_version=3;Gu.msi_cap=4;Gu.msix_cap=5;
+    Gu.discovery_identity=(GU_GPU_RECORD){.pci_id=pci[i].config[0],.subsystem_id=pci[i].config[11],
+      .class_code=0x0300,.segment=1,.bus=3+i,.device=2,.function=1,
+      .handle=Gu.handle,.pci=Gu.pci};
+    CHECK(Config());
+  }
+  CHECK(locations==2&&reads==128);
+  switch(mode){
+    case 0:Gu.pci=&pci[0];break;
+    case 1:Gu.handle=cards[0].handle;break;
+    case 2:pci[1].bus=3;break;
+    case 3:pci[1].segment=0;break;
+    case 4:pci[1].device=3;break;
+    case 5:pci[1].function=0;break;
+    case 6:pci[1].config[0]=0x220a10deU;break;
+    case 7:pci[1].config[11]^=1;break;
+    case 8:pci[1].config[2]=0x03020000U;break;
+    case 9:Gu.device_id=0x220aU;break;
+    case 10:free_fails=1;break;
+    case 11:read_fails=1;break;
+    case 12:break;
+    default:return 2;
+  }
+  if(mode<10){
+    CHECK(!Config());
+    if(mode<6||mode==9)CHECK(reads==128);
+    if(mode==0||mode==1||mode==9)CHECK(locations==2);
+    CHECK(!parses&&!latches);
+  }else{
+    EFI_STATUS s=GuAd104Prepare();
+    if(mode==12){
+      CHECK(s==EFI_SUCCESS&&Gu.profile_verified&&Gu.prom_verified&&latches==1&&parses==1);
+    }else{
+      CHECK(s==EFI_DEVICE_ERROR&&!Gu.profile_verified&&!Gu.prom_verified&&!latches);
+      if(mode==11)CHECK(!parses&&!rom_checks);
+      else CHECK(parses==1&&rom_checks==1&&Gu.retained);
+    }
+  }
+  CHECK(!cards[0].fault&&!cards[0].profile_verified&&!cards[0].prom_verified);
+  return 0;
+}
+"""
+        self.compile_run(host,range(13))
+
     def test_parent_supported_reference_manifests(self):
         source = r'''
 #include <stdint.h>
