@@ -1,4 +1,45 @@
 #include "compat/compat.h"
+
+/* The current serialized platform owns exactly one compatibility record.
+ * Compare the registered address before examining a caller's reference.
+ * Retain the closed record so a later card can never reuse its address. */
+static BOOLEAN GuCompatIdentityValid(const struct pci_dev *D) {
+  return D && Gu.compat_device_open && D==Gu.compat_device &&
+    D->owner==&Gu && D->owner_bs==Gu.bs && D->owner_pci==Gu.pci &&
+    D->owner_handle==Gu.handle && Gu.bs && Gu.pci && Gu.handle &&
+    D->vendor==0x10de && D->device==Gu.device_id;
+}
+BOOLEAN GuCompatPciMatches(const struct pci_dev *D) {
+  if(GuCompatIdentityValid(D))return TRUE;
+  Gu.fault=TRUE;return FALSE;
+}
+static BOOLEAN GuCompatDeviceMatches(const struct device *D) {
+  if(Gu.compat_device && D==&Gu.compat_device->dev &&
+     GuCompatIdentityValid(Gu.compat_device))return TRUE;
+  Gu.fault=TRUE;return FALSE;
+}
+EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
+  if(!out||*out)return EFI_INVALID_PARAMETER;
+  if(!Gu.bs||!Gu.pci||!Gu.handle||Gu.fault||Gu.retained)return EFI_NOT_READY;
+  if(Gu.compat_device||Gu.compat_device_open)return EFI_ALREADY_STARTED;
+  struct pci_dev *D=GuAlloc(sizeof(*D));
+  if(!D)return EFI_OUT_OF_RESOURCES;
+  D->owner=&Gu;D->owner_bs=Gu.bs;D->owner_pci=Gu.pci;D->owner_handle=Gu.handle;
+  D->vendor=0x10de;D->device=Gu.device_id;
+  D->mask_storage=0xffffffffffffULL;
+  D->dev.dma_mask=&D->mask_storage;D->dev.coherent_dma_mask=0xfffffffffULL;
+  D->current_state=PCI_D0;D->pm_cap=Gu.pm_cap;D->refs=1;
+  Gu.compat_device=D;Gu.compat_device_open=TRUE;*out=D;
+  return EFI_SUCCESS;
+}
+EFI_STATUS GuCompatCloseDevice(struct pci_dev *D) {
+  if(!GuCompatPciMatches(D))return EFI_ACCESS_DENIED;
+  Gu.compat_device_open=FALSE;
+  if(D->refs!=1||D->dev.scope) {
+    Gu.fault=TRUE;return EFI_DEVICE_ERROR;
+  }
+  return EFI_SUCCESS;
+}
 GU_ASSET *GuAssetEntries(VOID) {
   return Gu.asset_entries;
 }
@@ -13,10 +54,10 @@ EFI_STATUS GuAssetReserveEntries(EFI_BOOT_SERVICES *bs) {
   return EFI_SUCCESS;
 }
 void *devres_open_group(struct device *D,void *Id,int Flags) {
-  (void)Flags;if(Id || D->scope)return NULL;D->scope=true;return &D->scope;
+  (void)Flags;if(!GuCompatDeviceMatches(D)||Id || D->scope)return NULL;D->scope=true;return &D->scope;
 }
 int devres_release_group(struct device *D,void *Group) {
-  if(Group!=&D->scope || !D->scope)return -EINVAL;D->scope=false;return 0;
+  if(!GuCompatDeviceMatches(D)||Group!=&D->scope || !D->scope)return -EINVAL;D->scope=false;return 0;
 }
 void usleep_range(unsigned long A,unsigned long B) {(void)B;GuStall(A);}
 ktime_t ktime_get(void) {return Gu.ticks;}
@@ -46,14 +87,14 @@ VOID GuCopyFromIo(VOID *D,const VOID *S,size_t N) {
 }
 void *dma_alloc_coherent(struct device *D,size_t N,dma_addr_t *Address,int Flags) {
   VOID *Cpu=NULL;(void)Flags;
-  if(!D->dma_mask || *D->dma_mask!=0xffffffffULL || D->coherent_dma_mask!=0xffffffffULL)return NULL;
+  if(!GuCompatDeviceMatches(D)||!D->dma_mask || *D->dma_mask!=0xffffffffULL || D->coherent_dma_mask!=0xffffffffULL)return NULL;
   if(EFI_ERROR(GuDmaAllocate(N,&Cpu,Address)))return NULL;return Cpu;
 }
 void dma_free_coherent(struct device *D,size_t N,void *P,dma_addr_t A) {
-  (void)D;(void)N;if(EFI_ERROR(GuDmaFree(P,A)))Gu.retained=TRUE;
+  (void)N;if(!GuCompatDeviceMatches(D))return;if(EFI_ERROR(GuDmaFree(P,A)))Gu.retained=TRUE;
 }
-int dma_set_mask(struct device *D,u64 Mask) {if(!D->dma_mask)return -EINVAL;*D->dma_mask=Mask;return 0;}
-int dma_set_coherent_mask(struct device *D,u64 Mask) {D->coherent_dma_mask=Mask;return 0;}
+int dma_set_mask(struct device *D,u64 Mask) {if(!GuCompatDeviceMatches(D)||!D->dma_mask)return -EINVAL;*D->dma_mask=Mask;return 0;}
+int dma_set_coherent_mask(struct device *D,u64 Mask) {if(!GuCompatDeviceMatches(D))return -EINVAL;D->coherent_dma_mask=Mask;return 0;}
 void dma_wmb(void) {
 #if defined(_MSC_VER)
   _ReadWriteBarrier();
@@ -68,7 +109,8 @@ void *kvcalloc(size_t N,size_t S,int Flags) {
   (void)Flags;if(!S || N>(size_t)-1/S)return NULL;return GuAlloc(N*S);
 }
 int request_firmware(const struct firmware **Out,const char *Name,struct device *D) {
-  UINTN I;(void)D;*Out=NULL;
+  UINTN I;if(!Out)return -EINVAL;*Out=NULL;
+  if(!GuCompatDeviceMatches(D)||!Name)return -EINVAL;
   for(I=0;I<GU_ASSET_COUNT;I++)if(GuAssetEntries()[I].name && !strcmp(Name,GuAssetEntries()[I].name) &&
       GuAssetEntries()[I].firmware.data && GuAssetEntries()[I].firmware.size) {
     *Out=&GuAssetEntries()[I].firmware;return 0;
@@ -78,44 +120,47 @@ int request_firmware(const struct firmware **Out,const char *Name,struct device 
 void release_firmware(const struct firmware *F) {(void)F; /* Preloaded, app-owned immutable assets. */}
 void __module_get(void *M) {(void)M;Gu.retained=TRUE;}
 int pci_read_config_word(struct pci_dev *D,int O,u16 *V) {
-  (void)D;return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint16,(UINT32)O,V))?-EIO:0;
+  if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint16,(UINT32)O,V))?-EIO:0;
 }
 int pci_read_config_dword(struct pci_dev *D,int O,u32 *V) {
-  (void)D;return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint32,(UINT32)O,V))?-EIO:0;
+  if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint32,(UINT32)O,V))?-EIO:0;
 }
 int pci_write_config_word(struct pci_dev *D,int O,u16 V) {
-  (void)D;return EFI_ERROR(GuConfigWrite(EfiPciIoWidthUint16,(UINT32)O,&V))?-EIO:0;
+  if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuConfigWrite(EfiPciIoWidthUint16,(UINT32)O,&V))?-EIO:0;
 }
 int pcie_capability_read_word(struct pci_dev *D,int O,u16 *V) {
+  if(!GuCompatPciMatches(D))return -EINVAL;
   return Gu.pcie_cap?pci_read_config_word(D,Gu.pcie_cap+O,V):-EIO;
 }
 int pcie_capability_read_dword(struct pci_dev *D,int O,u32 *V) {
+  if(!GuCompatPciMatches(D))return -EINVAL;
   return Gu.pcie_cap?pci_read_config_dword(D,Gu.pcie_cap+O,V):-EIO;
 }
-int pci_is_pcie(struct pci_dev *D) {(void)D;return Gu.pcie_cap!=0;}
-int pci_select_bars(struct pci_dev *D,int R) {(void)D;(void)R;return Gu.bar_size?1:0;}
+int pci_is_pcie(struct pci_dev *D) {return GuCompatPciMatches(D)&&Gu.pcie_cap!=0;}
+int pci_select_bars(struct pci_dev *D,int R) {(void)R;return GuCompatPciMatches(D)&&Gu.bar_size?1:0;}
 int pci_request_region(struct pci_dev *D,int Bar,const char *Name) {
-  (void)D;(void)Name;return !Bar && Gu.owned && Gu.display_ok && !Gu.fault?0:-EBUSY;
+  (void)Name;return GuCompatPciMatches(D)&&!Bar && Gu.owned && Gu.display_ok && !Gu.fault?0:-EBUSY;
 }
-void pci_release_region(struct pci_dev *D,int Bar) {(void)D;(void)Bar; /* App releases PCI protocol after all cleanup. */}
+void pci_release_region(struct pci_dev *D,int Bar) {(VOID)GuCompatPciMatches(D);(void)Bar; /* App releases PCI protocol after all cleanup. */}
 int aperture_remove_conflicting_pci_devices(struct pci_dev *D,const char *Name) {
-  (void)D;(void)Name;
+  (void)Name;
+  if(!GuCompatPciMatches(D))return -EINVAL;
   if(Gu.display_check)Gu.display_ok=Gu.display_check();
   return Gu.display_ok?0:-EBUSY;
 }
-int pci_enable_device_mem(struct pci_dev *D) {(void)D;return -EOPNOTSUPP;}
-void pci_disable_device(struct pci_dev *D) {(void)D;}
-resource_size_t pci_resource_len(struct pci_dev *D,int Bar) {(void)D;return Bar?0:Gu.bar_size;}
+int pci_enable_device_mem(struct pci_dev *D) {return GuCompatPciMatches(D)?-EOPNOTSUPP:-EINVAL;}
+void pci_disable_device(struct pci_dev *D) {(VOID)GuCompatPciMatches(D);}
+resource_size_t pci_resource_len(struct pci_dev *D,int Bar) {return !GuCompatPciMatches(D)||Bar?0:Gu.bar_size;}
 void *pci_iomap(struct pci_dev *D,int Bar,unsigned long N) {
-  (void)D;(void)N;return !Bar && Gu.owned && !Gu.fault?(VOID *)(UINTN)Gu.bar_base:NULL;
+  (void)N;return GuCompatPciMatches(D)&&!Bar && Gu.owned && !Gu.fault?(VOID *)(UINTN)Gu.bar_base:NULL;
 }
-void pci_iounmap(struct pci_dev *D,void *P) {(void)D;(void)P;}
-int pci_save_state(struct pci_dev *D) {(void)D;return EFI_ERROR(GuSavePci())?-EIO:0;}
-void pci_restore_state(struct pci_dev *D) {(void)D;if(EFI_ERROR(GuRestorePci()))Gu.fault=TRUE;}
+void pci_iounmap(struct pci_dev *D,void *P) {(VOID)GuCompatPciMatches(D);(void)P;}
+int pci_save_state(struct pci_dev *D) {if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuSavePci())?-EIO:0;}
+void pci_restore_state(struct pci_dev *D) {if(!GuCompatPciMatches(D))return;if(EFI_ERROR(GuRestorePci()))Gu.fault=TRUE;}
 void pci_set_master(struct pci_dev *D) {
-  (void)D;(void)GuEnableMaster();
+  if(GuCompatPciMatches(D))(void)GuEnableMaster();
 }
-void pci_clear_master(struct pci_dev *D) {(void)D;(void)GuClearMaster();}
-int pcie_flr(struct pci_dev *D) {(void)D;return EFI_ERROR(GuFlr())?-EIO:0;}
-struct pci_dev *pci_dev_get(struct pci_dev *D) {D->refs++;return D;}
-void pci_dev_put(struct pci_dev *D) {D->refs--;}
+void pci_clear_master(struct pci_dev *D) {if(GuCompatPciMatches(D))(void)GuClearMaster();}
+int pcie_flr(struct pci_dev *D) {if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuFlr())?-EIO:0;}
+struct pci_dev *pci_dev_get(struct pci_dev *D) {if(!GuCompatPciMatches(D))return NULL;D->refs++;return D;}
+void pci_dev_put(struct pci_dev *D) {if(GuCompatPciMatches(D))D->refs--;}

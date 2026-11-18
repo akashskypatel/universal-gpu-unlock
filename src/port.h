@@ -128,6 +128,9 @@ typedef struct {
   /* CPU-only pool allocations are distinct from device-visible DMA buffers.
    * Keep their ownership and first uncertain release with this platform. */
   struct GU_CPU_POOL *cpu_pool;
+  /* Retained compatibility identity; never recycle it for another GPU. */
+  struct pci_dev *compat_device;
+  BOOLEAN compat_device_open;
   VOID *cpu_pool_failure_address;
   EFI_STATUS cpu_pool_failure_status;
   /* These resources belong to this platform, not to the active selector. */

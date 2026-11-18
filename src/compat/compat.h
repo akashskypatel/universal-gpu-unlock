@@ -63,7 +63,19 @@ static inline bool list_empty(const struct list_head *h) {return !h->count;}
 struct device {u64 *dma_mask;u64 coherent_dma_mask;struct list_head devres_head;int devres_lock;bool scope;};
 
 #define PCI_UNKNOWN -1
-struct pci_dev {u16 vendor,device;struct device dev;int current_state,pm_cap,refs;unsigned int dev_flags;};
+struct pci_dev {
+  u16 vendor,device;struct device dev;int current_state,pm_cap,refs;
+  unsigned int dev_flags;
+  GU_PLATFORM *owner;
+  EFI_BOOT_SERVICES *owner_bs;
+  EFI_PCI_IO_PROTOCOL *owner_pci;
+  EFI_HANDLE owner_handle;
+  u64 mask_storage;
+};
+/* CPU-only transaction identity. No hardware admission or protocol claim. */
+EFI_STATUS GuCompatOpenDevice(struct pci_dev **out);
+EFI_STATUS GuCompatCloseDevice(struct pci_dev *dev);
+BOOLEAN GuCompatPciMatches(const struct pci_dev *dev);
 /* The table always belongs to the current platform, even before reservation. */
 GU_ASSET *GuAssetEntries(VOID);
 /* Reserve the current platform's empty table once. */

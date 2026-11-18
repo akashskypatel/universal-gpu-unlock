@@ -1767,7 +1767,7 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 
 int gpu_unlock_610_load_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared)
 {
-	if (!pdev || pdev->vendor!=0x10de || !gpu_is_supported_device(pdev->device) || !GuAd104AssetsValid()) return -ENODEV;
+	if (!GuCompatPciMatches(pdev) || !shared || !gpu_is_supported_device(pdev->device) || !GuAd104AssetsValid()) return -ENODEV;
 	return request_scoped(&pdev->dev, &shared->gsp, unlock_assets(pdev)->gsp);
 }
 
@@ -1785,7 +1785,7 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
     /* No EFI application calls this library yet. A future ownership adapter
      * must prove exclusive release of GOP, console and all active consumers. */
     if (Gu.transaction_attempted) return -EALREADY;
-    if (!pdev || pdev->vendor!=0x10de || !gpu_is_supported_device(pdev->device) ||
+    if (!GuCompatPciMatches(pdev) || !gpu_is_supported_device(pdev->device) ||
         !shared || shared->gsp!=&GuAssets[2].firmware || !GuAd104AssetsValid() ||
         !Gu.prom_verified || !Gu.profile_verified || !Gu.owned || !Gu.armed ||
         !Gu.display_ok || !Gu.display_check || !Gu.display_check() || Gu.fault ||
@@ -1795,6 +1795,10 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 	if (!work)
 		return -ENOMEM;
 	work->pdev = pci_dev_get(pdev);
+	if (!work->pdev) {
+		kfree(work);
+		return -ENODEV;
+	}
 	work->gsp_fw = shared->gsp;
 	ret = unlock_transaction_assets(work);
 	if (!ret)

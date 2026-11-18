@@ -15,7 +15,7 @@ static EFI_STATUS GuExecuteUnlockCore(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
 {
   EFI_STATUS s;
   int result;
-  UINT64 mask=0xffffffffffffULL;
+  struct pci_dev *dev=NULL;
   struct gpu_unlock_610_shared shared={0};
   if(!table||!table->BootServices||!image||!stage||!Gu.handle||!Gu.pci)
     return EFI_INVALID_PARAMETER;
@@ -33,17 +33,18 @@ static EFI_STATUS GuExecuteUnlockCore(EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
   Gu.display_ok=TRUE;
   Gu.armed=TRUE;
 
-  struct pci_dev dev={.vendor=0x10de,.device=Gu.device_id,
-    .dev={.dma_mask=&mask,.coherent_dma_mask=0xfffffffffULL},
-    .current_state=PCI_D0,.pm_cap=Gu.pm_cap,.refs=1};
+  s=GuCompatOpenDevice(&dev);
+  if(s!=EFI_SUCCESS||Gu.fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
   *stage="shared-firmware-assets";
-  result=gpu_unlock_610_load_shared(&dev,&shared);
+  result=gpu_unlock_610_load_shared(dev,&shared);
   if(!result) {
     *stage="firmware-transaction";
-    result=gpu_unlock_610_unlock(&dev,&shared);
+    result=gpu_unlock_610_unlock(dev,&shared);
   }
   gpu_unlock_610_release_shared(&shared);
+  s=GuCompatCloseDevice(dev);
+  if(s!=EFI_SUCCESS)return s;
   GuLog("Selected GPU result=%d fault=%u safe=%u retained=%u flrs=%u DMA=%u\n",
         result,(unsigned)Gu.fault,(unsigned)GuSafeToReturn(),
         (unsigned)Gu.retained,(unsigned)Gu.flrs,(unsigned)Gu.dma_count);
