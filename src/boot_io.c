@@ -35,6 +35,10 @@ static EFI_HANDLE *UnreleasedFilesystemHandles;
 static EFI_FILE_PROTOCOL *UnreleasedBootFiles[5];
 static UINTN UnreleasedBootFileCount;
 static EFI_STATUS BootFileStatus;
+/* Windows staging owns at most two temporary buffers, independent of GPU selection.
+ * Retain uncertain addresses for diagnosis only. Never dereference or retry them. */
+static VOID *UnreleasedBootBuffers[2];
+static UINTN UnreleasedBootBufferCount;
 static CHAR16 ActiveLogPath[]=L"\\AD102-UNLOCK\\RUN0000.TXT";
 
 static BOOLEAN Silent;
@@ -201,6 +205,34 @@ failed:
   }
 }
 
+/* Boot-wide CPU memory. The caller retains each confirmed reference until
+ * one checked release. An error with nonnull output is uncertain ownership. */
+static EFI_STATUS BootBufferFailure(VOID *address) {
+  if(UnreleasedBootBufferCount<sizeof(UnreleasedBootBuffers)/sizeof(UnreleasedBootBuffers[0]))
+    UnreleasedBootBuffers[UnreleasedBootBufferCount++]=address;
+  BootFileStatus=EFI_DEVICE_ERROR;
+  return BootFileStatus;
+}
+static EFI_STATUS AllocateBootBuffer(EFI_BOOT_SERVICES *bs,UINTN size,VOID **out) {
+  if(!out||*out||!size)return EFI_INVALID_PARAMETER;
+  if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
+  if(!bs||!bs->AllocatePool||!bs->FreePool)return EFI_UNSUPPORTED;
+  VOID *p=NULL;
+  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,size,&p);
+  if(s!=EFI_SUCCESS)return p?BootBufferFailure(p):s;
+  if(!p)return EFI_OUT_OF_RESOURCES;
+  *out=p;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS ReleaseBootBuffer(EFI_BOOT_SERVICES *bs,VOID **out) {
+  if(!out||!*out)return EFI_SUCCESS;
+  VOID *p=*out;
+  *out=NULL;
+  if(!bs||!bs->FreePool||bs->FreePool(p)!=EFI_SUCCESS)
+    return BootBufferFailure(p);
+  return EFI_SUCCESS;
+}
+
 static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expected,VOID **data) {
 
   *data=NULL;EFI_FILE_PROTOCOL *f=NULL;UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
@@ -361,7 +393,7 @@ EFI_STATUS GuBootLoadAssets(VOID) {
   return status;
 }
 
-static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN *file_size,VOID **data) {
+static EFI_STATUS ReadWindowsBinary(EFI_BOOT_SERVICES *bs,EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN *file_size,VOID **data) {
 
   *data=NULL;*file_size=0;EFI_FILE_PROTOCOL *f=NULL;UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
   if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
@@ -385,7 +417,7 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
   }
   VOID *p=NULL;
 
-  if(s==EFI_SUCCESS){p=GuAlloc(sz);if(!p)s=EFI_OUT_OF_RESOURCES;}
+  if(s==EFI_SUCCESS)s=AllocateBootBuffer(bs,sz,&p);
 
   for(UINTN at=0;s==EFI_SUCCESS&&at<sz;) {
 
@@ -397,10 +429,11 @@ static EFI_STATUS ReadWindowsBinary(EFI_FILE_PROTOCOL *root,const CHAR16 *name,U
 
   EFI_STATUS closed=CloseBootFile(&f);if(closed!=EFI_SUCCESS)s=closed;
 
-  if(s!=EFI_SUCCESS){GuFree(p);return s;}
-
-  if(((UINT8 *)p)[0]!='M'||((UINT8 *)p)[1]!='Z'){GuFree(p);return EFI_COMPROMISED_DATA;}
-
+  if(s==EFI_SUCCESS&&(((UINT8 *)p)[0]!='M'||((UINT8 *)p)[1]!='Z'))s=EFI_COMPROMISED_DATA;
+  if(s!=EFI_SUCCESS) {
+    EFI_STATUS released=ReleaseBootBuffer(bs,&p);
+    return released==EFI_SUCCESS?s:released;
+  }
   *data=p;*file_size=sz;return EFI_SUCCESS;
 
 }
@@ -459,20 +492,24 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   }
   EFI_FILE_PROTOCOL *root=matched_root;
   VOID *bytes=NULL;UINTN actual_size=0;
-  s=ReadWindowsBinary(root,selected_name,&actual_size,&bytes);
+  s=ReadWindowsBinary(b,root,selected_name,&actual_size,&bytes);
   EFI_STATUS closed=CloseBootFile(&root);if(closed!=EFI_SUCCESS)s=closed;
   UINTN name_bytes=(GuStrLen(selected_name)+1)*sizeof(CHAR16);
   UINTN node_bytes=4+name_bytes,total=path_bytes-4+node_bytes+4;
-  UINT8 *path=NULL;
-  if(s==EFI_SUCCESS){path=GuAlloc(total);if(!path)s=EFI_OUT_OF_RESOURCES;}
+  VOID *path=NULL;
+  if(s==EFI_SUCCESS)s=AllocateBootBuffer(b,total,&path);
   if(s==EFI_SUCCESS) {
-    memcpy(path,base,path_bytes-4);UINT8 *node=path+path_bytes-4;
+    memcpy(path,base,path_bytes-4);UINT8 *node=(UINT8 *)path+path_bytes-4;
     node[0]=MEDIA_DEVICE_PATH;node[1]=MEDIA_FILEPATH_DP;node[2]=(UINT8)node_bytes;node[3]=(UINT8)(node_bytes>>8);
     memcpy(node+4,selected_name,name_bytes);node+=node_bytes;
     node[0]=END_DEVICE_PATH_TYPE;node[1]=END_ENTIRE_DEVICE_PATH_SUBTYPE;node[2]=4;node[3]=0;
     s=b->LoadImage(FALSE,Self,(VOID *)path,bytes,actual_size,&Windows);
   }
-  GuFree(bytes);GuFree(path);
+  /* The image buffer and device path have independent confirmed references.
+   * Consume both once even when an earlier release fails. */
+  EFI_STATUS bytes_released=ReleaseBootBuffer(b,&bytes);
+  EFI_STATUS path_released=ReleaseBootBuffer(b,&path);
+  if(bytes_released!=EFI_SUCCESS||path_released!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;
   if(s==EFI_SUCCESS) {
     EFI_LOADED_IMAGE_PROTOCOL *im=NULL;
     if(b->HandleProtocol(Windows,&LoadedGuid,(VOID **)&im)==EFI_SUCCESS&&im&&im->DeviceHandle!=volume) {

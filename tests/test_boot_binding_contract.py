@@ -219,13 +219,24 @@ int main(void){
         self.assertIn("if(released!=EFI_SUCCESS)s=released;",windows)
         self.assertLess(windows.index("if(s!=EFI_SUCCESS||matches<1"),windows.index("b->LoadImage("))
         self.assertIn("BootFileStatus!=EFI_SUCCESS",BOOT.split("EFI_STATUS GuBootWindows(",1)[1])
+        # Boot-wide staging must not allocate from either GPU's CPU pool.
+        reader=BOOT.split("static EFI_STATUS ReadWindowsBinary(",1)[1].split("EFI_STATUS GuBootLoadWindows(",1)[0]
+        for source in (reader,windows):
+            self.assertNotIn("GuAlloc(",source)
+            self.assertNotIn("GuFree(",source)
+        self.assertIn("AllocateBootBuffer(bs,sz,&p)",reader)
+        self.assertIn("AllocateBootBuffer(b,total,&path)",windows)
+        self.assertLess(windows.index("b->LoadImage("),windows.index("ReleaseBootBuffer(b,&bytes)"))
+        self.assertLess(windows.index("ReleaseBootBuffer(b,&bytes)"),windows.index("ReleaseBootBuffer(b,&path)"))
+        self.assertLess(windows.index("if(bytes_released!=EFI_SUCCESS||path_released!=EFI_SUCCESS)s=EFI_DEVICE_ERROR;"),windows.index("TargetEspVolume=volume"))
 
     def test_windows_binary_reader_rejects_invalid_info_lengths(self):
         """Run the actual boot-file reader with independent fake EFI file services."""
         source = BOOT.split("static EFI_STATUS ReadWindowsBinary(", 1)[1].split(
             "\nEFI_STATUS GuBootLoadWindows(", 1)[0]
         close = BOOT.split("static EFI_STATUS CloseBootFile(",1)[1].split("\nEFI_STATUS GuBootOpen(",1)[0]
-        production = "static EFI_STATUS CloseBootFile(" + close + "\nstatic EFI_STATUS ReadWindowsBinary(" + source
+        buffers=BOOT.split("static EFI_STATUS BootBufferFailure(",1)[1].split("\nstatic EFI_STATUS ReadFile(",1)[0]
+        production = "static EFI_STATUS CloseBootFile(" + close + "\nstatic EFI_STATUS BootBufferFailure(" + buffers + "\nstatic EFI_STATUS ReadWindowsBinary(" + source
         host = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -247,9 +258,11 @@ typedef struct {UINT64 Size,FileSize,PhysicalSize;
 #define EFI_DEVICE_ERROR 4
 #define EFI_NOT_FOUND 5
 #define EFI_UNSUPPORTED 6
+#define EFI_INVALID_PARAMETER 7
+#define EfiLoaderData 1
 #define EFI_FILE_MODE_READ 1
 #define EFI_FILE_DIRECTORY 0x10
-static int InfoGuid,mode,open_calls,info_calls,read_calls,close_calls,alloc_calls;
+static int InfoGuid,mode,open_calls,info_calls,read_calls,close_calls,alloc_calls,free_calls;
 typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
 struct EFI_FILE_PROTOCOL {
   EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,UINT64,UINT64);
@@ -261,8 +274,26 @@ static EFI_FILE_PROTOCOL file;
 static EFI_FILE_PROTOCOL *UnreleasedBootFiles[5];
 static UINTN UnreleasedBootFileCount;
 static EFI_STATUS BootFileStatus;
-static void *GuAlloc(size_t n) {alloc_calls++;return malloc(n);}
-static void GuFree(void *p) {free(p);}
+static void *UnreleasedBootBuffers[2];
+static UINTN UnreleasedBootBufferCount;
+typedef struct {
+  EFI_STATUS (*AllocatePool)(int,UINTN,void **);
+  EFI_STATUS (*FreePool)(void *);
+} EFI_BOOT_SERVICES;
+static EFI_STATUS Allocate(int type,UINTN n,void **out) {
+  if(type!=EfiLoaderData)return EFI_INVALID_PARAMETER;
+  alloc_calls++;
+  if(mode==11)return EFI_OUT_OF_RESOURCES;
+  if(mode==12)return EFI_SUCCESS;
+  *out=malloc(n);
+  if(mode==13&&*out)return EFI_OUT_OF_RESOURCES;
+  return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
+}
+static EFI_STATUS Free(void *p) {
+  free_calls++;
+  if(mode==14||mode==15)return EFI_DEVICE_ERROR;
+  free(p);return EFI_SUCCESS;
+}
 static EFI_STATUS Open(EFI_FILE_PROTOCOL *r,EFI_FILE_PROTOCOL **f,CHAR16 *name,
                        UINT64 open_mode,UINT64 attr) {
   (void)r;(void)name;(void)attr;
@@ -303,26 +334,56 @@ int main(int argc,char **argv) {
   static EFI_FILE_PROTOCOL root={Open,NULL,NULL,NULL};
   file=(EFI_FILE_PROTOCOL){NULL,GetInfo,Read,Close};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>10)return 3;
+  if(mode<0||mode>15)return 3;
+  EFI_BOOT_SERVICES bs={Allocate,Free};
+  if(mode==15) {
+    void *a=NULL,*b=NULL,*c=NULL;
+    CHECK(AllocateBootBuffer(&bs,8,&a)==EFI_SUCCESS);
+    CHECK(AllocateBootBuffer(&bs,16,&b)==EFI_SUCCESS);
+    void *saved_a=a,*saved_b=b;
+    CHECK(ReleaseBootBuffer(&bs,&a)==EFI_DEVICE_ERROR&&!a);
+    CHECK(ReleaseBootBuffer(&bs,&b)==EFI_DEVICE_ERROR&&!b);
+    CHECK(free_calls==2&&UnreleasedBootBufferCount==2);
+    CHECK(UnreleasedBootBuffers[0]==saved_a&&UnreleasedBootBuffers[1]==saved_b);
+    CHECK(ReleaseBootBuffer(&bs,&a)==EFI_SUCCESS&&free_calls==2);
+    CHECK(AllocateBootBuffer(&bs,8,&c)==EFI_DEVICE_ERROR&&!c&&alloc_calls==2);
+    free(saved_a);free(saved_b); /* Host fixture teardown. */
+    return 0;
+  }
   UINTN size=99;
   void *bytes=(void *)(uintptr_t)1;
-  EFI_STATUS s=ReadWindowsBinary(&root,name,&size,&bytes);
-  EFI_STATUS expected=(mode==0?EFI_SUCCESS:
-                       mode==3||mode==7||mode==10?EFI_DEVICE_ERROR:
-                       mode==8?EFI_DEVICE_ERROR:EFI_COMPROMISED_DATA);
+  EFI_STATUS s=ReadWindowsBinary(&bs,&root,name,&size,&bytes);
+  EFI_STATUS expected=(mode==0||mode==14?EFI_SUCCESS:
+                       mode==3||mode==7||mode==8||mode==10||mode==13?EFI_DEVICE_ERROR:
+                       mode==11||mode==12?EFI_OUT_OF_RESOURCES:EFI_COMPROMISED_DATA);
   CHECK(s==expected);
   CHECK(open_calls==1 && info_calls==1 && close_calls==1);
   if(mode==10) {
     CHECK(BootFileStatus==EFI_DEVICE_ERROR&&UnreleasedBootFileCount==1&&UnreleasedBootFiles[0]==&file);
-    CHECK(ReadWindowsBinary(&root,name,&size,&bytes)==EFI_DEVICE_ERROR);
+    CHECK(ReadWindowsBinary(&bs,&root,name,&size,&bytes)==EFI_DEVICE_ERROR);
     CHECK(open_calls==1&&close_calls==1);
   }
-  if(mode==0) {
+  if(mode==0||mode==14) {
     CHECK(size==65536 && bytes!=NULL && read_calls==1 && alloc_calls==1);
-    GuFree(bytes);
+    void *saved=bytes;
+    CHECK(ReleaseBootBuffer(&bs,&bytes)==(mode==14?EFI_DEVICE_ERROR:EFI_SUCCESS));
+    CHECK(!bytes&&free_calls==1);
+    if(mode==14) {
+      CHECK(BootFileStatus==EFI_DEVICE_ERROR&&UnreleasedBootBufferCount==1&&UnreleasedBootBuffers[0]==saved);
+      CHECK(ReleaseBootBuffer(&bs,&bytes)==EFI_SUCCESS&&free_calls==1);
+      CHECK(AllocateBootBuffer(&bs,16,&bytes)==EFI_DEVICE_ERROR&&!bytes&&alloc_calls==1);
+      free(saved); /* Host fixture teardown. */
+    }
   } else {
     CHECK(size==0 && bytes==NULL);
     if(mode>=1&&mode<=6)CHECK(read_calls==0 && alloc_calls==0);
+    if(mode>=11)CHECK(alloc_calls==1&&read_calls==0&&!free_calls);
+    if(mode==13) {
+      CHECK(BootFileStatus==EFI_DEVICE_ERROR&&UnreleasedBootBufferCount==1&&UnreleasedBootBuffers[0]);
+      CHECK(ReadWindowsBinary(&bs,&root,name,&size,&bytes)==EFI_DEVICE_ERROR);
+      CHECK(open_calls==1&&alloc_calls==1&&!free_calls);
+      free(UnreleasedBootBuffers[0]); /* Host fixture teardown. */
+    }
   }
   return 0;
 }
@@ -337,7 +398,7 @@ int main(int argc,char **argv) {
                      "-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",
                      str(path),"-o",str(binary)],capture_output=True,text=True)
                 self.assertEqual(built.returncode,0,built.stderr)
-                for mode in range(11):
+                for mode in range(16):
                     with self.subTest(compiler=compiler,mode=mode):
                         result=subprocess.run(
                             [str(binary),str(mode)],capture_output=True,text=True)
