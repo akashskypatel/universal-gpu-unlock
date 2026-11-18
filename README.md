@@ -147,6 +147,7 @@ compatibility, anti-cheat safety, or guaranteed speedup are established.
 - [Preparation-only active source builds](docs/ACTIVE_GPU_PREPARATION.md)
 - [Dynamic multi-GPU refactor review and active-execution gate analysis](docs/MULTI_GPU_REFACTOR_REVIEW.md)
 - [Unverified actuation runbook](docs/UNVERIFIED_ACTUATION_RUNBOOK.md) — the one opt-in build that may attempt the transaction, and how to read it
+- [Production readiness inventory](docs/PRODUCTION_READINESS_INVENTORY.md) — read-only gap inventory for a dynamic, multi-GPU, hardware-runnable image
 - [Host simulator](docs/HOST_SIMULATOR.md) — runs the active image against a modelled AD102 and reports what that does and does not establish
 - [Windows-GPU-UNLOCK authoritative execution map](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia_unlock_evidence_to_execution_map.md)
 - [Windows 617.42 cumulative reverse engineering notes](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia-tensor-core-unlock-investigation.md)
