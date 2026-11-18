@@ -57,7 +57,8 @@ void *devres_open_group(struct device *D,void *Id,int Flags) {
   (void)Flags;if(!GuCompatDeviceMatches(D)||Id || D->scope)return NULL;D->scope=true;return &D->scope;
 }
 int devres_release_group(struct device *D,void *Group) {
-  if(!GuCompatDeviceMatches(D)||Group!=&D->scope || !D->scope)return -EINVAL;D->scope=false;return 0;
+  if(!GuCompatDeviceMatches(D)||Group!=&D->scope || !D->scope)return -EINVAL;
+  D->scope=false;return 0;
 }
 void usleep_range(unsigned long A,unsigned long B) {(void)B;GuStall(A);}
 ktime_t ktime_get(void) {return Gu.ticks;}
@@ -88,7 +89,8 @@ VOID GuCopyFromIo(VOID *D,const VOID *S,size_t N) {
 void *dma_alloc_coherent(struct device *D,size_t N,dma_addr_t *Address,int Flags) {
   VOID *Cpu=NULL;(void)Flags;
   if(!GuCompatDeviceMatches(D)||!D->dma_mask || *D->dma_mask!=0xffffffffULL || D->coherent_dma_mask!=0xffffffffULL)return NULL;
-  if(EFI_ERROR(GuDmaAllocate(N,&Cpu,Address)))return NULL;return Cpu;
+  if(EFI_ERROR(GuDmaAllocate(N,&Cpu,Address)))return NULL;
+  return Cpu;
 }
 void dma_free_coherent(struct device *D,size_t N,void *P,dma_addr_t A) {
   (void)N;if(!GuCompatDeviceMatches(D))return;if(EFI_ERROR(GuDmaFree(P,A)))Gu.retained=TRUE;
@@ -120,13 +122,16 @@ int request_firmware(const struct firmware **Out,const char *Name,struct device 
 void release_firmware(const struct firmware *F) {(void)F; /* Preloaded, app-owned immutable assets. */}
 void __module_get(void *M) {(void)M;Gu.retained=TRUE;}
 int pci_read_config_word(struct pci_dev *D,int O,u16 *V) {
-  if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint16,(UINT32)O,V))?-EIO:0;
+  if(!GuCompatPciMatches(D))return -EINVAL;
+  return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint16,(UINT32)O,V))?-EIO:0;
 }
 int pci_read_config_dword(struct pci_dev *D,int O,u32 *V) {
-  if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint32,(UINT32)O,V))?-EIO:0;
+  if(!GuCompatPciMatches(D))return -EINVAL;
+  return EFI_ERROR(GuConfigRead(EfiPciIoWidthUint32,(UINT32)O,V))?-EIO:0;
 }
 int pci_write_config_word(struct pci_dev *D,int O,u16 V) {
-  if(!GuCompatPciMatches(D))return -EINVAL;return EFI_ERROR(GuConfigWrite(EfiPciIoWidthUint16,(UINT32)O,&V))?-EIO:0;
+  if(!GuCompatPciMatches(D))return -EINVAL;
+  return EFI_ERROR(GuConfigWrite(EfiPciIoWidthUint16,(UINT32)O,&V))?-EIO:0;
 }
 int pcie_capability_read_word(struct pci_dev *D,int O,u16 *V) {
   if(!GuCompatPciMatches(D))return -EINVAL;
