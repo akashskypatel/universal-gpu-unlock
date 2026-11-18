@@ -4,6 +4,12 @@
 `sim/`, tests · **Method:** static reading only; no source file was modified and
 no hardware was touched.
 
+**Fix pass in progress (2026-11-18):** the class-A items and the two coupled
+hardware-refusal defects (B6, B7) are being closed in source. See §11 for the
+per-item state; every fix there is **unverified on hardware** and is exercised
+only by the host simulator (`ENVIRONMENT=HOST_SIMULATOR`, `ACTUATION_VERIFIED=0`)
+and host contract tests.
+
 **One-line verdict:** the repository is a *fail-closed research harness*. Every
 component that would mutate a GPU is present and internally consistent, but the
 product asked about — one deployable signed image that selects cards at runtime
@@ -25,6 +31,7 @@ items, and 5 release items**.
 | `GPU-ACTIVE-PREP-*.EFI`, `…-DXE-*.efi` | `Build-Experimental-MSVC.ps1`, `Build-Dxe-Driver.ps1` (default) | boots, discovers, validates cold profile, refuses before mutation (`GU_ACTIVE_SEQUENCE_PREPARE_ONLY`, `GU_PREFLIGHT_ONLY 1`) | No |
 | `GPU-SEQUENCE-COMPILE-ONLY-*.EFI` | same builders, `-SyntheticCompileProfile` | compiles the ordered multi-target source; both entrypoints return `EFI_UNSUPPORTED` immediately | No |
 | `GPU-{ONE-TARGET,SEQUENCE}-UNVERIFIED-ACTUATION-*.EFI` | same builders, `-AcceptUnverifiedActuation` | the real transaction, one card at a time, ordered | **Yes** — no CI build coverage, per-machine, `ACTUATION_VERIFIED=0` |
+| `GPU-RUNTIME-SELECTION-{PREP,UNVERIFIED-ACTUATION}[-DXE].{EFI,efi}` | same builders, `-RuntimeSelection` | same profiles, but the target list comes from the `GuTargets` variable at boot instead of the build | only with `-AcceptUnverifiedActuation`, which still requires the waiver |
 
 CI (`gpu-topology-diagnostic.yml`) compiles the diagnostic and the app/DXE
 prepare and synthetic variants on `windows-latest`. It **never** builds an
@@ -67,6 +74,13 @@ turns into `EFI_UNSUPPORTED` with no way to recover without a rebuild.
 coordinator unchanged, plus a documented default policy and an operator override
 that does not require recompilation.
 
+**Status (2026-11-18): fixed in source — unverified on hardware.** `-RuntimeSelection`
+builds carry no `gpu-selection.h`; the target list is the `GuTargets` UEFI
+variable (`src/gpu_selection.c`), read once per boot, defaulting to the
+single-card policy when unset and to every supported card for `ALL`. The
+console path records a lone card automatically and offers a numbered choice on
+a multi-card machine. See §11.1.
+
 ### A2. The Windows ESP is identified by a build-time partition GUID — **P0**
 `boot_io.c:468-482` requires the ESP device path to match `WindowsPartition`;
 `gpu_windows_path.c:21-40` compares the GPT GUID byte-for-byte;
@@ -84,6 +98,13 @@ loop, but nothing has ever executed two cards. Production requires *verified*
 multi-target admission, which needs C1–C4 resolved first.
 *Exit criteria:* two physical cards, ordered execution, per-card completion
 records, peer snapshots unchanged, handover verified.
+
+**Status (2026-11-18): build coupling removed; hardware evidence still absent.**
+A runtime-selection image cannot know the target count at build time, so the
+static "exactly one address" gate no longer applies to it; the runtime
+admission (`selected_count != 1` without `GU_ACTUATION_ADMITTED`) is unchanged
+and still refuses multi-card actuation without the waiver. The remaining work
+is the two-card harness in C1–C4/C9, not code. See §11.2.
 
 ### A4. The stock profile is a compile-time selector — **P0**
 `port.h:57-72` requires exactly one of `GU_ENTRY_LATCHED_SS1_FULL`,
@@ -155,8 +176,8 @@ These are verified from source, not inferred.
 | B3 | MSI must be disabled and the function in D0 | `checks.c:66-68` (MSI control bit 0 must be 0), `checks.c:99-102` (PM state must be D0) | firmware or a UEFI driver that left MSI enabled refuses forever | P0 |
 | B4 | Unknown PCI capability IDs refused | `checks.c:87-89` (`default: return FALSE`) | a real card exposing any capability outside PM/MSI/MSI-X/PCIe/vendor is refused | P1 |
 | B5 | PCIe endpoint v1/v2 only, FLR bit set, link-status bit clear | `checks.c:70-79`, `107-112` | PCIe v3 (or any other layout) refuses | P1 |
-| B6 | BAR0 exactly 16 MiB at a base that fits the low 32 bits | `gpu_discovery.c:546-547`, `msi_release.c:773-775` (`AddrLen!=0x1000000`, `AddrRangeMin!=Gu.bar_base`) | **Resizable-BAR cards and any BAR0 above 4 GiB are refused** — `bar_base` is `config[4] & ~0xf`, the high dword is never read | P0 |
-| B7 | Device DMA addresses below 4 GiB | `port.c:497` (`Entry->dma>0xffffffff` → refuse) with `AllocateAnyPages` | on a large-memory system a valid allocation lands above 4 GiB and the run stops | P1 |
+| ~~B6~~ | ~~BAR0 exactly 16 MiB at a base that fits the low 32 bits~~ | was `gpu_discovery.c:546-547`, `msi_release.c:773-775` | **fixed in source, unverified on hardware** — the firmware descriptor is authoritative: base decoded as 64-bit from config, any power-of-two window `>= 16 MiB`, config/attribute mismatch refused (§11.3) | ~~P0~~ done |
+| ~~B7~~ | ~~Device DMA addresses below 4 GiB~~ | was `port.c:497` with `AllocateAnyPages` | **fixed in source, unverified on hardware** — `AllocateMaxAddress` asks for a sub-4 GiB buffer up front; the mapped-address ceiling check stays as the last line of defence and the refusal is modelled in the simulator (§11.4) | ~~P1~~ done |
 | B8 | Bus Master off at admission (one narrow exception) | `checks.c:39-41`, `GuCheckConfigInitialMaster` in single-target mode | a firmware that leaves BME on changes which gate applies | P2 |
 | B9 | Image launched from USB with a writable log directory | `boot_io.c:168`, `:176-180` | no fully internal deployment (ESP-resident app) is possible | P1 |
 | B10 | Per-call DMA ≤ 128 MiB, 1 MiB ROM buffer, ~80 MB radix table per card | `port.c:469`, `profile.c:289`, `unlock_610.c:1117` | multi-GPU memory footprint is multiplicative (~165 MB/card) and untested | P1 |
@@ -255,10 +276,115 @@ only blockers that are fully solvable in this repository.
 ```sh
 grep -n "GU_ACTUATION_ADMITTED\|GU_PREFLIGHT_ONLY" src/port.h        # gates
 grep -n "MULTI_TARGET_WITHOUT_WAIVER" src/gpu_discovery.c           # A3
-grep -n "amd_count\|AddrLen!=0x1000000" src/msi_release.c           # B1, B6
+grep -n "amd_count" src/msi_release.c                               # B1
+grep -n "GU_BAR_MIN_BYTES\|AddrRangeMax" src/msi_release.c          # B6 (fixed)
+grep -n "AllocateMaxAddress" src/port.c                             # B7 (fixed)
 grep -n "return FALSE" src/checks.c                                 # B3-B5
 grep -n "AcceptUnverifiedActuation" .github/workflows/*.yml         # D2 (no hits)
 python3 tools/run_simulation.py verify                              # F
 ```
 
-No file under `src/` was modified by this review.
+No file under `src/` was modified by the review itself. The fix pass recorded
+in §11 does modify `src/`; reproduce it with:
+
+```sh
+python3 tools/run_simulation.py verify                        # 9 scenarios, all pass
+python3 -m unittest discover -s tests -p "test_*.py"          # host contracts
+gcc -std=c11 -O1 -fsanitize=undefined -fno-sanitize-recover=all \
+    -Wall -Wextra -Werror -pedantic -DGU_SELECTION_HOST_TEST \
+    -Isrc -Itests tests/test_gpu_selection.c src/gpu_selection.c -o /tmp/tgs && /tmp/tgs
+```
+
+---
+
+## 11. Fix log — what actually changed (2026-11-18)
+
+Every entry below is **fixed in source, unverified on hardware**. "Verified"
+means observed in the host simulator or a host contract test with
+`ENVIRONMENT=HOST_SIMULATOR`, `ACTUATION_VERIFIED=0`,
+`CAN_DETACH/CAN_UNLOCK/CAN_FLASH/RECOVERY_VERIFIED=0`. No card was touched, so
+no entry claims hardware behaviour.
+
+### 11.1 A1 — runtime target selection
+
+| What | Where |
+| --- | --- |
+| New module: text parser, canonical formatter, variable read/write/delete | `src/gpu_selection.h`, `src/gpu_selection.c` |
+| Variable name/GUID (fork-owned) | `GuTargets`, `5c1f2b40-8e21-4ef7-9d2b-7a113c5e8402` |
+| Build switch; no `gpu-selection.h` is generated or read | `-RuntimeSelection` in both builders, `/DGU_RUNTIME_SELECTION` |
+| Boot-time resolution, `ALL` policy, single-card default | `gpu_discovery.c` `ResolveRuntimeSelection`, `SelectPreparedRecords` |
+| Console policy acquisition (auto single, numbered menu, `A`, `S`) | `app.c` `ResolveTargetsOnConsole` |
+| Simulator models the variable | `sim/sim_world.c` `SimWorldSetTargets` |
+
+Bounds: 128 targets, 4096-byte text, ASCII, `SSSS:BB:DD.F`, duplicates and
+malformed forms refused with no partial list. A `GetVariable` that reports
+`EFI_BUFFER_TOO_SMALL` is refused (`EFI_BAD_BUFFER_SIZE`), never truncated.
+
+Evidence: sim scenarios `runtime-target` (binds `0000:01:00.0` chosen from the
+variable with **no compiled list in the image**) and `runtime-absent`
+(`0000:03:00.0` requested, no card there → refused, unbound platform, no BAR0
+write, no FLR). Host unit `tests/test_gpu_selection.c` (80 checks: parser
+matrix, 128/129 boundary, round-trip, variable store, oversized and malformed
+stored text). Contract `tests/test_runtime_selection_contract.py` (16 tests,
+including "a stale three-address `gpu-selection.h` in the include path is
+ignored by a runtime-selection build").
+
+Not closed by this: the *policy* still has no per-card record of which card was
+already unlocked last boot (A7), and nothing yet proves two real cards.
+
+### 11.2 A3 — multi-target admission
+
+* `port.h`: `GU_RUNTIME_SELECTION` requires the ordered execution mode and is
+  rejected next to `GU_SYNTHETIC_COMPILE_ONLY`/`GU_ACTIVE_SEQUENCE_PREPARE_ONLY`.
+* `gpu_discovery.c`: the static `GU_GPU_SELECTION_COUNT != 1` gate now belongs
+  to the compiled-list branch only. With runtime selection the count is unknown
+  at build time, so the **runtime** gate decides: `selected_count != 1` without
+  `GU_ACTUATION_ADMITTED` still refuses.
+* No new admission path was added: the single switch
+  (`GU_ACTUATION_ADMITTED`) and the waiver are untouched, and the synthetic
+  profile is still structurally impossible to ship.
+
+### 11.3 B6 — the BAR0 window is read, not assumed
+
+`ReadBarWindow` (`gpu_discovery.c`) validates the firmware ACPI descriptor:
+`Desc == 0x8a`, `Len == 43`, zero resource type and translation offset,
+power-of-two `AddrLen >= 16 MiB`, base aligned to `AddrLen`, no
+`AddrRangeMin + AddrLen` overflow, `AddrRangeMax == Min + Len - 1`. It releases
+the descriptor through `FreePool` and refuses if the release cannot be proven
+harmful — the release result is logged, never treated as a hardware fault.
+
+`Gu.bar_size`/`bar_base` (from the descriptor, base cross-checked against a
+64-bit decode of config `0x10`/`0x14`) are now authoritative in `profile.c`,
+`msi_release.c`, `unlock_execution.c` and the S3 gate; the 16 MiB literal is
+gone. A config/attribute disagreement is refused, so the change makes discovery
+**stricter**, not looser.
+
+Evidence: sim scenarios `rebar` (256 MiB window) and `bar-above-4g` (BAR0 at
+`0x1_0000_0000`), both previously refused, now pass discovery and the full
+transaction with the image reporting the assigned base/size.
+
+### 11.4 B7 — device DMA under 4 GiB by request, not by luck
+
+`GuDmaAllocate` now calls `AllocateBuffer(AllocateMaxAddress, ...)` with the
+32-bit ceiling. The ownership rules are unchanged: any buffer the firmware
+writes is retained if the call fails, retained if `Map` fails, and released
+only when both `Unmap` and `FreeBuffer` succeed. The mapped-address check
+(`dma > 0xffffffff`, alignment, truncation, `bytes-1 > 0xffffffff - dma`)
+remains as the last line of defence.
+
+Evidence: sim scenario `dma-high` (the model forces the 32-bit allocator to hand
+out `0x1_0000_0000`): the transaction stops before any register write, no WPR2
+window opens, no FLR, no fault is recorded, and no buffer is counted as mapped.
+`tests/test_platform_bind_lifetime.py` re-executes the real allocator against
+11 independent EFI error modes.
+
+Honesty limit: the simulator cannot model the exact `AllocateMaxAddress`
+ceiling; it models "32-bit unless the scenario forces 2^32". The firmware
+contract that matters (never DMA above 4 GiB) is enforced in code twice.
+
+### 11.5 Not touched by this pass
+
+A2 (build-time ESP GUID), A4 (compile-time stock profile), A5 (Turing payload),
+A6 (asset install/hash pinning), A7 (persisted state/rollback), A8 (watchdog
+recovery), and every class-C item that needs hardware remain exactly as
+inventoried above.
