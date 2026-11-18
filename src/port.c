@@ -75,6 +75,16 @@ typedef struct GU_PLATFORM_ALLOCATION {
   struct GU_PLATFORM_ALLOCATION *next;
 } GU_PLATFORM_ALLOCATION;
 static GU_PLATFORM_ALLOCATION *PlatformAllocations;
+/* An ambiguous pool result must not leave untrusted memory in the registry.
+ * Keep the first address/status as CPU-only diagnostic evidence. */
+static EFI_STATUS PlatformRegistryStatus;
+static VOID *PlatformRegistryFailureAddress;
+static VOID RecordPlatformRegistryFailure(EFI_STATUS status,VOID *address) {
+  if(PlatformRegistryStatus==EFI_SUCCESS) {
+    PlatformRegistryStatus=status;
+    PlatformRegistryFailureAddress=address;
+  }
+}
 
 /* Publication is irreversible for this boot image. A context that has
  * ever owned the active slot cannot be disposed as an unused candidate. */
@@ -100,13 +110,17 @@ EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                               GU_PLATFORM **Out) {
   if(!Bs || !Pci || !Out)return EFI_INVALID_PARAMETER;
   if(*Out)return EFI_ALREADY_STARTED;
+  if(PlatformRegistryStatus!=EFI_SUCCESS)return PlatformRegistryStatus;
   if(!Bs->AllocatePool)return EFI_UNSUPPORTED;
   for(GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;entry;entry=entry->next)
     if(entry->pci==Pci)return EFI_ALREADY_STARTED;
   GU_PLATFORM_ALLOCATION *entry=NULL;
   EFI_STATUS status=Bs->AllocatePool(EfiLoaderData,sizeof(*entry),
                                     (VOID **)&entry);
-  if(status!=EFI_SUCCESS)return status;
+  if(status!=EFI_SUCCESS) {
+    if(entry)RecordPlatformRegistryFailure(status,entry);
+    return status;
+  }
   if(!entry)return EFI_OUT_OF_RESOURCES;
   memset(entry,0,sizeof(*entry));
   GU_PLATFORM *platform=&entry->platform;
@@ -127,6 +141,7 @@ EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
 EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                                    GU_PLATFORM **Owner) {
   if(!Bs || !Pci || !Owner || !*Owner)return EFI_INVALID_PARAMETER;
+  if(PlatformRegistryStatus!=EFI_SUCCESS)return PlatformRegistryStatus;
   if(AnyPublishedPlatform())return EFI_ALREADY_STARTED;
   if(GuPlatformActive!=&UnboundPlatform ||
      memcmp(&Gu,&EmptyPlatform,sizeof(Gu))!=0)return EFI_ACCESS_DENIED;
@@ -147,6 +162,7 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
                                       const GU_GPU_EXEC_SEQUENCE *sequence,
                                       const GU_GPU_EXEC_OBSERVATION *observations,
                                       size_t count) {
+  if(PlatformRegistryStatus!=EFI_SUCCESS)return PlatformRegistryStatus;
   if(!bs||!sequence||!observations||!sequence->next_step||!sequence->owned_mode)
     return EFI_NOT_READY;
   if(GuGpuExecCheckNext(sequence,observations,count)!=GU_GPU_EXEC_OK &&
@@ -210,6 +226,7 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
                                       const GU_GPU_EXEC_OBSERVATION *observations,
                                       size_t count) {
   if(!bs||!owner||!*owner||!sequence||!observations)return EFI_INVALID_PARAMETER;
+  if(PlatformRegistryStatus!=EFI_SUCCESS)return PlatformRegistryStatus;
   if(GuGpuExecCheckNext(sequence,observations,count)!=GU_GPU_EXEC_OK ||
      !sequence->owned_mode || !sequence->next_step)
     return EFI_NOT_READY;
@@ -258,12 +275,13 @@ EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out) {
    * No saved configuration, allocations, protocol state or errors may
    * be discarded. This is not an active-platform teardown operation. */
   if(!PlatformPristine(entry))return EFI_ACCESS_DENIED;
-  GU_PLATFORM_ALLOCATION *next=entry->next;
-  EFI_STATUS status=entry->bs->FreePool(entry);
-  if(status==EFI_SUCCESS) {
-    *link=next;
-    *Out=NULL;
-  }
+  /* Consume the confirmed candidate before calling firmware. An error is
+   * not proof that the original pool still exists. Do not retry or dereference. */
+  EFI_BOOT_SERVICES *bs=entry->bs;
+  *link=entry->next;
+  *Out=NULL;
+  EFI_STATUS status=bs->FreePool(entry);
+  if(status!=EFI_SUCCESS)RecordPlatformRegistryFailure(status,entry);
   return status;
 }
 

@@ -168,7 +168,8 @@ EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
 EFI_STATUS GuBindAllocatedPlatform(EFI_BOOT_SERVICES *Bs, EFI_PCI_IO_PROTOCOL *Pci,
                                    GU_PLATFORM **Owner);
 /* Release only a registered, never-published, unchanged allocation.
- * The caller must own the reference exclusively. Clear it only on success.
+ * The caller must own the reference exclusively. Consume it before the
+ * firmware release. An uncertain release permanently blocks new binding.
  * A lost active pointer cannot make a published platform disposable. */
 EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **Out);
 #ifdef GU_ACTIVE_SINGLE_TARGET

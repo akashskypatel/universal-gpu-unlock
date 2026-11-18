@@ -228,22 +228,25 @@ static GU_PLATFORM UnboundPlatform;
 GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 #define Gu (*GuPlatformActive)
 static const GU_PLATFORM EmptyPlatform;
-static unsigned allocations,fail_alloc,empty_alloc,frees,fail_free;
+static unsigned allocations,fail_alloc,empty_alloc,frees,fail_free,free_calls,ambiguous_alloc;
+static VOID *failed_release;
 static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
   if(kind!=EfiLoaderData || !out)return EFI_INVALID_PARAMETER;
   allocations++;
   if(fail_alloc)return EFI_OUT_OF_RESOURCES;
   *out=empty_alloc?NULL:calloc(1,bytes);
+  if(ambiguous_alloc&&*out)return EFI_OUT_OF_RESOURCES;
   return EFI_SUCCESS;
 }
 static EFI_STATUS Free(VOID *ptr) {
-  if(fail_free)return EFI_ACCESS_DENIED;
+  free_calls++;
+  if(fail_free){failed_release=ptr;return EFI_ACCESS_DENIED;}
   free(ptr);frees++;return EFI_SUCCESS;
 }
 """ + original + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
-  int mode=argc>1?argv[1][0]-'0':-1;
+  int mode=argc>1?atoi(argv[1]):-1;
   EFI_BOOT_SERVICES bs={Allocate,Free};
   EFI_PCI_IO_PROTOCOL first={1},second={2};
   if(mode==0) {
@@ -314,10 +317,8 @@ int main(int argc,char **argv) {
     CHECK(GuDiscardUnboundPlatform(&b)==EFI_ACCESS_DENIED && b && !frees);
     CHECK(GuDiscardUnboundPlatform(&a)==EFI_SUCCESS && !a && frees==1);
     CHECK(GuDiscardUnboundPlatform(&a)==EFI_INVALID_PARAMETER);
-    b->fault=0;fail_free=1;
+    b->fault=0;
     GU_PLATFORM *saved=b;
-    CHECK(GuDiscardUnboundPlatform(&b)==EFI_ACCESS_DENIED && b==saved && frees==1);
-    fail_free=0;
     bs.FreePool=NULL;
     CHECK(GuDiscardUnboundPlatform(&b)==EFI_UNSUPPORTED && b==saved);
     bs.FreePool=Free;
@@ -348,10 +349,6 @@ int main(int argc,char **argv) {
     foreign.bs=&bs;foreign.pci=&first;
     GU_PLATFORM *unknown=&foreign;
     CHECK(GuDiscardUnboundPlatform(&unknown)==EFI_ACCESS_DENIED && unknown==&foreign);
-    fail_free=1;
-    CHECK(GuDiscardUnboundPlatform(&a)==EFI_ACCESS_DENIED && a);
-    CHECK(GuAllocatePlatform(&bs,&first,&duplicate)==EFI_ALREADY_STARTED && !duplicate);
-    fail_free=0;
     /* Remove an interior node, then reuse only its original PCI identity. */
     CHECK(GuDiscardUnboundPlatform(&a)==EFI_SUCCESS && !a);
     CHECK(GuAllocatePlatform(&bs,&first,&a)==EFI_SUCCESS && a);
@@ -412,6 +409,37 @@ int main(int argc,char **argv) {
     CHECK(GuInit(&bs,&second)==EFI_ALREADY_STARTED);
     CHECK(GuDiscardUnboundPlatform(&second_owner)==EFI_SUCCESS && !second_owner);
     CHECK(AnyPublishedPlatform() && frees==1);
+  } else if(mode==10) {
+    GU_PLATFORM *a=NULL,*b=NULL;
+    CHECK(GuAllocatePlatform(&bs,&first,&a)==EFI_SUCCESS);
+    ambiguous_alloc=1;
+    CHECK(GuAllocatePlatform(&bs,&second,&b)==EFI_OUT_OF_RESOURCES&&!b);
+    CHECK(PlatformRegistryStatus==EFI_OUT_OF_RESOURCES&&PlatformRegistryFailureAddress);
+    CHECK(PlatformAllocations&&&PlatformAllocations->platform==a&&!PlatformAllocations->next);
+    CHECK(GuBindAllocatedPlatform(&bs,&first,&a)==EFI_OUT_OF_RESOURCES&&a);
+    CHECK(GuAllocatePlatform(&bs,&second,&b)==EFI_OUT_OF_RESOURCES&&!b&&allocations==2);
+    CHECK(GuPlatformActive==&UnboundPlatform&&!AnyPublishedPlatform());
+    CHECK(GuDiscardUnboundPlatform(&a)==EFI_SUCCESS&&!a&&free_calls==1);
+    CHECK(!PlatformAllocations);
+    free(PlatformRegistryFailureAddress); /* Host fixture teardown. */
+  } else if(mode==11) {
+    GU_PLATFORM *a=NULL,*b=NULL,*extra=NULL;
+    CHECK(GuAllocatePlatform(&bs,&first,&a)==EFI_SUCCESS);
+    CHECK(GuAllocatePlatform(&bs,&second,&b)==EFI_SUCCESS);
+    GU_PLATFORM *alias=a;
+    fail_free=1;
+    CHECK(GuDiscardUnboundPlatform(&a)==EFI_ACCESS_DENIED&&!a&&free_calls==1);
+    CHECK(PlatformRegistryStatus==EFI_ACCESS_DENIED&&PlatformRegistryFailureAddress==failed_release);
+    CHECK(PlatformAllocations&&&PlatformAllocations->platform==b&&!PlatformAllocations->next);
+    /* The firmware could have consumed the failed allocation. Never retry or scan it. */
+    CHECK(GuDiscardUnboundPlatform(&alias)==EFI_ACCESS_DENIED&&free_calls==1);
+    CHECK(GuAllocatePlatform(&bs,&first,&extra)==EFI_ACCESS_DENIED&&!extra&&allocations==2);
+    CHECK(GuBindAllocatedPlatform(&bs,&second,&b)==EFI_ACCESS_DENIED&&b);
+    CHECK(GuPlatformActive==&UnboundPlatform&&!AnyPublishedPlatform());
+    fail_free=0;
+    CHECK(GuDiscardUnboundPlatform(&b)==EFI_SUCCESS&&!b&&free_calls==2);
+    CHECK(!PlatformAllocations);
+    free(failed_release); /* Host fixture teardown, not a production retry. */
   } else return 3;
   /* Test process termination only. Do not use as a production unbind. */
   while(PlatformAllocations) {
@@ -431,7 +459,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(executable)],
                 capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            for mode in range(10):
+            for mode in range(12):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(executable), str(mode)],
                                             capture_output=True, text=True)
@@ -566,6 +594,11 @@ int main(void) {
       CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
       saved[1]->fault=0;
     }
+    PlatformRegistryStatus=EFI_ACCESS_DENIED; /* Independent negative observation. */
+    CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
+    CHECK(GuPlatformActive==saved[i]&&owner[next]);
+    CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+    PlatformRegistryStatus=EFI_SUCCESS; /* Test only, never reset in production. */
     owner[next]->fault=1;
     CHECK(GuAdvanceAllocatedPlatform(&bs,&owner[next],&sequence,observed,4)==EFI_ACCESS_DENIED);
     owner[next]->fault=0;
@@ -603,6 +636,9 @@ int main(void) {
   CHECK(ready_calls==4);
   CHECK(saved[1]->release_state==&release[1]&&saved[0]->release_state==&release[0]);
   CHECK(GuDiscardUnboundPlatform(&owner[3])==EFI_SUCCESS);
+  PlatformRegistryStatus=EFI_ACCESS_DENIED;
+  CHECK(GuVerifyCompletedPlatforms(&bs,&sequence,observed,4)==EFI_ACCESS_DENIED);
+  CHECK(GuPlatformActive==saved[2]);
   /* Test process termination: production retains published allocations. */
   while(PlatformAllocations){
     GU_PLATFORM_ALLOCATION *next=PlatformAllocations->next;
