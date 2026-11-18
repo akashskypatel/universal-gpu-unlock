@@ -91,8 +91,8 @@ int strcmp(const char *,const char *);
 size_t strlen(const char *);
 void *devres_open_group(struct device *,void *,int);
 int devres_release_group(struct device *,void *);
-void usleep_range(unsigned long,unsigned long);
-ktime_t ktime_get(void);
+ktime_t GuCompatTime(const struct pci_dev *);
+BOOLEAN GuCompatDelay(const struct pci_dev *,UINTN);
 static inline ktime_t ktime_add_us(ktime_t t,unsigned long u) {return t+u;}
 static inline int ktime_compare(ktime_t a,ktime_t b) {return a>b?1:a<b?-1:0;}
 /* Device-attributed transaction I/O. The device must own the open scope. */

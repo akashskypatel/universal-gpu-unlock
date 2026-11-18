@@ -92,8 +92,17 @@ int devres_release_group(struct device *D,void *Group) {
   if(!GuCompatDeviceMatches(D)||Group!=&D->scope || !D->scope)return -EINVAL;
   D->scope=false;return 0;
 }
-void usleep_range(unsigned long A,unsigned long B) {(void)B;GuStall(A);}
-ktime_t ktime_get(void) {return Gu.ticks;}
+/* A wait belongs to the device that initiated it. Do not advance another
+ * platform's clock or continue polling when firmware could not delay. */
+ktime_t GuCompatTime(const struct pci_dev *D) {
+  if(!GuCompatPciMatches(D))return 0;
+  return Gu.ticks;
+}
+BOOLEAN GuCompatDelay(const struct pci_dev *D,UINTN Microseconds) {
+  if(!GuCompatPciMatches(D)||Gu.fault||Gu.retained)return FALSE;
+  GuStall(Microseconds);
+  return !Gu.fault&&!Gu.retained;
+}
 /* Vendor access must carry the transaction's retained device reference.
  * A numeric BAR address alone cannot identify a physical GPU. */
 u32 GuCompatRead32(const struct pci_dev *D,const void *P) {

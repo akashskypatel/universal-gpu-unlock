@@ -305,7 +305,7 @@ static void write_bar(struct unlock_transaction_work *work, u32 offset, u32 valu
 static int poll_us(struct unlock_transaction_work *work, u32 offset, u32 mask, u32 expect,
 		   unsigned int budget_us, bool timeout_is_failure)
 {
-	ktime_t deadline = ktime_add_us(ktime_get(), budget_us);
+	ktime_t deadline = ktime_add_us(GuCompatTime(work->pdev), budget_us);
 	u32 value = 0;
 
 	for (;;) {
@@ -317,7 +317,7 @@ static int poll_us(struct unlock_transaction_work *work, u32 offset, u32 mask, u
 		}
 		if ((value & mask) == expect)
 			return 0;
-		if (ktime_compare(ktime_get(), deadline) >= 0) {
+		if (ktime_compare(GuCompatTime(work->pdev), deadline) >= 0) {
 			/* Console loglevel hides info. A tolerated timeout must not
 			 * look like the failure that stopped the boot. */
 			if (!timeout_is_failure) {
@@ -329,7 +329,8 @@ static int poll_us(struct unlock_transaction_work *work, u32 offset, u32 mask, u
 				offset, value, mask, expect, budget_us);
 			return GU_RESULT(-ETIMEDOUT);
 		}
-		usleep_range(50, 100);
+		if (!GuCompatDelay(work->pdev, 50))
+			return GU_RESULT(-EIO);
 	}
 }
 
@@ -346,19 +347,22 @@ static bool is_ad102(const struct unlock_transaction_work *work)
 static int poll_falcon_engine_halt(struct unlock_transaction_work *work, const struct falcon_eng *eng,
 				   unsigned int budget_us, bool timeout_is_failure)
 {
-	ktime_t deadline = ktime_add_us(ktime_get(), budget_us);
+	ktime_t deadline = ktime_add_us(GuCompatTime(work->pdev), budget_us);
 	u32 cpuctl = 0, riscv = 0;
 	bool is_gsp = (eng->base == gu_gsp.base);
 
 	/* Allow engine to latch STARTCPU before sampling HALT status */
-	usleep_range(100, 200);
+	if (!GuCompatDelay(work->pdev, 100))
+		return GU_RESULT(-EIO);
 
 	for (;;) {
 		bool cpu_halt = !read_bar(work, eng->base + 0x100, &cpuctl) && !inaccessible(cpuctl) && ((cpuctl & (1u << 4)) != 0);
 		bool riscv_halt = !is_gsp && !read_bar(work, eng->falcon2 + 0x388, &riscv) && !inaccessible(riscv) && ((riscv & (1u << 4)) != 0);
+		if (Gu.fault)
+			return GU_RESULT(-EIO);
 		if (cpu_halt || riscv_halt)
 			return 0;
-		if (ktime_compare(ktime_get(), deadline) >= 0) {
+		if (ktime_compare(GuCompatTime(work->pdev), deadline) >= 0) {
 			if (!timeout_is_failure) {
 				dev_info(&work->pdev->dev, "falcon halt timeout tolerated: base=%#x cpuctl=%#x falcon2=%#x riscv=%#x budget_us=%u\n",
 					eng->base, cpuctl, eng->falcon2, riscv, budget_us);
@@ -368,7 +372,8 @@ static int poll_falcon_engine_halt(struct unlock_transaction_work *work, const s
 				eng->base, cpuctl, eng->falcon2, riscv, budget_us);
 			return GU_RESULT(-ETIMEDOUT);
 		}
-		usleep_range(50, 100);
+		if (!GuCompatDelay(work->pdev, 50))
+			return GU_RESULT(-EIO);
 	}
 }
 
@@ -684,7 +689,7 @@ static int falcon_hs(struct unlock_transaction_work *work, const struct falcon_e
 	else
 		write_bar(work, eng->base + 0x100, 1u << 1);
 	if (wait_plm) {
-		ktime_t deadline = ktime_add_us(ktime_get(), GU_BOOT_TIMEOUT_US);
+		ktime_t deadline = ktime_add_us(GuCompatTime(work->pdev), GU_BOOT_TIMEOUT_US);
 
 		for (;;) {
 			u32 plm, engine, identity, marker = 0;
@@ -701,13 +706,14 @@ static int falcon_hs(struct unlock_transaction_work *work, const struct falcon_e
 			if (plm == ~0u && work->plm_entry != ~0u &&
 			    (!is_ad102(work) || marker == GU_AD102_MARKER))
 				return 0;
-			if ((engine & (1u << 4)) || ktime_compare(ktime_get(), deadline) >= 0)
+			if ((engine & (1u << 4)) || ktime_compare(GuCompatTime(work->pdev), deadline) >= 0)
 				log_falcon_failure(work, eng, identity, engine, plm);
 			if (engine & (1u << 4))
 				return GU_RESULT(-EIO);
-			if (ktime_compare(ktime_get(), deadline) >= 0)
+			if (ktime_compare(GuCompatTime(work->pdev), deadline) >= 0)
 				return GU_RESULT(-ETIMEDOUT);
-			usleep_range(50, 100);
+			if (!GuCompatDelay(work->pdev, 50))
+				return GU_RESULT(-EIO);
 		}
 	}
 	ret = poll_falcon_engine_halt(work, eng, GU_BOOT_TIMEOUT_US, true);
@@ -1309,7 +1315,7 @@ out:
 
 static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 {
-	ktime_t deadline = ktime_add_us(ktime_get(), GU_GFW_TIMEOUT_US);
+	ktime_t deadline = ktime_add_us(GuCompatTime(work->pdev), GU_GFW_TIMEOUT_US);
 	int assessed = -EAGAIN;
 
 	for (;;) {
@@ -1366,9 +1372,10 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 		}
 		if (assessed != -EAGAIN)
 			return GU_RESULT(assessed);
-		if (ktime_compare(ktime_get(), deadline) >= 0)
+		if (ktime_compare(GuCompatTime(work->pdev), deadline) >= 0)
 			return GU_RESULT(-ETIMEDOUT);
-		usleep_range(1000, 2000);
+		if (!GuCompatDelay(work->pdev, 1000))
+			return GU_RESULT(-EIO);
 	}
 }
 
@@ -1595,7 +1602,7 @@ static int hold_sec2_reset(struct unlock_transaction_work *work, const char *pha
  */
 static int wait_post_flr_bar(struct unlock_transaction_work *work, u32 chip)
 {
-	ktime_t deadline = ktime_add_us(ktime_get(), 1000000);
+	ktime_t deadline = ktime_add_us(GuCompatTime(work->pdev), 1000000);
 	u32 value = 0;
 
 	for (;;) {
@@ -1605,12 +1612,13 @@ static int wait_post_flr_bar(struct unlock_transaction_work *work, u32 chip)
 			dev_info(&work->pdev->dev, "post-FLR BAR ready: chip=%#x\n", value);
 			return 0;
 		}
-		if (ktime_compare(ktime_get(), deadline) >= 0) {
+		if (ktime_compare(GuCompatTime(work->pdev), deadline) >= 0) {
 			dev_err(&work->pdev->dev, "post-FLR BAR timeout: chip=%#x expected=%#x budget_us=1000000\n",
 				value, chip);
 			return GU_RESULT(-ETIMEDOUT);
 		}
-		usleep_range(1000, 2000);
+		if (!GuCompatDelay(work->pdev, 1000))
+			return GU_RESULT(-EIO);
 	}
 }
 
@@ -1619,7 +1627,7 @@ static int wait_post_flr_bar(struct unlock_transaction_work *work, u32 chip)
  */
 static int wait_post_flr_gfw(struct unlock_transaction_work *work)
 {
-	ktime_t deadline = ktime_add_us(ktime_get(), GU_GFW_TIMEOUT_US);
+	ktime_t deadline = ktime_add_us(GuCompatTime(work->pdev), GU_GFW_TIMEOUT_US);
 	struct gpu_unlock_gfw_sample sample = { };
 	u32 identity = 0;
 	int ret;
@@ -1647,11 +1655,14 @@ static int wait_post_flr_gfw(struct unlock_transaction_work *work)
 		      inaccessible(sample.cpuctl) ? -EAGAIN : gpu_unlock_gfw_assess(&sample);
 		if (!ret)
 			break;
-		if (ktime_compare(ktime_get(), deadline) >= 0) {
+		if (ktime_compare(GuCompatTime(work->pdev), deadline) >= 0) {
 			ret = -ETIMEDOUT;
 			break;
 		}
-		usleep_range(1000, 2000);
+		if (!GuCompatDelay(work->pdev, 1000)) {
+			ret = -EIO;
+			break;
+		}
 	}
 	dev_info(&work->pdev->dev, "post-FLR GFW result: error=%d pci=%#x plm=%#x boot=%#x cpuctl=%#x budget_us=%u\n",
 		 ret, identity, sample.plm, sample.boot, sample.cpuctl, GU_GFW_TIMEOUT_US);

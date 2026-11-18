@@ -49,6 +49,7 @@ static u32 cpu_value, riscv_value;
 static bool cpu_readable, riscv_readable;
 static int riscv_reads;
 static ktime_t now;
+static int delay_calls,fail_delay,fail_read;
 #define GU_RESULT(x) (x)
 #define dev_info(dev, fmt, ...) ((void)0)
 #define dev_err(dev, fmt, ...) ((void)0)
@@ -56,6 +57,7 @@ static ktime_t now;
 static int read_bar(struct unlock_transaction_work *work,u32 address,u32 *value)
 {
     (void)work;
+    if (fail_read) { Gu.fault=true; return -EIO; }
     if (Gu.fault) return -EIO;
     if (address==active->base+0x100) {
         if (!cpu_readable) return -EIO;
@@ -68,10 +70,16 @@ static int read_bar(struct unlock_transaction_work *work,u32 address,u32 *value)
     }
     return -EIO;
 }
-static ktime_t ktime_get(void){return now;}
+static ktime_t GuCompatTime(struct gpu_dev *dev){(void)dev;return now;}
 static ktime_t ktime_add_us(ktime_t a,unsigned n){return a+n;}
 static int ktime_compare(ktime_t a,ktime_t b){return (a>b)-(a<b);}
-static void usleep_range(unsigned a,unsigned b){(void)b;now+=a;}
+static bool GuCompatDelay(struct gpu_dev *dev,unsigned a){
+    (void)dev;
+    if (Gu.fault) return false;
+    delay_calls++;
+    if (delay_calls==fail_delay) { Gu.fault=true; return false; }
+    now+=a;return true;
+}
 
 __READERS__
 
@@ -81,6 +89,7 @@ static void setup(const struct falcon_eng *engine,u32 cpu,u32 riscv,
     active=engine;cpu_value=cpu;riscv_value=riscv;
     cpu_readable=cpu_ok;riscv_readable=riscv_ok;
     now=0;riscv_reads=0;Gu.fault=false;
+    delay_calls=fail_delay=fail_read=0;
 }
 int main(void)
 {
@@ -115,12 +124,27 @@ int main(void)
 
     setup(&gu_sec2,0x10u,0,true,true);
     Gu.fault=true;
-    assert(poll_falcon_engine_halt(&work,&gu_sec2,300,true)==-ETIMEDOUT);
+    assert(poll_falcon_engine_halt(&work,&gu_sec2,300,true)==-EIO);
+    assert(delay_calls==0);
     assert(!is_falcon_engine_halted(&work,&gu_sec2));
 
     setup(&gu_sec2,0,0,true,true);
     assert(poll_falcon_engine_halt(&work,&gu_sec2,300,false)==-ETIMEDOUT);
-    puts("STATUS=COMPLETE PASS=8 HALT_ENGINE_TESTS HARDWARE_ACTION=NONE");
+    setup(&gu_sec2,0x10u,0,true,true);
+    fail_delay=1;
+    assert(poll_falcon_engine_halt(&work,&gu_sec2,300,true)==-EIO);
+    assert(now==0&&delay_calls==1&&Gu.fault);
+
+    setup(&gu_sec2,0,0,true,true);
+    fail_delay=2;
+    assert(poll_falcon_engine_halt(&work,&gu_sec2,300,false)==-EIO);
+    assert(now==100&&delay_calls==2&&Gu.fault);
+
+    setup(&gu_sec2,0,0,true,true);
+    fail_read=1;
+    assert(poll_falcon_engine_halt(&work,&gu_sec2,300,false)==-EIO);
+    assert(now==100&&delay_calls==1&&Gu.fault);
+    puts("STATUS=COMPLETE PASS=11 HALT_ENGINE_TESTS HARDWARE_ACTION=NONE");
     return 0;
 }
 """
@@ -151,7 +175,7 @@ class HaltReaderTests(unittest.TestCase):
                 check=False, timeout=10,
             )
             self.assertEqual(execute_run.returncode, 0, execute_run.stderr)
-            self.assertIn("STATUS=COMPLETE PASS=8", execute_run.stdout)
+            self.assertIn("STATUS=COMPLETE PASS=11", execute_run.stdout)
 
 
 if __name__ == "__main__":
