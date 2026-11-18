@@ -20,6 +20,10 @@ static void *uncertain_state;
 static UINTN uncertain_state_bytes;
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 static unsigned context_allocs,context_frees,fail_context_free;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+static unsigned candidate_alias,discard_calls;
+static GU_PLATFORM *last_candidate;
+#endif
 #endif
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static int refuse_advance,refuse_completed,refuse_final_graph,drift_after_graph;
@@ -141,14 +145,24 @@ static EFI_STATUS Allocate(int kind, UINTN bytes, VOID **out) {
 #if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_ACTIVE_SINGLE_TARGET)
 EFI_STATUS GuAllocatePlatform(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,GU_PLATFORM **out) {
   if(!bs || !pci || !out || *out)return EFI_INVALID_PARAMETER;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  if(candidate_alias==1 && last_candidate){*out=last_candidate;return EFI_SUCCESS;}
+  if(candidate_alias==2){*out=GuPlatformActive;return EFI_SUCCESS;}
+#endif
   EFI_STATUS status=bs->AllocatePool(EfiLoaderData,sizeof(**out),(VOID **)out);
   if(status==EFI_SUCCESS) {
     (*out)->bs=bs;(*out)->pci=pci;context_allocs++;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+    last_candidate=*out;
+#endif
   }
   return status;
 }
 EFI_STATUS GuDiscardUnboundPlatform(GU_PLATFORM **out) {
   if(!out || !*out)return EFI_INVALID_PARAMETER;
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  discard_calls++;
+#endif
   if(fail_context_free && (*out)->pci==&gpu[1].protocol)return EFI_NOT_READY;
   EFI_STATUS status=(*out)->bs->FreePool(*out);
   if(status==EFI_SUCCESS){*out=NULL;context_frees++;}
@@ -779,6 +793,43 @@ static int CheckPreparationTableLifetime(void) {
   CHECK(!locate_calls&&!resolve_calls&&!init_calls&&state_allocs==2&&!state_frees);
   free(last_failed_free); /* Test-only boot termination. */
   UnreleasedPreparedContextTable=NULL;
+  ResetPair();
+  GU_GPU_EXEC_TARGET targets[2]={{0}};
+  size_t orders[2]={0,1};
+  targets[0].identity.pci=&gpu[0].protocol;
+  targets[1].identity.pci=&gpu[1].protocol;
+  sequence.targets=targets;sequence.order=orders;
+  sequence.count=sequence.capacity=sequence.selected_count=2;
+  context_allocs=context_frees=discard_calls=0;
+  fail_state_alloc_with_output=3; /* Table and first context succeed. */
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_DEVICE_ERROR);
+  CHECK(UnconfirmedPreparedContext==uncertain_state && uncertain_state_bytes==sizeof(GU_PLATFORM));
+  CHECK(!PreparedContexts&&!PreparedContextCount&&!UnreleasedPreparedContextTable);
+  CHECK(context_allocs==1&&context_frees==1&&discard_calls==1&&state_allocs==3&&state_frees==2);
+  for(UINTN i=0;i<uncertain_state_bytes;i++)
+    CHECK(((const unsigned char *)uncertain_state)[i]==0xa5);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(!locate_calls&&!init_calls&&discard_calls==1);
+  free(uncertain_state); /* Test-only boot termination. */
+  UnconfirmedPreparedContext=NULL;
+
+  /* A duplicate output cannot acquire a second disposal obligation. */
+  ResetPair();context_allocs=context_frees=discard_calls=0;
+  last_candidate=NULL;candidate_alias=1;
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_DEVICE_ERROR);
+  CHECK(UnconfirmedPreparedContext!=NULL&&!PreparedContexts&&!PreparedContextCount);
+  CHECK(context_allocs==1&&context_frees==1&&discard_calls==1&&state_frees==2);
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_ALREADY_STARTED);
+  CHECK(!locate_calls&&!init_calls&&discard_calls==1);
+  UnconfirmedPreparedContext=NULL;
+  ResetPair();context_allocs=context_frees=discard_calls=0;
+  last_candidate=NULL;candidate_alias=2;
+  GU_PLATFORM original=Gu;
+  CHECK(PreparePlatformContexts(&services,&sequence)==EFI_DEVICE_ERROR);
+  CHECK(UnconfirmedPreparedContext==GuPlatformActive&&!PreparedContexts);
+  CHECK(!context_allocs&&!context_frees&&!discard_calls&&state_frees==1);
+  CHECK(!memcmp(&original,&Gu,sizeof(Gu)));
+  UnconfirmedPreparedContext=NULL;candidate_alias=0;last_candidate=NULL;
   ResetPair();
   return 0;
 }

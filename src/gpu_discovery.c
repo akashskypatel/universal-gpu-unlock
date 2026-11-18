@@ -784,6 +784,8 @@ static GU_PLATFORM **PreparedContexts;
 static size_t PreparedContextCount;
 /* An uncertain table address is diagnostic evidence, not an owned array. */
 static VOID *UnreleasedPreparedContextTable;
+/* Do not publish, inspect or dispose of a failed candidate output. */
+static GU_PLATFORM *UnconfirmedPreparedContext;
 
 static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
                                           const GU_GPU_EXEC_SEQUENCE *sequence) {
@@ -793,7 +795,8 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
      sequence->capacity>GU_INVENTORY_MAX_HANDLES ||
      !sequence->selected_count || sequence->selected_count>sequence->count)
     return EFI_INVALID_PARAMETER;
-  if(PreparedContexts||UnreleasedPreparedContextTable)return EFI_ALREADY_STARTED;
+  if(PreparedContexts||UnreleasedPreparedContextTable||UnconfirmedPreparedContext)
+    return EFI_ALREADY_STARTED;
   size_t count=sequence->selected_count;
   /* The sequence was checked by GuGpuExecCheckNext. Confirm all indices
    * and PCI references before allocating any candidate. */
@@ -824,19 +827,40 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
   for(size_t i=0;i<count;i++) {
     EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)
         sequence->targets[sequence->order[i]].identity.pci;
-    status=GuAllocatePlatform(bs,pci,&contexts[i]);
-    if(status!=EFI_SUCCESS)break;
-    if(!contexts[i] || contexts[i]->bs!=bs || contexts[i]->pci!=pci) {
-      status=EFI_UNSUPPORTED;
+    GU_PLATFORM *candidate=NULL;
+    status=GuAllocatePlatform(bs,pci,&candidate);
+    if(status!=EFI_SUCCESS) {
+      if(candidate) {
+        UnconfirmedPreparedContext=candidate;
+        GuLog("ACTIVE_CONTEXT[%zu]_ALLOCATION_UNCERTAIN ADDRESS=%p STATUS=%#llx\n",
+              i,(VOID *)candidate,(unsigned long long)status);
+        status=EFI_DEVICE_ERROR;
+      }
       break;
     }
+    if(!candidate){status=EFI_OUT_OF_RESOURCES;break;}
+    BOOLEAN alias=candidate==GuPlatformActive;
+    for(size_t j=0;j<i;j++)if(contexts[j]==candidate)alias=TRUE;
+    if(alias || candidate->bs!=bs || candidate->pci!=pci) {
+      UnconfirmedPreparedContext=candidate;
+      GuLog("ACTIVE_CONTEXT[%zu]_OWNER_UNCONFIRMED ADDRESS=%p ALIAS=%u\n",
+            i,(VOID *)candidate,(unsigned)alias);
+      status=EFI_DEVICE_ERROR;
+      break;
+    }
+    contexts[i]=candidate;
     GuLog("ACTIVE_CONTEXT[%zu]=PREPARED CPU_ONLY=1 MUTATION_AUTHORIZED=0\n",i);
   }
   EFI_STATUS cleanup=EFI_SUCCESS;
   for(size_t i=0;i<PreparedContextCount;i++) {
     if(!contexts[i])continue;
+    GU_PLATFORM *candidate=contexts[i];
     EFI_STATUS released=GuDiscardUnboundPlatform(&contexts[i]);
-    if(released!=EFI_SUCCESS && cleanup==EFI_SUCCESS)cleanup=released;
+    if(released!=EFI_SUCCESS) {
+      GuLog("ACTIVE_CONTEXT[%zu]_FREE_STATUS=%#llx ADDRESS=%p REFERENCE_RETAINED=%u\n",
+            i,(unsigned long long)released,(VOID *)candidate,(unsigned)(contexts[i]!=NULL));
+      if(cleanup==EFI_SUCCESS)cleanup=released;
+    }
   }
   if(cleanup==EFI_SUCCESS) {
     /* Consume the published table reference before the release attempt. */
@@ -867,7 +891,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   if(!image||!table||!table->BootServices)return EFI_INVALID_PARAMETER;
   if(UnreleasedDiscoveryAllocation||UnreleasedPciHandles)return EFI_ALREADY_STARTED;
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
-  if(PreparedContexts||UnreleasedPreparedContextTable)return EFI_ALREADY_STARTED;
+  if(PreparedContexts||UnreleasedPreparedContextTable||UnconfirmedPreparedContext)
+    return EFI_ALREADY_STARTED;
 #endif
   EFI_STATUS s=LocatePciHandles(table,&handles,&handle_count);
   if(s!=EFI_SUCCESS)return s;
