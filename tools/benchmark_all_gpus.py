@@ -53,7 +53,16 @@ def is_integrated(runtime, index):
 
 def benchmark_device(index):
     device = torch.device(f"cuda:{index}")
-    torch.cuda.set_device(device)
+    with torch.cuda.device(device):
+        previous_tf32 = torch.backends.cuda.matmul.allow_tf32
+        try:
+            return _benchmark_device(index, device)
+        finally:
+            torch.backends.cuda.matmul.allow_tf32 = previous_tf32
+
+
+def _benchmark_device(index, device):
+    stream = torch.cuda.current_stream(device)
     props = torch.cuda.get_device_properties(device)
 
     print("=" * 79)
@@ -89,10 +98,10 @@ def benchmark_device(index):
                 iterations = 10 if n <= 8192 else 5
                 start = torch.cuda.Event(enable_timing=True)
                 end = torch.cuda.Event(enable_timing=True)
-                start.record()
+                start.record(stream)
                 for _ in range(iterations):
                     c = torch.matmul(a, b)
-                end.record()
+                end.record(stream)
                 torch.cuda.synchronize(device)
 
                 elapsed_ms = start.elapsed_time(end) / iterations
@@ -126,10 +135,10 @@ def benchmark_device(index):
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)
         iterations = 10
-        start.record()
+        start.record(stream)
         for _ in range(iterations):
             y.copy_(x)
-        end.record()
+        end.record(stream)
         torch.cuda.synchronize(device)
 
         elapsed_ms = start.elapsed_time(end) / iterations
