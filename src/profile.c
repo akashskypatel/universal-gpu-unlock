@@ -206,6 +206,13 @@ static BOOLEAN DiagnosticOwnerMatches(GU_PLATFORM *owner,EFI_BOOT_SERVICES *bs,
   owner->fault=TRUE;owner->retained=TRUE;
   return FALSE;
 }
+/* A diagnostic buffer must remain an exact general CPU allocation of
+ * the original platform. Do not read, parse or release a foreign buffer. */
+static BOOLEAN DiagnosticBufferMatches(GU_PLATFORM *owner,const VOID *buffer) {
+  if(!owner->retained&&GuCpuPoolOwns(owner,buffer,1048576U))return TRUE;
+  owner->fault=TRUE;owner->retained=TRUE;
+  return FALSE;
+}
 EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
   if(!owner->bs||!owner->pci||!owner->handle)return EFI_NOT_READY;
@@ -227,9 +234,11 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   if(!config_ok||!regs_ok||!assets_ok)return EFI_NOT_READY;
   VOID *prom=GuAlloc(1048576U);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
-  if(!prom)return EFI_OUT_OF_RESOURCES;
+  if(!prom)return owner->fault||owner->retained?EFI_DEVICE_ERROR:EFI_OUT_OF_RESOURCES;
+  if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
   BOOLEAN copied=GuCopyFromIo(owner,prom,(VOID *)(UINTN)(owner->bar_base+0x300000),1048576U);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
   BOOLEAN prom_ok=copied&&!owner->fault&&GuAd104PromMatches(owner,prom,1048576U);
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
@@ -242,6 +251,7 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   GuLog("DIAGNOSTIC PROM=%u FWSEC_PARSE=%d FWSEC_MATCH=%u STABLE=%u SIGNATURE_AUTHENTICATED=0\n",
         (unsigned)prom_ok,parsed,(unsigned)fw_ok,(unsigned)stable);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
   GuFree(prom);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle)||owner->fault||owner->retained)return EFI_DEVICE_ERROR;
   if(parsed==0 && fw.descriptor_version==2)

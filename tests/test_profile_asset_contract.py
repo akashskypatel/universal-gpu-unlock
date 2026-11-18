@@ -81,8 +81,13 @@ struct gpu_unlock_fwsec {int descriptor_version;};
 static GU_PLATFORM p[2],*GuPlatformActive=&p[0];
 static EFI_BOOT_SERVICES services[2];
 static EFI_PCI_IO_PROTOCOL interfaces[2];
-static int mode,configs,registers,logs,allocs,frees,copies,wrong;
+static int mode,configs,registers,logs,allocs,frees,copies,wrong,parses;
 static void *buffer;
+static GU_PLATFORM *buffer_owner;
+static size_t buffer_bytes;
+static BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *o,const VOID *m,size_t n){
+  return o==buffer_owner&&m==buffer&&n==buffer_bytes;
+}
 static void drift(void){GuPlatformActive=&p[1];}
 static BOOLEAN ConfigFor(GU_PLATFORM *o){
   configs++;if(o!=&p[0]||o!=GuPlatformActive)wrong++;
@@ -105,11 +110,15 @@ static void GuLog(const char *fmt,...){
   (void)fmt;logs++;
   if(mode==3&&logs==1)drift();
   if(mode==8&&logs==2)drift();
+  if(mode==20&&logs==2)buffer_owner=&p[1];
 }
 static VOID *GuAlloc(size_t n){
   allocs++;if(GuPlatformActive!=&p[0])wrong++;
   if(mode==10)return NULL;
+  if(mode==22){p[0].fault=p[0].retained=1;return NULL;}
   buffer=malloc(n);
+  buffer_owner=mode==18?&p[1]:&p[0];
+  buffer_bytes=mode==21?n-1:n;
   if(mode==4)drift();
   return buffer;
 }
@@ -124,6 +133,7 @@ static BOOLEAN GuCopyFromIo(GU_PLATFORM *o,VOID *dst,const VOID *src,size_t n){
   if(mode==5)drift();
   if(mode==11)o->bs=&services[1];
   if(mode==12)o->pci=&interfaces[1];
+  if(mode==19)buffer_owner=&p[1];
   return TRUE;
 }
 static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *o,const VOID *m,size_t n){
@@ -131,7 +141,7 @@ static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *o,const VOID *m,size_t n){
   return TRUE;
 }
 static int gpu_unlock_vbios_fwsec(const VOID *m,size_t n,struct gpu_unlock_fwsec *f){
-  (void)n;if(m!=buffer)wrong++;f->descriptor_version=3;return 0;
+  (void)n;parses++;if(m!=buffer)wrong++;f->descriptor_version=3;return 0;
 }
 static BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f){return f->descriptor_version==3;}
 """ + actual + r"""
@@ -151,7 +161,7 @@ int main(int argc,char **argv){
   CHECK(!wrong&&!p[1].fault&&!p[1].retained&&!p[1].profile_verified&&!p[0].profile_verified);
   if(mode==0){
     CHECK(status==EFI_SUCCESS&&allocs==1&&frees==1&&copies==1&&configs==2&&registers==2);
-    CHECK(!p[0].fault&&!p[0].retained);
+    CHECK(!p[0].fault&&!p[0].retained&&parses==1);
   }else if(mode==10){
     CHECK(status==EFI_OUT_OF_RESOURCES&&allocs==1&&!frees&&!copies&&!p[0].fault);
   }else if(mode>=13&&mode<=17){
@@ -166,6 +176,10 @@ int main(int argc,char **argv){
     if(mode==6)CHECK(configs==2&&registers==1&&!frees);
     if(mode==7||mode==8)CHECK(configs==2&&registers==2&&!frees);
     if(mode==9)CHECK(frees==1&&!buffer);
+    if(mode==18||mode==21)CHECK(allocs==1&&!copies&&!parses&&!frees);
+    if(mode==19)CHECK(allocs==1&&copies==1&&!parses&&!frees&&configs==1);
+    if(mode==20)CHECK(allocs==1&&copies==1&&parses==1&&!frees&&configs==2);
+    if(mode==22)CHECK(allocs==1&&!buffer&&!copies&&!parses&&!frees);
     free(buffer); /* Host fixture teardown, not production recovery. */
   }
   return 0;
@@ -177,7 +191,7 @@ int main(int argc,char **argv){
             source.write_text(host,encoding="utf-8")
             result=subprocess.run(["gcc","-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
-            for mode in range(18):
+            for mode in range(23):
                 with self.subTest(mode=mode):
                     result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True)
                     self.assertEqual(result.returncode,0,result.stderr)
