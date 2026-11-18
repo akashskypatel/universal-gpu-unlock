@@ -278,7 +278,7 @@ int main(void){
   CHECK(platforms[0].fault&&!Gu.fault);
   platforms[0].fault=0;
   CHECK(pci_read_config_word(a,0,&value)==-EINVAL&&reads==2&&platforms[0].fault&&!Gu.fault);
-  CHECK(dma_set_mask(&a->dev,99)==-EINVAL&&a->mask_storage==42);
+  CHECK(dma_set_mask(&a->dev,99)==-EINVAL&&a->mask_storage==43);
   CHECK(dma_set_coherent_mask(&a->dev,99)==-EINVAL&&a->dev.coherent_dma_mask==41);
   CHECK(!devres_open_group(&a->dev,NULL,0)&&!a->dev.scope);
   CHECK(devres_release_group(&a->dev,group)==-EINVAL);
@@ -422,7 +422,7 @@ static const struct asset_names {const char *gsp;} names={"gsp"};
 static const struct asset_names *unlock_assets(const struct pci_dev *p){(void)p;return &names;}
 static void *devres_open_group(struct device *d,void *id,int flags){
   (void)id;(void)flags;
-  if(!GuCompatDeviceMatches(d)||d->scope)return NULL;
+  if(GuCompatDeviceOwner(d)!=active||d->scope)return NULL;
   opens++;d->scope=1;return &d->scope;
 }
 static int devres_release_group(struct device *d,void *g){
