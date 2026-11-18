@@ -118,20 +118,31 @@ BOOLEAN GuBootLogOpen(VOID){return Log!=NULL;}
 EFI_HANDLE GuBootGetTargetEspVolume(VOID){return TargetEspVolume;}
 const CHAR16 *GuBootGetLogPath(VOID){return Log?ActiveLogPath:NULL;}
 
-/* Consume each local reference once. Retain failed reference addresses
- * for diagnosis only; never dereference or retry them. */
+/* Retain uncertain file references at boot scope, not on a GPU. */
+static EFI_STATUS RecordBootFileFailure(EFI_FILE_PROTOCOL *file) {
+  if(UnreleasedBootFileCount<sizeof(UnreleasedBootFiles)/sizeof(UnreleasedBootFiles[0]))
+    UnreleasedBootFiles[UnreleasedBootFileCount++]=file;
+  BootFileStatus=EFI_DEVICE_ERROR;
+  return BootFileStatus;
+}
+/* An error with a nonnull output does not establish an open file.
+ * Do not use that reference or pass it to CloseBootFile. */
+static EFI_STATUS BootFileOpenResult(EFI_STATUS status,EFI_FILE_PROTOCOL **file) {
+  if(status!=EFI_SUCCESS&&*file) {
+    EFI_FILE_PROTOCOL *uncertain=*file;
+    *file=NULL;
+    return RecordBootFileFailure(uncertain);
+  }
+  return status;
+}
+/* Consume each confirmed local reference once. Retain failed reference
+ * addresses for diagnosis only; never dereference or retry them. */
 static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **file) {
   if(!file||!*file)return EFI_SUCCESS;
   EFI_FILE_PROTOCOL *f=*file;
   *file=NULL;
   EFI_STATUS s=f->Close?f->Close(f):EFI_UNSUPPORTED;
-  if(s!=EFI_SUCCESS) {
-    if(UnreleasedBootFileCount<sizeof(UnreleasedBootFiles)/sizeof(UnreleasedBootFiles[0]))
-      UnreleasedBootFiles[UnreleasedBootFileCount++]=f;
-    BootFileStatus=EFI_DEVICE_ERROR;
-    return EFI_DEVICE_ERROR;
-  }
-  return EFI_SUCCESS;
+  return s==EFI_SUCCESS?s:RecordBootFileFailure(f);
 }
 
 EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
@@ -158,11 +169,14 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   s=b->HandleProtocol(OwnVolume,&FsGuid,(VOID **)&fs);if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
 
-  s=fs->OpenVolume(fs,&Root);if(s!=EFI_SUCCESS||!Root){s=EFI_DEVICE_ERROR;goto failed;}
+  s=fs->OpenVolume(fs,&Root);
+  s=BootFileOpenResult(s,&Root);
+  if(s!=EFI_SUCCESS||!Root){s=EFI_DEVICE_ERROR;goto failed;}
 
   EFI_FILE_PROTOCOL *dir=NULL;
 
   s=Root->Open(Root,&dir,L"\\AD102-UNLOCK",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,EFI_FILE_DIRECTORY);
+  s=BootFileOpenResult(s,&dir);
 
   if(s!=EFI_SUCCESS||!dir){s=EFI_DEVICE_ERROR;goto failed;}
 
@@ -173,12 +187,14 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     for(UINTN at=7;at>3;){at--;name[at]=(CHAR16)('0'+number%10);number/=10;}
 
     EFI_FILE_PROTOCOL *existing=NULL;s=dir->Open(dir,&existing,name,EFI_FILE_MODE_READ,0);
+    s=BootFileOpenResult(s,&existing);
 
     if(s==EFI_SUCCESS&&existing){s=CloseBootFile(&existing);if(s!=EFI_SUCCESS)break;continue;}
 
     if(s!=EFI_NOT_FOUND)break;
 
     s=dir->Open(dir,&Log,name,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    s=BootFileOpenResult(s,&Log);
     if(s==EFI_SUCCESS&&Log) {
       for(UINTN k=0;k<sizeof(name)/sizeof(CHAR16);k++) ActiveLogPath[14+k]=name[k];
     }
@@ -239,6 +255,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
   if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
 
   EFI_STATUS s=root->Open(root,&f,(CHAR16 *)name,EFI_FILE_MODE_READ,0);
+  s=BootFileOpenResult(s,&f);
 
   if(s!=EFI_SUCCESS||!f)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
 
@@ -339,6 +356,7 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
   if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
   EFI_FILE_PROTOCOL *root=NULL;
   s=fs->OpenVolume(fs,&root);
+  s=BootFileOpenResult(s,&root);
   if(s!=EFI_SUCCESS||!root)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
   s=ReadFile(root,path,asset->bytes,out);
   EFI_STATUS closed=CloseBootFile(&root);
@@ -407,6 +425,7 @@ static EFI_STATUS ReadWindowsBinary(EFI_BOOT_SERVICES *bs,EFI_FILE_PROTOCOL *roo
   if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
 
   EFI_STATUS s=root->Open(root,&f,(CHAR16 *)name,EFI_FILE_MODE_READ,0);
+  s=BootFileOpenResult(s,&f);
 
   if(s!=EFI_SUCCESS||!f)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
 
@@ -461,11 +480,18 @@ EFI_STATUS GuBootLoadWindows(VOID) {
        Inspect(p,&bytes,&usb,&windows)&&!usb&&
        GuWindowsEspPathMatches((const uint8_t *)p,bytes,(const uint8_t *)&WindowsPartition)) {
       EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *tfs=NULL;EFI_FILE_PROTOCOL *troot=NULL;
-      if(b->HandleProtocol(h[i],&FsGuid,(VOID **)&tfs)==EFI_SUCCESS&&tfs&&tfs->OpenVolume(tfs,&troot)==EFI_SUCCESS&&troot) {
+      if(b->HandleProtocol(h[i],&FsGuid,(VOID **)&tfs)==EFI_SUCCESS&&tfs) {
+        EFI_STATUS opened=tfs->OpenVolume(tfs,&troot);
+        opened=BootFileOpenResult(opened,&troot);
+        if(BootFileStatus!=EFI_SUCCESS){s=BootFileStatus;break;}
+        if(opened!=EFI_SUCCESS||!troot)continue;
         const CHAR16 *found_name=NULL;
         for(UINTN c_idx=0;c_idx<sizeof(WindowsCandidates)/sizeof(WindowsCandidates[0]);c_idx++) {
           EFI_FILE_PROTOCOL *tf=NULL;
-          if(troot->Open(troot,&tf,(CHAR16 *)WindowsCandidates[c_idx],EFI_FILE_MODE_READ,0)==EFI_SUCCESS&&tf) {
+          opened=troot->Open(troot,&tf,(CHAR16 *)WindowsCandidates[c_idx],EFI_FILE_MODE_READ,0);
+          opened=BootFileOpenResult(opened,&tf);
+          if(BootFileStatus!=EFI_SUCCESS){s=BootFileStatus;break;}
+          if(opened==EFI_SUCCESS&&tf) {
             s=CloseBootFile(&tf);
             if(s!=EFI_SUCCESS)break;
             found_name=WindowsCandidates[c_idx];

@@ -169,9 +169,9 @@ int main(void){
 
     def test_shared_file_close_failure_is_sticky(self):
         """Exercise actual close helpers, including failure after log flush."""
-        close = BOOT.split("static EFI_STATUS CloseBootFile(",1)[1].split("\nEFI_STATUS GuBootOpen(",1)[0]
+        close = BOOT.split("static EFI_STATUS RecordBootFileFailure(",1)[1].split("\nEFI_STATUS GuBootOpen(",1)[0]
         boot_close=BOOT.split("EFI_STATUS GuBootClose(VOID) {",1)[1].split("\nEFI_STATUS GuBootWindows(",1)[0]
-        actual="static EFI_STATUS CloseBootFile("+close+"\nEFI_STATUS GuBootClose(VOID) {"+boot_close
+        actual="static EFI_STATUS RecordBootFileFailure("+close+"\nEFI_STATUS GuBootClose(VOID) {"+boot_close
         host=r"""
 #include <stddef.h>
 #include <stdio.h>
@@ -209,6 +209,22 @@ int main(void){
     CHECK(GuBootClose()==expected);
     CHECK(root.closes==1&&log.closes==1&&log.flushes==1);
   }
+  /* Separate boot: an unconfirmed result cannot be closed. Confirmed
+   * root and log references still get their single cleanup attempt. */
+  EFI_FILE_PROTOCOL root={Close,Flush,0,0,0,0};
+  EFI_FILE_PROTOCOL log={Close,Flush,0,0,0,0};
+  EFI_FILE_PROTOCOL uncertain={Close,Flush,0,0,0,0};
+  Root=&root;Log=&log;BootFileStatus=EFI_SUCCESS;UnreleasedBootFileCount=0;
+  EFI_FILE_PROTOCOL *out=NULL;
+  CHECK(BootFileOpenResult(EFI_UNSUPPORTED,&out)==EFI_UNSUPPORTED&&!out);
+  CHECK(BootFileStatus==EFI_SUCCESS&&!UnreleasedBootFileCount);
+  out=&uncertain;
+  CHECK(BootFileOpenResult(EFI_UNSUPPORTED,&out)==EFI_DEVICE_ERROR&&!out);
+  CHECK(UnreleasedBootFileCount==1&&UnreleasedBootFiles[0]==&uncertain);
+  CHECK(CloseBootFile(&out)==EFI_SUCCESS&&!uncertain.closes);
+  CHECK(GuBootClose()==EFI_DEVICE_ERROR&&!Root&&!Log);
+  CHECK(root.closes==1&&log.closes==1&&!uncertain.closes);
+  CHECK(GuBootClose()==EFI_DEVICE_ERROR&&root.closes==1&&log.closes==1);
   return 0;
 }
 """
@@ -227,6 +243,10 @@ int main(void){
         self.assertIn("if(released!=EFI_SUCCESS)s=released;",windows)
         self.assertLess(windows.index("if(s!=EFI_SUCCESS||matches<1"),windows.index("b->LoadImage("))
         self.assertIn("BootFileStatus!=EFI_SUCCESS",BOOT.split("EFI_STATUS GuBootWindows(",1)[1])
+        import re
+        opens=re.findall(r"(?:s|opened)=[^;\n]*->(?:Open|OpenVolume)\([^;]*\);\s*(?:s|opened)=BootFileOpenResult\(", BOOT)
+        self.assertEqual(len(opens),9)
+        self.assertEqual(len(re.findall(r"->(?:Open|OpenVolume)\(",BOOT)),9)
         # Boot-wide staging must not allocate from either GPU's CPU pool.
         reader=BOOT.split("static EFI_STATUS ReadWindowsBinary(",1)[1].split("EFI_STATUS GuBootLoadWindows(",1)[0]
         for source in (reader,windows):
@@ -242,9 +262,9 @@ int main(void){
         """Run the actual boot-file reader with independent fake EFI file services."""
         source = BOOT.split("static EFI_STATUS ReadWindowsBinary(", 1)[1].split(
             "\nEFI_STATUS GuBootLoadWindows(", 1)[0]
-        close = BOOT.split("static EFI_STATUS CloseBootFile(",1)[1].split("\nEFI_STATUS GuBootOpen(",1)[0]
+        close = BOOT.split("static EFI_STATUS RecordBootFileFailure(",1)[1].split("\nEFI_STATUS GuBootOpen(",1)[0]
         buffers=BOOT.split("static EFI_STATUS BootBufferFailure(",1)[1].split("\nstatic EFI_STATUS ReadFile(",1)[0]
-        production = "static EFI_STATUS CloseBootFile(" + close + "\nstatic EFI_STATUS BootBufferFailure(" + buffers + "\nstatic EFI_STATUS ReadWindowsBinary(" + source
+        production = "static EFI_STATUS RecordBootFileFailure(" + close + "\nstatic EFI_STATUS BootBufferFailure(" + buffers + "\nstatic EFI_STATUS ReadWindowsBinary(" + source
         host = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -307,7 +327,8 @@ static EFI_STATUS Open(EFI_FILE_PROTOCOL *r,EFI_FILE_PROTOCOL **f,CHAR16 *name,
   (void)r;(void)name;(void)attr;
   open_calls++;
   if(open_mode!=EFI_FILE_MODE_READ)return EFI_DEVICE_ERROR;
-  *f=&file;return EFI_SUCCESS;
+  if(mode==17)return EFI_NOT_FOUND;
+  *f=&file;return mode==16?EFI_NOT_FOUND:EFI_SUCCESS;
 }
 static EFI_STATUS GetInfo(EFI_FILE_PROTOCOL *f,void *guid,UINTN *size,void *buffer) {
   (void)f;(void)guid;info_calls++;
@@ -342,7 +363,7 @@ int main(int argc,char **argv) {
   static EFI_FILE_PROTOCOL root={Open,NULL,NULL,NULL};
   file=(EFI_FILE_PROTOCOL){NULL,GetInfo,Read,Close};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>15)return 3;
+  if(mode<0||mode>17)return 3;
   EFI_BOOT_SERVICES bs={Allocate,Free};
   if(mode==15) {
     void *a=NULL,*b=NULL,*c=NULL;
@@ -361,6 +382,16 @@ int main(int argc,char **argv) {
   UINTN size=99;
   void *bytes=(void *)(uintptr_t)1;
   EFI_STATUS s=ReadWindowsBinary(&bs,&root,name,&size,&bytes);
+  if(mode==16||mode==17) {
+    CHECK(s==(mode==16?EFI_DEVICE_ERROR:EFI_NOT_FOUND)&&!size&&!bytes);
+    CHECK(open_calls==1&&!info_calls&&!read_calls&&!close_calls&&!alloc_calls&&!free_calls);
+    if(mode==16) {
+      CHECK(BootFileStatus==EFI_DEVICE_ERROR&&UnreleasedBootFileCount==1&&UnreleasedBootFiles[0]==&file);
+      CHECK(ReadWindowsBinary(&bs,&root,name,&size,&bytes)==EFI_DEVICE_ERROR);
+      CHECK(open_calls==1&&!close_calls);
+    }else CHECK(BootFileStatus==EFI_SUCCESS&&!UnreleasedBootFileCount);
+    return 0;
+  }
   EFI_STATUS expected=(mode==0||mode==14?EFI_SUCCESS:
                        mode==3||mode==7||mode==8||mode==10||mode==13?EFI_DEVICE_ERROR:
                        mode==11||mode==12?EFI_OUT_OF_RESOURCES:EFI_COMPROMISED_DATA);
@@ -406,7 +437,7 @@ int main(int argc,char **argv) {
                      "-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",
                      str(path),"-o",str(binary)],capture_output=True,text=True)
                 self.assertEqual(built.returncode,0,built.stderr)
-                for mode in range(16):
+                for mode in range(18):
                     with self.subTest(compiler=compiler,mode=mode):
                         result=subprocess.run(
                             [str(binary),str(mode)],capture_output=True,text=True)
