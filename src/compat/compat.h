@@ -74,8 +74,8 @@ struct pci_dev {
 };
 /* CPU-only transaction identity. Reserve before release. Open only after
  * existing ownership and cold-entry checks. Neither grants hardware admission. */
-EFI_STATUS GuCompatReserveDevice(VOID);
-EFI_STATUS GuCompatOpenDevice(struct pci_dev **out);
+EFI_STATUS GuCompatReserveDevice(GU_PLATFORM *owner);
+EFI_STATUS GuCompatOpenDevice(GU_PLATFORM *owner,struct pci_dev **out);
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *dev);
 /* Resolve only the validated open owner. Does not select or rebind a GPU. */
 GU_PLATFORM *GuCompatOwner(const struct pci_dev *dev);
@@ -83,7 +83,7 @@ BOOLEAN GuCompatPciMatches(const struct pci_dev *dev);
 /* The table always belongs to the current platform, even before reservation. */
 GU_ASSET *GuAssetEntries(VOID);
 /* Reserve the current platform's empty table once. */
-EFI_STATUS GuAssetReserveEntries(EFI_BOOT_SERVICES *bs);
+EFI_STATUS GuAssetReserveEntries(GU_PLATFORM *owner,EFI_BOOT_SERVICES *bs);
 #define GuAssets (GuAssetEntries())
 void *memcpy(void *,const void *,size_t);
 void *memset(void *,int,size_t);

@@ -26,7 +26,7 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
   *stage="compatibility-reserve";
-  s=GuCompatReserveDevice();
+  s=GuCompatReserveDevice(owner);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
   *stage="driver-release";
@@ -41,7 +41,7 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
   owner->armed=TRUE;
 
   *stage="compatibility-open";
-  s=GuCompatOpenDevice(&dev);
+  s=GuCompatOpenDevice(owner,&dev);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault||
      GuCompatOwner(dev)!=owner)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 

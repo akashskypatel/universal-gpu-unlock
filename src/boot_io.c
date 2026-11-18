@@ -352,7 +352,7 @@ EFI_STATUS GuBootLoadAssets(VOID) {
   if(!arch)return EFI_UNSUPPORTED;
 #ifdef GU_ACTIVE_SINGLE_TARGET
   /* Build an independently owned immutable firmware table first. */
-  EFI_STATUS reserved=GuAssetReserveEntries(Gu.bs);
+  EFI_STATUS reserved=GuAssetReserveEntries(&Gu,Gu.bs);
   if(reserved!=EFI_SUCCESS)return reserved;
 #endif
   Gu.asset_load_attempted=TRUE; /* Latch before the first file operation. */

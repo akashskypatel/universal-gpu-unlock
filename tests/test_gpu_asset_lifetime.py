@@ -87,9 +87,10 @@ typedef struct {
   EFI_BOOT_SERVICES *bs;
   int started,owned,armed,fault,retained,asset_load_attempted,asset_entries_reserved;
   GU_ASSET asset_entries[GU_ASSET_COUNT];
-} MOCK_PLATFORM;
-static MOCK_PLATFORM platforms[2],*current=&platforms[0];
+} GU_PLATFORM;
+static GU_PLATFORM platforms[2],*current=&platforms[0];
 #define Gu (*current)
+#define GuPlatformActive current
 static int alloc_count,free_count,fail_alloc;
 static EFI_STATUS Allocate(int kind,size_t bytes,VOID **out) {
   if(kind!=EfiLoaderData || !out)return EFI_INVALID_PARAMETER;
@@ -103,41 +104,44 @@ static EFI_STATUS Free(VOID *ptr) {free_count++;free(ptr);return EFI_SUCCESS;}
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
   static EFI_BOOT_SERVICES bs={Allocate,Free};
-  Gu.bs=&bs;
+  Gu.bs=&bs;platforms[1].bs=&bs;
+  CHECK(GuAssetReserveEntries(NULL,&bs)==EFI_NOT_READY);
+  CHECK(GuAssetReserveEntries(&platforms[1],&bs)==EFI_NOT_READY);
+  CHECK(!platforms[0].asset_entries_reserved&&!platforms[1].asset_entries_reserved&&!alloc_count);
   int mode=argc>1?argv[1][0]-'0':-1;
   if(mode==0) {
     GU_ASSET *before=GuAssetEntries();
-    CHECK(GuAssetReserveEntries(&bs)==EFI_SUCCESS);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_SUCCESS);
     CHECK(Gu.asset_entries_reserved && GuAssetEntries()==before);
     CHECK(GuAssetEntries()==Gu.asset_entries && alloc_count==0 && free_count==0);
-    CHECK(GuAssetReserveEntries(&bs)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_ALREADY_STARTED);
     Gu.asset_load_attempted=TRUE;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_ALREADY_STARTED);
   } else if(mode==1) {
     GuAssetEntries()[0].name="original";
-    CHECK(GuAssetReserveEntries(&bs)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_ALREADY_STARTED);
     CHECK(!strcmp(GuAssetEntries()[0].name,"original"));
     CHECK(!Gu.asset_entries_reserved && alloc_count==0 && free_count==0);
   } else if(mode==2) {
     /* Reserving inline metadata must not request or depend on a new pool. */
     fail_alloc=1;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_SUCCESS);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_SUCCESS);
     CHECK(Gu.asset_entries_reserved && alloc_count==0);
   } else if(mode==3) {
     Gu.started=1;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_NOT_READY && alloc_count==0);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_NOT_READY && alloc_count==0);
     Gu.started=0;Gu.retained=1;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_NOT_READY && alloc_count==0);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_NOT_READY && alloc_count==0);
     CHECK(!Gu.asset_entries_reserved);
   } else if(mode==4) {
     GuAssetEntries()[0].firmware.size=7;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_ALREADY_STARTED);
     CHECK(!Gu.asset_entries_reserved && GuAssetEntries()[0].firmware.size==7);
   } else if(mode==5) {
     bs.FreePool=NULL;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_NOT_READY && alloc_count==0);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_NOT_READY && alloc_count==0);
     bs.FreePool=Free;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_SUCCESS);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_SUCCESS);
   } else if(mode==6) {
     GU_ASSET *first=GuAssetEntries();
     first[0].name="first";
@@ -145,24 +149,26 @@ int main(int argc,char **argv) {
     GU_ASSET *second=GuAssetEntries();
     /* A populated first table must not be reachable by a fresh platform. */
     CHECK(second!=first && !second[0].name && !Gu.asset_load_attempted);
-    CHECK(GuAssetReserveEntries(&bs)==EFI_SUCCESS);
+    CHECK(GuAssetReserveEntries(&platforms[0],&bs)==EFI_NOT_READY);
+    CHECK(!Gu.asset_entries_reserved&&!platforms[0].asset_entries_reserved);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_SUCCESS);
     second[0].name="second";Gu.asset_load_attempted=TRUE;
     current=&platforms[0];
     CHECK(GuAssetEntries()==first && !Gu.asset_load_attempted);
     CHECK(!strcmp(GuAssetEntries()[0].name,"first"));
     CHECK(!Gu.asset_entries_reserved);
-    CHECK(GuAssetReserveEntries(&bs)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_ALREADY_STARTED);
     current=&platforms[1];
     CHECK(GuAssetEntries()==second && Gu.asset_load_attempted);
     CHECK(Gu.asset_entries_reserved && !strcmp(GuAssetEntries()[0].name,"second"));
     CHECK(alloc_count==0 && free_count==0);
   } else if(mode==7) {
     Gu.asset_load_attempted=TRUE;
-    CHECK(GuAssetReserveEntries(&bs)==EFI_ALREADY_STARTED);
+    CHECK(GuAssetReserveEntries(&Gu,&bs)==EFI_ALREADY_STARTED);
     CHECK(!Gu.asset_entries_reserved && alloc_count==0);
   } else if(mode==8) {
     EFI_BOOT_SERVICES other=bs;
-    CHECK(GuAssetReserveEntries(&other)==EFI_NOT_READY);
+    CHECK(GuAssetReserveEntries(&Gu,&other)==EFI_NOT_READY);
     CHECK(!Gu.asset_entries_reserved && alloc_count==0);
   } else return 3;
   return 0;

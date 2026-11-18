@@ -49,31 +49,37 @@ static GU_PLATFORM *GuCompatDeviceOwner(const struct device *D) {
 }
 /* Reserve CPU storage before driver release. No compatibility operation
  * can use the record until the coordinator opens the scope. */
-EFI_STATUS GuCompatReserveDevice(VOID) {
-  if(!Gu.bs||!Gu.pci||!Gu.handle||Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(Gu.compat_device||Gu.compat_device_open||Gu.compat_device_closed)return EFI_ALREADY_STARTED;
-  if(Gu.started||Gu.owned||Gu.armed)return EFI_NOT_READY;
+EFI_STATUS GuCompatReserveDevice(GU_PLATFORM *owner) {
+  if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
+  if(!owner->bs||!owner->pci||!owner->handle||owner->fault||owner->retained)return EFI_NOT_READY;
+  if(owner->compat_device||owner->compat_device_open||owner->compat_device_closed)return EFI_ALREADY_STARTED;
+  if(owner->started||owner->owned||owner->armed)return EFI_NOT_READY;
   struct pci_dev *D=GuAlloc(sizeof(*D));
+  if(owner!=GuPlatformActive||(D&&!GuCpuPoolOwns(owner,D,sizeof(*D)))) {
+    owner->fault=TRUE;owner->retained=TRUE;
+    return EFI_ACCESS_DENIED;
+  }
   if(!D)return EFI_OUT_OF_RESOURCES;
-  D->owner=&Gu;D->owner_bs=Gu.bs;D->owner_pci=Gu.pci;D->owner_handle=Gu.handle;
-  D->vendor=0x10de;D->device=Gu.device_id;
+  D->owner=owner;D->owner_bs=owner->bs;D->owner_pci=owner->pci;D->owner_handle=owner->handle;
+  D->vendor=0x10de;D->device=owner->device_id;
   D->mask_storage=0xffffffffffffULL;
   D->dev.dma_mask=&D->mask_storage;D->dev.coherent_dma_mask=0xfffffffffULL;
-  Gu.compat_device=D;
+  owner->compat_device=D;
   return EFI_SUCCESS;
 }
-EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
+EFI_STATUS GuCompatOpenDevice(GU_PLATFORM *owner,struct pci_dev **out) {
   if(!out||*out)return EFI_INVALID_PARAMETER;
-  if(Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(Gu.compat_device_open||Gu.compat_device_closed)return EFI_ALREADY_STARTED;
-  if(!Gu.compat_device||!Gu.owned||!Gu.armed||!Gu.display_ok)return EFI_NOT_READY;
-  struct pci_dev *D=Gu.compat_device;
-  if(!GuCompatRecordMatches(&Gu,D)||D->refs||D->dev.scope||
-     !list_empty(&D->dev.devres_head)||!GuCpuPoolCompatEmpty(&Gu)) {
-    Gu.fault=TRUE;return EFI_ACCESS_DENIED;
+  if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
+  if(owner->fault||owner->retained)return EFI_NOT_READY;
+  if(owner->compat_device_open||owner->compat_device_closed)return EFI_ALREADY_STARTED;
+  if(!owner->compat_device||!owner->owned||!owner->armed||!owner->display_ok)return EFI_NOT_READY;
+  struct pci_dev *D=owner->compat_device;
+  if(!GuCompatRecordMatches(owner,D)||D->refs||D->dev.scope||
+     !list_empty(&D->dev.devres_head)||!GuCpuPoolCompatEmpty(owner)) {
+    owner->fault=TRUE;return EFI_ACCESS_DENIED;
   }
-  D->current_state=PCI_D0;D->pm_cap=Gu.pm_cap;D->refs=1;
-  Gu.compat_device_open=TRUE;*out=D;
+  D->current_state=PCI_D0;D->pm_cap=owner->pm_cap;D->refs=1;
+  owner->compat_device_open=TRUE;*out=D;
   return EFI_SUCCESS;
 }
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *D) {
@@ -90,14 +96,15 @@ EFI_STATUS GuCompatCloseDevice(struct pci_dev *D) {
 GU_ASSET *GuAssetEntries(VOID) {
   return Gu.asset_entries;
 }
-EFI_STATUS GuAssetReserveEntries(EFI_BOOT_SERVICES *bs) {
-  if(!bs||!bs->AllocatePool||!bs->FreePool||!Gu.bs||Gu.bs!=bs||
-     Gu.started||Gu.owned||Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
-  if(Gu.asset_entries_reserved||Gu.asset_load_attempted)return EFI_ALREADY_STARTED;
+EFI_STATUS GuAssetReserveEntries(GU_PLATFORM *owner,EFI_BOOT_SERVICES *bs) {
+  if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
+  if(!bs||!bs->AllocatePool||!bs->FreePool||!owner->bs||owner->bs!=bs||
+     owner->started||owner->owned||owner->armed||owner->fault||owner->retained)return EFI_NOT_READY;
+  if(owner->asset_entries_reserved||owner->asset_load_attempted)return EFI_ALREADY_STARTED;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++)
-    if(Gu.asset_entries[i].name||Gu.asset_entries[i].firmware.data||
-       Gu.asset_entries[i].firmware.size)return EFI_ALREADY_STARTED;
-  Gu.asset_entries_reserved=TRUE;
+    if(owner->asset_entries[i].name||owner->asset_entries[i].firmware.data||
+       owner->asset_entries[i].firmware.size)return EFI_ALREADY_STARTED;
+  owner->asset_entries_reserved=TRUE;
   return EFI_SUCCESS;
 }
 void *devres_open_group(struct device *D,void *Id,int Flags) {

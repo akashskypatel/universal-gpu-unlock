@@ -178,21 +178,25 @@ int main(void){
     platforms[i].bar_size=0x4000;
   }
   struct pci_dev *a=NULL,*b=NULL,*extra=NULL;
-  CHECK(GuCompatOpenDevice(NULL)==EFI_INVALID_PARAMETER);
-  CHECK(GuCompatOpenDevice(&a)==EFI_NOT_READY&&!a&&allocs==0);
-  Gu.owned=1;CHECK(GuCompatReserveDevice()==EFI_NOT_READY&&allocs==0);Gu.owned=0;
-  Gu.armed=1;CHECK(GuCompatReserveDevice()==EFI_NOT_READY&&allocs==0);Gu.armed=0;
-  Gu.started=1;CHECK(GuCompatReserveDevice()==EFI_NOT_READY&&allocs==0);Gu.started=0;
-  fail_alloc=1;CHECK(GuCompatReserveDevice()==EFI_OUT_OF_RESOURCES&&!a&&!Gu.compat_device);
-  fail_alloc=0;CHECK(GuCompatReserveDevice()==EFI_SUCCESS&&Gu.compat_device&&!Gu.compat_device_open);
-  CHECK(GuCompatReserveDevice()==EFI_ALREADY_STARTED&&allocs==2);
+  CHECK(GuCompatReserveDevice(NULL)==EFI_NOT_READY);
+  CHECK(GuCompatReserveDevice(&platforms[1])==EFI_NOT_READY);
+  CHECK(GuCompatOpenDevice(&platforms[1],&extra)==EFI_NOT_READY);
+  CHECK(!extra&&!allocs&&!platforms[0].compat_device&&!platforms[1].compat_device);
+  CHECK(GuCompatOpenDevice(&Gu,NULL)==EFI_INVALID_PARAMETER);
+  CHECK(GuCompatOpenDevice(&Gu,&a)==EFI_NOT_READY&&!a&&allocs==0);
+  Gu.owned=1;CHECK(GuCompatReserveDevice(&Gu)==EFI_NOT_READY&&allocs==0);Gu.owned=0;
+  Gu.armed=1;CHECK(GuCompatReserveDevice(&Gu)==EFI_NOT_READY&&allocs==0);Gu.armed=0;
+  Gu.started=1;CHECK(GuCompatReserveDevice(&Gu)==EFI_NOT_READY&&allocs==0);Gu.started=0;
+  fail_alloc=1;CHECK(GuCompatReserveDevice(&Gu)==EFI_OUT_OF_RESOURCES&&!a&&!Gu.compat_device);
+  fail_alloc=0;CHECK(GuCompatReserveDevice(&Gu)==EFI_SUCCESS&&Gu.compat_device&&!Gu.compat_device_open);
+  CHECK(GuCompatReserveDevice(&Gu)==EFI_ALREADY_STARTED&&allocs==2);
   CHECK(!GuCompatCompletedPlatform(&Gu));
-  CHECK(GuCompatOpenDevice(&a)==EFI_NOT_READY&&!a&&allocs==2);
+  CHECK(GuCompatOpenDevice(&Gu,&a)==EFI_NOT_READY&&!a&&allocs==2);
   u16 early=0;CHECK(pci_read_config_word(Gu.compat_device,0,&early)==-EINVAL&&reads==0&&Gu.fault);
   Gu.fault=0; /* Test-only reset. No production retry. */
   Gu.owned=Gu.armed=Gu.display_ok=1;
   Gu.pm_cap=9;
-  CHECK(GuCompatOpenDevice(&a)==EFI_SUCCESS&&a&&Gu.compat_device==a);
+  CHECK(GuCompatOpenDevice(&Gu,&a)==EFI_SUCCESS&&a&&Gu.compat_device==a);
   CHECK(a->pm_cap==9&&allocs==2);
   CHECK(GuCompatTime(a)==0&&GuCompatDelay(a,100)&&GuCompatTime(a)==100&&stalls==1);
   CHECK(GuCompatRead32(a,bar)==4&&mmio_reads==1&&last_io_owner==17);
@@ -200,7 +204,7 @@ int main(void){
   CHECK(GuCompatCopyFromIo(a,buffer,bar,sizeof(buffer)));CHECK(copies==1&&buffer[0]==0x5a&&last_io_owner==17);
   GuCompatDmaBarrier(a);CHECK(flushes==1&&last_io_owner==17);
   CHECK(a->owner==&Gu&&a->owner_bs==&bs&&a->owner_pci==&pci[0]&&a->owner_handle==&pci[0]);
-  CHECK(GuCompatOpenDevice(&extra)==EFI_ALREADY_STARTED&&!extra);
+  CHECK(GuCompatOpenDevice(&Gu,&extra)==EFI_ALREADY_STARTED&&!extra);
   CHECK(a->dev.dma_mask==&a->mask_storage&&a->refs==1&&list_empty(&a->dev.devres_head));
   CHECK(dma_set_mask(&a->dev,42)==0&&a->mask_storage==42);
   CHECK(dma_set_coherent_mask(&a->dev,41)==0&&a->dev.coherent_dma_mask==41);
@@ -213,6 +217,9 @@ int main(void){
   void *first=GuCompatAlloc(a,2,16);CHECK(first&&scratch_allocs==1);
   CHECK(!GuCpuPoolCompatEmpty(&Gu)&&GuCompatFree(a,first)&&scratch_frees==1);
   active=&platforms[1];
+  CHECK(GuCompatReserveDevice(&platforms[0])==EFI_NOT_READY&&allocs==2);
+  CHECK(GuCompatOpenDevice(&platforms[0],&extra)==EFI_NOT_READY&&!extra);
+  CHECK(platforms[0].compat_device_open&&!platforms[0].fault&&!Gu.compat_device&&!Gu.fault);
   CHECK(GuCompatOwner(a)==&platforms[0]&&!platforms[0].fault);
   CHECK(!GuCompatPciMatches(a)&&GuCompatTime(a)==100&&!platforms[0].fault);
   CHECK(dma_set_mask(&a->dev,43)==0&&a->mask_storage==43);
@@ -222,15 +229,15 @@ int main(void){
   CHECK(GuCompatCompletedPlatform(&Gu));
   CHECK(pci_read_config_word(a,0,&value)==-EINVAL&&reads==1&&Gu.fault);
   Gu.fault=0; /* Test-only reset; production fault is sticky. */
-  CHECK(GuCompatOpenDevice(&extra)==EFI_ALREADY_STARTED&&!extra);
+  CHECK(GuCompatOpenDevice(&Gu,&extra)==EFI_ALREADY_STARTED&&!extra);
   active=&platforms[1];
-  CHECK(GuCompatReserveDevice()==EFI_SUCCESS&&allocs==3);
+  CHECK(GuCompatReserveDevice(&Gu)==EFI_SUCCESS&&allocs==3);
   CHECK(Gu.compat_device!=a&&!Gu.compat_device_open);
   Gu.owned=Gu.armed=Gu.display_ok=1;
   Gu.handle=&pci[0];
-  CHECK(GuCompatOpenDevice(&b)==EFI_ACCESS_DENIED&&!b&&Gu.fault&&allocs==3);
+  CHECK(GuCompatOpenDevice(&Gu,&b)==EFI_ACCESS_DENIED&&!b&&Gu.fault&&allocs==3);
   Gu.handle=&pci[1];Gu.fault=0; /* Test-only reset. */
-  CHECK(GuCompatOpenDevice(&b)==EFI_SUCCESS&&a!=b&&a->dev.dma_mask!=b->dev.dma_mask&&allocs==3);
+  CHECK(GuCompatOpenDevice(&Gu,&b)==EFI_SUCCESS&&a!=b&&a->dev.dma_mask!=b->dev.dma_mask&&allocs==3);
   CHECK(GuCompatOwner(b)==&platforms[1]&&!Gu.fault);
   CHECK(!GuCompatOwner(a)&&platforms[0].fault&&!Gu.fault);
   platforms[0].fault=0; /* Independent host cases. */
@@ -341,10 +348,10 @@ int main(void){
                 self.assertEqual(built.returncode,0,built.stderr)
                 result=subprocess.run([str(exe)],capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertLess(execution.index("GuMsiPreflight("),execution.index("GuCompatReserveDevice()"))
-        self.assertLess(execution.index("GuCompatReserveDevice()"),execution.index("GuMsiRelease()"))
-        self.assertLess(execution.index("GuAd104ColdEntryFor(owner)"),execution.index("GuCompatOpenDevice(&dev)"))
-        self.assertLess(execution.index("GuCompatOpenDevice(&dev)"),execution.index("gpu_unlock_610_load_shared(dev,"))
+        self.assertLess(execution.index("GuMsiPreflight("),execution.index("GuCompatReserveDevice(owner)"))
+        self.assertLess(execution.index("GuCompatReserveDevice(owner)"),execution.index("GuMsiRelease()"))
+        self.assertLess(execution.index("GuAd104ColdEntryFor(owner)"),execution.index("GuCompatOpenDevice(owner,&dev)"))
+        self.assertLess(execution.index("GuCompatOpenDevice(owner,&dev)"),execution.index("gpu_unlock_610_load_shared(dev,"))
         self.assertLess(execution.index("gpu_unlock_610_release_shared(dev,&shared)"),execution.index("GuCompatCloseDevice(dev)"))
         self.assertLess(execution.index("GuCompatCloseDevice(dev)"),execution.index("GuMsiFinish()"))
         # Vendor I/O must carry its own work record even for repeated BAR addresses.
