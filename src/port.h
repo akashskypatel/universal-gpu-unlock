@@ -193,6 +193,9 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
 #ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These
    values are private to port.c; the vendor core can only read/compare them. */
+BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1);
+BOOLEAN GuGetEntrySelectorsFor(const GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1);
+BOOLEAN GuEntrySelectorsMatchFor(const GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1);
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0, UINT32 Ss1);
 BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1);
 BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1);
@@ -202,6 +205,7 @@ BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1);
 BOOLEAN GuSelectorPhase(UINT32 Phase);
 #endif
 BOOLEAN GuTargetConfig(const UINT32 *Config, UINTN Segment, UINTN Bus, UINTN Device, UINTN Function);
+BOOLEAN GuSafeToReturnFor(const GU_PLATFORM *platform);
 BOOLEAN GuSafeToReturn(VOID);
 EFI_STATUS GuDmaAllocate(UINTN Bytes, VOID **Cpu, UINT64 *Dma);
 EFI_STATUS GuDmaFree(VOID *Cpu, UINT64 Dma);
@@ -214,6 +218,8 @@ EFI_STATUS GuClearMaster(VOID);
 EFI_STATUS GuEnableMaster(VOID);
 EFI_STATUS GuConfigRead(EFI_PCI_IO_PROTOCOL_WIDTH Width, UINT32 Offset, VOID *Value);
 EFI_STATUS GuConfigWrite(EFI_PCI_IO_PROTOCOL_WIDTH Width, UINT32 Offset, VOID *Value);
+VOID GuStartedFor(GU_PLATFORM *platform);
+VOID GuQuiescedFor(GU_PLATFORM *platform);
 VOID GuStarted(VOID);
 VOID GuQuiesced(VOID);
 VOID GuLog(const char *Format, ...);
@@ -221,6 +227,8 @@ VOID GuLogText(const char *Text);
 BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *Destination,const VOID *Source,size_t Bytes);
 /* Read-only ownership proof for retained CPU objects, including inactive platforms. */
 BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes);
+/* Resolve a retained CPU object to one registered platform without selecting it. */
+GU_PLATFORM *GuPlatformForCpuObject(const VOID *memory,size_t bytes);
 /* Record an uncertain CPU pool result without dereferencing its address. */
 VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address);
 /* Temporary transaction memory uses the open compatibility record as its tag.

@@ -305,10 +305,11 @@ static int read_bar(struct unlock_transaction_work *work, u32 offset, u32 *value
 
 static void write_bar(struct unlock_transaction_work *work, u32 offset, u32 value)
 {
-	if (!GuCompatPciMatches(work->pdev))
+	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+	if (!owner || !GuCompatPciMatches(work->pdev))
 		return;
 	/* Retain DMA from the first mutating MMIO call, including reset failures. */
-	if (!work->firmware_started) { work->firmware_started = true; GuStarted(); }
+	if (!work->firmware_started) { work->firmware_started = true; GuStartedFor(owner); }
 	GuCompatWrite32(work->pdev, value, work->bar + offset);
 }
 
@@ -468,7 +469,7 @@ static int check_entry_selectors(struct unlock_transaction_work *work)
     if (!owner || !work->selectors_saved || !owner->profile_verified ||
         read_bar(work,GU_FEAT_SS0_OFFSET,&a) || read_bar(work,GU_FEAT_SS1_OFFSET,&b) ||
         GuCompatOwner(work->pdev)!=owner ||
-        !GuEntrySelectorsMatch(a,b) || a!=work->ss0_entry || b!=work->ss1_entry)
+        !GuEntrySelectorsMatchFor(owner,a,b) || a!=work->ss0_entry || b!=work->ss1_entry)
         return GU_RESULT(-EIO);
     return 0;
 }
@@ -1375,7 +1376,7 @@ static int unlock_transaction_gfw(struct unlock_transaction_work *work)
 				return GU_RESULT(-EBUSY);
 			}
             GU_PLATFORM *owner = GuCompatOwner(work->pdev);
-            if (!owner || !owner->profile_verified || !GuEntrySelectorsMatch(ss0,ss1) ||
+            if (!owner || !owner->profile_verified || !GuEntrySelectorsMatchFor(owner,ss0,ss1) ||
                 inaccessible(ss0) || ss0==GU_SS0_UNLOCK || (ss1 > 7) ||
                 work->plm_entry!=0xffffff8f || sample.plm!=0x8b8f ||
                 sample.boot!=0x3ff || sample.cpuctl!=0x10 || wpr_hi)
@@ -1799,7 +1800,7 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 	}
 	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
 	if (!owner || owner->fault) return GU_RESULT(-EIO);
-	work->quiesced=true;GuQuiesced();
+	work->quiesced=true;GuQuiescedFor(owner);
 	return 0;
 }
 
@@ -1807,7 +1808,8 @@ int gpu_unlock_610_load_shared(struct pci_dev *pdev, struct gpu_unlock_610_share
 {
 	int ret;
 	GU_PLATFORM *owner = GuCompatOwner(pdev);
-	if (!owner || !shared || !gpu_is_supported_device(pdev->device)) return -ENODEV;
+	if (!owner || !GuCompatPciMatches(pdev) || !shared ||
+	    !gpu_is_supported_device(pdev->device)) return -ENODEV;
 	if (shared->owner || shared->gsp) return -EALREADY;
 	if (!GuAd104AssetsValid(owner)) return -ENODEV;
 	ret = request_scoped(&pdev->dev, &shared->gsp, unlock_assets(pdev)->gsp);
@@ -1818,7 +1820,7 @@ int gpu_unlock_610_load_shared(struct pci_dev *pdev, struct gpu_unlock_610_share
 int gpu_unlock_610_release_shared(struct pci_dev *pdev, struct gpu_unlock_610_shared *shared)
 {
 	GU_PLATFORM *owner = GuCompatOwner(pdev);
-	if (!owner || !shared) return -EINVAL;
+	if (!owner || !GuCompatPciMatches(pdev) || !shared) return -EINVAL;
 	if (!shared->owner && !shared->gsp) return 0;
 	if (shared->owner != pdev || shared->gsp != &owner->asset_entries[2].firmware) return -EINVAL;
 	release_firmware(shared->gsp);
@@ -1834,7 +1836,7 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 
     /* Check the open owner before consulting its one-use transaction state. */
     GU_PLATFORM *owner = GuCompatOwner(pdev);
-    if (!owner) return -ENODEV;
+    if (!owner || !GuCompatPciMatches(pdev)) return -ENODEV;
     if (owner->transaction_attempted) return -EALREADY;
     if (!gpu_is_supported_device(pdev->device) ||
         !shared || shared->owner!=pdev || shared->gsp!=&owner->asset_entries[2].firmware || !GuAd104AssetsValid(owner) ||

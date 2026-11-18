@@ -16,8 +16,9 @@ static BOOLEAN GuCompatRecordMatches(const GU_PLATFORM *platform,const struct pc
     D->dev.dma_mask==&D->mask_storage;
 }
 
-static BOOLEAN GuCompatIdentityValid(const struct pci_dev *D) {
-  return Gu.compat_device_open&&!Gu.compat_device_closed&&GuCompatRecordMatches(&Gu,D)&&D->refs>=1;
+static BOOLEAN GuCompatIdentityValid(const GU_PLATFORM *platform,const struct pci_dev *D) {
+  return platform&&platform->compat_device_open&&!platform->compat_device_closed&&
+    GuCompatRecordMatches(platform,D)&&D->refs>=1;
 }
 
 /* Inspect a completed inactive owner without rebinding or touching hardware. */
@@ -30,15 +31,25 @@ BOOLEAN GuCompatCompletedPlatform(const GU_PLATFORM *platform) {
     GuCpuPoolCompatEmpty(platform);
 }
 GU_PLATFORM *GuCompatOwner(const struct pci_dev *D) {
-  if(GuCompatIdentityValid(D))return D->owner;
-  Gu.fault=TRUE;return NULL;
+  GU_PLATFORM *owner=GuPlatformForCpuObject(D,D?sizeof(*D):0);
+  if(owner&&GuCompatIdentityValid(owner,D))return owner;
+  if(owner)owner->fault=TRUE;
+  return NULL;
 }
 BOOLEAN GuCompatPciMatches(const struct pci_dev *D) {
-  return GuCompatOwner(D)!=NULL;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  return owner&&owner==GuPlatformActive;
+}
+static GU_PLATFORM *GuCompatDeviceOwner(const struct device *D) {
+  if(!D)return NULL;
+  const struct pci_dev *pdev=(const struct pci_dev *)((const UINT8 *)D-
+                              offsetof(struct pci_dev,dev));
+  GU_PLATFORM *owner=GuCompatOwner(pdev);
+  return owner&&D==&pdev->dev?owner:NULL;
 }
 static BOOLEAN GuCompatDeviceMatches(const struct device *D) {
-  if(GuCompatIdentityValid(Gu.compat_device)&&D==&Gu.compat_device->dev)return TRUE;
-  Gu.fault=TRUE;return FALSE;
+  GU_PLATFORM *owner=GuCompatDeviceOwner(D);
+  return owner&&owner==GuPlatformActive;
 }
 /* Reserve CPU storage before driver release. No compatibility operation
  * can use the record until the coordinator opens the scope. */
@@ -70,13 +81,14 @@ EFI_STATUS GuCompatOpenDevice(struct pci_dev **out) {
   return EFI_SUCCESS;
 }
 EFI_STATUS GuCompatCloseDevice(struct pci_dev *D) {
-  if(!GuCompatPciMatches(D))return EFI_ACCESS_DENIED;
-  Gu.compat_device_open=FALSE;
-  if(D->refs!=1||D->dev.scope||!list_empty(&D->dev.devres_head)||Gu.fault||Gu.retained||
-     !GuCpuPoolCompatEmpty(&Gu)) {
-    Gu.fault=TRUE;return EFI_DEVICE_ERROR;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner)return EFI_ACCESS_DENIED;
+  owner->compat_device_open=FALSE;
+  if(D->refs!=1||D->dev.scope||!list_empty(&D->dev.devres_head)||
+     owner->fault||owner->retained||!GuCpuPoolCompatEmpty(owner)) {
+    owner->fault=TRUE;return EFI_DEVICE_ERROR;
   }
-  Gu.compat_device_closed=TRUE;
+  owner->compat_device_closed=TRUE;
   return EFI_SUCCESS;
 }
 GU_ASSET *GuAssetEntries(VOID) {
@@ -93,22 +105,28 @@ EFI_STATUS GuAssetReserveEntries(EFI_BOOT_SERVICES *bs) {
   return EFI_SUCCESS;
 }
 void *devres_open_group(struct device *D,void *Id,int Flags) {
-  (void)Flags;if(!GuCompatDeviceMatches(D)||Id || D->scope)return NULL;D->scope=true;return &D->scope;
+  (void)Flags;
+  if(!GuCompatDeviceOwner(D)||Id||D->scope)return NULL;
+  D->scope=true;return &D->scope;
 }
 int devres_release_group(struct device *D,void *Group) {
-  if(!GuCompatDeviceMatches(D)||Group!=&D->scope || !D->scope)return -EINVAL;
+  if(!GuCompatDeviceOwner(D)||Group!=&D->scope||!D->scope)return -EINVAL;
   D->scope=false;return 0;
 }
 /* A wait belongs to the device that initiated it. Do not advance another
  * platform's clock or continue polling when firmware could not delay. */
 ktime_t GuCompatTime(const struct pci_dev *D) {
-  if(!GuCompatPciMatches(D))return 0;
-  return Gu.ticks;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  return owner?owner->ticks:0;
 }
 BOOLEAN GuCompatDelay(const struct pci_dev *D,UINTN Microseconds) {
-  if(!GuCompatPciMatches(D)||Gu.fault||Gu.retained)return FALSE;
-  GuStall(Microseconds);
-  return !Gu.fault&&!Gu.retained;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner||owner->fault||owner->retained||!owner->bs||!owner->bs->Stall)return FALSE;
+  if(EFI_ERROR(owner->bs->Stall(Microseconds))) {
+    owner->fault=TRUE;owner->retained=TRUE;return FALSE;
+  }
+  owner->ticks+=Microseconds;
+  return !owner->fault&&!owner->retained;
 }
 /* Vendor access must carry the transaction's retained device reference.
  * A numeric BAR address alone cannot identify a physical GPU. */
@@ -164,8 +182,14 @@ void *dma_alloc_coherent(struct device *D,size_t N,dma_addr_t *Address,int Flags
 void dma_free_coherent(struct device *D,size_t N,void *P,dma_addr_t A) {
   (void)N;if(!GuCompatDeviceMatches(D))return;if(EFI_ERROR(GuDmaFree(P,A)))Gu.retained=TRUE;
 }
-int dma_set_mask(struct device *D,u64 Mask) {if(!GuCompatDeviceMatches(D)||!D->dma_mask)return -EINVAL;*D->dma_mask=Mask;return 0;}
-int dma_set_coherent_mask(struct device *D,u64 Mask) {if(!GuCompatDeviceMatches(D))return -EINVAL;D->coherent_dma_mask=Mask;return 0;}
+int dma_set_mask(struct device *D,u64 Mask) {
+  if(!GuCompatDeviceOwner(D)||!D->dma_mask)return -EINVAL;
+  *D->dma_mask=Mask;return 0;
+}
+int dma_set_coherent_mask(struct device *D,u64 Mask) {
+  if(!GuCompatDeviceOwner(D))return -EINVAL;
+  D->coherent_dma_mask=Mask;return 0;
+}
 void GuCompatDmaBarrier(const struct pci_dev *D) {
   if(!GuCompatPciMatches(D))return;
 #if defined(_MSC_VER)
@@ -184,16 +208,19 @@ BOOLEAN GuCompatFree(const struct pci_dev *D,void *P) {
   return GuCpuPoolFreeScoped(D,P);
 }
 void GuCompatRetain(const struct pci_dev *D) {
-  if(GuCompatPciMatches(D))Gu.retained=TRUE;
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(owner)owner->retained=TRUE;
 }
 int request_firmware(const struct firmware **Out,const char *Name,struct device *D) {
   UINTN I;if(!Out)return -EINVAL;*Out=NULL;
-  if(!GuCompatDeviceMatches(D)||!Name)return -EINVAL;
-  if(!GuPlatformAssetsOwned(&Gu)){Gu.fault=TRUE;return -EIO;}
-  for(I=0;I<GU_ASSET_COUNT;I++)if(GuAssetEntries()[I].name && !strcmp(Name,GuAssetEntries()[I].name) &&
-      GuAssetEntries()[I].firmware.data && GuAssetEntries()[I].firmware.size) {
-    *Out=&GuAssetEntries()[I].firmware;return 0;
-  }
+  GU_PLATFORM *owner=GuCompatDeviceOwner(D);
+  if(!owner||!Name)return -EINVAL;
+  if(!GuPlatformAssetsOwned(owner)){owner->fault=TRUE;return -EIO;}
+  for(I=0;I<GU_ASSET_COUNT;I++)
+    if(owner->asset_entries[I].name&&!strcmp(Name,owner->asset_entries[I].name)&&
+       owner->asset_entries[I].firmware.data&&owner->asset_entries[I].firmware.size) {
+      *Out=&owner->asset_entries[I].firmware;return 0;
+    }
   return -ENOENT;
 }
 void release_firmware(const struct firmware *F) {(void)F; /* Preloaded, app-owned immutable assets. */}
@@ -246,12 +273,14 @@ int pcie_flr(struct pci_dev *D) {if(!GuCompatPciMatches(D))return -EINVAL;return
 /* The coordinator's base reference survives until the end of this boot.
  * A failed borrow/release must not change its count or revive a bad record. */
 struct pci_dev *pci_dev_get(struct pci_dev *D) {
-  if(!GuCompatPciMatches(D))return NULL;
-  if(D->refs<1||D->refs==INT_MAX){Gu.fault=TRUE;return NULL;}
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner)return NULL;
+  if(D->refs<1||D->refs==INT_MAX){owner->fault=TRUE;return NULL;}
   D->refs++;return D;
 }
 void pci_dev_put(struct pci_dev *D) {
-  if(!GuCompatPciMatches(D))return;
-  if(D->refs<=1){Gu.fault=TRUE;return;}
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner)return;
+  if(D->refs<=1){owner->fault=TRUE;return;}
   D->refs--;
 }

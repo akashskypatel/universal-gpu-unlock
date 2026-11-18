@@ -13,18 +13,29 @@ GU_PLATFORM *GuPlatformActive=&UnboundPlatform;
 static BOOLEAN AnyPublishedPlatform(VOID);
 static const GU_PLATFORM EmptyPlatform;
 #ifdef GU_ENTRY_LATCHED
-BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1) {
-  if(!Gu.entry_latched || !Ss0 || !Ss1)return FALSE;
-  *Ss0=Gu.entry_ss0;*Ss1=Gu.entry_ss1;return TRUE;
+BOOLEAN GuGetEntrySelectorsFor(const GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1) {
+  if(!platform||!platform->entry_latched||!Ss0||!Ss1)return FALSE;
+  *Ss0=platform->entry_ss0;*Ss1=platform->entry_ss1;return TRUE;
 }
-BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1) {
-  return Gu.entry_latched && Gu.prom_verified && !Gu.fault && Ss0==Gu.entry_ss0 && Ss1==Gu.entry_ss1;
+BOOLEAN GuGetEntrySelectors(UINT32 *Ss0,UINT32 *Ss1) {
+  return GuGetEntrySelectorsFor(&Gu,Ss0,Ss1);
 }
-BOOLEAN GuLatchEntrySelectors(UINT32 Ss0, UINT32 Ss1) {
-  if(Gu.fault || !Gu.prom_verified || Gu.started || Ss0==0xffffffffU ||
-     (Ss0&0xffff0000U)==0xbadf0000U || Ss0==0x88888888U || Ss1>0xfU)return FALSE;
-  if(Gu.entry_latched)return GuEntrySelectorsMatch(Ss0,Ss1);
-  Gu.entry_ss0=Ss0;Gu.entry_ss1=Ss1;Gu.entry_latched=TRUE;return TRUE;
+BOOLEAN GuEntrySelectorsMatchFor(const GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
+  return platform&&platform->entry_latched&&platform->prom_verified&&!platform->fault&&
+    Ss0==platform->entry_ss0&&Ss1==platform->entry_ss1;
+}
+BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0,UINT32 Ss1) {
+  return GuEntrySelectorsMatchFor(&Gu,Ss0,Ss1);
+}
+BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
+  if(!platform||platform->fault||!platform->prom_verified||platform->started||
+     Ss0==0xffffffffU||(Ss0&0xffff0000U)==0xbadf0000U||
+     Ss0==0x88888888U||Ss1>0xfU)return FALSE;
+  if(platform->entry_latched)return GuEntrySelectorsMatchFor(platform,Ss0,Ss1);
+  platform->entry_ss0=Ss0;platform->entry_ss1=Ss1;platform->entry_latched=TRUE;return TRUE;
+}
+BOOLEAN GuLatchEntrySelectors(UINT32 Ss0,UINT32 Ss1) {
+  return GuLatchEntrySelectorsFor(&Gu,Ss0,Ss1);
 }
 #endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
@@ -295,10 +306,12 @@ BOOLEAN GuTargetConfig(const UINT32 *C, UINTN S, UINTN B, UINTN D, UINTN F) {
     GuIsSupportedPciId(C[0]) &&
     ((C[2]>>16)==0x0300U || (C[2]>>16)==0x0302U) && !((C[3]>>16)&0x7f);
 }
-BOOLEAN GuSafeToReturn(VOID) {
-  return !Gu.retained && !Gu.allocations && !Gu.dma_count && !Gu.master_attributes_pending &&
-    (!Gu.started || (Gu.quiesced && !Gu.fault));
+BOOLEAN GuSafeToReturnFor(const GU_PLATFORM *platform) {
+  return platform&&!platform->retained&&!platform->allocations&&!platform->dma_count&&
+    !platform->master_attributes_pending&&
+    (!platform->started||(platform->quiesced&&!platform->fault));
 }
+BOOLEAN GuSafeToReturn(VOID) {return GuSafeToReturnFor(&Gu);}
 /* CPU pool records belong to a single platform. The payload follows a
  * naturally aligned header on the supported x64 ABI. A nonnull scope
  * identifies temporary compatibility transaction memory. Resolve a release
@@ -318,6 +331,18 @@ BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t byte
     if((const VOID *)(entry+1)==memory)
       return entry->owner==platform&&entry->bs==platform->bs&&entry->bytes==bytes&&!entry->scope;
   return FALSE;
+}
+
+GU_PLATFORM *GuPlatformForCpuObject(const VOID *memory,size_t bytes) {
+  if(!memory||!bytes||PlatformRegistryStatus!=EFI_SUCCESS)return NULL;
+  GU_PLATFORM *owner=NULL;
+  for(GU_PLATFORM_ALLOCATION *entry=PlatformAllocations;entry;entry=entry->next) {
+    if(!(entry->published||entry->retired)||
+       !GuCpuPoolOwns(&entry->platform,memory,bytes))continue;
+    if(owner)return NULL;
+    owner=&entry->platform;
+  }
+  return owner;
 }
 
 /* General CPU allocations may survive compatibility scope closure, but
@@ -397,8 +422,15 @@ BOOLEAN GuCpuPoolFreeScoped(const struct pci_dev *scope,VOID *memory) {
   if(!PoolScopeMatches(scope))return FALSE;
   return PoolFree(scope,memory);
 }
-VOID GuStarted(VOID) {Gu.started=TRUE;Gu.quiesced=FALSE;}
-VOID GuQuiesced(VOID) {if(!Gu.fault)Gu.quiesced=TRUE;}
+VOID GuStartedFor(GU_PLATFORM *platform) {
+  if(!platform)return;
+  platform->started=TRUE;platform->quiesced=FALSE;
+}
+VOID GuStarted(VOID) {GuStartedFor(&Gu);}
+VOID GuQuiescedFor(GU_PLATFORM *platform) {
+  if(platform&&!platform->fault)platform->quiesced=TRUE;
+}
+VOID GuQuiesced(VOID) {GuQuiescedFor(&Gu);}
 EFI_STATUS GuDmaAllocate(UINTN N, VOID **C, UINT64 *D) {
   EFI_STATUS Status; GU_DMA *Entry; UINTN Mapped;
   if(!C || !D)return EFI_INVALID_PARAMETER;
