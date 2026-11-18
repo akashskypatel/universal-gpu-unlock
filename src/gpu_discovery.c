@@ -31,12 +31,14 @@ static const GU_GPU_LOCATION ActiveRequested[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
 #endif
 
-/* The operator waiver is visible with and without port.h so the ordered
- * selected-target count rules below are identical in host tests and firmware. */
-#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
-#define GU_ACTUATION_WAIVED 1
-#else
-#define GU_ACTUATION_WAIVED 0
+/* Admission is one decision with two provenances (hardware waiver or the
+ * hosted simulator). Keep the fallback so host-test translation units that do
+ * not include port.h compile the same refusal path. */
+#ifndef GU_ACTUATION_ADMITTED
+#define GU_ACTUATION_ADMITTED 0
+#endif
+#ifndef GU_ACTUATION_SIMULATED
+#define GU_ACTUATION_SIMULATED 0
 #endif
 
 static EFI_GUID PciGuid = EFI_PCI_IO_PROTOCOL_GUID;
@@ -972,7 +974,7 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   /* Without the explicit waiver only one card may be admitted at a time. The
    * waiver admits an ordered list: the shared coordinator still executes one
    * transaction at a time and requires each predecessor's completion record. */
-  if(prepared.selected_count!=1 && !GU_ACTUATION_WAIVED){
+  if(prepared.selected_count!=1 && !GU_ACTUATION_ADMITTED){
     GuLog("ACTIVE_EXECUTION=REFUSED REASON=MULTI_TARGET_WITHOUT_WAIVER SELECTED=%zu\n",
           prepared.selected_count);
     s=EFI_UNSUPPORTED;goto done;
@@ -1009,13 +1011,21 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   }
   s=BindPreparedSequence(table,io,&prepared,&storage);
   if(s!=EFI_SUCCESS)goto done;
-#if GU_ACTUATION_WAIVED
-  /* The waiver authorises the write; it does not make the outcome eligible.
-   * Eligibility stays false so a log cannot be mistaken for a qualification. */
+#if GU_ACTUATION_ADMITTED
+  /* Admission authorises the write; it does not make the outcome eligible.
+   * Eligibility stays false so a log cannot be mistaken for a qualification,
+   * and a simulated run is marked as such. */
+#if GU_ACTUATION_SIMULATED
+  GuLog("ACTIVE_EXECUTION=SIMULATED SELECTED=%zu ORDERED_SEQUENTIAL=1 "
+        "MUTATION_AUTHORIZED=1 ENVIRONMENT=HOST_SIMULATOR CAN_DETACH=0 "
+        "CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 SIGNED_BOOTER_UNVERIFIED=1\n",
+        prepared.selected_count);
+#else
   GuLog("ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu ORDERED_SEQUENTIAL=1 "
         "MUTATION_AUTHORIZED=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 "
         "RECOVERY_VERIFIED=0 SIGNED_BOOTER_UNVERIFIED=1 "
         "WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION\n",prepared.selected_count);
+#endif
 #endif
 #else
   s=FreeDiscoveryStorage(table->BootServices,&storage);

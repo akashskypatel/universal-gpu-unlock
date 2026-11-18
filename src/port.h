@@ -96,10 +96,57 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #endif
 #endif
 
+/* GU_SIMULATED_ACTUATION is the hosted simulator profile. It exists so the
+ * real active transaction sources can be executed against a modelled PCI
+ * device on a workstation, for pre-execution and post-execution inspection.
+ *
+ * It is structurally impossible to ship: it is rejected in any build that is
+ * not hosted, and rejected next to the GU_UEFI_PORT marker that both firmware
+ * builders emit. A simulator build also never sets GU_HOST_TEST_PROFILE,
+ * because the simulated card must satisfy the same config policy, PROM and
+ * FWSEC checks as hardware.
+ *
+ * The simulator is evidence about code behaviour only. It is not evidence
+ * about silicon, and its logs are marked SIMULATED for that reason. */
+#ifdef GU_SIMULATED_ACTUATION
+#if __STDC_HOSTED__ != 1
+#error Simulated actuation is a hosted-only build and cannot be part of a firmware image
+#endif
+#if defined(GU_UEFI_PORT)
+#error Simulated actuation must not use the UEFI port marker emitted by the firmware builders
+#endif
+#if !defined(GU_AD104_TRANSACTION)
+#error Simulated actuation requires the experimental firmware transaction profile
+#endif
+#if !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Simulated actuation requires the ordered selected-target execution mode
+#endif
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
+#error Simulated actuation cannot be combined with preparation-only or synthetic builds
+#endif
+#if defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
+#error Simulated actuation and the hardware waiver are distinct profiles
+#endif
+#endif
+
+/* One admission switch, two provenances: the hardware waiver and the
+ * simulator. Both relax the same admission checks; only the hardware waiver
+ * can reach silicon, and only the simulator can be inspected afterwards. */
+#if defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
+#define GU_ACTUATION_ADMITTED 1
+#define GU_ACTUATION_SIMULATED 0
+#elif defined(GU_SIMULATED_ACTUATION)
+#define GU_ACTUATION_ADMITTED 1
+#define GU_ACTUATION_SIMULATED 1
+#else
+#define GU_ACTUATION_ADMITTED 0
+#define GU_ACTUATION_SIMULATED 0
+#endif
+
 /* Selected active artifacts are restricted to inventory/plan preparation.
  * The legacy engine is linked for compile coverage, but GPU I/O write,
  * DMA and FLR helpers also refuse in this configuration. */
-#if defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
+#if GU_ACTUATION_ADMITTED
 #define GU_PREFLIGHT_ONLY 0
 #elif defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
 #define GU_PREFLIGHT_ONLY 1

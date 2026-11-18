@@ -1053,20 +1053,28 @@ EFI_STATUS GuMsiRelease(VOID) {
    * Profile hashes and a structurally valid FWSEC descriptor do not prove
    * Windows 617.42 signed Booter acceptance or physical cold recovery.
    * Reject before any firmware callback, independent of entrypoint/build. */
-#ifndef GU_ACTIVE_UNVERIFIED_ACTUATION
+#if !GU_ACTUATION_ADMITTED
   if(Gu.device_id==0x2684U||Gu.device_id==0x220aU) {
     GuLog("MSI release refused for original AD102/GA102: vendor Stop and signed loader not verified\n");
     return EFI_UNSUPPORTED;
   }
 #else
-  /* Explicit operator waiver (GU_ACTIVE_UNVERIFIED_ACTUATION). The refusal is
-   * replaced by a recorded admission: nothing about the vendor Stop bound,
-   * signed Windows 617.42 Booter acceptance or physical recovery is verified. */
-  if(Gu.device_id==0x2684U||Gu.device_id==0x220aU)
+  /* Explicit admission. The refusal is replaced by a recorded acceptance:
+   * nothing about the vendor Stop bound, signed Windows 617.42 Booter
+   * acceptance or physical recovery is verified, and a simulated run says so. */
+  if(Gu.device_id==0x2684U||Gu.device_id==0x220aU) {
+#if GU_ACTUATION_SIMULATED
+    GuLog("MSI release SIMULATED for original AD102/GA102 device=%04x: "
+          "ENVIRONMENT=HOST_SIMULATOR VENDOR_STOP_BOUND=UNVERIFIED "
+          "SIGNED_BOOTER=UNVERIFIED RECOVERY=UNVERIFIED\n",
+          (unsigned)Gu.device_id);
+#else
     GuLog("MSI release WAIVED for original AD102/GA102 device=%04x: "
           "VENDOR_STOP_BOUND=UNVERIFIED SIGNED_BOOTER=UNVERIFIED "
           "RECOVERY=UNVERIFIED WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION\n",
           (unsigned)Gu.device_id);
+#endif
+  }
 #endif
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   for(UINTN stage=Plan.headless?3u:1u;stage<=3;stage++) {
