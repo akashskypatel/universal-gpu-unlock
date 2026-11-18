@@ -593,6 +593,8 @@ typedef struct {
   int profile_verified,prom_verified,started,owned,armed,fault,retained;
   struct GU_MSI_OWNED_STATE *release_state;
   BOOLEAN release_state_reserved,release_owner_invalid;
+  EFI_STATUS cpu_pool_failure_status;
+  void *pool_record;size_t pool_bytes;
 } GU_PLATFORM;
 typedef GU_PLATFORM MOCK_PLATFORM;
 static MOCK_PLATFORM *platforms,*current;
@@ -606,6 +608,14 @@ static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
 static EFI_STATUS Free(VOID *p) {
   if(fail_free_once){fail_free_once=0;return EFI_DEVICE_ERROR;}
   free(p);return EFI_SUCCESS;
+}
+static void *GuAlloc(size_t bytes){
+  if(Gu.pool_record)return NULL;
+  if(Gu.bs->AllocatePool(EfiLoaderData,bytes,&Gu.pool_record)!=EFI_SUCCESS)return NULL;
+  Gu.pool_bytes=bytes;return Gu.pool_record;
+}
+static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *address,size_t bytes){
+  return p&&address&&address==p->pool_record&&bytes==p->pool_bytes&&!p->cpu_pool_failure_status;
 }
 """ + production + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
@@ -704,6 +714,15 @@ int main(void) {
     CHECK(!GuMsiCompletedPlatform(saved,token));
     saved->release_state->plan.claimed=0;
     CHECK(!GuMsiCompletedPlatform(saved,current->release_state));
+    GU_MSI_OWNED_STATE *own=saved->release_state;
+    saved->release_state=current->release_state;
+    CHECK(!GuMsiCompletedPlatform(saved,saved->release_state));
+    saved->release_state=(void *)(uintptr_t)1;
+    CHECK(!GuMsiCompletedPlatform(saved,saved->release_state));
+    saved->release_state=own;
+    saved->pool_bytes--;
+    CHECK(!GuMsiCompletedPlatform(saved,token));
+    saved->pool_bytes++;
     saved->release_state->owner_handle=current->handle;
     CHECK(!GuMsiCompletedPlatform(saved,token));
     saved->release_state->owner_handle=saved->handle;

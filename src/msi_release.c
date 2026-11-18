@@ -71,15 +71,22 @@ typedef struct GU_MSI_OWNED_STATE {
 #define Original (CurrentMsi->original)
 #define Current (CurrentMsi->current)
 
-/* A release graph belongs to exactly one platform and boot-local PCI identity.
- * A lost or substituted context is an unsafe state, not an unused context. */
+/* Prove pool membership before dereferencing a retained release record.
+ * This also works on a completed inactive platform without rebinding it. */
+static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
+  if(!platform||platform->release_owner_invalid||!platform->release_state_reserved||
+     !platform->bs||!platform->pci||!platform->handle||!platform->image)return FALSE;
+  const GU_MSI_OWNED_STATE *state=platform->release_state;
+  return GuCpuPoolOwns(platform,state,sizeof(*state))&&
+    state->owner==platform&&state->owner_bs==platform->bs&&
+    state->owner_pci==platform->pci&&state->owner_handle==platform->handle&&
+    state->owner_image==platform->image;
+}
+/* A lost or substituted context is an unsafe state, not an unused context. */
 static BOOLEAN ReleaseOwnerMatches(VOID) {
   if(Gu.release_owner_invalid)return FALSE;
   if(!Gu.release_state_reserved && !CurrentMsi)return FALSE;
-  if(!Gu.release_state_reserved || !CurrentMsi ||
-     CurrentMsi->owner!=&Gu || CurrentMsi->owner_bs!=Gu.bs ||
-     CurrentMsi->owner_pci!=Gu.pci || CurrentMsi->owner_handle!=Gu.handle ||
-     CurrentMsi->owner_image!=Gu.image) {
+  if(!ReleaseStateMatches(&Gu)) {
     Gu.release_owner_invalid=TRUE;
     Gu.fault=TRUE;
     Gu.retained=TRUE;
@@ -91,15 +98,13 @@ static BOOLEAN ReleaseOwnerMatches(VOID) {
 EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs) {
   if((Gu.release_state_reserved || Gu.release_state) && !ReleaseOwnerMatches())
     return EFI_NOT_READY;
-  if(!bs||!bs->AllocatePool||!Gu.handle||!Gu.pci||!Gu.image||Gu.bs!=bs ||
+  if(!bs||!bs->AllocatePool||!bs->FreePool||!Gu.handle||!Gu.pci||!Gu.image||Gu.bs!=bs ||
      !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||
      Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
   if(Gu.release_state_reserved)return EFI_ALREADY_STARTED;
-  GU_MSI_OWNED_STATE *state=NULL;
-  EFI_STATUS s=bs->AllocatePool(EfiLoaderData,sizeof(*state),(VOID **)&state);
-  if(s!=EFI_SUCCESS)return s;
-  if(!state)return EFI_OUT_OF_RESOURCES;
-  memset(state,0,sizeof(*state));
+  GU_MSI_OWNED_STATE *state=GuAlloc(sizeof(*state));
+  if(!state)return Gu.cpu_pool_failure_status!=EFI_SUCCESS?
+    Gu.cpu_pool_failure_status:EFI_OUT_OF_RESOURCES;
   state->owner=&Gu;state->owner_bs=bs;state->owner_pci=Gu.pci;
   state->owner_handle=Gu.handle;state->owner_image=Gu.image;
   /* Publish only after the complete allocation succeeds. */
@@ -1154,15 +1159,10 @@ const VOID *GuMsiPlanOwnerToken(VOID) {return ReleaseOwnerMatches()?CurrentMsi:N
 /* Historical proof for a registered, completed context. Do not use its
  * old live graph after another target has legitimately changed the graph. */
 BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {
-  if(!platform||!token||!platform->release_state_reserved||
-     platform->release_owner_invalid||platform->release_state!=token)
-    return FALSE;
-  const GU_MSI_OWNED_STATE *state=platform->release_state;
-  const PLAN *plan=&state->plan;
-  return state->owner==platform && state->owner_bs==platform->bs &&
-    state->owner_pci==platform->pci && state->owner_handle==platform->handle &&
-    state->owner_image==platform->image &&
-    plan->table && plan->pci==platform->handle && plan->self==platform->image &&
+  if(!platform||!token||platform->release_state!=token||
+     !ReleaseStateMatches(platform))return FALSE;
+  const PLAN *plan=&platform->release_state->plan;
+  return plan->table && plan->pci==platform->handle && plan->self==platform->image &&
     plan->ready && plan->mutated && plan->stage==3 &&
     !plan->claimed && plan->master_normalized && plan->hardware_verified;
 }

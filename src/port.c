@@ -362,8 +362,8 @@ static VOID *PoolAllocate(const struct pci_dev *scope,size_t N) {
 static BOOLEAN PoolFree(const struct pci_dev *scope,VOID *Memory) {
   if(!Memory)return TRUE;
   if(Gu.retained||Gu.cpu_pool_failure_status!=EFI_SUCCESS)return FALSE;
-  /* A published compatibility address must not be recycled in this boot. */
-  if(Memory==Gu.compat_device) {
+  /* Published ownership records must not be recycled in this boot. */
+  if(Memory==Gu.compat_device||Memory==(VOID *)Gu.release_state) {
     GuRecordCpuPoolFailure(EFI_ACCESS_DENIED,Memory);
     return FALSE;
   }

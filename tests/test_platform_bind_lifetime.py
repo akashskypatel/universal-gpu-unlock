@@ -870,12 +870,14 @@ typedef struct {int tag;} EFI_PCI_IO_PROTOCOL;
 #define FALSE 0
 typedef struct EFI_BOOT_SERVICES {
   EFI_STATUS (*AllocatePool)(int,size_t,VOID **);
+  EFI_STATUS (*FreePool)(VOID *);
 } EFI_BOOT_SERVICES;
 typedef struct {EFI_BOOT_SERVICES *bs;EFI_HANDLE handle,image;
   EFI_PCI_IO_PROTOCOL *pci;
   int profile_verified,prom_verified,started,owned,armed,fault,retained;
   struct GU_MSI_OWNED_STATE *release_state;
   BOOLEAN release_state_reserved,release_owner_invalid;
+  EFI_STATUS cpu_pool_failure_status;
 } GU_PLATFORM;
 static GU_PLATFORM Gu;
 typedef struct {VOID *table;int mutated,claimed,ready;} PLAN;
@@ -893,10 +895,20 @@ static EFI_STATUS Allocate(int type,size_t n,VOID **out) {
   *out=calloc(1,n);
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
 }
+static void *pool_record;
+static size_t pool_bytes;
+static void *GuAlloc(size_t n){
+  if(Gu.bs->AllocatePool(EfiLoaderData,n,&pool_record)!=EFI_SUCCESS)return NULL;
+  pool_bytes=n;return pool_record;
+}
+static int GuCpuPoolOwns(const GU_PLATFORM *p,const void *address,size_t n){
+  return p==&Gu&&address&&address==pool_record&&n==pool_bytes&&!Gu.cpu_pool_failure_status;
+}
+static EFI_STATUS Free(VOID *p){free(p);return EFI_SUCCESS;}
 """ + production + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
-  EFI_BOOT_SERVICES bs={Allocate};
+  EFI_BOOT_SERVICES bs={Allocate,Free};
   EFI_PCI_IO_PROTOCOL pci={0};
   Gu.bs=&bs;Gu.handle=(VOID *)(uintptr_t)1;Gu.image=&bs;Gu.pci=&pci;
   Gu.profile_verified=Gu.prom_verified=1;
@@ -929,8 +941,16 @@ int main(int argc,char **argv) {
   } else if(mode==5) {
     Gu.retained=1;
     CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY && allocations==0);
+  } else if(mode==6) {
+    Gu.release_state_reserved=1;
+    Gu.release_state=(void *)(uintptr_t)1;
+    CHECK(!ReleaseOwnerMatches()&&Gu.release_owner_invalid&&Gu.fault&&Gu.retained);
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY&&!allocations);
+  } else if(mode==7) {
+    bs.FreePool=NULL;
+    CHECK(GuMsiReserveSelectedState(&bs)==EFI_NOT_READY&&!allocations);
   } else return 3;
-  free(Gu.release_state);
+  free(pool_record);
   return 0;
 }
 """
@@ -944,7 +964,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            for mode in range(6):
+            for mode in range(8):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(binary), str(mode)],
                                             capture_output=True, text=True)
@@ -979,7 +999,7 @@ typedef struct {
 typedef struct {
   EFI_BOOT_SERVICES *bs;
   struct GU_CPU_POOL *cpu_pool;
-  VOID *compat_device;
+  VOID *compat_device,*release_state;
   int compat_device_open,compat_device_closed;
   VOID *cpu_pool_failure_address;
   EFI_STATUS cpu_pool_failure_status;
@@ -1008,7 +1028,7 @@ static EFI_STATUS Free(VOID *p){
 int main(int argc,char **argv) {
   EFI_BOOT_SERVICES bs={Allocate,Free};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>15)return 3;
+  if(mode<0||mode>16)return 3;
   if(mode)Gu.bs=&bs;
   if(mode==1)bs.AllocatePool=NULL;
   if(mode==9)bs.FreePool=NULL;
@@ -1075,11 +1095,12 @@ int main(int argc,char **argv) {
     void *base=Gu.cpu_pool;
     GuFree(p);CHECK(frees==1&&released==base);
     GuFree(p);CHECK(frees==1&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED);
-  }else if(mode==11){
-    VOID *ptr=GuAlloc(16);CHECK(ptr);Gu.compat_device=ptr;
+  }else if(mode==11||mode==16){
+    VOID *ptr=GuAlloc(16);CHECK(ptr);
+    if(mode==11)Gu.compat_device=ptr;else Gu.release_state=ptr;
     CHECK(GuCpuPoolOwns(&Gu,ptr,16));GuFree(ptr);
     CHECK(!frees&&Gu.retained&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED&&Gu.cpu_pool_failure_address==ptr);
-    CHECK(Gu.cpu_pool&&Gu.compat_device==ptr&&!GuCpuPoolOwns(&Gu,ptr,16));
+    CHECK(Gu.cpu_pool&&(mode==11?Gu.compat_device:Gu.release_state)==ptr&&!GuCpuPoolOwns(&Gu,ptr,16));
     free(Gu.cpu_pool);
   }else{
     struct pci_dev *scope=(struct pci_dev *)GuAlloc(8);
@@ -1125,7 +1146,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            for mode in range(16):
+            for mode in range(17):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(binary), str(mode)],
                                             capture_output=True, text=True)
