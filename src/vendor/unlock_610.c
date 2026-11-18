@@ -1238,7 +1238,9 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	rom = GuCompatAlloc(work->pdev, 1, mapped);
 	if (!rom)
 		return GU_RESULT(-ENOMEM);
-	GuCompatCopyFromIo(work->pdev, rom, work->bar + 0x300000, mapped);
+	if (!GuCompatCopyFromIo(work->pdev, rom, work->bar + 0x300000, mapped)) {
+		ret=-EIO;goto out;
+	}
 	dev_info(&work->pdev->dev, "FWSEC: PROM bytes=%zu signature=%#x\n",
 		 mapped, (unsigned int)(rom[0] | (rom[1] << 8)));
 	GU_PLATFORM *owner = GuCompatOwner(work->pdev);

@@ -348,9 +348,10 @@ static BOOLEAN Registers(UINT32 *a,UINT32 *b){*a=1;*b=2;return !Gu.fault;}
 static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform){(void)platform;return TRUE;}
 static void *GuAlloc(size_t n){return malloc(n);}
 static void GuFree(void *p){free(p);if(free_fails)Gu.fault=Gu.retained=1;}
-static void GuCopyFromIo(void *p,const void *source,size_t bytes){
+static BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,void *p,const void *source,size_t bytes){
   (void)p;(void)source;(void)bytes;
-  if(read_fails)Gu.fault=1;
+  if(read_fails){owner->fault=1;return FALSE;}
+  return TRUE;
 }
 static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const void *p,size_t bytes){
   (void)platform;

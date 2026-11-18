@@ -100,7 +100,7 @@ static inline int ktime_compare(ktime_t a,ktime_t b) {return a>b?1:a<b?-1:0;}
 /* Device-attributed transaction I/O. The device must own the open scope. */
 u32 GuCompatRead32(const struct pci_dev *,const void *);
 void GuCompatWrite32(const struct pci_dev *,u32,void *);
-void GuCompatCopyFromIo(const struct pci_dev *,void *,const void *,size_t);
+BOOLEAN GuCompatCopyFromIo(const struct pci_dev *,void *,const void *,size_t);
 void *dma_alloc_coherent(struct device *,size_t,dma_addr_t *,int);
 void dma_free_coherent(struct device *,size_t,void *,dma_addr_t);
 int dma_set_mask(struct device *,u64);

@@ -218,7 +218,7 @@ VOID GuStarted(VOID);
 VOID GuQuiesced(VOID);
 VOID GuLog(const char *Format, ...);
 VOID GuLogText(const char *Text);
-VOID GuCopyFromIo(VOID *Destination, const VOID *Source, size_t Bytes);
+BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *Destination,const VOID *Source,size_t Bytes);
 /* Read-only ownership proof for retained CPU objects, including inactive platforms. */
 BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes);
 /* Record an uncertain CPU pool result without dereferencing its address. */

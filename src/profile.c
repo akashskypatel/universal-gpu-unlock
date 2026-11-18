@@ -204,8 +204,8 @@ EFI_STATUS GuDiagnosticScan(VOID) {
   if(!config_ok||!regs_ok||!assets_ok)return EFI_NOT_READY;
   VOID *prom=GuAlloc(1048576U);
   if(!prom)return EFI_OUT_OF_RESOURCES;
-  GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576U);
-  BOOLEAN prom_ok=!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576U);
+  BOOLEAN copied=GuCopyFromIo(&Gu,prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576U);
+  BOOLEAN prom_ok=copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576U);
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2=Config();
@@ -250,8 +250,8 @@ EFI_STATUS GuAd104Prepare(VOID) {
     GuLog("GuAd104Prepare: PROM alloc failed\n");
     return EFI_OUT_OF_RESOURCES;
   }
-  GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
-  BOOLEAN prom_match = !Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576);
+  BOOLEAN copied=GuCopyFromIo(&Gu,prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
+  BOOLEAN prom_match = copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576);
   int fwsec_res = prom_match?gpu_unlock_vbios_fwsec(prom,1048576,&fw):-1;
   BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2 = Config();

@@ -124,28 +124,36 @@ void GuCompatWrite32(const struct pci_dev *D,u32 Value,void *P) {
   if(Address<Gu.bar_base || Address-Gu.bar_base>0xffffffffULL){Gu.fault=TRUE;return;}
   GuWrite32((UINT32)(Address-Gu.bar_base),Value);
 }
-/* The read-only profile also uses this low-level selected-platform helper
- * before the compatibility scope opens. Vendor code uses the checked wrapper. */
-VOID GuCopyFromIo(VOID *D,const VOID *S,size_t N) {
+/* The read-only profile binds this operation to its selected owner before
+ * a compatibility scope exists. Never switch protocols within a read. */
+BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *D,const VOID *S,size_t N) {
   UINT64 Address=(UINTN)S,Offset;UINTN Done=0;
-  memset(D,0,N);
-  if(Gu.fault || Address<Gu.bar_base || Address-Gu.bar_base>Gu.bar_size ||
-     N>Gu.bar_size-(Address-Gu.bar_base)){Gu.fault=TRUE;return;}
-  Offset=Address-Gu.bar_base;
+  if(D)memset(D,0,N);
+  if(!owner||owner!=&Gu){Gu.fault=TRUE;return FALSE;}
+  if(!D||owner->fault||owner->retained||!owner->pci||!owner->pci->Mem.Read||
+     Address<owner->bar_base||Address-owner->bar_base>owner->bar_size||
+     N>owner->bar_size-(Address-owner->bar_base)){owner->fault=TRUE;return FALSE;}
+  EFI_PCI_IO_PROTOCOL *pci=owner->pci;
+  Offset=Address-owner->bar_base;
   while(Done<N) {
     UINTN Count=N-Done<1024?N-Done:1024;
-    if(EFI_ERROR(Gu.pci->Mem.Read(Gu.pci,EfiPciIoWidthUint8,0,Offset+Done,Count,(UINT8 *)D+Done))) {
-      Gu.fault=TRUE;return;
+    EFI_STATUS status=pci->Mem.Read(pci,EfiPciIoWidthUint8,0,Offset+Done,Count,(UINT8 *)D+Done);
+    if(EFI_ERROR(status)||owner!=&Gu||owner->pci!=pci||owner->fault||owner->retained) {
+      memset(D,0,N);owner->fault=TRUE;
+      if(owner!=&Gu)Gu.fault=TRUE;
+      return FALSE;
     }
     Done+=Count;
   }
+  return TRUE;
 }
-void GuCompatCopyFromIo(const struct pci_dev *D,VOID *Destination,const VOID *Source,size_t N) {
-  if(!GuCompatPciMatches(D)) {
-    memset(Destination,0,N);
-    return;
+BOOLEAN GuCompatCopyFromIo(const struct pci_dev *D,VOID *Destination,const VOID *Source,size_t N) {
+  GU_PLATFORM *owner=GuCompatOwner(D);
+  if(!owner) {
+    if(Destination)memset(Destination,0,N);
+    return FALSE;
   }
-  GuCopyFromIo(Destination,Source,N);
+  return GuCopyFromIo(owner,Destination,Source,N);
 }
 void *dma_alloc_coherent(struct device *D,size_t N,dma_addr_t *Address,int Flags) {
   VOID *Cpu=NULL;(void)Flags;

@@ -61,7 +61,7 @@ int main(void) {
         timing=compat[compat.index("ktime_t GuCompatTime("):compat.index("/* Vendor access")]
         masks=compat[compat.index("int dma_set_mask("):compat.index("void GuCompatDmaBarrier(")]
         mmio=compat[compat.index("u32 GuCompatRead32("):compat.index("/* The read-only profile")]
-        copy=compat[compat.index("void GuCompatCopyFromIo("):compat.index("void *dma_alloc_coherent(")]
+        copy=compat[compat.index("BOOLEAN GuCopyFromIo("):compat.index("void *dma_alloc_coherent(")]
         barrier=compat[compat.index("void GuCompatDmaBarrier("):compat.index("void *GuCompatAlloc(")]
         scratch=compat[compat.index("void *GuCompatAlloc("):compat.index("int request_firmware(")]
         read=compat[compat.index("int pci_read_config_word("):compat.index("int pci_read_config_dword(")]
@@ -77,6 +77,7 @@ int main(void) {
 typedef void VOID;
 typedef uint16_t u16;
 typedef uint64_t u64;
+typedef uint8_t UINT8;
 typedef uint32_t UINT32;
 typedef uint64_t UINT64;
 typedef uint64_t ktime_t;
@@ -87,7 +88,10 @@ typedef int EFI_STATUS;
 typedef void *EFI_HANDLE;
 typedef struct {int id;} EFI_BOOT_SERVICES;
 typedef struct EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
-struct EFI_PCI_IO_PROTOCOL {int id; EFI_STATUS (*Flush)(EFI_PCI_IO_PROTOCOL *);};
+struct EFI_PCI_IO_PROTOCOL {
+  int id; EFI_STATUS (*Flush)(EFI_PCI_IO_PROTOCOL *);
+  struct { EFI_STATUS (*Read)(EFI_PCI_IO_PROTOCOL *,int,UINT8,UINT64,UINTN,VOID *); } Mem;
+};
 #define TRUE 1
 #define FALSE 0
 #define EFI_SUCCESS 0
@@ -102,10 +106,11 @@ struct EFI_PCI_IO_PROTOCOL {int id; EFI_STATUS (*Flush)(EFI_PCI_IO_PROTOCOL *);}
 #define EINVAL 22
 #define EIO 5
 #define EfiPciIoWidthUint16 1
+#define EfiPciIoWidthUint8 0
 typedef struct {
   EFI_BOOT_SERVICES *bs;EFI_PCI_IO_PROTOCOL *pci;EFI_HANDLE handle;
   unsigned device_id,pm_cap;
-  UINT64 bar_base,ticks;
+  UINT64 bar_base,bar_size,ticks;
   int fault,retained,started,owned,armed,display_ok;
   int compat_device_open,compat_device_closed;
   struct pci_dev *compat_device;
@@ -121,8 +126,11 @@ static void GuStall(UINTN us){
 }
 static UINT32 GuRead32(UINT32 offset){mmio_reads++;last_io_owner=Gu.pci->id;return offset;}
 static void GuWrite32(UINT32 offset,UINT32 value){(void)offset;(void)value;mmio_writes++;last_io_owner=Gu.pci->id;}
-static void GuCopyFromIo(void *dst,const void *src,size_t n){
-  (void)src;copies++;last_io_owner=Gu.pci->id;memset(dst,0x5a,n);
+static int fail_copy_at;
+static EFI_STATUS ReadMemory(EFI_PCI_IO_PROTOCOL *pci,int width,UINT8 bar,UINT64 offset,UINTN n,VOID *dst){
+  if(width!=EfiPciIoWidthUint8||bar||offset>0x4000||n>1024||n>0x4000-offset)return EFI_DEVICE_ERROR;
+  copies++;last_io_owner=pci->id;memset(dst,0x5a,n);
+  return copies==fail_copy_at?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 static EFI_STATUS Flush(EFI_PCI_IO_PROTOCOL *pci){flushes++;last_io_owner=pci->id;return EFI_SUCCESS;}
 static const void *pool[2];
@@ -150,13 +158,14 @@ static EFI_STATUS GuConfigRead(int width,UINT32 offset,u16 *out){
 #define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}}while(0)
 int main(void){
   EFI_BOOT_SERVICES bs={1},foreign={2};
-  EFI_PCI_IO_PROTOCOL pci[2]={{17,Flush},{23,Flush}};
+  EFI_PCI_IO_PROTOCOL pci[2]={{17,Flush,{ReadMemory}},{23,Flush,{ReadMemory}}};
   void *bar=(void *)(uintptr_t)0x1004;
   unsigned char buffer[4];
   for(int i=0;i<2;i++){
     platforms[i].bs=&bs;platforms[i].pci=&pci[i];platforms[i].handle=&pci[i];
     platforms[i].device_id=0x2684;platforms[i].pm_cap=7; /* repeated model */
     platforms[i].bar_base=0x1000; /* deliberately equal numeric BAR addresses */
+    platforms[i].bar_size=0x4000;
   }
   struct pci_dev *a=NULL,*b=NULL,*extra=NULL;
   CHECK(GuCompatOpenDevice(NULL)==EFI_INVALID_PARAMETER);
@@ -178,7 +187,7 @@ int main(void){
   CHECK(GuCompatTime(a)==0&&GuCompatDelay(a,100)&&GuCompatTime(a)==100&&stalls==1&&last_io_owner==17);
   CHECK(GuCompatRead32(a,bar)==4&&mmio_reads==1&&last_io_owner==17);
   GuCompatWrite32(a,12,bar);CHECK(mmio_writes==1&&last_io_owner==17);
-  GuCompatCopyFromIo(a,buffer,bar,sizeof(buffer));CHECK(copies==1&&buffer[0]==0x5a&&last_io_owner==17);
+  CHECK(GuCompatCopyFromIo(a,buffer,bar,sizeof(buffer)));CHECK(copies==1&&buffer[0]==0x5a&&last_io_owner==17);
   GuCompatDmaBarrier(a);CHECK(flushes==1&&last_io_owner==17);
   CHECK(a->owner==&Gu&&a->owner_bs==&bs&&a->owner_pci==&pci[0]&&a->owner_handle==&pci[0]);
   CHECK(GuCompatOpenDevice(&extra)==EFI_ALREADY_STARTED&&!extra);
@@ -242,11 +251,11 @@ int main(void){
   fail_stall=0;Gu.fault=Gu.retained=0; /* Continue independent fixture cases. */
   CHECK(GuCompatRead32(b,bar)==4&&mmio_reads==2&&last_io_owner==23);
   GuCompatWrite32(b,12,bar);CHECK(mmio_writes==2&&last_io_owner==23);
-  GuCompatCopyFromIo(b,buffer,bar,sizeof(buffer));CHECK(copies==2&&buffer[0]==0x5a&&last_io_owner==23);
+  CHECK(GuCompatCopyFromIo(b,buffer,bar,sizeof(buffer)));CHECK(copies==2&&buffer[0]==0x5a&&last_io_owner==23);
   GuCompatDmaBarrier(b);CHECK(flushes==2&&last_io_owner==23);
   CHECK(GuCompatRead32(a,bar)==~0U&&mmio_reads==2&&Gu.fault);
   GuCompatWrite32(a,12,bar);CHECK(mmio_writes==2);
-  GuCompatCopyFromIo(a,buffer,bar,sizeof(buffer));CHECK(copies==2&&buffer[0]==0&&buffer[3]==0);
+  CHECK(!GuCompatCopyFromIo(a,buffer,bar,sizeof(buffer)));CHECK(copies==2&&buffer[0]==0&&buffer[3]==0);
   GuCompatDmaBarrier(a);CHECK(flushes==2&&last_io_owner==23);
   CHECK(!platforms[0].fault);
   CHECK(pci_read_config_word(a,0,&value)==-EINVAL&&reads==2&&Gu.fault);
@@ -262,6 +271,20 @@ int main(void){
   Gu.pci=&pci[0];CHECK(!GuCompatPciMatches(b));Gu.pci=&pci[1];
   Gu.handle=&pci[0];CHECK(!GuCompatPciMatches(b));Gu.handle=&pci[1];
   CHECK(GuCompatPciMatches(b));
+  /* Move a multi-part read through the real owner-bound copy routine. */
+  Gu.fault=0;
+  unsigned char multi[2050];
+  CHECK(GuCompatCopyFromIo(b,multi,bar,sizeof(multi))&&copies==5&&last_io_owner==23);
+  CHECK(multi[0]==0x5a&&multi[2049]==0x5a);
+  fail_copy_at=copies+2;
+  CHECK(!GuCompatCopyFromIo(b,multi,bar,sizeof(multi))&&copies==7&&Gu.fault);
+  for(size_t i=0;i<sizeof(multi);i++)CHECK(multi[i]==0);
+  Gu.fault=0;fail_copy_at=0;
+  CHECK(!GuCopyFromIo(&platforms[0],multi,bar,sizeof(multi))&&copies==7&&Gu.fault&&!platforms[0].fault);
+  Gu.fault=0;pci[1].Mem.Read=NULL;
+  CHECK(!GuCompatCopyFromIo(b,multi,bar,sizeof(multi))&&copies==7&&Gu.fault);
+  pci[1].Mem.Read=ReadMemory;Gu.fault=0;
+  CHECK(!GuCompatCopyFromIo(b,multi,(void *)(uintptr_t)0x4fff,sizeof(multi))&&copies==7&&Gu.fault);
   /* Inject independent boundary cases without changing the completed peer. */
   Gu.fault=0;
   pci_dev_put(b);CHECK(b->refs==1&&Gu.fault&&a->refs==1);
