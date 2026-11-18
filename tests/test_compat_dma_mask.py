@@ -401,10 +401,26 @@ static struct pci_dev cards[2],*selected=&cards[0];
 #define GuAssets (Gu.asset_entries)
 static int releases,opens,fail_release,invalid_assets;
 static GU_ASSET *GuAssetEntries(void){return GuAssets;}
-static int GuPlatformAssetsOwned(const GU_PLATFORM *p){return p==active&&!invalid_assets;}
+static int GuPlatformAssetsOwned(const GU_PLATFORM *p){
+  return (p==&contexts[0]||p==&contexts[1])&&!invalid_assets;
+}
 static int GuAd104AssetsValid(const GU_PLATFORM *p){return GuPlatformAssetsOwned(p);}
-static GU_PLATFORM *GuCompatOwner(const struct pci_dev *p){return p==selected?active:NULL;}
-static int GuCompatDeviceMatches(const struct device *d){return d==&selected->dev;}
+static GU_PLATFORM *GuCompatOwner(const struct pci_dev *p){
+  if(p==&cards[0])return &contexts[0];
+  if(p==&cards[1])return &contexts[1];
+  return NULL;
+}
+static int GuCompatPciMatches(const struct pci_dev *p){
+  return p==selected&&GuCompatOwner(p)==active;
+}
+static GU_PLATFORM *GuCompatDeviceOwner(const struct device *d){
+  if(d==&cards[0].dev)return &contexts[0];
+  if(d==&cards[1].dev)return &contexts[1];
+  return NULL;
+}
+static int GuCompatDeviceMatches(const struct device *d){
+  return d==&selected->dev&&GuCompatDeviceOwner(d)==active;
+}
 static int gpu_is_supported_device(int d){return d==1;}
 static const struct asset_names {const char *gsp;} names={"gsp"};
 static const struct asset_names *unlock_assets(const struct pci_dev *p){(void)p;return &names;}
