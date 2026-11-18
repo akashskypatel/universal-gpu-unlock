@@ -670,6 +670,7 @@ static EFI_STATUS PlatformRegistryStatus;
 typedef GU_PLATFORM MOCK_PLATFORM;
 static MOCK_PLATFORM *platforms,*current;
 #define Gu (*current)
+#define GuPlatformActive current
 static int fail_alloc,fail_free_once,alloc_calls,free_calls;
 static EFI_STATUS Allocate(int kind,size_t size,VOID **out) {
   alloc_calls++;

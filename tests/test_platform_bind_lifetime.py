@@ -1037,6 +1037,8 @@ static GU_PLATFORM_ALLOCATION *PlatformAllocations;
 static EFI_STATUS PlatformRegistryStatus;
 static GU_PLATFORM platforms[2],*active=&platforms[0];
 #define Gu (*active)
+#define GuPlatformActive active
+static EFI_BOOT_SERVICES foreign;
 static int mode,calls,frees,free_error;
 static void *allocated,*released;
 static EFI_STATUS Allocate(int kind,size_t n,VOID **out) {
@@ -1045,11 +1047,15 @@ static EFI_STATUS Allocate(int kind,size_t n,VOID **out) {
   if(mode==3)return EFI_OUT_OF_RESOURCES;
   if(mode==2)return EFI_SUCCESS; /* Misbehaving successful null output. */
   *out=allocated=malloc(n);
-  if(mode==8)return EFI_OUT_OF_RESOURCES; /* Error with a nonnull output. */
+  if(mode==17||mode==18)active=&platforms[1];
+  if(mode==21)platforms[0].bs=&foreign;
+  if(mode==8||mode==18)return EFI_OUT_OF_RESOURCES; /* Error with a nonnull output. */
   return *out?EFI_SUCCESS:EFI_OUT_OF_RESOURCES;
 }
 static EFI_STATUS Free(VOID *p){
   frees++;released=p;
+  if(mode==19||mode==20)active=&platforms[1];
+  if(mode==22)platforms[0].bs=&foreign;
   if(free_error)return EFI_DEVICE_ERROR;
   free(p);return EFI_SUCCESS;
 }
@@ -1058,7 +1064,8 @@ static EFI_STATUS Free(VOID *p){
 int main(int argc,char **argv) {
   EFI_BOOT_SERVICES bs={Allocate,Free};
   mode=argc>1?atoi(argv[1]):-1;
-  if(mode<0||mode>16)return 3;
+  if(mode<0||mode>22)return 3;
+  foreign=bs;platforms[1].bs=&bs;
   if(mode)Gu.bs=&bs;
   if(mode==1)bs.AllocatePool=NULL;
   if(mode==9)bs.FreePool=NULL;
@@ -1132,6 +1139,29 @@ int main(int argc,char **argv) {
     CHECK(!frees&&Gu.retained&&Gu.cpu_pool_failure_status==EFI_ACCESS_DENIED&&Gu.cpu_pool_failure_address==ptr);
     CHECK(Gu.cpu_pool&&(mode==11?Gu.compat_device:Gu.release_state)==ptr&&!GuCpuPoolOwns(&Gu,ptr,16));
     free(Gu.cpu_pool);
+  }else if(mode==17||mode==18||mode==21){
+    CHECK(GuAlloc(32)==NULL&&allocated&&calls==1&&!frees);
+    CHECK(!platforms[0].cpu_pool&&!platforms[1].cpu_pool);
+    CHECK(platforms[0].fault&&platforms[0].retained&&!platforms[1].fault&&!platforms[1].retained);
+    CHECK(platforms[0].cpu_pool_failure_address==allocated);
+    CHECK(platforms[0].cpu_pool_failure_status==(mode==18?EFI_OUT_OF_RESOURCES:EFI_ACCESS_DENIED));
+    CHECK(!platforms[1].cpu_pool_failure_status);
+    active=&platforms[0];CHECK(!GuAlloc(8)&&calls==1);
+    free(allocated); /* Test fixture teardown only. */
+  }else if(mode==19||mode==20||mode==22){
+    struct pci_dev *scope=(struct pci_dev *)GuAlloc(8);CHECK(scope);
+    Gu.compat_device=scope;Gu.compat_device_open=1;
+    VOID *temporary=GuCpuPoolAllocScoped(scope,32);CHECK(temporary);
+    GU_CPU_POOL *base=Gu.cpu_pool,*remaining=base->next;
+    free_error=mode==20;
+    CHECK(!GuCpuPoolFreeScoped(scope,temporary)&&frees==1&&released==base);
+    CHECK(platforms[0].cpu_pool==remaining&&!platforms[1].cpu_pool);
+    CHECK(platforms[0].fault&&platforms[0].retained&&!platforms[1].fault&&!platforms[1].retained);
+    CHECK(platforms[0].cpu_pool_failure_status==(mode==20?EFI_DEVICE_ERROR:EFI_ACCESS_DENIED));
+    CHECK(platforms[0].cpu_pool_failure_address==base&&!platforms[1].cpu_pool_failure_status);
+    active=&platforms[0];Gu.bs=&bs;CHECK(!GuCpuPoolFreeScoped(scope,temporary)&&frees==1);
+    if(free_error)free(base);
+    free(remaining); /* Test fixture teardown only. */
   }else{
     struct pci_dev *scope=(struct pci_dev *)GuAlloc(8);
     CHECK(scope);Gu.compat_device=scope;Gu.compat_device_open=1;
@@ -1176,7 +1206,7 @@ int main(int argc,char **argv) {
                  str(source), "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
-            for mode in range(17):
+            for mode in range(23):
                 with self.subTest(mode=mode):
                     result = subprocess.run([str(binary), str(mode)],
                                             capture_output=True, text=True)

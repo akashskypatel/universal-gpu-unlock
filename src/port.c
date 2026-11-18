@@ -355,74 +355,93 @@ BOOLEAN GuCpuPoolCompatEmpty(const GU_PLATFORM *platform) {
     if(entry->owner!=platform||entry->bs!=platform->bs||!entry->bytes||entry->scope)return FALSE;
   return TRUE;
 }
-VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
-  if(Gu.cpu_pool_failure_status==EFI_SUCCESS) {
-    Gu.cpu_pool_failure_status=status;
-    Gu.cpu_pool_failure_address=address;
+/* Keep the original owner when a firmware service returns an uncertain
+ * result. Never attribute an error to a different active platform. */
+static VOID RecordCpuPoolFailureFor(GU_PLATFORM *owner,EFI_STATUS status,VOID *address) {
+  if(owner->cpu_pool_failure_status==EFI_SUCCESS) {
+    owner->cpu_pool_failure_status=status;
+    owner->cpu_pool_failure_address=address;
   }
-  Gu.fault=TRUE;
-  Gu.retained=TRUE;
+  owner->fault=TRUE;
+  owner->retained=TRUE;
+}
+VOID GuRecordCpuPoolFailure(EFI_STATUS status,VOID *address) {
+  RecordCpuPoolFailureFor(&Gu,status,address);
 }
 
-static VOID *PoolAllocate(const struct pci_dev *scope,size_t N) {
+static VOID *PoolAllocate(GU_PLATFORM *owner,const struct pci_dev *scope,size_t N) {
   GU_CPU_POOL *entry=NULL;
-  if(!N||N>(size_t)-1-sizeof(*entry)||Gu.retained||
-     Gu.cpu_pool_failure_status!=EFI_SUCCESS||!Gu.bs||
-     !Gu.bs->AllocatePool||!Gu.bs->FreePool)return NULL;
-  EFI_STATUS status=Gu.bs->AllocatePool(EfiLoaderData,sizeof(*entry)+N,(VOID **)&entry);
+  if(!owner||owner!=GuPlatformActive||!N||N>(size_t)-1-sizeof(*entry)||owner->retained||
+     owner->cpu_pool_failure_status!=EFI_SUCCESS||!owner->bs||
+     !owner->bs->AllocatePool||!owner->bs->FreePool)return NULL;
+  EFI_BOOT_SERVICES *bs=owner->bs;
+  EFI_STATUS status=bs->AllocatePool(EfiLoaderData,sizeof(*entry)+N,(VOID **)&entry);
+  if(owner!=GuPlatformActive||owner->bs!=bs||owner->retained||
+     owner->cpu_pool_failure_status!=EFI_SUCCESS) {
+    RecordCpuPoolFailureFor(owner,status==EFI_SUCCESS?EFI_ACCESS_DENIED:status,entry);
+    return NULL;
+  }
   if(status!=EFI_SUCCESS) {
-    if(entry)GuRecordCpuPoolFailure(status,entry);
+    if(entry)RecordCpuPoolFailureFor(owner,status,entry);
     return NULL;
   }
   if(!entry)return NULL;
-  entry->next=Gu.cpu_pool;
-  entry->owner=&Gu;
-  entry->bs=Gu.bs;
+  entry->next=owner->cpu_pool;
+  entry->owner=owner;
+  entry->bs=bs;
   entry->bytes=N;
   entry->scope=scope;
-  Gu.cpu_pool=entry;
+  owner->cpu_pool=entry;
   VOID *memory=entry+1;
   memset(memory,0,N);
   return memory;
 }
 
-static BOOLEAN PoolFree(const struct pci_dev *scope,VOID *Memory) {
+static BOOLEAN PoolFree(GU_PLATFORM *owner,const struct pci_dev *scope,VOID *Memory) {
   if(!Memory)return TRUE;
-  if(Gu.retained||Gu.cpu_pool_failure_status!=EFI_SUCCESS)return FALSE;
+  if(!owner||owner!=GuPlatformActive||owner->retained||
+     owner->cpu_pool_failure_status!=EFI_SUCCESS)return FALSE;
   /* Published ownership records must not be recycled in this boot. */
-  if(Memory==Gu.compat_device||Memory==(VOID *)Gu.release_state) {
-    GuRecordCpuPoolFailure(EFI_ACCESS_DENIED,Memory);
+  if(Memory==owner->compat_device||Memory==(VOID *)owner->release_state) {
+    RecordCpuPoolFailureFor(owner,EFI_ACCESS_DENIED,Memory);
     return FALSE;
   }
-  GU_CPU_POOL **link=&Gu.cpu_pool;
+  GU_CPU_POOL **link=&owner->cpu_pool;
   while(*link&&(VOID *)(*link+1)!=Memory)link=&(*link)->next;
   GU_CPU_POOL *entry=*link;
-  if(!entry||entry->owner!=&Gu||entry->bs!=Gu.bs||entry->scope!=scope||
+  if(!entry||entry->owner!=owner||entry->bs!=owner->bs||entry->scope!=scope||
      !entry->bs||!entry->bs->FreePool) {
-    GuRecordCpuPoolFailure(EFI_ACCESS_DENIED,Memory);
+    RecordCpuPoolFailureFor(owner,EFI_ACCESS_DENIED,Memory);
     return FALSE;
   }
-  /* Unlink before attempting release. On error retain its address only;
-   * the firmware may already have consumed the original pool memory. */
+  /* Unlink before calling firmware. Never dereference or retry the
+   * consumed reference, even if the owner or service identity changes. */
+  EFI_BOOT_SERVICES *bs=entry->bs;
   *link=entry->next;
-  EFI_STATUS status=entry->bs->FreePool(entry);
-  if(status!=EFI_SUCCESS)GuRecordCpuPoolFailure(status,entry);
+  EFI_STATUS status=bs->FreePool(entry);
+  if(status!=EFI_SUCCESS)RecordCpuPoolFailureFor(owner,status,entry);
+  if(owner!=GuPlatformActive||owner->bs!=bs) {
+    RecordCpuPoolFailureFor(owner,EFI_ACCESS_DENIED,entry);
+    return FALSE;
+  }
   return status==EFI_SUCCESS;
 }
-VOID *GuAlloc(size_t N) {return PoolAllocate(NULL,N);}
-VOID GuFree(VOID *Memory) {(VOID)PoolFree(NULL,Memory);}
-static BOOLEAN PoolScopeMatches(const struct pci_dev *scope) {
-  if(scope&&scope==Gu.compat_device&&Gu.compat_device_open&&!Gu.compat_device_closed)return TRUE;
-  Gu.fault=TRUE;
+VOID *GuAlloc(size_t N) {return PoolAllocate(&Gu,NULL,N);}
+VOID GuFree(VOID *Memory) {(VOID)PoolFree(&Gu,NULL,Memory);}
+static BOOLEAN PoolScopeMatches(GU_PLATFORM *owner,const struct pci_dev *scope) {
+  if(scope&&scope==owner->compat_device&&owner->compat_device_open&&!owner->compat_device_closed)return TRUE;
+  owner->fault=TRUE;
   return FALSE;
 }
 VOID *GuCpuPoolAllocScoped(const struct pci_dev *scope,size_t bytes) {
-  if(!PoolScopeMatches(scope)||Gu.fault)return NULL;
-  return PoolAllocate(scope,bytes);
+  GU_PLATFORM *owner=GuPlatformActive;
+  if(!owner||!PoolScopeMatches(owner,scope)||owner->fault)return NULL;
+  return PoolAllocate(owner,scope,bytes);
 }
 BOOLEAN GuCpuPoolFreeScoped(const struct pci_dev *scope,VOID *memory) {
-  if(!PoolScopeMatches(scope))return FALSE;
-  return PoolFree(scope,memory);
+  GU_PLATFORM *owner=GuPlatformActive;
+  if(!owner||!PoolScopeMatches(owner,scope))return FALSE;
+  return PoolFree(owner,scope,memory);
 }
 VOID GuStartedFor(GU_PLATFORM *platform) {
   if(!platform)return;
