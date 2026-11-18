@@ -504,6 +504,9 @@ int main(void) {
             self.assertRegex(source, r'ObservationPoolRelease\([^;]*"'+stage+r'"\);')
         self.assertIn('if(!ObservationPoolConfirmed(status,handles,"msi-bds-handles"))handles=NULL;',source)
         self.assertIn('ObservationPoolRelease(bs,handles,"msi-bds-handles")',source)
+        self.assertIn('ObservationOpeners(bs,handle,&TextOutGuid,&entries,&count,outer,"textout")',source)
+        self.assertEqual(source.count('"GOP_HANDLE",opens);'),2)
+        self.assertEqual(source.count('"GOP_OPEN_CONTROLLER",opens);'),2)
         program=r"""
 #include <stdio.h>
 #include <stddef.h>
@@ -520,6 +523,8 @@ typedef struct {
     EFI_STATUS (*FreePool)(VOID *);
 } EFI_BOOT_SERVICES;
 static EFI_OPEN_PROTOCOL_INFORMATION_ENTRY outer={42}, uncertain={99};
+static struct {VOID *gop;} Snapshot;
+static struct {VOID *gpus;} Report;
 static int mode,calls,releases,foreign_frees,fail_release,logs;
 static void Say(const char *format,...) {(void)format;logs++;}
 static EFI_STATUS Open(EFI_HANDLE h,EFI_GUID *g,EFI_OPEN_PROTOCOL_INFORMATION_ENTRY **out,UINTN *count) {
@@ -539,22 +544,34 @@ int main(void) {
     EFI_BOOT_SERVICES bs={Open,Release};
     EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *p=NULL,*nested=NULL;
     UINTN count=0,n=0;
-    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"outer")==0 && p==&outer && count==1);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"outer")==0 && p==&outer && count==1);
     mode=1;
-    CHECK(ObservationOpeners(&bs,NULL,NULL,&nested,&n,"nested")==1 && !nested && ObservationPoolFault && logs==1);
-    CHECK(ObservationOpeners(&bs,NULL,NULL,&nested,&n,"later")==1 && !nested && !n && calls==2);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&nested,&n,NULL,"nested")==1 && !nested && ObservationPoolFault && logs==1);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&nested,&n,NULL,"later")==1 && !nested && !n && calls==2);
     CHECK(ObservationPoolRelease(&bs,nested,"nested")==0 && releases==0);
     CHECK(ObservationPoolRelease(&bs,p,"outer")==0 && releases==1 && !foreign_frees && outer.marker==42 && uncertain.marker==99);
     ObservationPoolFault=0;mode=2;
-    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"ordinary")==1 && !p && !ObservationPoolFault);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"ordinary")==1 && !p && !ObservationPoolFault);
     mode=0;
-    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"normal")==0 && p==&outer);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"normal")==0 && p==&outer);
     fail_release=1;
     CHECK(ObservationPoolRelease(&bs,p,"normal")==1 && ObservationPoolFault && releases==2);
-    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"blocked")==1 && !p && !count && calls==4);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"blocked")==1 && !p && !count && calls==4);
     ObservationPoolFault=0;mode=3;
-    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,"warning")==2 && !p && ObservationPoolFault);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"warning")==2 && !p && ObservationPoolFault);
     CHECK(!foreign_frees && releases==2 && uncertain.marker==99);
+    ObservationPoolFault=0;mode=0;fail_release=0;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"parent")==0 && p==&outer);
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&nested,&n,p,"alias")==1 && !nested && ObservationPoolFault);
+    CHECK(ObservationPoolRelease(&bs,nested,"alias")==0 && releases==2);
+    CHECK(ObservationPoolRelease(&bs,p,"parent")==0 && releases==3);
+    ObservationPoolFault=0;Snapshot.gop=&outer;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"live-gop")==1 && !p && ObservationPoolFault);
+    CHECK(ObservationPoolRelease(&bs,p,"live-gop")==0 && releases==3);
+    ObservationPoolFault=0;Snapshot.gop=NULL;Report.gpus=&outer;
+    CHECK(ObservationOpeners(&bs,NULL,NULL,&p,&count,NULL,"live-report")==1 && !p && ObservationPoolFault);
+    CHECK(ObservationPoolRelease(&bs,p,"live-report")==0 && releases==3);
+    CHECK(!foreign_frees && outer.marker==42 && uncertain.marker==99);
     return 0;
 }
 """
