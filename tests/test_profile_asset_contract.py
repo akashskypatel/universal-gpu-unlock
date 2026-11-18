@@ -1,6 +1,8 @@
 """Verify that one exact asset table drives both firmware loading and verification."""
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 R=Path(__file__).resolve().parents[1]/"src"
 P=(R/"profile.c").read_text(encoding="utf-8")
@@ -40,6 +42,136 @@ class AssetContract(unittest.TestCase):
             self.assertNotIn(write,x)
         self.assertIn("GuAd104FwsecMatches(&fw)",x)
         self.assertIn("SIGNATURE_AUTHENTICATED=0",x)
+        self.assertNotIn("Gu.",x)
+        self.assertNotIn("owner->profile_verified=",x)
+        self.assertNotIn("owner->prom_verified=",x)
+    def test_read_only_diagnostic_retains_original_owner(self):
+        start=P.index("static BOOLEAN DiagnosticOwnerMatches(")
+        end=P.index("EFI_STATUS GuAd104Prepare(",start)
+        actual=P[start:end]
+        host=r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+typedef void VOID;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+typedef uintptr_t UINTN;
+typedef uint32_t UINT32;
+typedef void *EFI_HANDLE;
+typedef struct {int id;} EFI_BOOT_SERVICES;
+typedef struct {int id;} EFI_PCI_IO_PROTOCOL;
+typedef struct {
+  EFI_BOOT_SERVICES *bs;
+  EFI_PCI_IO_PROTOCOL *pci;
+  EFI_HANDLE handle;
+  UINTN bar_base;
+  int started,owned,retained,profile_verified,fault;
+} GU_PLATFORM;
+struct gpu_unlock_fwsec {int descriptor_version;};
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 1
+#define EFI_DEVICE_ERROR 2
+#define EFI_OUT_OF_RESOURCES 3
+#define EFI_UNSUPPORTED 4
+#define EFI_COMPROMISED_DATA 5
+static GU_PLATFORM p[2],*GuPlatformActive=&p[0];
+static EFI_BOOT_SERVICES services[2];
+static EFI_PCI_IO_PROTOCOL interfaces[2];
+static int mode,configs,registers,logs,allocs,frees,copies,wrong;
+static void *buffer;
+static void drift(void){GuPlatformActive=&p[1];}
+static BOOLEAN ConfigFor(GU_PLATFORM *o){
+  configs++;if(o!=&p[0]||o!=GuPlatformActive)wrong++;
+  if(mode==1&&configs==1)drift();
+  if(mode==6&&configs==2)drift();
+  return TRUE;
+}
+static BOOLEAN RegistersFor(GU_PLATFORM *o,UINT32 *a,UINT32 *b){
+  registers++;if(o!=&p[0]||o!=GuPlatformActive)wrong++;
+  *a=1;*b=2;
+  if(mode==2&&registers==1)drift();
+  if(mode==7&&registers==2)drift();
+  return TRUE;
+}
+static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *o){
+  if(o!=&p[0]||o!=GuPlatformActive)wrong++;
+  return TRUE;
+}
+static void GuLog(const char *fmt,...){
+  (void)fmt;logs++;
+  if(mode==3&&logs==1)drift();
+  if(mode==8&&logs==2)drift();
+}
+static VOID *GuAlloc(size_t n){
+  allocs++;if(GuPlatformActive!=&p[0])wrong++;
+  if(mode==10)return NULL;
+  buffer=malloc(n);
+  if(mode==4)drift();
+  return buffer;
+}
+static VOID GuFree(VOID *m){
+  frees++;if(GuPlatformActive!=&p[0]||m!=buffer)wrong++;
+  free(m);buffer=NULL;
+  if(mode==9)drift();
+}
+static BOOLEAN GuCopyFromIo(GU_PLATFORM *o,VOID *dst,const VOID *src,size_t n){
+  (void)src;(void)n;copies++;
+  if(o!=&p[0]||o!=GuPlatformActive||dst!=buffer)wrong++;
+  if(mode==5)drift();
+  if(mode==11)o->bs=&services[1];
+  if(mode==12)o->pci=&interfaces[1];
+  return TRUE;
+}
+static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *o,const VOID *m,size_t n){
+  (void)n;if(o!=&p[0]||o!=GuPlatformActive||m!=buffer)wrong++;
+  return TRUE;
+}
+static int gpu_unlock_vbios_fwsec(const VOID *m,size_t n,struct gpu_unlock_fwsec *f){
+  (void)n;if(m!=buffer)wrong++;f->descriptor_version=3;return 0;
+}
+static BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f){return f->descriptor_version==3;}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"failed mode %d line %d: %s\n",mode,__LINE__,#x);return 1;}}while(0)
+int main(int argc,char **argv){
+  mode=argc>1?atoi(argv[1]):-1;
+  p[0].bs=p[1].bs=&services[0];
+  p[0].pci=&interfaces[0];p[1].pci=&interfaces[1];
+  p[0].handle=&p[0];p[1].handle=&p[1];p[0].bar_base=0x1000;
+  EFI_STATUS status=GuDiagnosticScan();
+  CHECK(!wrong&&!p[1].fault&&!p[1].retained&&!p[1].profile_verified&&!p[0].profile_verified);
+  if(mode==0){
+    CHECK(status==EFI_SUCCESS&&allocs==1&&frees==1&&copies==1&&configs==2&&registers==2);
+    CHECK(!p[0].fault&&!p[0].retained);
+  }else if(mode==10){
+    CHECK(status==EFI_OUT_OF_RESOURCES&&allocs==1&&!frees&&!copies&&!p[0].fault);
+  }else{
+    CHECK(status==EFI_DEVICE_ERROR&&p[0].fault&&p[0].retained);
+    if(mode<=3)CHECK(!allocs&&!copies&&!frees);
+    if(mode==1)CHECK(registers==0);
+    if(mode==4)CHECK(allocs==1&&!copies&&!frees);
+    if(mode==5||mode==11||mode==12)CHECK(copies==1&&configs==1&&!frees);
+    if(mode==6)CHECK(configs==2&&registers==1&&!frees);
+    if(mode==7||mode==8)CHECK(configs==2&&registers==2&&!frees);
+    if(mode==9)CHECK(frees==1&&!buffer);
+    free(buffer); /* Host fixture teardown, not production recovery. */
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"diagnostic_owner.c"
+            binary=Path(directory)/"diagnostic_owner"
+            source.write_text(host,encoding="utf-8")
+            result=subprocess.run(["gcc","-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            for mode in range(13):
+                with self.subTest(mode=mode):
+                    result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True)
+                    self.assertEqual(result.returncode,0,result.stderr)
     def test_profile_uses_exact_discovery_identity_and_refuses_failed_release(self):
         config=P.split("static BOOLEAN ConfigFor(GU_PLATFORM *platform) {",1)[1].split("static BOOLEAN TuringColdState",1)[0]
         self.assertIn("id->handle!=platform->handle",config)

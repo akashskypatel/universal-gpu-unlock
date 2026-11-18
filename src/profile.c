@@ -198,33 +198,55 @@ BOOLEAN GuAd104ColdEntryFor(GU_PLATFORM *platform) {
 }
 BOOLEAN GuAd104ColdEntry(VOID) {return GuAd104ColdEntryFor(&Gu);}
 /* A read-only firmware and selector report; never set qualification latches. */
+static BOOLEAN DiagnosticOwnerMatches(GU_PLATFORM *owner,EFI_BOOT_SERVICES *bs,
+                                      EFI_PCI_IO_PROTOCOL *pci,EFI_HANDLE handle) {
+  if(owner==GuPlatformActive&&owner->bs==bs&&owner->pci==pci&&owner->handle==handle)
+    return TRUE;
+  /* Never release a diagnostic allocation through a substituted owner. */
+  owner->fault=TRUE;owner->retained=TRUE;
+  return FALSE;
+}
 EFI_STATUS GuDiagnosticScan(VOID) {
+  GU_PLATFORM *owner=GuPlatformActive;
+  if(!owner)return EFI_NOT_READY;
+  EFI_BOOT_SERVICES *bs=owner->bs;
+  EFI_PCI_IO_PROTOCOL *pci=owner->pci;
+  EFI_HANDLE handle=owner->handle;
   UINT32 before0=0,before1=0,after0=0,after1=0;
   struct gpu_unlock_fwsec fw;
-  if(Gu.started||Gu.owned||Gu.retained||Gu.profile_verified||Gu.fault)
+  if(owner->started||owner->owned||owner->retained||owner->profile_verified||owner->fault)
     return EFI_NOT_READY;
-  BOOLEAN config_ok=ConfigFor(&Gu);
-  BOOLEAN regs_ok=config_ok&&RegistersFor(&Gu,&before0,&before1);
-  BOOLEAN assets_ok=GuAd104AssetsValid(&Gu);
+  BOOLEAN config_ok=ConfigFor(owner);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  BOOLEAN regs_ok=config_ok&&RegistersFor(owner,&before0,&before1);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  BOOLEAN assets_ok=GuAd104AssetsValid(owner);
   GuLog("DIAGNOSTIC CONFIG=%u REGISTERS=%u PINNED_ASSETS=%u\n",
         (unsigned)config_ok,(unsigned)regs_ok,(unsigned)assets_ok);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!config_ok||!regs_ok||!assets_ok)return EFI_NOT_READY;
   VOID *prom=GuAlloc(1048576U);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!prom)return EFI_OUT_OF_RESOURCES;
-  BOOLEAN copied=GuCopyFromIo(&Gu,prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576U);
-  BOOLEAN prom_ok=copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576U);
+  BOOLEAN copied=GuCopyFromIo(owner,prom,(VOID *)(UINTN)(owner->bar_base+0x300000),1048576U);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  BOOLEAN prom_ok=copied&&!owner->fault&&GuAd104PromMatches(owner,prom,1048576U);
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
-  BOOLEAN cfg2=ConfigFor(&Gu);
-  BOOLEAN reg2=cfg2&&RegistersFor(&Gu,&after0,&after1);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  BOOLEAN cfg2=ConfigFor(owner);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  BOOLEAN reg2=cfg2&&RegistersFor(owner,&after0,&after1);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   BOOLEAN stable=cfg2&&reg2&&before0==after0&&before1==after1;
   GuLog("DIAGNOSTIC PROM=%u FWSEC_PARSE=%d FWSEC_MATCH=%u STABLE=%u SIGNATURE_AUTHENTICATED=0\n",
         (unsigned)prom_ok,parsed,(unsigned)fw_ok,(unsigned)stable);
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   GuFree(prom);
-  if(Gu.fault||Gu.retained)return EFI_DEVICE_ERROR;
+  if(!DiagnosticOwnerMatches(owner,bs,pci,handle)||owner->fault||owner->retained)return EFI_DEVICE_ERROR;
   if(parsed==0 && fw.descriptor_version==2)
     return EFI_UNSUPPORTED; /* V2 lacks active signature metadata. */
-  return !Gu.fault&&prom_ok&&fw_ok&&stable?EFI_SUCCESS:EFI_COMPROMISED_DATA;
+  return !owner->fault&&prom_ok&&fw_ok&&stable?EFI_SUCCESS:EFI_COMPROMISED_DATA;
 }
 EFI_STATUS GuAd104Prepare(VOID) {
   UINT32 ss0=0,ss1=0,after0=0,after1=0;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
