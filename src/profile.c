@@ -54,6 +54,7 @@ BOOLEAN GuAd104AssetsValid(VOID) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
     if(!GuAssets[i].name||strcmp(GuAssets[i].name,a->name)||
        GuAssets[i].firmware.size!=a->bytes||!GuAssets[i].firmware.data||
+       !GuCpuPoolOwns(&Gu,GuAssets[i].firmware.data,a->bytes)||
        !GuHashMatches(GuAssets[i].firmware.data,a->bytes,a->sha256))
       return FALSE;
   }
@@ -88,10 +89,17 @@ BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
 
 static BOOLEAN Config(VOID) {
   UINT32 c[64];UINTN s,b,d,f;GU_CAPS caps;
-  if(!Gu.pci || !Gu.pci->GetLocation || !Gu.pci->Pci.Read ||
+  const GU_GPU_RECORD *id=&Gu.discovery_identity;
+  if(!Gu.handle || !Gu.pci || id->handle!=Gu.handle || id->pci!=Gu.pci ||
+     id->pci_id!=(((UINT32)Gu.device_id<<16)|0x10deU) ||
+     !Gu.pci->GetLocation || !Gu.pci->Pci.Read ||
      !Gu.bar_base || Gu.bar_size!=0x1000000 ||
      EFI_ERROR(Gu.pci->GetLocation(Gu.pci,&s,&b,&d,&f))) {
     GuLog("Config: invalid pci handle or location\n");
+    return FALSE;
+  }
+  if(s!=id->segment||b!=id->bus||d!=id->device||f!=id->function) {
+    GuLog("Config: discovery location mismatch\n");
     return FALSE;
   }
   for(UINTN i=0;i<64;i++) {
@@ -108,7 +116,8 @@ static BOOLEAN Config(VOID) {
     GuLog("Config: cold PCI policy refused (seg=%u bus=%u dev=%u fun=%u)\n", (unsigned)s, (unsigned)b, (unsigned)d, (unsigned)f);
     return FALSE;
   }
-  if(!GuIsSupportedPciId(c[0]) || ((c[2]>>16)!=0x0300U && (c[2]>>16)!=0x0302U) || (c[4]&~0xfU)!=Gu.bar_base) {
+  if(c[0]!=id->pci_id||c[11]!=id->subsystem_id||(c[2]>>16)!=id->class_code ||
+     !GuIsSupportedPciId(c[0]) || ((c[2]>>16)!=0x0300U && (c[2]>>16)!=0x0302U) || (c[4]&~0xfU)!=Gu.bar_base) {
     GuLog("Config: mismatch c0=0x%x c2=0x%x c4=0x%x bar_base=0x%llx\n", c[0], c[2], c[4], (unsigned long long)Gu.bar_base);
     return FALSE;
   }
@@ -189,12 +198,13 @@ EFI_STATUS GuDiagnosticScan(VOID) {
   GuLog("DIAGNOSTIC PROM=%u FWSEC_PARSE=%d FWSEC_MATCH=%u STABLE=%u SIGNATURE_AUTHENTICATED=0\n",
         (unsigned)prom_ok,parsed,(unsigned)fw_ok,(unsigned)stable);
   GuFree(prom);
+  if(Gu.fault||Gu.retained)return EFI_DEVICE_ERROR;
   if(parsed==0 && fw.descriptor_version==2)
     return EFI_UNSUPPORTED; /* V2 lacks active signature metadata. */
   return !Gu.fault&&prom_ok&&fw_ok&&stable?EFI_SUCCESS:EFI_COMPROMISED_DATA;
 }
 EFI_STATUS GuAd104Prepare(VOID) {
-  UINT32 ss0,ss1,after0,after1;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
+  UINT32 ss0=0,ss1=0,after0=0,after1=0;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
   GuLog("GuAd104Prepare: start\n");
   /* V2 structural parsing is not signature acceptance. The dedicated
    * Turing falcon loader/selector contract is not verified in this fork. */
@@ -225,8 +235,8 @@ EFI_STATUS GuAd104Prepare(VOID) {
     return EFI_OUT_OF_RESOURCES;
   }
   GuCopyFromIo(prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
-  BOOLEAN prom_match = GuAd104PromMatches(prom,1048576);
-  int fwsec_res = gpu_unlock_vbios_fwsec(prom,1048576,&fw);
+  BOOLEAN prom_match = !Gu.fault&&GuAd104PromMatches(prom,1048576);
+  int fwsec_res = prom_match?gpu_unlock_vbios_fwsec(prom,1048576,&fw):-1;
   BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2 = Config();
   BOOLEAN reg2 = Registers(&after0,&after1);
@@ -234,6 +244,7 @@ EFI_STATUS GuAd104Prepare(VOID) {
   GuLog("GuAd104Prepare: prom_match=%u fwsec_res=%d fwsec_match=%u cfg2=%u reg2=%u ss0_stable=%u\n",
         prom_match, fwsec_res, fwsec_match, cfg2, reg2, (ss0==after0 && ss1==after1));
   GuFree(prom);
+  if(Gu.fault||Gu.retained)return EFI_DEVICE_ERROR;
   if(!valid) return EFI_COMPROMISED_DATA;
   Gu.prom_verified=TRUE;
   if(!GuLatchEntrySelectors(ss0,ss1)) {

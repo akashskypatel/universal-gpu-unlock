@@ -268,6 +268,14 @@ int main(void) {
     for(size_t i=0;i<selected_count;i++) {
       size_t target=i<3?(i+1)%3:i;
       CHECK(Gu.handle==handles[target]&&Gu.pci==&gpu[target].protocol);
+      CHECK(Gu.discovery_identity.handle==Gu.handle&&Gu.discovery_identity.pci==Gu.pci);
+      CHECK(Gu.discovery_identity.pci_id==ActiveSequence.targets[target].identity.pci_id);
+      CHECK(Gu.discovery_identity.subsystem_id==ActiveSequence.targets[target].identity.subsystem_id);
+      CHECK(Gu.discovery_identity.class_code==ActiveSequence.targets[target].identity.class_code);
+      CHECK(Gu.discovery_identity.segment==ActiveSequence.targets[target].identity.segment&&
+            Gu.discovery_identity.bus==ActiveSequence.targets[target].identity.bus&&
+            Gu.discovery_identity.device==ActiveSequence.targets[target].identity.device&&
+            Gu.discovery_identity.function==ActiveSequence.targets[target].identity.function);
       CHECK(ActiveSequence.order[i]==target&&ActiveSequence.next_step==i);
       CHECK(GuIsPreparedPeerHandle(handles[19]));
       CHECK(!Gu.profile_verified&&!Gu.prom_verified&&!Gu.release_state&&!Gu.asset_entries_reserved);

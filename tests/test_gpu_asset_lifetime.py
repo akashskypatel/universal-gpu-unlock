@@ -27,6 +27,8 @@ LOADER = body(BOOT, "EFI_STATUS GuBootLoadAssets(VOID) {",
               "\nstatic EFI_STATUS ReadWindowsBinary(")
 MANIFEST = body(PROFILE, "static const GU_ARCH_ASSETS AdaAssets=",
                 "BOOLEAN GuAd104AssetsValid(VOID) {")
+ASSET_VERIFY = body(PROFILE, "BOOLEAN GuAd104AssetsValid(VOID) {",
+                    "BOOLEAN GuAd104PromMatches(")
 PREDICATES = body(PORT, "#define GU_PORT_MATCH(id)",
                   "static inline BOOLEAN GuIsAdaPciId(")
 
@@ -297,8 +299,25 @@ typedef int BOOLEAN;
 #define GU_ASSET_COUNT 5U
 typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
 typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
-static struct {int is_turing,is_ampere;UINT16 device_id;} Gu;
-''' + PREDICATES + MANIFEST + r'''
+struct firmware {size_t size;const unsigned char *data;};
+typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
+typedef struct {int is_turing,is_ampere;UINT16 device_id;GU_ASSET assets[GU_ASSET_COUNT];} GU_PLATFORM;
+static GU_PLATFORM platforms[2],*active=&platforms[0];
+#define Gu (*active)
+#define GuAssets (Gu.assets)
+static unsigned char data[2][GU_ASSET_COUNT];
+static int hash_calls;
+static int GuCpuPoolOwns(const GU_PLATFORM *owner,const void *p,size_t bytes) {
+    unsigned index=(unsigned)(owner-platforms);
+    for(unsigned i=0;i<GU_ASSET_COUNT;i++)
+        if(p==&data[index][i]&&bytes==owner->assets[i].firmware.size)return 1;
+    return 0;
+}
+static int GuHashMatches(const void *p,size_t bytes,const char *hash) {
+    (void)p;(void)bytes;(void)hash;hash_calls++;return 1;
+}
+#include <string.h>
+''' + PREDICATES + MANIFEST + ASSET_VERIFY + r'''
 #define CHECK(x) do {if(!(x))return __LINE__;} while(0)
 int main(void) {
   const GU_ARCH_ASSETS *ada=GuGetArchAssetsForPciId(0x268410deU);
@@ -334,6 +353,22 @@ int main(void) {
   Gu.is_turing=1;CHECK(!GuGetArchAssets());
   Gu.is_ampere=0;Gu.device_id=0x1e07U;CHECK(GuGetArchAssets()==turing);
   Gu.is_turing=0;CHECK(!GuGetArchAssets());
+  /* Same model, same manifest, independently allocated bytes. */
+  for(unsigned n=0;n<2;n++) {
+    active=&platforms[n];Gu.device_id=0x2684;Gu.is_turing=Gu.is_ampere=0;
+    for(unsigned i=0;i<GU_ASSET_COUNT;i++) {
+      GuAssets[i].name=ada->entries[i].name;
+      GuAssets[i].firmware=(struct firmware){ada->entries[i].bytes,&data[n][i]};
+    }
+    CHECK(GuAd104AssetsValid());
+  }
+  CHECK(hash_calls==10);
+  const unsigned char *own=GuAssets[0].firmware.data;
+  GuAssets[0].firmware.data=platforms[0].assets[0].firmware.data;
+  CHECK(!GuAd104AssetsValid()&&hash_calls==10); /* reject before content access */
+  GuAssets[0].firmware.data=own;
+  CHECK(GuAd104AssetsValid()&&hash_calls==15);
+  active=&platforms[0];CHECK(GuAd104AssetsValid()&&hash_calls==20);
   return 0;
 }
 '''

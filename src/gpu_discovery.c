@@ -509,6 +509,7 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
 static void ConfigureBoundPlatform(EFI_HANDLE image,const GU_GPU_RECORD *selected,
                                    const UINT32 config[64],const GU_CAPS *caps) {
   Gu.image=image;
+  Gu.discovery_identity=*selected;
   Gu.handle=(EFI_HANDLE)selected->handle;
   Gu.device_id=(UINT16)(selected->pci_id >> 16);
   Gu.is_ampere=GuIsAmpereDeviceId(Gu.device_id);

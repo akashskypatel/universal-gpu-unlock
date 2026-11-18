@@ -26,6 +26,7 @@ class AssetContract(unittest.TestCase):
         self.assertIn("GuAd104AssetsValid()",load)
         self.assertIn("GuGetArchAssets()",verify)
         self.assertIn("GuHashMatches(",verify)
+        self.assertLess(verify.index("GuCpuPoolOwns(&Gu,"),verify.index("GuHashMatches("))
         self.assertNotIn("ada_sizes",load)
     def test_diagnostics_are_read_only(self):
         x=P.split("EFI_STATUS GuDiagnosticScan(VOID) {",1)[1].split("EFI_STATUS GuAd104Prepare(VOID) {",1)[0]
@@ -34,6 +35,16 @@ class AssetContract(unittest.TestCase):
             self.assertNotIn(write,x)
         self.assertIn("GuAd104FwsecMatches(&fw)",x)
         self.assertIn("SIGNATURE_AUTHENTICATED=0",x)
+    def test_profile_uses_exact_discovery_identity_and_refuses_failed_release(self):
+        config=P.split("static BOOLEAN Config(VOID) {",1)[1].split("static BOOLEAN TuringColdState",1)[0]
+        self.assertIn("id->handle!=Gu.handle",config)
+        self.assertIn("id->pci!=Gu.pci",config)
+        self.assertLess(config.index("b!=id->bus"),config.index("GuConfigRead("))
+        for match in ("c[0]!=id->pci_id","c[11]!=id->subsystem_id","(c[2]>>16)!=id->class_code"):
+            self.assertIn(match,config)
+        prepare=P.split("EFI_STATUS GuAd104Prepare(VOID) {",1)[1]
+        self.assertLess(prepare.index("GuFree(prom);"),prepare.index("if(Gu.fault||Gu.retained)return EFI_DEVICE_ERROR;"))
+        self.assertLess(prepare.index("if(Gu.fault||Gu.retained)return EFI_DEVICE_ERROR;"),prepare.index("Gu.prom_verified=TRUE;"))
     def test_diagnostics_run_before_preparation(self):
         shared=(R/"unlock_execution.c").read_text(encoding="utf-8")
         prep=shared.split("EFI_STATUS GuPrepareBoundGpu(",1)[1].split("EFI_STATUS GuExecutePreparedSequence(",1)[0]

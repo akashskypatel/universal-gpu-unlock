@@ -7,6 +7,7 @@
 /* Hardware PCI locations and BAR addresses are discovered at runtime. */
 
 #include "gpu_device_ids.h"
+#include "gpu_inventory.h"
 /* Share the parent device registry across EFI and the vendor core. */
 #define GU_PORT_MATCH(id) (dev == (UINT16)(id)) ||
 static inline BOOLEAN GuIsAdaDeviceId(UINT16 dev) {
@@ -105,6 +106,8 @@ typedef struct {
   UINT64 bar_base, bar_size, ticks;
   UINT16 pm_cap, pcie_cap, msi_cap, msix_cap;
   UINT16 device_id;
+  /* Retain the exact read-only discovery identity for this physical GPU. */
+  GU_GPU_RECORD discovery_identity;
   UINT32 saved_config[64];
   UINT16 saved_devctl, saved_devctl2;
   UINT8 pcie_version;
