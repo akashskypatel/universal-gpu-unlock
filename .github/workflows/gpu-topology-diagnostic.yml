@@ -88,6 +88,7 @@ jobs:
               "$RUNNER_TEMP/test_gpu_selection_$compiler"
             done
             python3 -m unittest discover -s tests -p test_runtime_selection_contract.py -v
+            python3 -m unittest discover -s tests -p test_runtime_esp_contract.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v

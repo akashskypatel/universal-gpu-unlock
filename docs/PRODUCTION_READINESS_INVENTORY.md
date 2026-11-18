@@ -91,6 +91,15 @@ another machine boot." One image therefore belongs to one Windows installation.
 with `\EFI\Microsoft\Boot\bootmgfw.efi`, cross-check the `BootOrder` entry that
 names it), keeping the strict single-ESP refusal.
 
+**Status (2026-11-18): fixed in source — unverified on hardware.** `-RuntimeEsp`
+drops the compiled pin. A volume qualifies only if its device path carries
+exactly one GPT partition with the EFI-system type (`GuWindowsEspPathCandidate`),
+it is not USB and not this image's own volume, and it actually contains
+`\EFI\Microsoft\Boot\bootmgfw.efi`; the existing "exactly one match"
+refusal is unchanged, so a second ESP cannot be silently chosen. The
+`BootOrder` cross-check in the original exit criteria is **not** implemented:
+it needs live `BootOrder` parsing and a second machine to validate. See §11.6.
+
 ### A3. Multi-GPU execution exists but only behind the waiver — **P0**
 `gpu_discovery.c:26-28` (compile) and `:977-981` (runtime) both refuse
 `N > 1` unless admitted; `unlock_execution.c:148-190` is a correct sequential
@@ -381,6 +390,47 @@ window opens, no FLR, no fault is recorded, and no buffer is counted as mapped.
 Honesty limit: the simulator cannot model the exact `AllocateMaxAddress`
 ceiling; it models "32-bit unless the scenario forces 2^32". The firmware
 contract that matters (never DMA above 4 GiB) is enforced in code twice.
+
+### 11.6 A2 — runtime Windows-ESP identification
+
+| What | Where |
+| --- | --- |
+| Structural predicate, no pin | `GuWindowsEspPathCandidate` (`gpu_windows_path.c/.h`) |
+| Marker probe that does not latch the boot-file error state | `EspCarriesWindowsManager` (`boot_io.c`) |
+| Both ESP sites select the runtime rule | asset reader `ReadPinnedAssetFromConfiguredEsp`, `GuBootLoadWindows` |
+| Pin becomes conditional; the pinned default is unchanged | `boot_profile.h` (`GU_RUNTIME_ESP` branch, explicit comment) |
+| Build switch | `-RuntimeEsp` → `/DGU_RUNTIME_ESP` in both builders |
+
+The pinned path still demands `local/boot_profile.h` and an exact GUID match;
+`GU_RUNTIME_ESP` + `GU_HOST_TEST_PROFILE` is a compile error, so a
+synthetic-GUID image cannot be passed off as a runtime-ESP image.
+
+Evidence: `tests/test_gpu_windows_path.c` (32 checks, now including 11 candidate
+predicate cases), `tests/test_runtime_esp_contract.py` (12 tests: the pin is
+still mandatory by default, the runtime branch carries no pin, both ESP sites
+select it, the marker probe never latches `BootFileStatus`, the single-match
+refusals survive, and the builders expose the switch). The UEFI sources compile
+under `-DGU_RUNTIME_ESP` (checked by building the simulator with the define).
+
+Coverage limit, stated plainly: the simulator does **not** exercise the runtime
+ESP policy, because it models the asset volume and the Windows volume as two
+directories, so no single modelled volume carries both. The runtime rule is
+predicate-tested and compile-checked, not end-to-end tested, and has not been
+run on hardware.
+
+### 11.7 Items deliberately not changed
+
+* **A4 (stock profile)** and **A5 (Turing payload)** need per-SKU cold-state
+  evidence that this repository does not contain. Choosing a profile or
+  emitting a Turing patch from the current constants would be a guess in the
+  most destructive part of the path, so nothing was changed there.
+* **A8 (watchdog)**: the transaction re-enables no timer today because nobody
+  knows its worst-case duration. Arming a watchdog without that bound could
+  reset a machine mid-transaction, which is worse than the current hang. Left
+  as inventoried until C2/C6 produce the bound.
+* **A6/A7 (asset install, persisted state/rollback)**: both require an
+  off-line installer and a signature story (D1) that this repository does not
+  have yet.
 
 ### 11.5 Not touched by this pass
 

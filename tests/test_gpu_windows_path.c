@@ -35,6 +35,21 @@ int main(void) {
   path[56]=5;CHECK(GuWindowsPathLength(path,58)==0);memcpy(path,save,58);
   path[0]=0x7f;CHECK(GuWindowsPathLength(path,58)==0);memcpy(path,save,58);
   path[2]=2;CHECK(GuWindowsPathLength(path,58)==0);memcpy(path,save,58);
+  /* The runtime policy's structural test accepts the same shape without a
+   * pin, and rejects everything the pinned test rejects structurally. */
+  CHECK(GuWindowsEspPathCandidate(path,58));
+  CHECK(GuWindowsEspPathCandidate(path,sizeof(path)));
+  CHECK(!GuWindowsEspPathCandidate(path,57));
+  CHECK(!GuWindowsEspPathCandidate(NULL,58));
+  CHECK(!GuWindowsEspPathCandidate(path,4097));
+  path[12+40]=1;CHECK(!GuWindowsEspPathCandidate(path,58));memcpy(path,save,58);
+  path[12+41]=1;CHECK(!GuWindowsEspPathCandidate(path,58));memcpy(path,save,58);
+  path[12+16]=0;CHECK(!GuWindowsEspPathCandidate(path,58));memcpy(path,save,58);
+  path[12+2]=41;CHECK(!GuWindowsEspPathCandidate(path,58));memcpy(path,save,58);
+  path[12+2]=43;CHECK(!GuWindowsEspPathCandidate(path,58));memcpy(path,save,58);
+  /* A different partition on the same volume is still a valid candidate: the
+   * pin, not the shape, is what the runtime policy drops. */
+  path[12+24]^=0xff;CHECK(GuWindowsEspPathCandidate(path,58));memcpy(path,save,58);
   /* A repeated HD node on the same path is ambiguous, even if both match. */
   memmove(path+54,path+12,42);
   path[96]=0x7f;path[97]=0xff;path[98]=4;path[99]=0;

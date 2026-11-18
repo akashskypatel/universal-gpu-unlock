@@ -1248,7 +1248,14 @@ EFI_STATUS SimWorldInit(const char *seed_dir, const char *esp_dir,
    * Windows value must equal GU_WINDOWS_PARTITION_INITIALIZER. */
   static const UINT8 media_guid[16] = {0x11,0x22,0x33,0x44,0x55,0x66,0x77,0x88,
                                        0x99,0xaa,0xbb,0xcc,0xdd,0xee,0x00,0x01};
+#ifdef GU_WINDOWS_PARTITION_INITIALIZER
   const EFI_GUID windows = GU_WINDOWS_PARTITION_INITIALIZER;
+#else
+  /* A runtime-ESP image carries no pin, so the model only needs some GPT
+   * partition GUID on the modelled ESP. */
+  const EFI_GUID windows = {0x7c9e4f10,0x1b2d,0x4c3a,
+                            {0x9e,0x55,0x21,0x0a,0x44,0x8b,0x6d,0xf1}};
+#endif
   UINT8 windows_bytes[16];
   memcpy(windows_bytes, &windows, 16);
 

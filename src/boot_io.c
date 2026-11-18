@@ -48,7 +48,9 @@ static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID,FsGuid=EFI_SIMPLE_FILE
 
 static EFI_GUID PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID,InfoGuid=EFI_FILE_INFO_ID;
 
+#ifndef GU_RUNTIME_ESP
 static const EFI_GUID WindowsPartition=GU_WINDOWS_PARTITION_INITIALIZER;
+#endif
 
 static const CHAR16 WindowsName[]=L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi";
 
@@ -327,6 +329,23 @@ static EFI_STATUS LocateBootFilesystems(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handl
 
 /* Only the explicitly configured Windows GPT ESP may supply a missing
  * firmware file. Never search arbitrary partitions or write to this ESP. */
+#ifdef GU_RUNTIME_ESP
+/* Probe only: does this volume carry the Windows boot manager? A failure means
+ * "not the Windows ESP", so it must not latch BootFileStatus or disturb the
+ * image's own open-file accounting. */
+static BOOLEAN EspCarriesWindowsManager(EFI_BOOT_SERVICES *b,EFI_HANDLE handle) {
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;EFI_FILE_PROTOCOL *root=NULL,*file=NULL;
+  if(!b||!handle)return FALSE;
+  if(b->HandleProtocol(handle,&FsGuid,(VOID **)&fs)!=EFI_SUCCESS||!fs)return FALSE;
+  if(fs->OpenVolume(fs,&root)!=EFI_SUCCESS||!root)return FALSE;
+  EFI_STATUS s=root->Open(root,&file,(CHAR16 *)WindowsCandidates[0],EFI_FILE_MODE_READ,0);
+  BOOLEAN found=s==EFI_SUCCESS&&file!=NULL;
+  if(file)file->Close(file);
+  root->Close(root);
+  return found;
+}
+#endif
+
 static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
                                                     const CHAR16 *path,VOID **out) {
   if(!asset||!path||!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
@@ -342,8 +361,16 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
     UINTN bytes=0;BOOLEAN usb=FALSE,media=FALSE;
     if(b->HandleProtocol(handles[i],&PathGuid,(VOID **)&dp)==EFI_SUCCESS&&
        Inspect(dp,&bytes,&usb,&media)&&!usb&&
+#ifdef GU_RUNTIME_ESP
+       /* The marker is what makes a volume the Windows ESP, so a second ESP
+        * without one can no longer make the machine ambiguous. */
+       GuWindowsEspPathCandidate((const uint8_t *)dp,bytes)&&
+       EspCarriesWindowsManager(b,handles[i])
+#else
        GuWindowsEspPathMatches((const uint8_t *)dp,bytes,
-                              (const uint8_t *)&WindowsPartition)) {
+                              (const uint8_t *)&WindowsPartition)
+#endif
+       ) {
       matches++;
       matched=handles[i];
     }
@@ -478,7 +505,14 @@ EFI_STATUS GuBootLoadWindows(VOID) {
     EFI_DEVICE_PATH_PROTOCOL *p=NULL;UINTN bytes=0;BOOLEAN usb=FALSE,windows=FALSE;
     if(b->HandleProtocol(h[i],&PathGuid,(VOID **)&p)==EFI_SUCCESS&&
        Inspect(p,&bytes,&usb,&windows)&&!usb&&
-       GuWindowsEspPathMatches((const uint8_t *)p,bytes,(const uint8_t *)&WindowsPartition)) {
+#ifdef GU_RUNTIME_ESP
+       /* The candidate-file probe below is the Windows-ESP test in this build;
+        * the volume list itself still has to yield exactly one match. */
+       GuWindowsEspPathCandidate((const uint8_t *)p,bytes)
+#else
+       GuWindowsEspPathMatches((const uint8_t *)p,bytes,(const uint8_t *)&WindowsPartition)
+#endif
+       ) {
       EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *tfs=NULL;EFI_FILE_PROTOCOL *troot=NULL;
       if(b->HandleProtocol(h[i],&FsGuid,(VOID **)&tfs)==EFI_SUCCESS&&tfs) {
         EFI_STATUS opened=tfs->OpenVolume(tfs,&troot);
@@ -520,7 +554,11 @@ EFI_STATUS GuBootLoadWindows(VOID) {
     return s==EFI_SUCCESS?EFI_NOT_FOUND:s;
   }
   if(matches!=1) {
+#ifdef GU_RUNTIME_ESP
+    GuLog("GuBootLoadWindows refused: %zu volumes carry a Windows boot manager\n",(size_t)matches);
+#else
     GuLog("GuBootLoadWindows refused: pinned partition maps to %zu distinct filesystem handles\n",(size_t)matches);
+#endif
     EFI_STATUS closed=CloseBootFile(&matched_root);
     return closed==EFI_SUCCESS?EFI_UNSUPPORTED:closed;
   }
@@ -551,7 +589,11 @@ EFI_STATUS GuBootLoadWindows(VOID) {
     }
   }
   if(s==EFI_SUCCESS)TargetEspVolume=volume;
+#ifdef GU_RUNTIME_ESP
+  GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=0 policy=runtime_marker path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
+#else
   GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=1 path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
+#endif
   return s;
 }
 

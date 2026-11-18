@@ -39,3 +39,21 @@ int GuWindowsEspPathMatches(const uint8_t *path, size_t bound,
   }
   return partitions==1U && matching;
 }
+
+int GuWindowsEspPathCandidate(const uint8_t *path, size_t bound) {
+  size_t at=0,length;
+  unsigned partitions=0;
+  if(!(length=GuWindowsPathLength(path,bound)))return 0;
+  while(at+4<=length) {
+    size_t n=(size_t)path[at+2] | ((size_t)path[at+3]<<8);
+    if(path[at]==0x7fU)break;
+    if(path[at]==4U && path[at+1]==1U) {
+      if(n!=HARD_DRIVE_NODE_BYTES || ++partitions!=1U)return 0;
+      if(!path[at+16] && !path[at+17] && !path[at+18] && !path[at+19] &&
+         !path[at+20] && !path[at+21] && !path[at+22] && !path[at+23])return 0;
+      if(path[at+40]!=2U || path[at+41]!=2U)return 0;
+    }
+    at+=n;
+  }
+  return partitions==1U;
+}
