@@ -840,7 +840,7 @@ static EFI_STATUS PreparePlatformContexts(EFI_BOOT_SERVICES *bs,
     }
     if(!candidate){status=EFI_OUT_OF_RESOURCES;break;}
     int alias=candidate==GuPlatformActive;
-    for(size_t j=0;j<i;j++)if(contexts[j]==candidate)alias=TRUE;
+    for(size_t j=0;j<i;j++)if(contexts[j]==candidate)alias=1;
     if(alias || candidate->bs!=bs || candidate->pci!=pci) {
       UnconfirmedPreparedContextAddress=(UINTN)candidate;
       GuLog("ACTIVE_CONTEXT[%zu]_OWNER_UNCONFIRMED ADDRESS=%p ALIAS=%u\n",
