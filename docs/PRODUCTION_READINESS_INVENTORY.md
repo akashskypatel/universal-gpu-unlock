@@ -152,12 +152,16 @@ the failure mode the repository's own gates exist to prevent. See §11.11 and
 dumps, Turing either implemented with payloads and a signed-loader contract or
 refused at *build* time (not only at prepare).
 
-**Status (2026-11-18): partly fixed — the unsafe half is now refused.** The
-actuation paths refuse every Ada id whose register geometry was never captured
+**Status (2026-11-18): partly fixed — the unsafe half is now refused, and
+Turing is refused when the image is built.** The actuation paths refuse every Ada
+id whose register geometry was never captured
 (`src/gpu_sku_geometry.[ch]`), so an AD104/106/107 card can no longer be driven
 with AD102 offsets; the read-only diagnostic deliberately still runs, because
-capturing that geometry is the work needed to add a row. Turing is unchanged
-(refused at prepare, no payload). What remains open is the data: a captured
+capturing that geometry is the work needed to add a row. Turing is now refused at
+*build* time as well as at prepare: `src/turing_assets.h` fails any build that
+defines `GU_TURING_ACTUATION`, because this tree pins five TU102 hashes and
+ships no payload bytes, and it pins the reviewed manifest row count so the table
+cannot be trimmed while Turing stays admitted (§11.9). What remains open is the data: a captured
 table per SKU, and a Turing payload plus a signed-loader contract. See §11.9.
 
 ### A6. Firmware assets must be re-read from removable media on every boot — **P0**
@@ -519,10 +523,27 @@ consuming the attempt, the diagnostic stays open, build wiring), the simulator
 scenario `prepare ad104-sku` (`SIM_VERIFY=PASS SCENARIOS=10`), and host case 13 in
 `tests/test_gpu_asset_lifetime.py` (the refusal costs zero reads).
 
+Turing is refused twice over, which is the second half of the A5 exit
+criterion:
+
+| Where | What it refuses |
+| --- | --- |
+| `src/turing_assets.h` (compile time) | a build defining `GU_TURING_ACTUATION` — there is no payload to stage or hash, so such an image cannot exist |
+| `src/turing_assets.h` (compile time) | a Turing manifest whose row count drifts from the reviewed five, so trimming the table cannot leave Turing cards admitted |
+| `profile.c`, `RegistersFor` | a Turing card whose cold state does not match the passive predicate (`TURING_COLD=REFUSED`, `ACTIVE_ALLOWED=0`) |
+| `profile.c`, `GuAd104Prepare` | the actuation path for any Turing card |
+
+Evidence: `tests/test_turing_build_gate.py` (5 tests that compile a translation
+unit including the header and require the compiler to fail with the explanation,
+require it to succeed without the flag, and require a trimmed manifest to fail —
+the tripwire is demonstrated, not asserted from source text).
+
 What this does *not* do: it does not make any captured table a verified
 transaction. `ACTUATION_VERIFIED=0` still holds for the reference AD102, and the
 AD104/106/107 rows stay empty until a dump exists. Ampere keeps its documented
-generic path, unchanged by this gate.
+generic path, unchanged by this gate. And the build gate says nothing about
+whether the pinned Turing hashes are right — only that a Turing actuation image
+cannot be produced from this tree.
 
 ### 11.10 A6 — the bundle can be staged once, and says so
 

@@ -489,6 +489,8 @@ int main(int argc,char **argv){
 #include <stddef.h>
 #include <wchar.h>
 #include "gpu_device_ids.h"
+/* The spliced Turing table carries the build-time row-count tripwire. */
+#include "turing_assets.h"
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef unsigned long UINTN;
