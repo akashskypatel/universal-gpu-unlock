@@ -368,6 +368,41 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered DXE compilation failed'}
             if(-not (Test-Path .\src\build_dxe\GPU-SEQUENCE-COMPILE-ONLY-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Ordered DXE EFI missing'}
             'ORDERED_SEQUENCE_COMPILE_EXIT=0 HARDWARE_ACTION=NONE NOT_FOR_DEPLOYMENT=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # S1/D2: compile the admitted (waiver) image with the real toolchain.
+            # tools/waiver_build_diff.py shows the waiver flips two macros and no
+            # symbols in a hosted GCC build; this shows MSVC still emits a complete
+            # binary from the same sources. Neither output is uploaded: the waiver
+            # exists to be reviewed, not deployed.
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target waiver app compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-ONE-TARGET-UNVERIFIED-ACTUATION-0000-09-02-0.EFI)){throw 'One-target waiver app EFI missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target waiver DXE compilation failed'}
+            if(-not (Test-Path .\src\build_dxe\GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-0000-09-02-0.efi)){throw 'One-target waiver DXE EFI missing'}
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered waiver app compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-SEQUENCE-UNVERIFIED-ACTUATION-0000-09-02-0--0001-2A-03-1.EFI)){throw 'Ordered waiver app EFI missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered waiver DXE compilation failed'}
+            if(-not (Test-Path .\src\build_dxe\GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Ordered waiver DXE EFI missing'}
+            # The waiver's own interlocks must still refuse, without compiling.
+            $waiverNeedsSingle = $false
+            try { & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -AcceptUnverifiedActuation } catch {
+              $waiverNeedsSingle = $_.Exception.Message -match 'requires -EnableSingleTargetExecution'
+            }
+            if(-not $waiverNeedsSingle){throw 'Waiver without single-target execution was not rejected'}
+            $waiverNeedsActuation = $false
+            try { & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -AcceptUnverifiedActuation } catch {
+              $waiverNeedsActuation = $_.Exception.Message -match 'requires -EnableSingleTargetExecution'
+            }
+            if(-not $waiverNeedsActuation){throw 'DXE waiver without single-target execution was not rejected'}
+            $waiverNoSynthetic = $false
+            try { & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation -SyntheticCompileProfile } catch {
+              $waiverNoSynthetic = $_.Exception.Message -match 'cannot be combined with -SyntheticCompileProfile'
+            }
+            if(-not $waiverNoSynthetic){throw 'Waiver combined with a compile-only profile was not rejected'}
+            'WAIVER_MSVC=COMPILED ONE_TARGET=1 ORDERED_SEQUENCE=1 DXE=1 HARDWARE_ACTION=NONE PUBLISHED=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'WAIVER_INTERLOCKS=REFUSED BEFORE_COMPILATION=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # Live-active output must fail before any compiler or USB stage.
             # This negative check must still pass when Visual Studio is present.
             foreach ($builder in @('.\src\Build-Experimental-MSVC.ps1', '.\src\Build-Dxe-Driver.ps1')) {
