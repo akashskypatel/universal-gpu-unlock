@@ -52,7 +52,9 @@ jobs:
           set +e -uo pipefail
           HOST_LOG="$RUNNER_TEMP/gu-log/host.log"
           (
-            set -euo pipefail
+            set -eEuo pipefail
+            # Name the command that failed, not just the exit code.
+            trap 'rc=$?; printf "::error::HOST_FAILED rc=%s cmd=%s\n" "$rc" "$BASH_COMMAND" >&2' ERR
             trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .' EXIT
             # MSI 7E56 requires an exact passive dual-NVIDIA hardware fingerprint.
             for compiler in gcc clang; do
@@ -290,7 +292,9 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             # The activity log needs artifact access to read; an annotation does
             # not, so a failing command is named where a reviewer will see it.
-            printf '::error::HOST_EXIT=%s %s\n' "$rc" "$(grep -v -e '^HOST_EXIT=' -e '^Filesystem' -e '^/dev/' "$HOST_LOG" | tail -n 3 | tr '\n' '|' | cut -c1-1200)"
+            detail=$(grep -v -e '^HOST_EXIT=' -e '^Filesystem' -e '^/dev/' "$HOST_LOG" | tail -n 14 \
+                     | grep -iE 'error|fail|terminated|undefined|no such file' | tail -n 4 | tr '\n' ' ' | cut -c1-900)
+            printf '::error::HOST_EXIT=%s %s\n' "$rc" "${detail:-(no diagnostic line in the log)}"
           fi
           exit "$rc"
       - name: Run the host simulator scenarios
