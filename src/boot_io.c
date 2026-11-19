@@ -7,6 +7,7 @@
  * nothing here changes where the image may be launched from. */
 
 #include "boot_io.h"
+#include "launch_source.h"
 #include "version.h"
 #include "gpu_windows_path.h"
 
@@ -171,6 +172,17 @@ static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **file) {
   return s==EFI_SUCCESS?s:RecordBootFileFailure(f);
 }
 
+#ifdef GU_ESP_RESIDENT
+/* A resident image must identify its ESP at runtime. A compiled partition GUID
+ * would tie the installed copy to one machine, which is the coupling A2 removed,
+ * so the two switches are not allowed to disagree. */
+#ifndef GU_RUNTIME_ESP
+#error GU_ESP_RESIDENT requires GU_RUNTIME_ESP
+#endif
+static BOOLEAN EspCarriesWindowsManager(EFI_BOOT_SERVICES *b,EFI_HANDLE handle);
+static BOOLEAN StagedBundleRecordUsable(VOID);
+#endif
+
 EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(Table)return EFI_ALREADY_STARTED;
@@ -191,8 +203,38 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   UINTN length=0;BOOLEAN usb=FALSE,windows=FALSE;
 
-  if(s!=EFI_SUCCESS||!Inspect(path,&length,&usb,&windows)||!usb)return EFI_ACCESS_DENIED;
-  BootFromUsb=TRUE;
+  if(s!=EFI_SUCCESS||!Inspect(path,&length,&usb,&windows))return EFI_ACCESS_DENIED;
+  /* Where may this image start from. A stick is the path everything else was
+   * written for and stays unconditional; a resident copy has to earn the gates
+   * below, and the refusal names the one that failed. */
+  GU_LAUNCH_OBSERVATION launch={0};
+  launch.Removable=usb?GU_LS_TRUE:GU_LS_FALSE;
+  launch.Partition=windows?GU_LS_TRUE:GU_LS_FALSE;
+#ifdef GU_ESP_RESIDENT
+  launch.EspResidentBuild=GU_LS_TRUE;
+#else
+  launch.EspResidentBuild=GU_LS_FALSE;
+#endif
+  if(usb) {
+    BootFromUsb=TRUE;
+  } else {
+#ifdef GU_ESP_RESIDENT
+    launch.PinnedEsp=GU_LS_TRUE; /* nothing is pinned in a runtime-ESP build */
+    launch.WindowsLoader=EspCarriesWindowsManager(b,OwnVolume)?GU_LS_TRUE:GU_LS_FALSE;
+    launch.BundleRecord=StagedBundleRecordUsable()?GU_LS_TRUE:GU_LS_FALSE;
+#endif
+    if(GuLaunchSourceDecide(&launch)!=GU_LAUNCH_ALLOW_RESIDENT) {
+      GU_LS_UINTN reason=GuLaunchSourceReason(&launch);
+      GuLog("LAUNCH_SOURCE DECISION=%s REASON=%s REMOVABLE=%u PARTITION=%u "
+            "WINDOWS_LOADER=%u PINNED=%u BUNDLE=%u RESIDENT_BUILD=%u\n",
+            GuLaunchSourceDecisionName(GU_LAUNCH_REFUSE),
+            GuLaunchSourceReasonName(reason),(unsigned)launch.Removable,
+            (unsigned)launch.Partition,(unsigned)launch.WindowsLoader,
+            (unsigned)launch.PinnedEsp,(unsigned)launch.BundleRecord,
+            (unsigned)launch.EspResidentBuild);
+      return EFI_ACCESS_DENIED;
+    }
+  }
 
   s=b->HandleProtocol(OwnVolume,&FsGuid,(VOID **)&fs);if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
 
@@ -232,6 +274,21 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   EFI_STATUS closed=CloseBootFile(&dir);
   if(closed!=EFI_SUCCESS){s=closed;goto failed;}
   if(s!=EFI_SUCCESS||!Log){if(s==EFI_SUCCESS)s=EFI_OUT_OF_RESOURCES;goto failed;}
+
+  if(!BootFromUsb) {
+    /* The last gate: a resident image needs its own writable log directory, which
+     * is what the lines above just proved by creating the file. */
+    launch.LogWritable=GU_LS_TRUE;
+    GU_LS_UINTN decision=GuLaunchSourceDecide(&launch);
+    GU_LS_UINTN reason=GuLaunchSourceReason(&launch);
+    GuLog("LAUNCH_SOURCE DECISION=%s REASON=%s ESP_RESIDENT=1 LOG_WRITABLE=1\n",
+          GuLaunchSourceDecisionName(decision),GuLaunchSourceReasonName(reason));
+    if(decision!=GU_LAUNCH_ALLOW_RESIDENT){s=EFI_ACCESS_DENIED;goto failed;}
+    /* Loud, once: this copy runs from the ESP and not from the stick it was
+     * installed from. Every actuation gate is unchanged. */
+    GuLog("LAUNCH_SOURCE=ESP_RESIDENT_WINDOWS_ESP ALLOWED_BY=GU_ESP_RESIDENT "
+          "INSTALL_STILL_REQUIRES_USB=1 ACTUATION_GATES_UNCHANGED=1\n");
+  }
 
   /* What removable media last staged on the ESP, if anything. Reported before
    * discovery because it is a property of the medium, not of the card; the
@@ -419,6 +476,22 @@ static BOOLEAN EspCarriesWindowsManager(EFI_BOOT_SERVICES *b,EFI_HANDLE handle) 
  * EFI_UNSUPPORTED when more than one does. Reads use it as a fallback source;
  * the installer uses it as the staging destination, so both must agree on
  * which volume that is. */
+#ifdef GU_ESP_RESIDENT
+/* Was this image's bundle ever staged on this volume? Presence and identity of
+ * the record, not a re-hash: the loader verifies every byte it uses. */
+static BOOLEAN StagedBundleRecordUsable(VOID) {
+  GU_ASSET_INSTALL staged;
+  if(GuAssetInstallRead(Table,&staged)!=EFI_SUCCESS)return FALSE;
+  if(staged.Files!=GU_ASSET_COUNT)return FALSE;
+  for(UINTN i=0;i<GU_ASSET_INSTALL_VERSION_CHARS;i++) {
+    CHAR16 want=GU_ASSET_BUNDLE_VERSION[i];
+    if(staged.Version[i]!=want)return FALSE;
+    if(!want)return TRUE;
+  }
+  return FALSE;
+}
+#endif
+
 static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {
   if(!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
   *out=NULL;

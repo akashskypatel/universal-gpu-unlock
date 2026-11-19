@@ -6,7 +6,8 @@ param(
     [switch]$SyntheticCompileProfile,
     [switch]$AcceptUnverifiedActuation,
     [switch]$RuntimeSelection,
-    [switch]$RuntimeEsp
+    [switch]$RuntimeEsp,
+    [switch]$EspResident
 )
 $ErrorActionPreference = 'Stop'
 # The experimental original NVIDIA Stop and stock recovery baseline passed.
@@ -27,6 +28,12 @@ if ($AcceptUnverifiedActuation -and $SyntheticCompileProfile) {
 }
 if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation) {
     throw 'Live GPU execution build refused: production hardware ownership and signed firmware acceptance remain unverified. Use -AcceptUnverifiedActuation for an explicitly unverified image, or -SyntheticCompileProfile only for compile validation.'
+}
+if ($EspResident -and -not $RuntimeEsp) {
+    throw '-EspResident requires -RuntimeEsp: a compiled partition GUID would tie the installed copy to one machine'
+}
+if ($EspResident -and $SyntheticCompileProfile) {
+    throw '-EspResident cannot be combined with -SyntheticCompileProfile: a compile-only image never opens the ESP'
 }
 if ($RuntimeEsp -and $SyntheticCompileProfile) {
     throw '-RuntimeEsp cannot be combined with -SyntheticCompileProfile: a compile-only image never opens the ESP'
@@ -84,6 +91,7 @@ try {
         'boot_io.c',
         'msi_release.c',
         'stop_contract.c',
+        'launch_source.c',
         'unlock_execution.c',
         'port.c',
         'compat.c',
@@ -131,6 +139,11 @@ try {
         } else {
             $clFlags += ' /DGU_ACTIVE_SEQUENCE_PREPARE_ONLY /DGU_HOST_TEST_PROFILE'
         }
+    }
+
+    if ($EspResident) {
+        # Run from the Windows ESP itself; every launch gate is checked at boot.
+        $clFlags += ' /DGU_ESP_RESIDENT'
     }
 
     if ($RuntimeEsp) {

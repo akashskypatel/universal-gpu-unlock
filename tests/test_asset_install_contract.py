@@ -60,7 +60,11 @@ def function_body(text, name):
 class TheLaunchRuleIsNotRelaxed(unittest.TestCase):
     def test_open_still_refuses_a_non_usb_image(self):
         body = function_body(BOOT, "EFI_STATUS GuBootOpen(")
-        self.assertIn("Inspect(path,&length,&usb,&windows)||!usb", body)
+        # The rule moved into an explicit decision (GU_ESP_RESIDENT); the default
+        # build still cannot start from anything but the stick.
+        self.assertIn("if(GuLaunchSourceDecide(&launch)!=GU_LAUNCH_ALLOW_RESIDENT) {", body)
+        self.assertIn("launch.EspResidentBuild=GU_LS_FALSE;", body)
+        self.assertIn("return EFI_ACCESS_DENIED;", body)
         self.assertIn("EFI_ACCESS_DENIED", body)
 
     def test_the_installer_requires_the_usb_launch(self):

@@ -97,7 +97,11 @@ class BootIoWiring(unittest.TestCase):
                       BOOT_IO)
 
     def test_marker_probe_does_not_latch_file_status(self):
-        probe = BOOT_IO.split("static BOOLEAN EspCarriesWindowsManager", 1)[1].split("\n}", 1)[0]
+        # Split on the definition, not on the name: the module now also has a
+        # forward declaration earlier in the file.
+        probe = BOOT_IO.split(
+            "static BOOLEAN EspCarriesWindowsManager(EFI_BOOT_SERVICES *b,EFI_HANDLE handle) {",
+            1)[1].split("\n}", 1)[0]
         self.assertNotIn("BootFileOpenResult", probe)
         self.assertNotIn("BootFileStatus", probe)
         self.assertIn("root->Close(root);", probe)

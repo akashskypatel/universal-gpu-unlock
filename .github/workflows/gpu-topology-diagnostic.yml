@@ -139,6 +139,12 @@ jobs:
               "$RUNNER_TEMP/test_stop_contract_$compiler"
             done
             python3 -m unittest discover -s tests -p test_stop_contract_contract.py -v
+            # Launch source: a stick always, the ESP only when every gate holds.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_LAUNCH_SOURCE_HOST_TEST -Isrc tests/test_launch_source.c src/launch_source.c -o "$RUNNER_TEMP/test_launch_source_$compiler"
+              "$RUNNER_TEMP/test_launch_source_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_launch_source_contract.py -v
             # The readiness headline is generated, not typed into prose.
             python3 -m unittest discover -s tests -p test_readiness_summary.py -v
             # Every stock profile must link, and keep its own selector contract.

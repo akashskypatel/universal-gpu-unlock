@@ -90,6 +90,8 @@ order a healthy run emits them:
 | Marker | Meaning |
 |---|---|
 | `ACTIVE_GPU[i] BDF=... ID=... CLASS=...` | discovered identity of every NVIDIA GPU, including untouched peers |
+| `LAUNCH_SOURCE DECISION=REFUSE REASON=... REMOVABLE=0 ...` | the image refused to start from this volume, and named the gate. In any build without `GU_ESP_RESIDENT` this is expected off the stick (`REASON=BUILD_REFUSES_ESP_RESIDENT`); any other reason means a resident image could not prove one of its gates. Record it: the reason is the finding. |
+| `LAUNCH_SOURCE=ESP_RESIDENT_WINDOWS_ESP ALLOWED_BY=GU_ESP_RESIDENT INSTALL_STILL_REQUIRES_USB=1 ACTUATION_GATES_UNCHANGED=1` | a resident build started from the machine's own ESP. It says nothing about the run being safe: every actuation gate above still applies, and installing the bundle still needs the stick. |
 | `ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=<n> ORDERED_SEQUENTIAL=1 MUTATION_AUTHORIZED=1 ...` | the waiver is in force for this boot; `CAN_*` are still `0` |
 | `MSI preflight: status=... graph=<n>` | owner graph captured |
 | `MSI release WAIVED for original AD102/GA102 ... VENDOR_STOP_BOUND=UNVERIFIED` | the `0x2684`/`0x220a` refusal was replaced by an admission, not by a proof |

@@ -156,9 +156,9 @@
       "id": "B9",
       "class": "B",
       "priority": "P1",
-      "source": "none",
-      "section": null,
-      "note": "The image must be launched from USB with a writable log directory; no ESP-resident deployment exists.",
+      "source": "partial",
+      "section": "11.17",
+      "note": "A resident build may start from the Windows ESP behind five gates and a provable writable log; the default build still names its refusal. Never booted.",
       "hardware_verified": false
     },
     {

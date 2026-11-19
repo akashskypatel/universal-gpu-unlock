@@ -13,15 +13,15 @@ no hardware was touched.
 | Source obligation | Items | Share |
 | --- | --- | --- |
 | Met - implemented, and pinned by a host test, simulator row or CI job | 6 | 14% |
-| Partial - some exit criteria implemented, the remainder named | 8 | 19% |
-| Not started | 29 | 67% |
+| Partial - some exit criteria implemented, the remainder named | 9 | 21% |
+| Not started | 28 | 65% |
 
-**Source progress: 23%** (6 met + half of 8 partial = 10 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 24%** (6 met + half of 9 partial = 10.5 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 3 | 5 | 0 | 8 |
-| B - hardware preconditions | 2 | 0 | 8 | 10 |
+| B - hardware preconditions | 2 | 1 | 7 | 10 |
 | C - privileged operations never shown safe | 0 | 3 | 7 | 10 |
 | D - release engineering | 1 | 0 | 4 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
@@ -275,7 +275,7 @@ These are verified from source, not inferred.
 | ~~B6~~ | ~~BAR0 exactly 16 MiB at a base that fits the low 32 bits~~ | was `gpu_discovery.c:546-547`, `msi_release.c:773-775` | **fixed in source, unverified on hardware** — the firmware descriptor is authoritative: base decoded as 64-bit from config, any power-of-two window `>= 16 MiB`, config/attribute mismatch refused (§11.3) | ~~P0~~ done |
 | ~~B7~~ | ~~Device DMA addresses below 4 GiB~~ | was `port.c:497` with `AllocateAnyPages` | **fixed in source, unverified on hardware** — `AllocateMaxAddress` asks for a sub-4 GiB buffer up front; the mapped-address ceiling check stays as the last line of defence and the refusal is modelled in the simulator (§11.4) | ~~P1~~ done |
 | B8 | Bus Master off at admission (one narrow exception) | `checks.c:39-41`, `GuCheckConfigInitialMaster` in single-target mode | a firmware that leaves BME on changes which gate applies | P2 |
-| B9 | Image launched from USB with a writable log directory | `boot_io.c:168`, `:176-180` | no fully internal deployment (ESP-resident app) is possible | P1 |
+| B9 | Image launched from USB with a writable log directory | `boot_io.c:168`, `:176-180` | **relaxed in source, unverified on hardware** — `-EspResident` builds may now start from the ESP, but only when five further gates hold and the log is provably writable; the default build is unchanged and still refuses (§11.17) | P1 |
 | B10 | Per-call DMA ≤ 128 MiB, 1 MiB ROM buffer, ~80 MB radix table per card | `port.c:469`, `profile.c:289`, `unlock_610.c:1117` | multi-GPU memory footprint is multiplicative (~165 MB/card) and untested | P1 |
 
 ---
@@ -853,6 +853,55 @@ decision, requirement order equals the plan). CI compiles and runs both.
 What it is not: the refusal is unchanged, `DECISION` is `REFUSE` on every capture
 this image can produce, and no line says a Stop is safe. The bound and the recovery
 evidence are still steps 3-5 of the plan, and they need hardware.
+
+### 11.17 B9 — the image can now start from the ESP, and only when it can prove it
+
+B9 said "launched from USB with a writable log directory", which meant a machine
+could never run this from its own disk. The rule is now a decision
+(`src/launch_source.[ch]`) over seven observations, and it has two ways to say
+yes:
+
+| Launch | Decision | Requires |
+| --- | --- | --- |
+| Removable media | `ALLOW_REMOVABLE` | nothing further; the stick is the path everything was written for |
+| The Windows ESP | `ALLOW_RESIDENT` | partition volume **and** a `GU_ESP_RESIDENT` build **and** a Windows loader on it **and** the pin matched **and** the bundle record present **and** the log directory writable |
+| Anything else | `REFUSE` | — the line names the first gate that failed |
+
+The refusal is the interesting half. Every non-USB launch in every other build now
+logs `LAUNCH_SOURCE DECISION=REFUSE REASON=BUILD_REFUSES_ESP_RESIDENT …` and returns
+`EFI_ACCESS_DENIED` — the same behaviour as before, but it says why instead of
+looking like a broken device path. In a resident build the same decision is
+re-evaluated after the log file is created, because `LOG_WRITABLE` is only
+provable there; there is deliberately no single pre-open decision that would have
+to guess.
+
+Three interlocks keep this from becoming a second, quieter admission path:
+
+* `GU_ESP_RESIDENT` without `GU_RUNTIME_ESP` is a compile error, and both builders
+  throw on `-EspResident` without `-RuntimeEsp`; a pinned build would tie the
+  image to one machine, which is the coupling A2 removed.
+* `-EspResident` with `-SyntheticCompileProfile` is refused by both builders, so
+  the simulator's synthetic build can never claim the relaxation.
+* Installation is untouched: `GuAssetInstallStage` still refuses a non-removable
+  volume (`ASSET_INSTALL REASON=IMAGE_NOT_ON_REMOVABLE_MEDIA`). A resident image
+  runs from the ESP but must still be *installed* from the stick, and the
+  admission line says so (`INSTALL_STILL_REQUIRES_USB=1
+  ACTUATION_GATES_UNCHANGED=1`).
+
+Evidence: `tests/test_launch_source.c` (126 checks under ASan+UBSan: all 64
+observation masks decide and name a reason without ever disagreeing, removable is
+unconditional, each gate is independently necessary);
+`tests/test_launch_source_contract.py` (12 source checks: default build refuses and
+logs the reason, the compile interlock, both builder interlocks, the install gate
+still refuses, `BootFromUsb` is set only inside the removable branch, one
+definition and one declaration of the ESP probe, every reason is named). CI
+compiles the C test with gcc and clang and runs the source checks.
+
+What it is not: nothing here has been booted from an ESP. No donor machine has run
+a resident build, `LAUNCH_SOURCE=ESP_RESIDENT_WINDOWS_ESP` has never appeared in a
+real log, and the simulator cannot produce it (its image is not a UEFI volume). B9
+stays partial until a donor run shows that line and the six `MISSING` facts from
+the Stop contract on the same boot.
 
 ### 11.15 S5/A8 — the recovery matrix, checked against the code
 

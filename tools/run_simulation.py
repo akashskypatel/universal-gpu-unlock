@@ -24,6 +24,7 @@ INCLUDE = BUILD / "include"
 
 APP_SOURCES = [
     "app.c", "driver_nvram.c", "boot_io.c", "msi_release.c", "stop_contract.c",
+    "launch_source.c",
     "unlock_execution.c",
     "port.c", "compat.c", "checks.c", "gpu_inventory.c", "gpu_discovery.c",
     "gpu_execution_state.c", "gpu_windows_path.c", "profile.c", "prom_reference.c", "gpu_selection.c", "gpu_sku_geometry.c", "boot_state.c", "asset_install.c", "sha256.c",
