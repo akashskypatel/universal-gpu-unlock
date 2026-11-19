@@ -98,10 +98,7 @@ typedef struct {
 #define PCI_EXPRESS_CAPABILITY_ID       0x0010
 #define PCI_POWER_STATE_D0              0
 
-/* Only one vendor/device pair is "supported" for this harness; the real
- * whitelist lives in gpu_device_ids.h and is pinned by test_gpu_device_ids.c. */
-#define SUPPORTED_ID 0x268410DEU
-static BOOLEAN GuIsSupportedPciId(UINT32 Config0) { return Config0 == SUPPORTED_ID; }
+__ID_STUB__
 
 __DEFINES__
 
@@ -373,24 +370,39 @@ static int Run(void) {
 int main(void) { return Run(); }
 """
 
-HARNESS = PRELUDE.replace(
-    "__DEFINES__",
-    "\n".join(
-        "#define %s %s" % (name, source_define(name))
-        for name in ("GU_CONFIG_BYTES", "GU_CAP_START", "GU_CAP_LAST", "GU_CAP_LIMIT", "GU_MSIX_ID")
-    ),
-).replace(
-    "__ACTUAL_CODE__",
-    "\n\n".join(
-        source_body(name)
-        for name in (
-            "ConfigByte",
-            "ConfigWord",
-            "GuCheckConfigPolicy",
-            "GuCheckConfig",
-            "GuCheckConfigInitialMaster",
-        )
-    ),
+# The whitelist stub is separate so other host models can admit more than one
+# card without duplicating the type and constant block below.
+ID_STUB = """
+/* Only one vendor/device pair is "supported" for this harness; the real
+ * whitelist lives in gpu_device_ids.h and is pinned by test_gpu_device_ids.c. */
+#define SUPPORTED_ID 0x268410DEU
+static BOOLEAN GuIsSupportedPciId(UINT32 Config0) { return Config0 == SUPPORTED_ID; }
+"""
+
+# Everything before the stub: UEFI-shaped typedefs, GU_CAPS and the PCI
+# constants the policy uses. Reused by tests/test_multi_target.py.
+TYPES = PRELUDE.split("__ID_STUB__")[0]
+
+POLICY_DEFINES = "\n".join(
+    "#define %s %s" % (name, source_define(name))
+    for name in ("GU_CONFIG_BYTES", "GU_CAP_START", "GU_CAP_LAST", "GU_CAP_LIMIT", "GU_MSIX_ID")
+)
+
+POLICY_CODE = "\n\n".join(
+    source_body(name)
+    for name in (
+        "ConfigByte",
+        "ConfigWord",
+        "GuCheckConfigPolicy",
+        "GuCheckConfig",
+        "GuCheckConfigInitialMaster",
+    )
+)
+
+HARNESS = (
+    PRELUDE.replace("__ID_STUB__", ID_STUB)
+    .replace("__DEFINES__", POLICY_DEFINES)
+    .replace("__ACTUAL_CODE__", POLICY_CODE)
 )
 
 

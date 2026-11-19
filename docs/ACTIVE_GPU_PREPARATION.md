@@ -15,7 +15,12 @@ The interactive UEFI application and the Driver Execution Environment (DXE) driv
 A PCI location has the format segment:bus:device.function (BDF).
 Specify one location with `-SelectionBdf` or 2–128 distinct locations with
 `-SelectionBdfs`. The shared parser preserves the requested order and rejects
-invalid or duplicate locations. It does not select multiple devices implicitly.
+invalid or duplicate locations. It does not select multiple devices implicitly:
+on a machine with two or more NVIDIA display functions and no requested
+location, preparation is refused with
+`ACTIVE_PREPARE=REFUSED REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=<n> SELECTED=0`
+rather than picking a card. Naming a location the image was not built for is
+refused with `REASON=UNSUPPORTED_CARD`, by BDF and device id.
 
 The boot discovery path allocates its inventory from the observed PCI handle
 count, with a 4,096-handle resource bound. It retains independent saved

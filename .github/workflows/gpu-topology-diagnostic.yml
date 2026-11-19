@@ -173,6 +173,9 @@ jobs:
             # The admission policy itself, compiled from src/checks.c.
             CC=gcc python3 -m unittest discover -s tests -p test_admission_gates.py -v
             CC=clang python3 -m unittest discover -s tests -p test_admission_gates.py -v
+            # Two modelled cards: selection refuses ambiguity, snapshots stay apart.
+            CC=gcc python3 -m unittest discover -s tests -p test_multi_target.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_multi_target.py -v
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_pci_master_policy.c -o "$RUNNER_TEMP/test_pci_master_policy_$compiler"
               "$RUNNER_TEMP/test_pci_master_policy_$compiler"

@@ -246,9 +246,9 @@
       "id": "C9",
       "class": "C",
       "priority": "P1",
-      "source": "none",
-      "section": null,
-      "note": "Multi-GPU interference is a 2x config-space snapshot per target; never executed with two cards.",
+      "source": "partial",
+      "section": "11.22",
+      "note": "A two-card host model now executes selection and per-target admission from real code (\u00a711.22); nothing has run with two physical cards, and the per-card memory footprint (B10) is still unmeasured.",
       "hardware_verified": false
     },
     {

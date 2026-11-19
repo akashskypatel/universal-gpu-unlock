@@ -320,7 +320,11 @@ static EFI_STATUS SelectPreparedRecords(GU_GPU_PREPARED_VIEW *prepared,
           (unsigned)p->class_code,(unsigned)GuIsSupportedPciId(p->pci_id));
   }
   if(requested_count){
-    if(requested_count>count)return EFI_UNSUPPORTED;
+    if(requested_count>count){
+      GuLog("ACTIVE_PREPARE=REFUSED REASON=REQUESTED_EXCEEDS_INVENTORY REQUESTED=%zu NVIDIA_COUNT=%zu\n",
+            requested_count,count);
+      return EFI_UNSUPPORTED;
+    }
     int result=GuFindGpuRecordSequence(prepared->inventory.nvidia,count,requested,
                                        requested_count,prepared->selected_indices);
     if(result!=GU_INVENTORY_OK){
@@ -334,11 +338,39 @@ static EFI_STATUS SelectPreparedRecords(GU_GPU_PREPARED_VIEW *prepared,
     for(size_t i=0;i<count;i++)
       if(GuIsSupportedPciId(prepared->inventory.nvidia[i].pci_id))
         prepared->selected_indices[prepared->selected_count++]=i;
-    if(!prepared->selected_count)return EFI_UNSUPPORTED;
+    if(!prepared->selected_count){
+      GuLog("ACTIVE_PREPARE=REFUSED REASON=NO_SUPPORTED_CARD NVIDIA_COUNT=%zu REQUESTED=ALL\n",
+            count);
+      return EFI_UNSUPPORTED;
+    }
     GuLog("ACTIVE_PREPARE=POLICY_ALL SUPPORTED=%zu NVIDIA_COUNT=%zu\n",
           prepared->selected_count,count);
   }else if(count==1){
     prepared->selected_count=1;prepared->selected_indices[0]=0;
+  }else if(!count){
+    GuLog("ACTIVE_PREPARE=REFUSED REASON=NO_NVIDIA_CARD NVIDIA_COUNT=0\n");
+    return EFI_UNSUPPORTED;
+  }else{
+    /* Two or more NVIDIA display functions and no explicit selection: the
+     * operator never said which card may be prepared, and picking one here
+     * would be this code choosing a target on a multi-card machine. Nothing
+     * is selected, and the reason is in the log rather than implied by a
+     * COMPLETE line with SELECTED=0. */
+    GuLog("ACTIVE_PREPARE=REFUSED REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=%zu SELECTED=0\n",
+          count);
+    return EFI_UNSUPPORTED;
+  }
+  /* A card this image was not built for is refused here, by name, instead of
+   * surfacing later as an unexplained EFI_UNSUPPORTED. */
+  for(size_t i=0;i<prepared->selected_count;i++){
+    const GU_GPU_RECORD *p=&prepared->inventory.nvidia[prepared->selected_indices[i]];
+    if(!GuIsSupportedPciId(p->pci_id)){
+      GuLog("ACTIVE_PREPARE=REFUSED REASON=UNSUPPORTED_CARD BDF=%04x:%02x:%02x.%u ID=%04x:%04x\n",
+            (unsigned)p->segment,(unsigned)p->bus,(unsigned)p->device,
+            (unsigned)p->function,(unsigned)(p->pci_id&65535U),(unsigned)(p->pci_id>>16));
+      prepared->selected_count=0;
+      return EFI_UNSUPPORTED;
+    }
   }
   for(size_t i=0;i<prepared->selected_count;i++){
     const GU_GPU_RECORD *p=&prepared->inventory.nvidia[prepared->selected_indices[i]];
