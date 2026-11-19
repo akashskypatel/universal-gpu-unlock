@@ -237,9 +237,9 @@
       "id": "C8",
       "class": "C",
       "priority": "P2",
-      "source": "none",
-      "section": null,
-      "note": "AER, ASPM, PCIe training, hot-plug and tunneled links are unhandled.",
+      "source": "partial",
+      "section": "11.24",
+      "note": "The PCIe link is read at admission: sticky errors, an ASPM request this image does not manage, an untrained or down link, and an unusable width/speed refuse the active path. AER lives in extended config space and is logged as unobserved; hot-plug events, training recovery and tunneled links are still unhandled.",
       "hardware_verified": false
     },
     {

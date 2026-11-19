@@ -13,16 +13,16 @@ no hardware was touched.
 | Source obligation | Items | Share |
 | --- | --- | --- |
 | Met - implemented, and pinned by a host test, simulator row or CI job | 10 | 23% |
-| Partial - some exit criteria implemented, the remainder named | 13 | 30% |
-| Not started | 20 | 47% |
+| Partial - some exit criteria implemented, the remainder named | 14 | 33% |
+| Not started | 19 | 44% |
 
-**Source progress: 38%** (10 met + half of 13 partial = 16.5 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 40%** (10 met + half of 14 partial = 17 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 3 | 5 | 0 | 8 |
 | B - hardware preconditions | 6 | 1 | 3 | 10 |
-| C - privileged operations never shown safe | 0 | 5 | 5 | 10 |
+| C - privileged operations never shown safe | 0 | 6 | 4 | 10 |
 | D - release engineering | 1 | 2 | 2 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
@@ -292,7 +292,7 @@ These are verified from source, not inferred.
 | C5 | Post-state verification | proves the registers it wrote (`SS0/SS1`, permissions, PLM `0xffffff8f`/`0x8b8f`, WPR2 closed) | `unlock_610.c:1360-1395`, `:1770-1800` | P1 (by design: it cannot prove the *unlock*) |
 | C6 | Time budgets | 20 s boot/PLM (`unlock_610.c:28`), 1 s post-FLR BAR (`:1629-1645`), GFW budget (`:1656`) | on timeout buffers are retained and the box must be power-cycled | P1 |
 | C7 | FLR assumptions | requires FLR bit; post-FLR expectations are board-observed values | `checks.c:107-112`, `unlock_610.c:1770-1800` | P1 |
-| C8 | PCIe error/training, AER, ASPM, hot-plug, Thunderbolt/USB4 tunnels | unhandled | `checks.c:107-112` covers link status only | P2 |
+| C8 | PCIe error/training, AER, ASPM, hot-plug, Thunderbolt/USB4 tunnels | the link is now read at admission: logged errors, ASPM requests, untrained/down/unusable links refuse the active path (§11.24); AER is unobservable in a 256-byte snapshot and is logged as such, and hot-plug events, training recovery and tunnels stay unhandled | `checks.c` `GuCheckLinkState`, `tests/test_link_state.py` | P2 |
 | C9 | Multi-GPU interference | peer protection is 2× full config-space snapshot per target | **partial (§11.22)** — `tests/test_two_card_contract.py` runs the shipped mock in three selection configurations and `tests/test_multi_target.py` executes selection plus per-snapshot admission from real code; two physical cards and the ~165 MB/card footprint (B10) are still unmeasured | P1 |
 | C10 | S3/resume | boot-script writes of SS0/SS1 at resume, needs 16 MiB BAR, no resume verification | `unlock_execution.c:211-260` | P1 |
 
@@ -457,6 +457,55 @@ partial and `B10` untouched - the per-card memory footprint (~165 MB: DMA
 window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
+
+### 11.24 C8 — the admission policy now reads the link, and names what it still cannot
+
+Every gate in `src/checks.c` reads the capability chain: identity, class, header,
+BAR descriptor, power state, MSI/MSI-X off, bus master, FLR. None of them read
+the *link*. A card can pass all of that and still be attached over a link that
+is not trained, that firmware left with ASPM enabled, or that has already
+recorded a PCIe error - three states an unlock must not start in.
+
+`GuCheckLinkState` (`src/checks.c`) reads them from the same 256-byte snapshot,
+using the capability offset the admission policy already produced
+(`GU_CAPS.pcie`) rather than searching for it again. It reports the first hazard
+it finds, in this order:
+
+| Verdict | What was read | Token in the log |
+| --- | --- | --- |
+| `GU_LINK_ERROR_LOGGED` | Device Status `CED`/`NFER`/`FER`/`URD` (sticky, we do not clear them) | `PCIE_ERROR_LOGGED` |
+| `GU_LINK_ASPM_ENABLED` | Link Control ASPM request, `L0s`/`L1` | `ASPM_ENABLED` |
+| `GU_LINK_NOT_TRAINED` | Link Status bit 11 | `LINK_NOT_TRAINED` |
+| `GU_LINK_DOWN` | Link Status bit 13 (DLL link active) | `LINK_DOWN` |
+| `GU_LINK_UNUSABLE` | negotiated width 0, or speed 0/reserved | `LINK_UNUSABLE` |
+| `GU_LINK_ABSENT` | no usable capability offset | `PCIE_CAPABILITY_ABSENT` |
+
+A degraded link is *not* a refusal: x1 Gen1 still trains and still reports its
+advertised maximum, so the adapter logs `PCI_LINK=OK WIDTH=1 MAX_WIDTH=16
+SPEED=1 MAX_SPEED=4 ...` and continues. The active path logs that line for every
+admitted card, and a refusal ends the path before `GuInit` with
+`ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=<token> BDF=...`. Nothing
+is mutated and nothing is allocated at that point, so nothing is marked
+retained.
+
+What is still unhandled, and says so on every line: AER lives in extended
+capability space, which begins at `0x100` and is not part of the snapshot, so it
+is reported as `AER=UNOBSERVED` instead of being assumed clear; hot-plug is
+observed (`HOTPLUG=`, `SURPRISE=`) and logged but not refused; PCIe training
+*recovery*, hot-plug events, Thunderbolt/USB4 tunnels and ASPM entry after
+admission remain outside this image. The log carries
+`UNHANDLED=HOTPLUG,AER` for exactly that reason.
+
+Evidence: `tests/test_link_state.py` compiles the real `ConfigByte`,
+`ConfigWord`, `GuCheckLinkState`, `GuLinkAccepted` and `GuLinkReason` and drives
+crafted snapshots through every verdict, the ordering between them, each sticky
+error bit, a degraded-but-healthy link, hot-plug bits, capability offsets that
+are not `0x50`, and the rejections of an absent, unaligned, out-of-range or null
+capability. It also compares the host mock's copy of `GU_LINK` with
+`src/checks.h` token for token, so the mock cannot drift from the firmware type.
+The shipped C mock (`tests/test_gpu_discovery.c`) gains a link-refusal switch and
+one end-to-end case: with the link refused the active path returns
+`EFI_UNSUPPORTED` without ever calling `GuInit`.
 
 ### 11.23 C2 — the Stop now asks whether anything is still in flight, and refuses if it is
 

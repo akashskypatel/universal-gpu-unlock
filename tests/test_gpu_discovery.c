@@ -44,7 +44,7 @@ static EFI_HANDLE handles[24];
 static size_t count;
 static unsigned init_calls, free_calls, log_calls, resolve_calls, locate_calls;
 static void *failed_handle_buffer;
-static unsigned prep_markers, prep_refusals, global_refusals;
+static unsigned prep_markers, prep_refusals, global_refusals, link_refusals;
 static int fail_pool_free, fail_locate, redirect_on_refresh, refuse_init;
 
 static GU_PLATFORM MockPrimaryPlatform;
@@ -62,6 +62,7 @@ void GuLog(const char *format, ...) {
   if(strstr(format,"ACTIVE_SEQUENCE=PREPARED_NOT_STARTED"))prep_markers++;
   if(strstr(format,"REASON=SELECTION_PREPARATION_ONLY"))prep_refusals++;
   if(strstr(format,"REASON=MULTI_NVIDIA_GLOBAL_STATE"))global_refusals++;
+  if(strstr(format,"REASON=PCIE_LINK"))link_refusals++;
 }
 int GuIsSupportedPciId(UINT32 pci) {
   return pci == Primary.pci_id || pci == Secondary.pci_id;
@@ -82,6 +83,33 @@ int GuCheckConfigInitialMaster(const UINT32 c[64], UINTN seg, UINTN bus,
   memcpy(without_master,c,sizeof(without_master));
   without_master[1]&=~4u;
   return GuCheckConfig(without_master,seg,bus,dev,fun,caps);
+}
+/* The mock models admission, not the link: its config snapshots are not real
+ * PCIe capability structures. One switch makes the link unacceptable so the
+ * refusal path is exercised here too; the real policy over crafted config space
+ * is pinned by tests/test_link_state.py. */
+static GU_LINK_VERDICT link_refusal;
+GU_LINK_VERDICT GuCheckLinkState(const UINT32 c[64], UINT16 pcie, GU_LINK *out) {
+  GU_LINK link = {0};
+  (void)c;
+  if (!out || !pcie) return GU_LINK_ABSENT;
+  link.width = 16; link.max_width = 16; link.speed = 3; link.max_speed = 4;
+  link.trained = 1; link.up = 1;
+  *out = link;
+  return link_refusal;
+}
+int GuLinkAccepted(GU_LINK_VERDICT verdict) { return verdict == GU_LINK_OK; }
+const char *GuLinkReason(GU_LINK_VERDICT verdict) {
+  switch (verdict) {
+    case GU_LINK_OK: return "OK";
+    case GU_LINK_ABSENT: return "PCIE_CAPABILITY_ABSENT";
+    case GU_LINK_ERROR_LOGGED: return "PCIE_ERROR_LOGGED";
+    case GU_LINK_ASPM_ENABLED: return "ASPM_ENABLED";
+    case GU_LINK_NOT_TRAINED: return "LINK_NOT_TRAINED";
+    case GU_LINK_DOWN: return "LINK_DOWN";
+    case GU_LINK_UNUSABLE: return "LINK_UNUSABLE";
+    default: return "LINK_STATE_UNKNOWN";
+  }
 }
 static EFI_STATUS Read(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN n, VOID *out) {
   MOCK_DEVICE *m = (MOCK_DEVICE *)io->context;
@@ -421,6 +449,13 @@ int main(void) {
   return 0;
 #endif
   EFI_STATUS status;
+  /* C8: a link this image refuses to actuate on ends the active path before
+   * GuInit, and the refusal names itself. */
+  ResetActivePair();
+  link_refusal=GU_LINK_ASPM_ENABLED;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+  CHECK(init_calls==0 && link_refusals==1);
+  link_refusal=GU_LINK_OK;
   ResetActivePair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_SUCCESS && init_calls==1);

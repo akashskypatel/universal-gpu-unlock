@@ -105,3 +105,28 @@ int GuIsSupportedPciId(UINT32);
 int GuIsAmpereDeviceId(UINT16);
 int GuIsTuringDeviceId(UINT16);
 int GuCheckConfig(const UINT32[64], UINTN, UINTN, UINTN, UINTN, GU_CAPS *);
+/* The link observation the adapter makes after admission. The mock header
+ * carries its own copy of the type because this build replaces checks.c
+ * entirely; tests/test_link_state.py compares this block with src/checks.h so
+ * the two cannot drift. */
+typedef struct {
+  UINT8 width, max_width;
+  UINT8 speed, max_speed;
+  UINT8 aspm;
+  UINT8 trained, up;
+  UINT8 errors;
+  UINT8 hotplug, surprise;
+} GU_LINK;
+typedef enum {
+  GU_LINK_OK = 0,
+  GU_LINK_ABSENT,
+  GU_LINK_ERROR_LOGGED,
+  GU_LINK_ASPM_ENABLED,
+  GU_LINK_NOT_TRAINED,
+  GU_LINK_DOWN,
+  GU_LINK_UNUSABLE
+} GU_LINK_VERDICT;
+GU_LINK_VERDICT GuCheckLinkState(const UINT32[64], UINT16, GU_LINK *);
+int GuLinkAccepted(GU_LINK_VERDICT);
+const char *GuLinkReason(GU_LINK_VERDICT);
+
