@@ -127,7 +127,11 @@ static EFI_STATUS BarAttributes(EFI_PCI_IO_PROTOCOL *p, UINT8 index,
   return EFI_SUCCESS;
 }
 static EFI_STATUS Free(VOID *p) {
-  for (size_t i = 0; i < GU_INVENTORY_MAX_HANDLES; i++)
+  /* Bounded by the mock array, not by the inventory limit: this used to walk
+   * 4096 entries of a 24-entry array, so the comparison could match an unrelated
+   * static and skip the pool free. Which statics follow `gpu` is the compiler's
+   * choice, which is why only one compiler failed. */
+  for (size_t i = 0; i < sizeof(gpu) / sizeof(gpu[0]); i++)
     if (p == &gpu[i].bar) return EFI_SUCCESS;   /* firmware descriptor, not pool */
   if(p && p!=handles) {
     if(fail_state_free){fail_state_free=0;last_failed_free=p;return EFI_NOT_READY;}
