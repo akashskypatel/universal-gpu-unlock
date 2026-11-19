@@ -12,21 +12,21 @@ no hardware was touched.
 
 | Source obligation | Items | Share |
 | --- | --- | --- |
-| Met - implemented, and pinned by a host test, simulator row or CI job | 10 | 23% |
-| Partial - some exit criteria implemented, the remainder named | 14 | 33% |
+| Met - implemented, and pinned by a host test, simulator row or CI job | 11 | 26% |
+| Partial - some exit criteria implemented, the remainder named | 13 | 30% |
 | Not started | 19 | 44% |
 
-**Source progress: 40%** (10 met + half of 14 partial = 17 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 41%** (11 met + half of 13 partial = 17.5 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
-| A - architecture coupling to the build machine | 3 | 5 | 0 | 8 |
+| A - architecture coupling to the build machine | 4 | 4 | 0 | 8 |
 | B - hardware preconditions | 6 | 1 | 3 | 10 |
 | C - privileged operations never shown safe | 0 | 6 | 4 | 10 |
 | D - release engineering | 1 | 2 | 2 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
-Blocking `P0`: 21 items, 5 met, 9 partial, 7 not started.
+Blocking `P0`: 21 items, 6 met, 8 partial, 7 not started.
 
 What the percentage is not: a measure of the product working. A met item means the code exists and something on the host pins it; the behaviour it would perform on a GPU is still unproven, which is why the second number is the one that decides whether this product works. It is 0% because no run has ever driven a card.
 
@@ -129,8 +129,10 @@ exactly one GPT partition with the EFI-system type (`GuWindowsEspPathCandidate`)
 it is not USB and not this image's own volume, and it actually contains
 `\EFI\Microsoft\Boot\bootmgfw.efi`; the existing "exactly one match"
 refusal is unchanged, so a second ESP cannot be silently chosen. The
-`BootOrder` cross-check in the original exit criteria is **not** implemented:
-it needs live `BootOrder` parsing and a second machine to validate. See §11.6.
+`BootOrder` cross-check is implemented in source (§11.25): an option that names
+the selected volume is required, a readable order that names no such volume is
+refused, and an order this image cannot read is logged as unchecked rather than
+silently accepted. It has not been run against a real `BootOrder`.
 
 ### A3. Multi-GPU execution exists but only behind the waiver — **P0**
 `gpu_discovery.c:26-28` (compile) and `:977-981` (runtime) both refuse
@@ -458,6 +460,56 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.25 A2 — BootOrder now decides, and an unreadable order never counts as a pass
+
+Runtime ESP identification dropped the compiled GUID, but the exit criteria had
+a second half that was never implemented: *cross-check the `BootOrder` entry
+that names the selected ESP*. Without it the image could pick a volume that
+carries `\EFI\Microsoft\Boot\bootmgfw.efi` while the firmware boots from a
+different one.
+
+The cross-check is now implemented in two parts. `GuBootOptionNamesDevicePath`
+(`src/gpu_windows_path.c`) parses one `EFI_LOAD_OPTION` - attributes,
+`FilePathListLength`, a NUL-terminated UTF-16 description, then the path - and
+compares the **device-node prefix**: the nodes before the first FilePath
+(media/0x04) or end (0x7f) node. An option that appends
+`\EFI\Microsoft\Boot\bootmgfw.efi` therefore names the same partition, while a
+different partition, controller or segment does not.
+`GuBootOrderNamesVolume` walks `BootOrder`, builds each `Boot####` name, reads
+it through a caller-supplied variable reader, and answers one of three things:
+
+| Verdict | Meaning | What the caller does |
+| --- | --- | --- |
+| `GU_ORDER_NAMES` | one named option points at this volume | `BOOTORDER=NAMES_SELECTED_ESP=1` |
+| `GU_ORDER_NONE` | the order was readable and nothing points here | refuse: `BOOTORDER=NONE_NAMES_SELECTED_ESP REFUSED=1` |
+| `GU_ORDER_UNREADABLE` | `BootOrder` or an option could not be read in full | `BOOTORDER=UNCHECKED STATUS=… PROCEEDING=1`, the rule before this entry |
+
+The third row is the honest one: this image does not claim a cross-check it did
+not perform. An option named but absent is skipped; an option larger than the
+2 KiB bound, an odd-sized `BootOrder`, a missing `BootOrder` or no
+`GetVariable` at all are `UNREADABLE`, never `NONE` and never `NAMES`. The
+check only exists in the runtime branch - the pinned build still matches one
+compiled GUID and never reads a variable - and it runs before the volume is
+published, so a contradiction cannot leave a selected volume behind.
+
+Evidence: `tests/test_gpu_windows_path.c` drives the real predicate and the real
+walk with a fake variable store - match, no match, absent option, unreadable
+option, missing `BootOrder`, oversized option, odd-sized order, malformed nodes
+and null arguments - 56 checks, gcc and clang. `tests/test_runtime_esp_contract.py`
+pins the wiring: the shared walk, both log lines, the refusal ordering, the
+`#ifdef GU_RUNTIME_ESP` placement, and that the adapter reads no variable
+without a runtime-services service. The UEFI sources compile under
+`-DGU_RUNTIME_ESP` (checked by building the simulator with the define).
+
+Coverage limit, stated plainly: nothing here has read a real `BootOrder`. The
+predicate and the walk are executed on the host; the firmware calls around them
+are compile-checked only, and a firmware whose boot options describe the ESP in
+a form this comparison does not model - a short-form path, a `BBS` node, a
+boot-manager that reaches the volume through a different controller alias -
+degrade to `UNCHECKED` rather than to a wrong answer, and would then be refused
+if the order were readable and simply did not match. `A2` is therefore **done in
+source, unverified on hardware**, and the hardware half is unchanged.
+
 ### 11.24 C8 — the admission policy now reads the link, and names what it still cannot
 
 Every gate in `src/checks.c` reads the capability chain: identity, class, header,
@@ -505,7 +557,10 @@ capability. It also compares the host mock's copy of `GU_LINK` with
 `src/checks.h` token for token, so the mock cannot drift from the firmware type.
 The shipped C mock (`tests/test_gpu_discovery.c`) gains a link-refusal switch and
 one end-to-end case: with the link refused the active path returns
-`EFI_UNSUPPORTED` without ever calling `GuInit`.
+`EFI_UNSUPPORTED` without ever calling `GuInit`. The host simulator's modelled
+card (`sim/sim_gpu.c`) now carries a real link - Gen4 x16, trained, active, ASPM
+disabled - because a modelled card with zeroed link registers would have proved
+only that the gate fires, not that a real card passes it.
 
 ### 11.23 C2 — the Stop now asks whether anything is still in flight, and refuses if it is
 

@@ -21,9 +21,9 @@
       "id": "A2",
       "class": "A",
       "priority": "P0",
-      "source": "partial",
-      "section": "11.6",
-      "note": "Runtime ESP identification; the BootOrder cross-check in the exit criteria is still missing.",
+      "source": "done",
+      "section": "11.25",
+      "note": "Runtime ESP identification plus the BootOrder cross-check: the selected volume must be named by a Boot#### that BootOrder lists, a readable order naming none refuses, and an unreadable order is logged as unchecked instead of counting as a pass.",
       "hardware_verified": false
     },
     {

@@ -810,12 +810,20 @@ EFI_STATUS SimGpuBuild(SIM_GPU **out) {
   gpu->config[SIM_CAP_MSI + 1] = (UINT8)SIM_CAP_PCIE;
   Wr16(gpu->config, SIM_CAP_MSI + 2, 0x0000);
 
-  /* PCI Express capability, endpoint v1, FLR supported, no link status bit. */
+  /* PCI Express capability, endpoint v1, FLR supported. The card sits in a
+   * real slot, so the link is trained, active, Gen4 x16, with ASPM disabled -
+   * the state the admission policy now requires before anything is actuated. */
   gpu->config[SIM_CAP_PCIE + 0] = 0x10;
   gpu->config[SIM_CAP_PCIE + 1] = 0x00;
   Wr16(gpu->config, SIM_CAP_PCIE + 2, 0x0001);
   Wr32(gpu->config, SIM_CAP_PCIE + 4, 0x10000000);   /* DEVCTL: FLR capable */
-  Wr16(gpu->config, SIM_CAP_PCIE + 8, 0x0000);       /* link control/status */
+  Wr16(gpu->config, SIM_CAP_PCIE + 8, 0x0000);       /* DEVCTL reserved bits clear */
+  Wr16(gpu->config, SIM_CAP_PCIE + 0x0a, 0x0000);    /* DEVSTA: no errors, nothing pending */
+  Wr32(gpu->config, SIM_CAP_PCIE + 0x0c, 4u | (16u << 4));/* max: Gen4 x16 */
+  Wr16(gpu->config, SIM_CAP_PCIE + 0x10, 0x0000);    /* ASPM: disabled */
+  Wr16(gpu->config, SIM_CAP_PCIE + 0x12,
+       (UINT16)(4u | (16u << 4) | (1u << 13)));      /* Gen4 x16, trained, up */
+  Wr32(gpu->config, SIM_CAP_PCIE + 0x14, 0x00000000);/* slot: no hot-plug */
   {
     UINT32 bar_base = 0x80000000u;
     Wr32(gpu->config, 0x10, bar_base);      /* BAR0: 16 MiB, 64-bit */

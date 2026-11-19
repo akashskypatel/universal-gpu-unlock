@@ -111,14 +111,99 @@ class BootIoWiring(unittest.TestCase):
         self.assertIn("pinned_GPT=0", runtime)
 
 
+def function_body(text, signature):
+    """The brace-matched body of one function, so a neighbouring function's
+    contents cannot be mistaken for this one's."""
+    start = text.index(signature) + len(signature)
+    depth = 1
+    pos = start
+    while depth and pos < len(text):
+        depth += (text[pos] == "{") - (text[pos] == "}")
+        pos += 1
+    if depth:
+        raise AssertionError("unterminated function: " + signature)
+    return text[start:pos]
+
+
 class Predicate(unittest.TestCase):
     def test_candidate_test_is_structural_only(self):
-        self.assertIn("int GuWindowsEspPathCandidate(const uint8_t *path, size_t bound) {", PATHS)
-        body = PATHS.split("int GuWindowsEspPathCandidate", 1)[1]
+        signature = "int GuWindowsEspPathCandidate(const uint8_t *path, size_t bound) {"
+        self.assertIn(signature, PATHS)
+        body = function_body(PATHS, signature)
         self.assertNotIn("memcmp", body)
         self.assertIn("partitions==1U", body)
         header = (SRC / "gpu_windows_path.h").read_text(encoding="utf-8")
         self.assertIn("int GuWindowsEspPathCandidate(const uint8_t *path, size_t bound);", header)
+
+    def test_the_pinned_test_still_compares_the_guid(self):
+        """The runtime rule dropped the pin; the pinned rule must not lose it."""
+        signature = ("int GuWindowsEspPathMatches(const uint8_t *path, size_t bound,\n"
+                     "                            const uint8_t guid[16]) {")
+        body = function_body(PATHS, signature)
+        self.assertIn("memcmp(path+at+24,guid,16)", body)
+
+    def test_a_boot_option_prefix_is_compared_by_value(self):
+        """A2: BootOrder names a volume by its device-path prefix, so the
+        comparison is over bytes - but only the prefix before a file name."""
+        signature = ("int GuBootOptionNamesDevicePath(const uint8_t *load_option, size_t option_bound,\n"
+                     "                                const uint8_t *path, size_t path_bound) {")
+        body = function_body(PATHS, signature)
+        self.assertIn("memcmp(load_option+at,path,prefix)", body)
+        self.assertIn("wanted=(size_t)load_option[4]", body)
+
+
+class BootOrderCrossCheck(unittest.TestCase):
+    """A2: the ESP the image picks must be the ESP BootOrder boots from."""
+
+    def test_the_walk_is_shared_and_bounded(self):
+        header = (SRC / "gpu_windows_path.h").read_text(encoding="utf-8")
+        self.assertIn("int GuBootOrderNamesVolume(GU_VARIABLE_READ read", header)
+        self.assertIn("#define GU_ORDER_UNREADABLE (-1)", header)
+        source = PATHS
+        self.assertIn("#define GU_ORDER_MAX_ENTRIES 64U", source)
+        self.assertIn("#define GU_ORDER_OPTION_BYTES 2048U", source)
+        # The entry count is captured before the loop: the per-option read uses
+        # its own size variable, so a second iteration cannot change the bound.
+        self.assertIn("entries=order_size/2U;", source)
+
+    def test_a_contradiction_refuses_and_an_unreadable_order_does_not_claim_a_pass(self):
+        signature = "static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {"
+        body = function_body(BOOT_IO, signature)
+        self.assertIn("BootOrderNamesVolume(mdp,mbytes)", body)
+        self.assertIn("BOOTORDER=NONE_NAMES_SELECTED_ESP REFUSED=1", body)
+        self.assertIn("BOOTORDER=UNCHECKED STATUS=%#llx PROCEEDING=1", body)
+        self.assertIn("BOOTORDER=NAMES_SELECTED_ESP=1", body)
+        # A readable order that names nothing must return before the volume is
+        # published, and the unchecked path must be a different line.
+        self.assertLess(body.index("BOOTORDER=NONE_NAMES_SELECTED_ESP"),
+                        body.index("*out=matched;"))
+
+    def test_only_the_runtime_build_consults_boot_order(self):
+        # The pinned build still matches one compiled GUID and never reads a
+        # variable: the cross-check lives inside the runtime branch only.
+        start = BOOT_IO.index("static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {")
+        body = BOOT_IO[start:BOOT_IO.index("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp", start)]
+        guarded = body.split("#ifdef GU_RUNTIME_ESP", 1)[1]
+        self.assertIn("BootOrderNamesVolume", guarded)
+        self.assertIn("#else", body)
+        before = body.split("#else", 1)[0]
+        self.assertNotIn("BootOrderNamesVolume", before)
+
+    def test_the_adapter_never_reads_without_a_variable_service(self):
+        signature = "static int ReadGlobalVariable(const uint8_t *name,size_t name_bytes,"
+        self.assertIn(signature, BOOT_IO)
+        body = function_body(BOOT_IO, signature + "\n                              uint8_t *out,size_t *size) {")
+        self.assertIn("if(!rs||!rs->GetVariable", body)
+        self.assertIn("return s==EFI_NOT_FOUND?0:-1;", body)
+
+    def test_the_simulator_models_a_linked_card(self):
+        """C8 made an untrained link a refusal, so the modelled card must have
+        one: a simulator card without a link would prove the gate fires, not
+        that a real card passes it."""
+        sim = (ROOT / "sim" / "sim_gpu.c").read_text(encoding="utf-8")
+        self.assertIn("Gen4 x16, trained, up", sim)
+        self.assertIn("max: Gen4 x16", sim)
+        self.assertIn("ASPM: disabled", sim)
 
 
 class BuilderSwitches(unittest.TestCase):

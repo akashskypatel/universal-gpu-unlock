@@ -57,3 +57,91 @@ int GuWindowsEspPathCandidate(const uint8_t *path, size_t bound) {
   }
   return partitions==1U;
 }
+
+/* The device-node prefix both sides have in common, or zero for a mismatch. */
+static size_t DevicePrefix(const uint8_t *path, size_t bound) {
+  size_t at=0;
+  while(at+4<=bound) {
+    size_t n=(size_t)path[at+2] | ((size_t)path[at+3]<<8);
+    if(n<4 || n>bound-at)return 0;
+    /* A FilePath node names a file on the volume, not the volume; anything
+     * else - including the media hard-drive node that carries the partition
+     * GUID - is part of the identity being compared. */
+    if(path[at]==0x7fU || (path[at]==4U && path[at+1]==4U))return at;
+    at+=n;
+  }
+  /* Every node consumed: the prefix is the whole range. A boot option may end
+   * its list this way, and a truncated tail still has to match byte for byte
+   * on both sides before anything is called a match. */
+  return at>=4U?at:0;
+}
+
+int GuBootOptionNamesDevicePath(const uint8_t *load_option, size_t option_bound,
+                                const uint8_t *path, size_t path_bound) {
+  size_t at,prefix,wanted,have;
+  if(!load_option || option_bound<8 || option_bound>DP_MAX || !path)return 0;
+  wanted=(size_t)load_option[4] | ((size_t)load_option[5]<<8);
+  if(wanted<4)return 0;
+  /* The description is UTF-16 and must be terminated inside the blob. */
+  for(at=6;at+1<option_bound;at+=2)
+    if(load_option[at]==0 && load_option[at+1]==0)break;
+  if(at+2>option_bound)return 0;
+  at+=2;
+  if(at+wanted>option_bound)return 0;
+  have=DevicePrefix(load_option+at,wanted);
+  if(!have)return 0;
+  prefix=DevicePrefix(path,path_bound);
+  if(!prefix || prefix!=have)return 0;
+  return memcmp(load_option+at,path,prefix)==0;
+}
+
+#define GU_ORDER_MAX_ENTRIES 64U
+#define GU_ORDER_OPTION_BYTES 2048U
+
+/* "BootOrder" and "Boot####", as the UTF-16LE bytes GetVariable takes, with the
+ * terminator. The caller must supply at least 2 * (GU_ORDER_NAME_MAX + 1) bytes
+ * and the length is returned including both terminator bytes. */
+#define GU_ORDER_NAME_MAX 15U
+static size_t Utf16Name(const char *ascii, uint8_t *out) {
+  size_t n=0;
+  if(!ascii||!out)return 0;
+  for(;ascii[n];n++) {
+    if(n>=GU_ORDER_NAME_MAX)return 0;
+    out[2*n]=(uint8_t)ascii[n];
+    out[2*n+1]=0;
+  }
+  out[2*n]=0;out[2*n+1]=0;
+  return 2*n+2;
+}
+
+int GuBootOrderNamesVolume(GU_VARIABLE_READ read, const uint8_t *path,
+                           size_t path_bound) {
+  static const char hex[]="0123456789ABCDEF";
+  uint8_t name[2U*(GU_ORDER_NAME_MAX+1U)];
+  uint8_t order[GU_ORDER_MAX_ENTRIES*2U];
+  uint8_t option[GU_ORDER_OPTION_BYTES];
+  size_t name_bytes,order_size,option_size,entries;
+  if(!read||!path||!path_bound)return GU_ORDER_UNREADABLE;
+  if(!(name_bytes=Utf16Name("BootOrder",name)))return GU_ORDER_UNREADABLE;
+  order_size=sizeof(order);
+  if(read(name,name_bytes,order,&order_size)!=1)return GU_ORDER_UNREADABLE;
+  if(order_size>sizeof(order)||order_size%2U)return GU_ORDER_UNREADABLE;
+  /* The entry count is fixed here: the per-option call below uses its own size
+   * variable, because reusing one across the loop would change the bound. */
+  entries=order_size/2U;
+  for(size_t i=0;i<entries;i++) {
+    char text[9]={'B','o','o','t',0,0,0,0,0};
+    unsigned entry=(unsigned)order[2*i] | ((unsigned)order[2*i+1]<<8);
+    int got;
+    text[4]=hex[(entry>>12)&0x0fU];text[5]=hex[(entry>>8)&0x0fU];
+    text[6]=hex[(entry>>4)&0x0fU];text[7]=hex[entry&0x0fU];
+    if(!(name_bytes=Utf16Name(text,name)))return GU_ORDER_UNREADABLE;
+    option_size=sizeof(option);
+    got=read(name,name_bytes,option,&option_size);
+    if(got==0)continue;                                  /* named but absent */
+    if(got!=1||option_size>sizeof(option))return GU_ORDER_UNREADABLE;
+    if(GuBootOptionNamesDevicePath(option,option_size,path,path_bound))
+      return GU_ORDER_NAMES;
+  }
+  return GU_ORDER_NONE;
+}

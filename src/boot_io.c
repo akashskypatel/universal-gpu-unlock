@@ -492,6 +492,41 @@ static BOOLEAN StagedBundleRecordUsable(VOID) {
 }
 #endif
 
+#ifdef GU_RUNTIME_ESP
+/* The EFI global-variable GUID, spelled out the way driver_nvram.c does so
+ * this compiles against the simulation headers as well as EDK II's. */
+static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
+
+/* A2's remaining half: the selected volume must be the one BootOrder boots
+ * from.
+ *
+ * BootOrder lists the load options the firmware will try. Every option it names
+ * is read, and its device-path prefix compared with the selected volume. A
+ * readable BootOrder that names none of them is a contradiction, so it refuses;
+ * a BootOrder this image cannot read degrades to the previous rule and says so,
+ * because a check that did not happen must never be logged as one that passed. */
+/* The one firmware call the shared walk makes. Any failure that is not
+ * "variable absent" is reported as unreadable, so an option this image cannot
+ * read in full can never be counted as a match. */
+static int ReadGlobalVariable(const uint8_t *name,size_t name_bytes,
+                              uint8_t *out,size_t *size) {
+  EFI_RUNTIME_SERVICES *rs=Table?Table->RuntimeServices:NULL;
+  if(!rs||!rs->GetVariable||!name||!out||!size)return -1;
+  UINTN n=*size;
+  UINT32 attrs=0;
+  EFI_STATUS s=rs->GetVariable((CHAR16 *)name,&GlobalGuid,&attrs,&n,out);
+  *size=n;
+  if(s==EFI_SUCCESS)return 1;
+  return s==EFI_NOT_FOUND?0:-1;
+}
+
+static EFI_STATUS BootOrderNamesVolume(const EFI_DEVICE_PATH_PROTOCOL *dp,UINTN bytes) {
+  int verdict=GuBootOrderNamesVolume(ReadGlobalVariable,(const uint8_t *)dp,bytes);
+  if(verdict==GU_ORDER_NAMES)return EFI_SUCCESS;
+  return verdict==GU_ORDER_NONE?EFI_UNSUPPORTED:EFI_NOT_READY;
+}
+#endif
+
 static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {
   if(!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
   *out=NULL;
@@ -523,6 +558,25 @@ static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {
   EFI_STATUS freed=ReleaseBootFilesystemHandles(b,&handles);
   if(freed!=EFI_SUCCESS)return freed;
   if(matches!=1U)return matches?EFI_UNSUPPORTED:EFI_NOT_FOUND;
+#ifdef GU_RUNTIME_ESP
+  {
+    /* The volume that carries the boot manager is not necessarily the one the
+     * firmware will hand the console to. Ask BootOrder. */
+    EFI_DEVICE_PATH_PROTOCOL *mdp=NULL;
+    UINTN mbytes=0;BOOLEAN musb=FALSE,mmedia=FALSE;
+    if(b->HandleProtocol(matched,&PathGuid,(VOID **)&mdp)!=EFI_SUCCESS||!mdp||
+       !Inspect(mdp,&mbytes,&musb,&mmedia))return EFI_UNSUPPORTED;
+    EFI_STATUS order=BootOrderNamesVolume(mdp,mbytes);
+    if(order==EFI_UNSUPPORTED) {
+      GuLog("BOOTORDER=NONE_NAMES_SELECTED_ESP REFUSED=1\n");
+      return EFI_UNSUPPORTED;
+    }
+    if(order!=EFI_SUCCESS)
+      GuLog("BOOTORDER=UNCHECKED STATUS=%#llx PROCEEDING=1\n",(unsigned long long)order);
+    else
+      GuLog("BOOTORDER=NAMES_SELECTED_ESP=1\n");
+  }
+#endif
   *out=matched;
   return EFI_SUCCESS;
 }
