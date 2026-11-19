@@ -94,6 +94,8 @@ def render(manifest: dict) -> str:
     out = [HEADER]
     for stage in manifest["stages"]:
         out.append(f"### `{stage['id']}` — {stage['title']}\n\n")
+        out.append(f"*Build:*\n\n```powershell\n{stage['build']}\n```\n\n")
+        out.append(f"Note: {stage['build_note']}.\n\n")
         out.append(f"*Costs:* {stage['what_it_costs']}\n\n")
         out.append(f"*Exit criteria:* {stage['exit']}\n\n")
         gates = [g for g in manifest["gates"] if g["stage"] == stage["id"]]

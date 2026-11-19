@@ -52,6 +52,14 @@ card.
 
 ### `readonly` — Read-only contact
 
+*Build:*
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog
+```
+
+Note: the read-only image always saves its numbered log; add -WindowsEspGuid '<reviewed GUID>' only if you want the automatic Windows handover.
+
 *Costs:* nothing: the diagnostic never writes a GPU register, resets a Falcon, calls the vendor Stop or loads firmware
 
 *Exit criteria:* the card is enumerated, its BDF and PCI identity are in the log, and the eligibility flags are printed as false
@@ -82,6 +90,14 @@ card.
 
 ### `prepare` — Preparation only
 
+*Build:*
+
+```powershell
+.\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0'
+```
+
+Note: a selection without -EnableSingleTargetExecution and without the waiver compiles the preparation-only image (GPU-ACTIVE-PREP-*), which refuses to actuate before it starts.
+
 *Costs:* the active app runs its preflight and preparation, logs a refusal before any mutation, and hands back to Windows
 
 *Exit criteria:* preparation completes with MUTATION_AUTHORIZED=0 and no Stop, no waiver and no step line
@@ -104,6 +120,14 @@ card.
 * `BOOT_STATE PRESENT=0` (src/boot_io.c) — no record was found, which is the correct state for the first boot on a wiped machine.
 
 ### `actuate` — Waived actuation
+
+*Build:*
+
+```powershell
+.\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation
+```
+
+Note: the only waiver switch; it also needs a reviewed local/boot_profile.h or -RuntimeEsp, and the matched assets on the ESP.
 
 *Costs:* the one admission that may write: a single card, ordered, no retry, with the firmware timer bounded or explicitly off
 

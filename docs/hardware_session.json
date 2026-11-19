@@ -13,19 +13,25 @@
       "id": "readonly",
       "title": "Read-only contact",
       "what_it_costs": "nothing: the diagnostic never writes a GPU register, resets a Falcon, calls the vendor Stop or loads firmware",
-      "exit": "the card is enumerated, its BDF and PCI identity are in the log, and the eligibility flags are printed as false"
+      "exit": "the card is enumerated, its BDF and PCI identity are in the log, and the eligibility flags are printed as false",
+      "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\src\\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog",
+      "build_note": "the read-only image always saves its numbered log; add -WindowsEspGuid '<reviewed GUID>' only if you want the automatic Windows handover"
     },
     {
       "id": "prepare",
       "title": "Preparation only",
       "what_it_costs": "the active app runs its preflight and preparation, logs a refusal before any mutation, and hands back to Windows",
-      "exit": "preparation completes with MUTATION_AUTHORIZED=0 and no Stop, no waiver and no step line"
+      "exit": "preparation completes with MUTATION_AUTHORIZED=0 and no Stop, no waiver and no step line",
+      "build": ".\\src\\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0'",
+      "build_note": "a selection without -EnableSingleTargetExecution and without the waiver compiles the preparation-only image (GPU-ACTIVE-PREP-*), which refuses to actuate before it starts"
     },
     {
       "id": "actuate",
       "title": "Waived actuation",
       "what_it_costs": "the one admission that may write: a single card, ordered, no retry, with the firmware timer bounded or explicitly off",
-      "exit": "the waiver is recorded once, the pre-Stop contract is captured, the step reaches a terminal record, and the next boot reads the record it left"
+      "exit": "the waiver is recorded once, the pre-Stop contract is captured, the step reaches a terminal record, and the next boot reads the record it left",
+      "build": ".\\src\\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation",
+      "build_note": "the only waiver switch; it also needs a reviewed local/boot_profile.h or -RuntimeEsp, and the matched assets on the ESP"
     }
   ],
   "gates": [

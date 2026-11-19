@@ -148,6 +148,29 @@ class ThePatternsMatchRealLines(unittest.TestCase):
         self.assertIsNotNone(pattern.search("BOOT_STATE PRESENT=1 PHASE=2 BOOT_COUNT=3"))
 
 
+class TheBuildCommandsExist(unittest.TestCase):
+    def test_every_stage_names_a_builder_that_exists(self):
+        for stage in MANIFEST["stages"]:
+            match = re.search(r"(-File\s+)?\.[\\/]src[\\/]([\w.\-]+\.ps1)", stage["build"])
+            self.assertIsNotNone(match, stage["id"])
+            self.assertTrue((ROOT / "src" / match.group(2)).is_file(), stage["id"])
+
+    def test_every_switch_in_a_build_command_exists_in_that_script(self):
+        for stage in MANIFEST["stages"]:
+            match = re.search(r"src[\\/]([\w.\-]+\.ps1)(.*)$", stage["build"])
+            script, rest = match.group(1), match.group(2)
+            text = (ROOT / "src" / script).read_text(encoding="utf-8")
+            # Only the switches passed to the script, not to powershell.exe.
+            switches = re.findall(r"(?:^|\s)(-[A-Z][\w]*)", rest)
+            for switch in switches:
+                self.assertIn(switch, text, f"{stage['id']}: {switch} is not in {script}")
+
+    def test_the_waiver_switch_is_only_in_the_actuation_stage(self):
+        waiver = [stage["id"] for stage in MANIFEST["stages"]
+                  if "-AcceptUnverifiedActuation" in stage["build"]]
+        self.assertEqual(waiver, ["actuate"])
+
+
 class TheVerifierScoresRuns(unittest.TestCase):
     def test_a_good_read_only_run_passes_its_own_stage(self):
         result = run_verifier(str(FIXTURES / "readonly.txt"), "--self-test", "--stage", "readonly")
