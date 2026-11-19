@@ -174,9 +174,9 @@
       "id": "C1",
       "class": "C",
       "priority": "P0",
-      "source": "none",
-      "section": null,
-      "note": "The vendor Stop callback may write BAR0 and poll without a proven bound; refused for 0x2684/0x220a.",
+      "source": "partial",
+      "section": "11.16",
+      "note": "A pre-Stop capture and a ten-requirement contract exist and are pinned by host tests; the bound, the signed-Booter comparison and the recovery evidence are still absent.",
       "hardware_verified": false
     },
     {

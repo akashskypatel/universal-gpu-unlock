@@ -286,6 +286,17 @@ default is never widened:
    intent log, and an independently verified recovery procedure. Until the
    bound and recovery are demonstrated on hardware, G4 stays closed for
    `0x2684`/`0x220a`.
+   *Status (2026-11-18): **the capture and the contract exist; the bound does
+   not, and nothing new is admitted.*** `src/stop_contract.[ch]` decides over an
+   explicit observation with ten requirements, `ALLOW` only when every one holds,
+   and a zero observation satisfies none. `GuMsiRelease` logs one `STOP_CONTRACT`
+   line before the wholesale refusal (claiming `OWNER` only, because the refusal
+   precedes everything else) and before every `Driver()` call (claiming `OWNER`,
+   `COLD`, `CONSOLE`, `PEERS` - the checks that just passed in that iteration).
+   The six facts nothing in this tree can observe are printed in `MISSING`
+   instead of being assumed, so `DECISION` is `REFUSE` on every capture the
+   image can produce. Inventory §11.16; `tests/test_stop_contract.c` and
+   `tests/test_stop_contract_contract.py`.
 4. **DMA and FLR quiescence proof.** Demonstrate DMA inactivity *after* the
    Stop and before any MMIO write, per target.
 5. **Physical qualification on one card at a time.** Single target, stock

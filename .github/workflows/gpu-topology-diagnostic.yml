@@ -132,6 +132,13 @@ jobs:
             python3 -m unittest discover -s tests -p test_waiver_build_diff.py -v
             # The recovery matrix must stay grounded in code that exists.
             python3 -m unittest discover -s tests -p test_recovery_matrix.py -v
+            # Pre-Stop capture: the admission contract is a pure decision over an
+            # explicit observation, and a zero observation must refuse.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_STOP_CONTRACT_HOST_TEST -Isrc tests/test_stop_contract.c src/stop_contract.c -o "$RUNNER_TEMP/test_stop_contract_$compiler"
+              "$RUNNER_TEMP/test_stop_contract_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_stop_contract_contract.py -v
             # The readiness headline is generated, not typed into prose.
             python3 -m unittest discover -s tests -p test_readiness_summary.py -v
             # Every stock profile must link, and keep its own selector contract.

@@ -13,20 +13,20 @@ no hardware was touched.
 | Source obligation | Items | Share |
 | --- | --- | --- |
 | Met - implemented, and pinned by a host test, simulator row or CI job | 6 | 14% |
-| Partial - some exit criteria implemented, the remainder named | 7 | 16% |
-| Not started | 30 | 70% |
+| Partial - some exit criteria implemented, the remainder named | 8 | 19% |
+| Not started | 29 | 67% |
 
-**Source progress: 22%** (6 met + half of 7 partial = 9.5 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 23%** (6 met + half of 8 partial = 10 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 3 | 5 | 0 | 8 |
 | B - hardware preconditions | 2 | 0 | 8 | 10 |
-| C - privileged operations never shown safe | 0 | 2 | 8 | 10 |
+| C - privileged operations never shown safe | 0 | 3 | 7 | 10 |
 | D - release engineering | 1 | 0 | 4 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
-Blocking `P0`: 21 items, 4 met, 5 partial, 12 not started.
+Blocking `P0`: 21 items, 4 met, 6 partial, 11 not started.
 
 What the percentage is not: a measure of the product working. A met item means the code exists and something on the host pins it; the behaviour it would perform on a GPU is still unproven, which is why the second number is the one that decides whether this product works. It is 0% because no run has ever driven a card.
 
@@ -284,7 +284,7 @@ These are verified from source, not inferred.
 
 | # | Operation | Current state | Evidence | Pri |
 | --- | --- | --- | --- | --- |
-| C1 | Calling the vendor UEFI driver's `Stop` (3-stage detach) | refused by default for 0x2684/0x220a; the callback may write BAR0 and poll without a proven bound | `msi_release.c:1080-1112`, `:1051-1060`, `Driver()` at `:429-455` | P0 |
+| C1 | Calling the vendor UEFI driver's `Stop` (3-stage detach) | refused by default for 0x2684/0x220a; a pre-Stop capture and a ten-requirement contract now record what is missing (§11.16), but the callback may still write BAR0 and poll without a proven bound | `stop_contract.[ch]`, `msi_release.c::GuMsiRelease`, `Driver()` at `:429-455` | P0 |
 | C2 | DMA quiescence after Stop | cleared and re-read, but no IOMMU/SMMU, no engine-queue readback, no bus trace | `msi_release.c:935-940`, `NormalizeMasterAfterStop` | P0 |
 | C3 | Firmware acceptance (FWSEC descriptor, ROM) | structural parse + SHA-256 log; `SIGNATURE_AUTHENTICATED=0` | `vbios_610.c:177,213`, `profile.c:78-99` | P0 |
 | C4 | Booter ↔ V67 ↔ ROM pairing | five files hash-pinned to 610.43.03; FWSEC image comes from the live ROM, V67 from the bundle; no signature chain ties them. A per-card allowlist now exists for the ROM half (§11.13) but carries no references, and it is a digest, not a signature | `profile.c`, `prom_reference.c`, `unlock_610.c` | P0 |
@@ -817,6 +817,42 @@ is exactly the reviewed pair, no unit may gain or lose code, the profile matches
 the runbook, every compiled source is covered, no dependency on generated state),
 `tests/test_waiver_ci.py` (10 tests), `tests/test_build_source_lists.py` (4 tests).
 Workflow run 44445509664 and later on this branch: `host=success efi=success`.
+
+### 11.16 S3/C1 — a pre-Stop capture, and the contract it feeds
+
+Step 3 of `MULTI_GPU_REFACTOR_REVIEW.md` §4.3 asks for "a documented bound and a
+pre-Stop state capture for the AD102/GA102 Stop callback, then a per-target
+contract that requires ...". The capture and the contract exist now; the bound
+does not, and nothing is admitted that was not admitted before.
+
+`src/stop_contract.[ch]` is a pure decision over an explicit observation: ten
+requirements, each a bit, and `ALLOW` only when every one holds. A zero-initialised
+observation (or a NULL one) satisfies nothing, so the fail-closed direction is a
+property of the type rather than of the caller. `GuStopContractDescribe` spells the
+missing set out, and the requirement order is the plan's order.
+
+`GuMsiRelease` logs one `STOP_CONTRACT` line, twice over:
+
+| Site | What it can claim | Why |
+| --- | --- | --- |
+| Immediately before the wholesale refusal | `OWNER` only | the refusal deliberately precedes every other check (`test_release_handoff_contract.py` pins that ordering) |
+| Immediately before each `Driver()` call | `OWNER`, `COLD`, `CONSOLE`, `PEERS` | those four just returned success in the same iteration |
+| Always | the other six are `0` | no code in this tree observes the target's firmware GOP, a closed intent log, an executed recovery, the 617.42 Booter comparison, a Stop bound, or DMA idleness |
+
+The six unobservable facts are fields in the record, not omissions: the line names
+them in `MISSING`, so a hardware run knows exactly what it has to establish. A
+capture that guessed would be worse than one that says so.
+
+Evidence: `tests/test_stop_contract.c` (72 checks under ASan+UBSan: zero
+observation refuses, each requirement is independently necessary, the description
+is ordered and bounded, the shipped capture is incomplete by construction);
+`tests/test_stop_contract_contract.py` (12 source checks: capture before callback,
+before refusal, never claims an unobservable fact, one implementation of the
+decision, requirement order equals the plan). CI compiles and runs both.
+
+What it is not: the refusal is unchanged, `DECISION` is `REFUSE` on every capture
+this image can produce, and no line says a Stop is safe. The bound and the recovery
+evidence are still steps 3-5 of the plan, and they need hardware.
 
 ### 11.15 S5/A8 — the recovery matrix, checked against the code
 

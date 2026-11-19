@@ -6,6 +6,7 @@
  * No firmware variables, controller reconnects or reset fallback are used.
  */
 #include "msi_release.h"
+#include "stop_contract.h"
 #include "port.h"
 #include "boot_io.h"
 #include "profile.h"
@@ -1048,6 +1049,38 @@ static EFI_STATUS ClaimRestore(VOID) {
   }
   GuLog("MSI exclusive claim/decode result: status=%#llx\n",(unsigned long long)s);return s;
 }
+/* Pre-Stop state capture.
+ *
+ * The plan's step 3 asks for one record, taken immediately before the vendor
+ * Stop callback, of every fact the admission depends on. Each field below is
+ * either something this function just verified or one of the six facts no code
+ * in this tree can establish; the six stay FALSE and are named in MISSING, so the
+ * line cannot imply a check that never happened. */
+static void StopContractLog(UINTN Stage, BOOLEAN Owner, BOOLEAN Cold,
+                            BOOLEAN Console, BOOLEAN Peers) {
+  GU_STOP_OBSERVATION observation = {0};
+  observation.DeviceId=(GU_SC_UINT32)Gu.device_id;
+  observation.Owner=Owner?GU_SC_TRUE:GU_SC_FALSE;
+  observation.Cold=Cold?GU_SC_TRUE:GU_SC_FALSE;
+  observation.Console=Console?GU_SC_TRUE:GU_SC_FALSE;
+  observation.Peers=Peers?GU_SC_TRUE:GU_SC_FALSE;
+  /* TARGET_GOP, LOG, RECOVERY, SIGNED_BOOTER, BOUND and DMA are left false:
+   * nothing in this image observes them, and a capture that guessed would be
+   * worse than one that says so. */
+  UINT32 missing=GuStopContractMissing(&observation);
+  CHAR8 text[128];
+  GuStopContractDescribe(missing,text,sizeof(text));
+  GuLog("STOP_CONTRACT device=%04x stage=%zu OWNER=%d COLD=%d CONSOLE=%d PEERS=%d "
+        "TARGET_GOP=%d LOG=%d RECOVERY=%d SIGNED_BOOTER=%d BOUND=%d DMA=%d "
+        "DECISION=%s MISSING=%s\n",
+        (unsigned)Gu.device_id,Stage,(int)observation.Owner,(int)observation.Cold,
+        (int)observation.Console,(int)observation.Peers,
+        (int)observation.TargetGopGone,(int)observation.LogClosed,
+        (int)observation.Recovery,(int)observation.SignedBooter,
+        (int)observation.Bound,(int)observation.DmaIdle,
+        GuStopContractDecision(missing),text);
+}
+
 EFI_STATUS GuMsiRelease(VOID) {
   if(!ReleaseOwnerMatches())return EFI_NOT_READY;
   if(!Plan.ready||Plan.mutated||Gu.started||Gu.owned)return EFI_NOT_READY;
@@ -1058,6 +1091,10 @@ EFI_STATUS GuMsiRelease(VOID) {
    * Reject before any firmware callback, independent of entrypoint/build. */
 #if !GU_ACTUATION_ADMITTED
   if(Gu.device_id==0x2684U||Gu.device_id==0x220aU) {
+    /* Owner held at entry. Everything else is established by checks this refusal
+     * deliberately precedes, so the capture claims only what it knows: an
+     * unclaimed fact is listed as missing, never assumed. */
+    StopContractLog(0,TRUE,FALSE,FALSE,FALSE);
     GuLog("MSI release refused for original AD102/GA102: vendor Stop and signed loader not verified\n");
     return EFI_UNSUPPORTED;
   }
@@ -1066,6 +1103,7 @@ EFI_STATUS GuMsiRelease(VOID) {
    * nothing about the vendor Stop bound, signed Windows 617.42 Booter
    * acceptance or physical recovery is verified, and a simulated run says so. */
   if(Gu.device_id==0x2684U||Gu.device_id==0x220aU) {
+    StopContractLog(0,TRUE,FALSE,FALSE,FALSE);
 #if GU_ACTUATION_SIMULATED
     GuLog("MSI release SIMULATED for original AD102/GA102 device=%04x: "
           "ENVIRONMENT=HOST_SIMULATOR VENDOR_STOP_BOUND=UNVERIFIED "
@@ -1097,6 +1135,10 @@ EFI_STATUS GuMsiRelease(VOID) {
       GraphDiff(stage-1, FALSE);
       s=EFI_NOT_READY;
     }
+    /* Everything above just held: owner, cold selectors, console ownership and
+     * the peer graph. That is the pre-Stop capture, taken before the callback
+     * that can write BAR0 and poll. */
+    if(s==EFI_SUCCESS)StopContractLog(stage-1,TRUE,TRUE,TRUE,TRUE);
     if(s==EFI_SUCCESS)s=Driver(stage-1);
     b->RestoreTPL(old);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;

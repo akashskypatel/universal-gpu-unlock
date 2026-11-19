@@ -93,6 +93,7 @@ order a healthy run emits them:
 | `ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=<n> ORDERED_SEQUENTIAL=1 MUTATION_AUTHORIZED=1 ...` | the waiver is in force for this boot; `CAN_*` are still `0` |
 | `MSI preflight: status=... graph=<n>` | owner graph captured |
 | `MSI release WAIVED for original AD102/GA102 ... VENDOR_STOP_BOUND=UNVERIFIED` | the `0x2684`/`0x220a` refusal was replaced by an admission, not by a proof |
+| `STOP_CONTRACT device=... DECISION=REFUSE MISSING=...` | the pre-Stop capture lists the facts this image cannot establish - target GOP, closed log, executed recovery, 617.42 Booter comparison, Stop bound, DMA idleness. Record this line with the run: it is the checklist a hardware session has to fill. |
 | `SELECTED_GPU_STEP=ACTIVE ORDER=0 TARGET=0 PEERS=<n>` | the step that may write has begun |
 | `SELECTED_GPU_STEP=COMPLETE NEXT=1 PEERS_VERIFIED=<n>` | the step finished and peer state was re-observed |
 | `SELECTED_GPU_STEP=BOUND ORDER=1 TARGET=1` | only for multi-target runs: the successor context was published |
