@@ -457,8 +457,8 @@ implements was therefore a promise, not a gate with a witness.
 
 `tests/test_admission_gates.py` extracts `ConfigByte`, `ConfigWord`,
 `GuCheckConfigPolicy`, `GuCheckConfig` and `GuCheckConfigInitialMaster` from the
-real source, links them against independent host mocks, and drives 51 crafted
-256-byte snapshots through them. The UEFI constants the policy depends on
+real source, links them against independent host mocks, and runs 53 assertions
+over crafted 256-byte config snapshots. The UEFI constants the policy depends on
 (`PCI_CLASS_DISPLAY`, the command/status bits, the capability ids,
 `PCI_EXPRESS_CAPABILITY_ID`, `PCI_POWER_STATE_D0`) are re-read from
 `src/vendor/edk2/Include/IndustryStandard/Pci22.h`, `Pci23.h` and
