@@ -114,6 +114,9 @@ jobs:
             done
             python3 -m unittest discover -s tests -p test_stock_profile_contract.py -v
             python3 -m unittest discover -s tests -p test_watchdog_contract.py -v
+            # Every stock profile must link, and keep its own selector contract.
+            python3 tools/run_simulation.py matrix
+            python3 -m unittest discover -s tests -p test_stock_profile_matrix.py -v
             python3 -m unittest discover -s tests -p test_turing_build_gate.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v

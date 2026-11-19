@@ -64,13 +64,15 @@ int main(int argc, char **argv) {
   int stock_match = strcmp(variant, "stock-match") == 0;
   int stock_mismatch = strcmp(variant, "stock-mismatch") == 0;
   int watchdog = strcmp(variant, "watchdog") == 0;
+  int preserve = strcmp(variant, "preserve") == 0;
+  int untracked = strcmp(variant, "untracked") == 0;
 
   SimReportLine("SIM_VARIANT=%s", variant);
   if (!esp || !windows) {
     fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir> "
             "[nominal|msi-enabled|flr-refused|dma-high|rebar|bar-above-4g|"
             "runtime-target|runtime-absent|ad104-sku|install-assets|"
-            "stock-match|stock-mismatch|watchdog]\n",
+            "stock-match|stock-mismatch|watchdog|preserve|untracked]\n",
             argv[0]);
     return 2;
   }
@@ -96,8 +98,9 @@ int main(int argc, char **argv) {
    * value the original-03100062 profile is compiled for; "stock-mismatch" is the
    * other captured value, which that build must refuse. These variants are only
    * meaningful with the matching build (see tools/run_simulation.py). */
-  if (stock_match) SimGpuSetSelectors(gpu, 0x03100062U, 2U);
+  if (stock_match || untracked) SimGpuSetSelectors(gpu, 0x03100062U, 2U);
   if (stock_mismatch) SimGpuSetSelectors(gpu, 0x03000062U, 2U);
+  if (preserve) SimGpuSetSelectors(gpu, 0x03100062U, 2U);
   if (dma_high) SimGpuForceHighDma(gpu, 1);
   /* Firmware is free to place BAR0 above 4 GiB, and Resizable BAR makes the
    * window larger than the 16 MiB of registers this code addresses. */
@@ -432,10 +435,34 @@ int main(int argc, char **argv) {
       Check(SimGpuPromWrites(gpu) == 0, "the PROM window was written");
       Check(SimGpuWpr2Opens() == 1, "FWSEC did not open exactly one WPR2 window");
       Check(SimGpuWpr2High(gpu) == 0, "WPR2 remained enabled after the reset");
-      Check(ss0_at >= 0 && ss1_at >= 0 && ss0_at < ss1_at,
-            "selectors were not written in order");
-      Check(ss1_at >= 0 && flr_last >= 0 && ss1_at < flr_last,
-            "selectors were not applied before the final reset");
+      if (preserve) {
+        /* This policy must leave SS1 exactly as it found it: the port layer
+         * refuses that offset outright and the reset check compares it against
+         * the latched entry value. */
+        Check(ss0_at >= 0, "the preserve policy never wrote SS0");
+        Check(SimTraceWatchWrites(ss1_slot) == 0,
+              "the preserve policy wrote the selector it must preserve");
+        Check(owner->fault == 0, "the preserve policy faulted on SS1");
+        Check(SimLogContains("SELECTOR_PATH=PRESERVE"),
+              "the run did not record which selector contract it used");
+        Check(ss0_at < flr_last, "the SS0 write did not precede the reset");
+      } else {
+        Check(ss0_at >= 0 && ss1_at >= 0 && ss0_at < ss1_at,
+              "selectors were not written in order");
+        Check(ss1_at >= 0 && flr_last >= 0 && ss1_at < flr_last,
+              "selectors were not applied before the final reset");
+        if (untracked) {
+          /* No entry latch, so no phase machine: both selectors are written in
+           * stock order and the build says that it cannot detect a repeat. */
+          Check(SimLogContains("SELECTOR_PATH=UNTRACKED"),
+                "the non-latched run did not record its selector contract");
+          Check(!SimLogContains("SELECTOR_PATH=PHASED"),
+                "a non-latched run claimed the phased contract");
+        } else {
+          Check(SimLogContains("SELECTOR_PATH=PHASED"),
+                "the full policy did not record its selector contract");
+        }
+      }
       Check(owner->armed != 0, "owner was not armed after the transaction");
       Check(owner->fault == 0, "owner reported a fault");
       Check(owner->retained == 0, "owner retained firmware buffers");

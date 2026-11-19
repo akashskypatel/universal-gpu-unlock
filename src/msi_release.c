@@ -1161,11 +1161,23 @@ static BOOLEAN GuMsiHardwareVerifiedBeforeClose(VOID) {
   UINT32 architecture=(chip>>24)&0x0fU;
   BOOLEAN chip_ok=chip!=0xffffffff&&(chip&0xffff0000)!=0xbadf0000&&
     (Gu.is_turing?architecture==0x06U:Gu.is_ampere?architecture==0x07U:architecture==0x09U);
+  /* SS1 is the profile's business: the unlocking policies leave the unlock
+   * value there, entry-latched-preserve leaves the value it found. The readback
+   * is compared against the same contract the transaction was built under. */
+#ifdef GU_ENTRY_LATCHED_SS1_PRESERVE
+  UINT32 entry0=0,entry1=0;
+  BOOLEAN ss1_ok=GuGetEntrySelectorsFor(&Gu,&entry0,&entry1)&&ss1==entry1;
+  const char *ss1_contract="preserved";
+#else
+  BOOLEAN ss1_ok=ss1==8;
+  const char *ss1_contract="unlocked";
+#endif
+  (void)ss1_contract;
   BOOLEAN valid=!Gu.fault&&chip_ok&&(cpu&0x10)&&cpu!=0xffffffff&&
-    (cpu&0xffff0000)!=0xbadf0000&&!(hi>>4)&&ss0==0x88888888&&ss1==8&&
+    (cpu&0xffff0000)!=0xbadf0000&&!(hi>>4)&&ss0==0x88888888&&ss1_ok&&
     !(readout&0x07ffffff)&&readout!=0xffffffff&&plm==0xffffffff;
-  NOTE("MSI pre-close silicon verification: valid=%u chip=%#x cpu=%#x hi=%#x ss0=%#x ss1=%#x readout=%#x plm=%#x\n",
-       valid,chip,cpu,hi,ss0,ss1,readout,plm);
+  NOTE("MSI pre-close silicon verification: valid=%u chip=%#x cpu=%#x hi=%#x ss0=%#x ss1=%#x ss1_contract=%s readout=%#x plm=%#x\n",
+       valid,chip,cpu,hi,ss0,ss1,ss1_contract,readout,plm);
   return valid;
 }
 EFI_STATUS GuMsiFinish(VOID) {

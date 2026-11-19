@@ -1546,37 +1546,60 @@ static int write_selector(struct unlock_transaction_work *work, const char *name
 	return GU_RESULT(value == unlock ? 0 : -EIO);
 }
 
-/* AD104: one SS0 and one SS1 write, after all Ada payload checks.
+/* AD104: write the speed selectors, after all Ada payload checks.
  *
- * The four-phase selector state machine (and the single permitted SS1 write) is
- * part of the entry-latched-ss1-full stock policy only. The other policies have
- * no phase to advance: entry-latched-preserve forbids the SS1 write outright and
- * the non-latched policies write selectors without a phase at all. So this step
- * exists only in the full policy, and every other profile refuses it here
- * instead of writing selectors the port layer would fault on.
+ * Each stock profile has its own selector contract, and the differences are not
+ * cosmetic: the entry-latched-full policy may write SS1 exactly once, after the
+ * phase machine has authorised it; the entry-latched-preserve policy must leave
+ * SS1 exactly as it found it, because the port layer refuses that offset
+ * outright and the FLR check compares it against the latched entry value; the
+ * two non-latched policies write both selectors the way stock 610 does, with no
+ * phase tracking at all.
+ *
+ * Before this was per-profile, the step existed only in the full policy and
+ * every other build refused here - which meant three of the four profiles could
+ * not perform a transaction even after they linked. Each branch now logs the
+ * path it took, so a log says which contract the run was under.
  */
 static int unlock_transaction_selector(struct unlock_transaction_work *work)
 {
+	int ret;
+	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
+
+	if (!owner || !work->payload_verified || check_entry_selectors(work))
+		return GU_RESULT(-EPROTO);
+	ret = write_selector(work, "SS0", GU_FEAT_SS0_OFFSET, GU_SS0_UNLOCK);
+	if (ret)
+		return GU_RESULT(-EIO);
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
-    int ret;
-    GU_PLATFORM *owner=GuCompatOwner(work->pdev);
-    if (!owner || !work->payload_verified || check_entry_selectors(work)) return GU_RESULT(-EPROTO);
-    ret=write_selector(work,"SS0",GU_FEAT_SS0_OFFSET,GU_SS0_UNLOCK);
-    if (ret || !GuSelectorPhaseFor(owner,GU_SELECTOR_PHASE_SS0_WRITTEN) ||
-        !GuSelectorPhaseFor(owner,GU_SELECTOR_PHASE_SS1_WRITE)) return GU_RESULT(-EIO);
-    ret=write_selector(work,"SS1",GU_FEAT_SS1_OFFSET,GU_SS1_UNLOCK);
-    if (ret || !GuSelectorPhaseFor(owner,GU_SELECTOR_PHASE_TARGET)) return GU_RESULT(-EIO);
-    return is_ad102(work) ? ad102_readout(work,"selectors-applied",true) : 0;
+	if (!GuSelectorPhaseFor(owner, GU_SELECTOR_PHASE_SS0_WRITTEN) ||
+	    !GuSelectorPhaseFor(owner, GU_SELECTOR_PHASE_SS1_WRITE))
+		return GU_RESULT(-EIO);
+	if (write_selector(work, "SS1", GU_FEAT_SS1_OFFSET, GU_SS1_UNLOCK) ||
+	    !GuSelectorPhaseFor(owner, GU_SELECTOR_PHASE_TARGET))
+		return GU_RESULT(-EIO);
+	dev_info(&work->pdev->dev,
+		 "SELECTOR_PATH=PHASED\n");
 #else
-    /* Keep the helpers referenced so a build without this policy still
-     * type-checks them, and refuse loudly: no selector contract, no write. */
-    (void)check_entry_selectors;
-    (void)write_selector;
-    if (!GuCompatOwner(work->pdev) || !work->payload_verified) return GU_RESULT(-EPROTO);
-    dev_err(&work->pdev->dev,
-            "STOCK_PROFILE=REFUSED STEP=selectors REASON=NO_PHASE_MACHINE_IN_THIS_BUILD\n");
-    return GU_RESULT(-EOPNOTSUPP);
+#if defined(GU_ENTRY_LATCHED_SS1_PRESERVE)
+	/* SS1 is preserved: writing it here would fault the port layer, and the
+	 * reset check expects the latched entry value to still be in the register. */
+	dev_info(&work->pdev->dev,
+		 "SELECTOR_PATH=PRESERVE ss1=untouched reason=entry_latched_ss1_preserve\n");
+	(void)GU_FEAT_SS1_OFFSET;
+#else
+	/* No entry latch in this build, so there is no phase to advance and no
+	 * latched SS1 to preserve: both selectors are written, one time each, in the
+	 * order stock 610 writes them. A second write is not detected here - that
+	 * protection only exists in the phased policy. */
+	ret = write_selector(work, "SS1", GU_FEAT_SS1_OFFSET, GU_SS1_UNLOCK);
+	if (ret)
+		return GU_RESULT(-EIO);
+	dev_info(&work->pdev->dev,
+		 "SELECTOR_PATH=UNTRACKED reason=no_entry_latch\n");
 #endif
+#endif
+	return is_ad102(work) ? ad102_readout(work, "selectors-applied", true) : 0;
 }
 
 /* Reset SEC2 after FLR and leave it halted with reset released. Do not reset
@@ -1733,9 +1756,20 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 	if (read_bar(work, GU_FEAT_SS0_OFFSET, &ss0) || ss0 == ~0u ||
 	    read_bar(work, GU_FEAT_SS1_OFFSET, &ss1) || ss1 == ~0u)
 		return GU_RESULT(-ENODEV);
-	dev_info(&work->pdev->dev, "pre-FLR selectors: ss0=%#x expected=%#x ss1=%#x expected=%#x\n",
-		ss0, GU_SS0_UNLOCK, ss1, GU_SS1_UNLOCK);
-	if (ss0 != GU_SS0_UNLOCK || ss1 != GU_SS1_UNLOCK)
+	/* Which SS1 value is correct depends on the stock profile: the policies that
+	 * write the unlock value expect it, and entry-latched-preserve expects the
+	 * latched entry value to still be there, untouched. */
+#ifdef GU_ENTRY_LATCHED_SS1_PRESERVE
+	u32 ss1_expected = work->ss1_entry;
+	const char *ss1_contract = "preserved";
+#else
+	u32 ss1_expected = GU_SS1_UNLOCK;
+	const char *ss1_contract = "unlocked";
+#endif
+	dev_info(&work->pdev->dev,
+		 "pre-FLR selectors: ss0=%#x expected=%#x ss1=%#x expected=%#x contract=%s\n",
+		 ss0, GU_SS0_UNLOCK, ss1, ss1_expected, ss1_contract);
+	if (ss0 != GU_SS0_UNLOCK || ss1 != ss1_expected)
 		return GU_RESULT(-EIO);
 	if (is_ad102(work)) {
 		ret = ad102_readout(work, "pre-FLR", true);
@@ -1804,16 +1838,23 @@ static int unlock_transaction_reset(struct unlock_transaction_work *work)
 	    read_bar(work, GU_FEAT_PLM_OFFSET, &plm) ||
 	    (plm & 0xffff0000u) == 0xbadf0000u)
 		return GU_RESULT(-ENODEV);
+#ifdef GU_ENTRY_LATCHED_SS1_PRESERVE
+	u32 post_ss1_expected = work->ss1_entry;
+	const char *post_ss1_contract = "preserved";
+#else
+	u32 post_ss1_expected = GU_SS1_UNLOCK;
+	const char *post_ss1_contract = "unlocked";
+#endif
 	dev_info(&work->pdev->dev,
-		 "post-FLR SEC2 reset released, GSP halted, BME=0 pending=0 WPR2=%08x:%08x SS0=%08x SS1=%08x\n",
-		 lo, hi, ss0, ss1);
+		 "post-FLR SEC2 reset released, GSP halted, BME=0 pending=0 WPR2=%08x:%08x SS0=%08x SS1=%08x SS1_EXPECTED=%08x contract=%s\n",
+		 lo, hi, ss0, ss1, post_ss1_expected, post_ss1_contract);
 	/* The stock driver rejects preexisting WPR2 on this cold dGPU path.
 	 * kgspIsWpr2Up_TU102 uses HI.VAL != 0, not a LO/HI range comparison. */
 	if (hi >> 4) {
 		dev_err(&work->pdev->dev, "post-FLR WPR2 remains enabled: lo=%#x hi=%#x; stock driver requires HI.VAL=0\n", lo, hi);
 		return GU_RESULT(-EBUSY);
 	}
-	if (ss0 != GU_SS0_UNLOCK || ss1 != GU_SS1_UNLOCK)
+	if (ss0 != GU_SS0_UNLOCK || ss1 != post_ss1_expected)
 		return GU_RESULT(-EIO);
 	if (is_ad102(work)) {
 		ret = ad102_sample_permissions(work, "post-FLR", work->permission_after, false);

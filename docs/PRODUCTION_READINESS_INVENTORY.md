@@ -601,17 +601,39 @@ profiles **did not link**. The latch API and the selector phase were
 unconditional call sites with `#ifdef`-guarded definitions, so
 `entryLatchedSs1Preserve`, `original03100062` and `observed03000062` compiled and
 then failed at link time — the "one image, four profiles" matrix was really one
-image. The gate above only protects a real build if the other builds exist, so
-they now do.
+image, and nothing in CI ever built the other three.
+
+Linking them exposed a second half of the same defect: the *transaction* existed
+only in the full policy. The other three linked and then refused the selector
+step, so they could not perform an unlock at all. Each policy now has its own
+selector contract, and the checks that follow the write compare against that
+contract instead of a constant:
+
+| Profile | Selectors | Follow-up checks | Log |
+| --- | --- | --- | --- |
+| `entryLatchedSs1Full` | SS0, then one SS1 write, authorised by the phase machine | SS1 must be `0x8`, phase must be `TARGET` | `SELECTOR_PATH=PHASED` |
+| `entryLatchedSs1Preserve` | SS0 only; SS1 is refused by the port layer and left as found | SS1 must equal the latched entry value | `SELECTOR_PATH=PRESERVE` |
+| `original03100062`, `observed03000062` | both, in stock order, no phase | SS1 must be `0x8`; no phase to check | `SELECTOR_PATH=UNTRACKED` |
+
+Three call sites had to become policy-aware for that to be true: the pre-FLR
+comparison, the post-FLR comparison, and the pre-close silicon check in
+`msi_release.c` — each expected `SS1==0x8`, so a preserve build faulted after its
+own reset. The non-latched policies still have no protection against a repeated
+SS1 write; that guard is full-policy only, and the build says so rather than
+implying otherwise.
 
 Evidence: `tests/test_stock_profile.c` (12 checks, gcc and clang under UBSan:
 mismatch refuses, match accepts, no expectation accepts, no fault, message
 fields), `tests/test_stock_profile_contract.py` (14 tests: placement after the
 sanity rules, read-only, `EFI_UNSUPPORTED`, message fields, profile table, no
-runtime NVRAM selector), and two simulator rows that differ only in the card —
-`prepare stock-match` and `prepare stock-mismatch`, both on the
-`original03100062` build. The mismatch row reports
-`STATUS=8000000000000003 BAR_WRITES=0 FLR=0` and the refusal names the build.
+runtime NVRAM selector), `tests/test_stock_profile_matrix.py` (8 tests: the
+matrix builds and links every profile, and each policy keeps its own selector
+contract), and four simulator rows — `prepare stock-match` and `prepare
+stock-mismatch` differ only in the card (the mismatch row reports
+`STATUS=8000000000000003 BAR_WRITES=0 FLR=0` and names the build), and
+`transaction preserve` / `transaction untracked` run a full transaction under
+those policies: preserve reports `SEL_WRITES=1:0` (one SS0 write, no SS1 write)
+and still completes, untracked reports `SEL_WRITES=1:1` in stock order.
 
 What this does *not* do: it does not choose a profile at runtime. The two
 entry-latched policies are indistinguishable before the write — that is what

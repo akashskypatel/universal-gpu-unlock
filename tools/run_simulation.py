@@ -132,19 +132,25 @@ def prepare_tree() -> None:
 STOCK_BUILDS = {
     "default": [],
     "original": ["-DGU_STOCK_PROFILE_ORIGINAL_03100062"],
+    "observed": ["-DGU_STOCK_PROFILE_OBSERVED_03000062"],
+    "preserve": ["-DGU_ENTRY_LATCHED_SS1_PRESERVE"],
     # A bounded firmware timer, well above any plausible runtime for the
     # sequence: the point is that a hang reboots instead of freezing.
     "bounded": ["-DGU_WATCHDOG_SECONDS=600"],
 }
 # The default profile is replaced, not added to: exactly one profile is allowed.
-REPLACED_BY_ORIGINAL = ["-DGU_ENTRY_LATCHED_SS1_FULL"]
+# Exactly one stock profile is allowed, so a row that names a policy replaces the
+# default one instead of adding to it. Rows that only change something else (the
+# watchdog bound) keep the default policy.
+REPLACED_BY_DEFAULT_PROFILE = ["-DGU_ENTRY_LATCHED_SS1_FULL"]
+POLICY_PROFILES = ("original", "observed", "preserve")
 
 
 def build(profile: str = "default") -> Path:
     cc = compiler()
     defines = [flag for flag in DEFINES]
-    if profile == "original":
-        defines = [flag for flag in defines if flag not in REPLACED_BY_ORIGINAL]
+    if profile in POLICY_PROFILES:
+        defines = [flag for flag in defines if flag not in REPLACED_BY_DEFAULT_PROFILE]
     defines += STOCK_BUILDS[profile]
     suffix = "" if profile == "default" else "_" + profile
     objects = []
@@ -178,7 +184,8 @@ def build(profile: str = "default") -> Path:
 
 VARIANTS = ("nominal", "msi-enabled", "flr-refused", "dma-high", "rebar",
             "bar-above-4g", "runtime-target", "runtime-absent", "ad104-sku",
-            "install-assets", "stock-match", "stock-mismatch", "watchdog")
+            "install-assets", "stock-match", "stock-mismatch", "watchdog",
+            "preserve", "untracked")
 
 # Scenario matrix: every row must pass, and the two negative rows are the
 # documented refusal and abort paths.
@@ -205,7 +212,17 @@ SCENARIOS = (
     # The bounded build: the timer is armed with the configured threshold, the
     # transaction still completes, and the cancel removes it before handover.
     ("transaction", "watchdog", "bounded"),
+    # One row per selector contract, so each policy is exercised and not merely
+    # compiled: preserve writes SS0 only, the non-latched build writes both.
+    ("transaction", "preserve", "preserve"),
+    ("transaction", "untracked", "original"),
 )
+
+
+# A single-run invocation has to pick the same binary the verify row uses,
+# otherwise `transaction preserve` silently runs the default image.
+VARIANT_PROFILE = {row[1]: (row[2] if len(row) > 2 else "default")
+                   for row in SCENARIOS}
 
 
 def run(binary: Path, stage: str, variant: str) -> subprocess.CompletedProcess:
@@ -216,6 +233,14 @@ def run(binary: Path, stage: str, variant: str) -> subprocess.CompletedProcess:
 
 def main() -> int:
     stage = sys.argv[1] if len(sys.argv) > 1 else "prepare"
+    if stage == "matrix":
+        prepare_tree()
+        for name in STOCK_BUILDS:
+            build(name)
+            print(f"SIM_MATRIX_PROFILE={name} BUILD=PASS")
+        print(f"SIM_MATRIX=PASS PROFILES={len(STOCK_BUILDS)}")
+        return 0
+
     if stage == "verify":
         prepare_tree()
         binaries = {}
@@ -238,13 +263,13 @@ def main() -> int:
               % ("PASS" if not failed else "FAIL", len(results), len(failed)))
         return 1 if failed else 0
     if stage not in ("prepare", "transaction"):
-        raise SystemExit("unknown stage: %s (use prepare, transaction or verify)"
+        raise SystemExit("unknown stage: %s (use prepare, transaction, matrix or verify)"
                          % stage)
     variant = sys.argv[2] if len(sys.argv) > 2 else "nominal"
     if variant not in VARIANTS:
         raise SystemExit("unknown variant: %s" % variant)
     prepare_tree()
-    binary = build()
+    binary = build(VARIANT_PROFILE.get(variant, "default"))
     done = run(binary, stage, variant)
     sys.stdout.write(done.stdout)
     if done.stderr.strip():
