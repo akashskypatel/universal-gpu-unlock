@@ -176,6 +176,9 @@ jobs:
             # Two modelled cards: selection refuses ambiguity, snapshots stay apart.
             CC=gcc python3 -m unittest discover -s tests -p test_multi_target.py -v
             CC=clang python3 -m unittest discover -s tests -p test_multi_target.py -v
+            # The shipped mock's own two-card expectations, from the host suite.
+            CC=gcc python3 -m unittest discover -s tests -p test_two_card_contract.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_two_card_contract.py -v
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_pci_master_policy.c -o "$RUNNER_TEMP/test_pci_master_policy_$compiler"
               "$RUNNER_TEMP/test_pci_master_policy_$compiler"

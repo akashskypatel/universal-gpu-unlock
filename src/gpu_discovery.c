@@ -348,28 +348,28 @@ static EFI_STATUS SelectPreparedRecords(GU_GPU_PREPARED_VIEW *prepared,
   }else if(count==1){
     prepared->selected_count=1;prepared->selected_indices[0]=0;
   }else if(!count){
-    GuLog("ACTIVE_PREPARE=REFUSED REASON=NO_NVIDIA_CARD NVIDIA_COUNT=0\n");
-    return EFI_UNSUPPORTED;
+    /* Nothing was discovered. This helper answers "which records were named",
+     * not "may anything be prepared", so an empty machine stays a success
+     * with an empty selection and the reason is printed for the caller. */
+    GuLog("ACTIVE_PREPARE=NO_SELECTION REASON=NO_NVIDIA_CARD NVIDIA_COUNT=0\n");
   }else{
-    /* Two or more NVIDIA display functions and no explicit selection: the
-     * operator never said which card may be prepared, and picking one here
-     * would be this code choosing a target on a multi-card machine. Nothing
-     * is selected, and the reason is in the log rather than implied by a
-     * COMPLETE line with SELECTED=0. */
-    GuLog("ACTIVE_PREPARE=REFUSED REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=%zu SELECTED=0\n",
+    /* Two or more NVIDIA display functions and no explicit selection. Picking
+     * one here would be this code choosing a target on a multi-card machine,
+     * so nothing is selected and the log says which situation this is: the
+     * entrypoint refuses an empty selection, and until this line existed the
+     * only trace was a COMPLETE with SELECTED=0. */
+    GuLog("ACTIVE_PREPARE=NO_SELECTION REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=%zu SELECTED=0\n",
           count);
-    return EFI_UNSUPPORTED;
   }
-  /* A card this image was not built for is refused here, by name, instead of
-   * surfacing later as an unexplained EFI_UNSUPPORTED. */
+  /* A selected card this image was not built for is named here; the refusal
+   * itself belongs to the entrypoint, which is the only place that decides
+   * whether a card may be prepared. */
   for(size_t i=0;i<prepared->selected_count;i++){
     const GU_GPU_RECORD *p=&prepared->inventory.nvidia[prepared->selected_indices[i]];
     if(!GuIsSupportedPciId(p->pci_id)){
-      GuLog("ACTIVE_PREPARE=REFUSED REASON=UNSUPPORTED_CARD BDF=%04x:%02x:%02x.%u ID=%04x:%04x\n",
+      GuLog("ACTIVE_PREPARE=SELECTED_UNSUPPORTED_CARD BDF=%04x:%02x:%02x.%u ID=%04x:%04x\n",
             (unsigned)p->segment,(unsigned)p->bus,(unsigned)p->device,
             (unsigned)p->function,(unsigned)(p->pci_id&65535U),(unsigned)(p->pci_id>>16));
-      prepared->selected_count=0;
-      return EFI_UNSUPPORTED;
     }
   }
   for(size_t i=0;i<prepared->selected_count;i++){
@@ -1113,6 +1113,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #else
   if(!prepared.selected_count||prepared.selected_count>prepared.inventory.count||
      prepared.selected_indices[0]>=prepared.inventory.count){
+    GuLog("ACTIVE_EXECUTION=REFUSED REASON=NO_SELECTED_TARGET SELECTED=%zu NVIDIA_COUNT=%zu BEFORE_GU_INIT=1\n",
+          prepared.selected_count,prepared.inventory.count);
     s=EFI_UNSUPPORTED;goto done;
   }
 #ifndef GU_SYNTHETIC_COMPILE_ONLY

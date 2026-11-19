@@ -17,10 +17,12 @@ Specify one location with `-SelectionBdf` or 2–128 distinct locations with
 `-SelectionBdfs`. The shared parser preserves the requested order and rejects
 invalid or duplicate locations. It does not select multiple devices implicitly:
 on a machine with two or more NVIDIA display functions and no requested
-location, preparation is refused with
-`ACTIVE_PREPARE=REFUSED REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=<n> SELECTED=0`
-rather than picking a card. Naming a location the image was not built for is
-refused with `REASON=UNSUPPORTED_CARD`, by BDF and device id.
+location it selects nothing and prints
+`ACTIVE_PREPARE=NO_SELECTION REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=<n> SELECTED=0`,
+after which the entrypoint refuses with `REASON=NO_SELECTED_TARGET` rather than
+picking a card. Naming a location the image was not built for is named as
+`ACTIVE_PREPARE=SELECTED_UNSUPPORTED_CARD BDF=... ID=...` before the entrypoint
+refuses it.
 
 The boot discovery path allocates its inventory from the observed PCI handle
 count, with a 4,096-handle resource bound. It retains independent saved

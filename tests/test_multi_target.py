@@ -211,16 +211,17 @@ static int Run(void) {
   EXPECT(Prepared.selected_count == 1 && Prepared.selected_indices[0] == 0);
   EXPECT(LogHas("ACTIVE_PREPARE=COMPLETE SELECTED=1 NVIDIA_COUNT=1"));
 
-  /* 2. Two cards and no explicit selection is refused, by name, and nothing
-   *    is selected. Picking one here would be the code choosing a target. */
+  /* 2. Two cards and no explicit selection selects nothing and names the
+   *    situation. This helper answers "which records were named"; the refusal
+   *    belongs to the entrypoint, which rejects an empty selection. */
   Records[0] = Card(SUPPORTED_A, 1);
   Records[1] = Card(SUPPORTED_B, 2);
   Prepared = View(2);
   ResetLog();
-  EXPECT(SelectPreparedRecords(&Prepared, NULL, 0, FALSE) == EFI_UNSUPPORTED);
+  EXPECT(SelectPreparedRecords(&Prepared, NULL, 0, FALSE) == EFI_SUCCESS);
   EXPECT(Prepared.selected_count == 0);
-  EXPECT(LogHas("ACTIVE_PREPARE=REFUSED REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=2 SELECTED=0"));
-  EXPECT(!LogHas("ACTIVE_PREPARE=COMPLETE"));
+  EXPECT(LogHas("ACTIVE_PREPARE=NO_SELECTION REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=2 SELECTED=0"));
+  EXPECT(LogHas("ACTIVE_PREPARE=COMPLETE SELECTED=0 NVIDIA_COUNT=2"));
   EXPECT(LogCount("ACTIVE_PREPARED_STEP") == 0);
 
   /* 3. Two cards with the second one named: exactly that one is prepared. */
@@ -270,11 +271,13 @@ static int Run(void) {
   EXPECT(SelectPreparedRecords(&Prepared, Requested, 3, FALSE) == EFI_UNSUPPORTED);
   EXPECT(LogHas("REASON=REQUESTED_EXCEEDS_INVENTORY REQUESTED=3 NVIDIA_COUNT=2"));
 
-  /* 8. A machine with no NVIDIA display function says so. */
+  /* 8. A machine with no NVIDIA display function is an empty selection, not a
+   *    failure of this helper, and it says which situation it is. */
   Prepared = View(0);
   ResetLog();
-  EXPECT(SelectPreparedRecords(&Prepared, NULL, 0, FALSE) == EFI_UNSUPPORTED);
-  EXPECT(LogHas("ACTIVE_PREPARE=REFUSED REASON=NO_NVIDIA_CARD NVIDIA_COUNT=0"));
+  EXPECT(SelectPreparedRecords(&Prepared, NULL, 0, FALSE) == EFI_SUCCESS);
+  EXPECT(Prepared.selected_count == 0);
+  EXPECT(LogHas("ACTIVE_PREPARE=NO_SELECTION REASON=NO_NVIDIA_CARD NVIDIA_COUNT=0"));
 
   /* 9. The explicit ALL policy selects both supported cards in order. */
   Records[0] = Card(SUPPORTED_A, 1);
@@ -294,15 +297,16 @@ static int Run(void) {
   EXPECT(Prepared.selected_count == 0);
   EXPECT(LogHas("ACTIVE_PREPARE=REFUSED REASON=NO_SUPPORTED_CARD NVIDIA_COUNT=2"));
 
-  /* 11. A named card this image was not built for is refused by name. */
+  /* 11. A named card this image was not built for is selected by location and
+   *     named in the log; the entrypoint, not this helper, refuses it. */
   Records[0] = Card(SUPPORTED_A, 1);
   Records[1] = Card(UNSUPPORTED, 2);
   Requested[0] = At(2);
   Prepared = View(2);
   ResetLog();
-  EXPECT(SelectPreparedRecords(&Prepared, Requested, 1, FALSE) == EFI_UNSUPPORTED);
-  EXPECT(Prepared.selected_count == 0);
-  EXPECT(LogHas("ACTIVE_PREPARE=REFUSED REASON=UNSUPPORTED_CARD BDF=0000:02:00.0 ID=10de:1b80"));
+  EXPECT(SelectPreparedRecords(&Prepared, Requested, 1, FALSE) == EFI_SUCCESS);
+  EXPECT(Prepared.selected_count == 1 && Prepared.selected_indices[0] == 1);
+  EXPECT(LogHas("ACTIVE_PREPARE=SELECTED_UNSUPPORTED_CARD BDF=0000:02:00.0 ID=10de:1b80"));
 
   /* 12. One named supported card in a two-card machine is still admitted: the
    *     ambiguity rule applies only to an unstated selection. */
@@ -433,6 +437,7 @@ class MultiTargetModel(unittest.TestCase):
             "REASON=MULTI_TARGET_WITHOUT_WAIVER",
             "if(prepared.selected_count!=1 && !GU_ACTUATION_ADMITTED)",
             "if(prepared.inventory.count>1)",
+            "REASON=NO_SELECTED_TARGET",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, DISCOVERY)
@@ -447,16 +452,19 @@ class MultiTargetModel(unittest.TestCase):
         self.assertIsNotNone(match, "the single-target selection-count #error is gone")
         self.assertIn("#error", match.group(0))
 
-    def test_every_new_refusal_names_its_reason(self):
+    def test_every_new_diagnostic_names_its_reason(self):
         body = source_body("SelectPreparedRecords")
         for token in ("REASON=SELECTION_AMBIGUOUS", "REASON=NO_NVIDIA_CARD",
-                      "REASON=NO_SUPPORTED_CARD", "REASON=UNSUPPORTED_CARD",
+                      "REASON=NO_SUPPORTED_CARD", "SELECTED_UNSUPPORTED_CARD",
                       "REASON=REQUESTED_EXCEEDS_INVENTORY"):
             with self.subTest(token=token):
                 self.assertIn(token, body)
-        # A refused selection must never look like a completed one.
+        # The ambiguity is reported before the completion line that used to be
+        # the only trace of it.
         self.assertLess(body.index("REASON=SELECTION_AMBIGUOUS"),
                         body.index("ACTIVE_PREPARE=COMPLETE"))
+        # And the entrypoint names its own refusal of an empty selection.
+        self.assertIn("REASON=NO_SELECTED_TARGET", DISCOVERY)
 
 
 if __name__ == "__main__":

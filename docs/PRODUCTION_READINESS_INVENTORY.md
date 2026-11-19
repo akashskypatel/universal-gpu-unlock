@@ -97,8 +97,8 @@ These are the items that make "dynamic hardware selection" impossible today.
 `gpu_discovery.c:19-31` includes a generated `gpu-selection.h`;
 `GU_GPU_SELECTION_COUNT`/`GU_GPU_SELECTION_LOCATIONS` are baked in by
 `Gpu-Selection-Build.ps1` from `-SelectionBdf(s)`. With no requested list, only
-the `count == 1` case auto-selects, and anything else refuses by name
-(`REASON=SELECTION_AMBIGUOUS`, `gpu_discovery.c:306-386`, §11.22). There is no
+the `count == 1` case auto-selects, and anything else selects nothing and says
+why (`REASON=SELECTION_AMBIGUOUS`, `gpu_discovery.c:306-388`, §11.22). There is no
 runtime inventory menu, no UEFI-variable policy, no "all supported cards"
 default. A card added to a slot, or a BDF that shifts after a firmware update,
 turns into `EFI_UNSUPPORTED` with no way to recover without a rebuild.
@@ -293,7 +293,7 @@ These are verified from source, not inferred.
 | C6 | Time budgets | 20 s boot/PLM (`unlock_610.c:28`), 1 s post-FLR BAR (`:1629-1645`), GFW budget (`:1656`) | on timeout buffers are retained and the box must be power-cycled | P1 |
 | C7 | FLR assumptions | requires FLR bit; post-FLR expectations are board-observed values | `checks.c:107-112`, `unlock_610.c:1770-1800` | P1 |
 | C8 | PCIe error/training, AER, ASPM, hot-plug, Thunderbolt/USB4 tunnels | unhandled | `checks.c:107-112` covers link status only | P2 |
-| C9 | Multi-GPU interference | peer protection is 2× full config-space snapshot per target | **partial (§11.22)** — selection and per-snapshot admission are now executed by `tests/test_multi_target.py` with two modelled cards; two physical cards and the ~165 MB/card footprint (B10) are still unmeasured | P1 |
+| C9 | Multi-GPU interference | peer protection is 2× full config-space snapshot per target | **partial (§11.22)** — `tests/test_two_card_contract.py` runs the shipped mock in three selection configurations and `tests/test_multi_target.py` executes selection plus per-snapshot admission from real code; two physical cards and the ~165 MB/card footprint (B10) are still unmeasured | P1 |
 | C10 | S3/resume | boot-script writes of SS0/SS1 at resume, needs 16 MiB BAR, no resume verification | `unlock_execution.c:211-260` | P1 |
 
 ---
@@ -402,55 +402,61 @@ means observed in the host simulator or a host contract test with
 `CAN_DETACH/CAN_UNLOCK/CAN_FLASH/RECOVERY_VERIFIED=0`. No card was touched, so
 no entry claims hardware behaviour.
 
-### 11.22 C9 — two cards, modelled: selection refuses ambiguity, snapshots stay separate
+### 11.22 C9 — two cards, modelled: an empty selection now says why, snapshots stay separate
 
 The multi-card story was two claims with no witness: that a machine with two
 NVIDIA display functions cannot have a card chosen for it, and that the
 per-target config snapshot really is per target. The simulator models one card,
-and the entrypoint's refusals sit behind UEFI headers, so neither claim could be
-executed on a host.
+and the two-card expectations lived only inside the CI workflow's direct
+compilation of `tests/test_gpu_discovery.c`.
 
-`tests/test_multi_target.py` builds that missing model out of real code:
+`tests/test_two_card_contract.py` now runs that contract from the host suite, in
+three `gpu-selection.h` configurations: preparation-only with **two** selected
+locations (prepares the inventory, revalidates the unselected peer, calls
+`GuInit` never), ordered single-target compilation with three declared
+locations, and single-target with three locations **failing to compile** because
+that build may name only one card.
+
+`tests/test_multi_target.py` adds the model the machine cannot supply yet:
 `SelectPreparedRecords` extracted from `src/gpu_discovery.c`, the real
-`GuFindGpuRecordSequence` (compiled from `src/gpu_inventory.c`), and the real
-`GuCheckConfig`/`GuCheckConfigPolicy` from `src/checks.c`. Two cards are driven
-through it with two independent 256-byte snapshots and 56 assertions.
+`GuFindGpuRecordSequence` (compiled from `src/gpu_inventory.c`) and the real
+`GuCheckConfig`/`GuCheckConfigPolicy` from `src/checks.c`, driven with two cards
+and two independent 256-byte snapshots. 56 assertions.
 
-| Situation | What happens now |
+| Situation | What happens |
 | --- | --- |
 | one card, no selection | prepared, `SELECTED=1` (unchanged) |
-| two cards, no selection | **refused by name**: `ACTIVE_PREPARE=REFUSED REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=2 SELECTED=0`, nothing selected |
-| two cards, one named | exactly that one is prepared; the other appears only in the inventory lines |
-| two cards, both named | both, in enumeration order — the list the waiver admits, still one at a time in the coordinator |
-| a named location that is absent / duplicated | refused with the real matcher's `SELECTION_CODE=5` / `=4` |
+| two cards, no selection | nothing selected, plus the new line `ACTIVE_PREPARE=NO_SELECTION REASON=SELECTION_AMBIGUOUS NVIDIA_COUNT=2 SELECTED=0`; the entrypoint then refuses with `REASON=NO_SELECTED_TARGET` |
+| no NVIDIA card at all | empty selection, `REASON=NO_NVIDIA_CARD` |
+| two cards, one named | exactly that one is prepared |
+| two cards, both named | both, in enumeration order - the list the waiver admits, still one at a time in the coordinator |
+| a named location that is absent / duplicated | `SELECTION_CODE=5` / `=4`, unchanged |
 | more locations than cards | `REASON=REQUESTED_EXCEEDS_INVENTORY` |
-| no NVIDIA card at all | `REASON=NO_NVIDIA_CARD` |
-| `ALL` with nothing supported | `REASON=NO_SUPPORTED_CARD` |
-| a named card this image was not built for | `REASON=UNSUPPORTED_CARD BDF=… ID=…` |
+| a named card this image was not built for | selected by location, named as `ACTIVE_PREPARE=SELECTED_UNSUPPORTED_CARD BDF=… ID=…`; the entrypoint refuses it |
 
-Four of those refusals are new log lines in `SelectPreparedRecords`
-(`gpu_discovery.c:306-386`). Before this entry, a two-card machine with no
-selection prepared nothing and still printed `ACTIVE_PREPARE=COMPLETE
-SELECTED=0`, because `SelectPreparedRecords` returned success with an empty
-selection and an unnamed downstream check refused it later. The refusal was
-correct; the log made it look like a completed preparation. Every new branch
-refuses, so this narrows behaviour and opens nothing.
+All of that is logging. `SelectPreparedRecords` answers "which records were
+named", so it keeps returning success with an empty selection - a contract
+`tests/test_gpu_discovery.c` pins (a two-card machine with no request yields
+`inventory.count==2 && selected_count==0`), and one a read-only inventory caller
+depends on. Before this entry the only trace of that state was
+`ACTIVE_PREPARE=COMPLETE SELECTED=0`, with the refusal happening afterwards and
+silently; now both halves say what they are.
 
 The snapshot half is asserted directly: two snapshots with different capability
 offsets report different `GU_CAPS`, admitting the second changes neither the
 first card's bytes nor its verdict, a card made inadmissible by a version bump
-leaves the other one admissible, and a snapshot is never written by the policy.
-The entrypoint's own two-card guards (`REASON=MULTI_NVIDIA_GLOBAL_STATE`,
+leaves the other one admissible, and the policy never writes a snapshot. The
+entrypoint's two-card guards (`REASON=MULTI_NVIDIA_GLOBAL_STATE`,
 `REASON=MULTI_TARGET_WITHOUT_WAIVER`, the single-target `#error` on
 `GU_GPU_SELECTION_COUNT != 1`) are pinned as source text in the same test, and
-the harness's copy of `GU_GPU_PREPARED_VIEW` is compared field for field with
-the real declaration so the model cannot silently diverge.
+the harness's copy of `GU_GPU_PREPARED_VIEW` is compared field for field with the
+real declaration so the model cannot diverge.
 
 What this does not do: it does not put two cards in a machine. `C9` stays
-partial and `B10` untouched — the per-card memory footprint (~165 MB: DMA
+partial and `B10` untouched - the per-card memory footprint (~165 MB: DMA
 window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
-and unmeasured for two cards, and no log here comes from silicon. The read-only
-`M4_ONE_CARD_ONLY` manual gate therefore still applies to every donor run.
+and unmeasured for two cards, and no byte of evidence here comes from silicon.
+`M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
 ### 11.21 D5 — the donor session has a go/no-go gate, and still no hardware loop
 
