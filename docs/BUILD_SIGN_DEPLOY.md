@@ -124,6 +124,10 @@ renaming an image.
 # What can this repository build? Nothing is built, signed or staged.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -List
 
+# Every run starts with one line naming the WSL side that will sign:
+# WSL_SIGNING_READY distro=… user=… home=… key=… cert=… tools=…
+# If it reads WSL_SIGNING_BROKEN, nothing is built and nothing is staged.
+
 # Stage 1 of the donor session: the read-only image that saves its numbered log.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -SignOnly
 
@@ -176,6 +180,7 @@ selected when deploying - because a stick has exactly one `BOOTX64.EFI`.
 | Attestation check on the status line | A build whose reported flags contradict the variant (`READ_ONLY=1`, `PREPARATION_ONLY=1`, `UNVERIFIED_ACTUATION=1`, …) |
 | PE subsystem check | An EFI application where a boot-service driver was expected, and the reverse |
 | Unsigned SHA-256 | A file that changed between build and signing |
+| Signing preflight inside WSL | A distribution, user or home that has no `sbsign`, no key, or a key that does not match the `.cer` - it runs once, before the first build, and prints `WSL_SIGNING_READY distro=… user=… home=…` |
 | `db` enrollment | Signing with a certificate the firmware does not trust (`-SkipDbCheck` records `UNKNOWN`) |
 | Cert/key/certificate match inside WSL | A key that is not the one enrolled, an expired certificate, or a `.cer` that is a different certificate |
 | `sbverify` | A signature the tool cannot verify |
@@ -218,7 +223,10 @@ skipped and why.
 | --- | --- | --- |
 | `STATUS=ERROR DETAIL=… DB_ENROLLED=FALSE` | The certificate is not in `db` | Enroll it, or re-run with `-SkipDbCheck` and accept `DB_ENROLLED=UNKNOWN` |
 | `DB_ENROLLED=UNKNOWN` | `Get-SecureBootUEFI` could not read `db` - not elevated, or Secure Boot off | Run the script from an elevated prompt; if Secure Boot is off, the signature is only an integrity record |
-| WSL exit 2 | A required tool is missing in the distribution | `apt install sbsign openssl` |
+| `WSL_SIGNING_MISSING tool=…` | The preflight ran in a distribution or user without that tool, and it stops the run before any build | `apt install sbsign openssl` in that distribution, or pass `-WslDistribution`/`-WslUser` to name the one that has it |
+| `WSL_SIGNING_MISSING key=…` or `cert=…` | `$HOME` of the signing user does not hold `secureboot-signing/uefi-db.key` and `.crt` | Copy both into that home (mode 600 on the key), or select the user whose home already holds them with `-WslUser`. The preflight prints the `home=` it used |
+| `WSL_SIGNING_MISMATCH cer=…`, `key=…` or `cert=…` | The `.cer` you enrolled is not the DER form of the WSL certificate, the key does not match it, or it has expired | Re-export `uefi-db.cer` from the same certificate, and check `openssl x509 -noout -dates` |
+| Exit 2 before anything is built | Same as `WSL_SIGNING_MISSING tool=` - the preflight is the only thing that ran | Fix the WSL side; nothing was built, signed or staged |
 | WSL exit 3 | `wslpath` could not map a Windows path | Check `[automount] enabled = true` in `/etc/wsl.conf`, and that the repository is not on an unmounted drive |
 | WSL exit 4 | Key, certificate or `.cer` disagree, or the certificate is expired | Re-export the `.cer` from the same certificate; check `openssl x509 -noout -dates` |
 | WSL exit 5 | The unsigned image changed, or the signed file already existed | Re-run; if it repeats, something else is writing the build directory |

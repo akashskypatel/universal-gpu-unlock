@@ -364,6 +364,94 @@ openssl x509 -in "$cert" -noout -subject -fingerprint -sha256
     return [int]$exitCode
 }
 
+function Test-WslSigningReady {
+    param([string]$PublicCer)
+    # One round-trip before anything is built: which distribution, which user,
+    # which home, and whether every tool and both key files are actually there.
+    # A wrong -WslDistribution or -WslUser used to surface as a failed signature
+    # on the first image, after every build in the run had already happened.
+    # No `set -e`: every gap is reported, not just the first one.
+    $bashCode = @'
+set -o pipefail
+status=0
+tools=""
+for tool in base64 sha256sum openssl cmp sbsign sbverify; do
+  if command -v "$tool" >/dev/null 2>&1; then
+    tools="$tools $tool"
+  else
+    echo "WSL_SIGNING_MISSING tool=$tool"
+    status=2
+  fi
+done
+key="$HOME/__KEY__"
+cert="$HOME/__CERT__"
+key_ok=no
+cert_ok=no
+cer_match=no
+cert_valid=no
+if [ -f "$key" ]; then key_ok=yes; else echo "WSL_SIGNING_MISSING key=$key"; status=4; fi
+if [ -f "$cert" ]; then cert_ok=yes; else echo "WSL_SIGNING_MISSING cert=$cert"; status=4; fi
+if [ "$cert_ok" = yes ]; then
+  if [ -n "${public_efi:-}" ] && openssl x509 -in "$cert" -outform DER 2>/dev/null | cmp -s - "$public_efi"; then
+    cer_match=yes
+  else
+    echo "WSL_SIGNING_MISMATCH cer=$public_windows is not the DER form of $cert"
+    status=4
+  fi
+  if openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1; then
+    cert_valid=yes
+  else
+    echo "WSL_SIGNING_MISMATCH cert=$cert is expired or unreadable"
+    status=4
+  fi
+fi
+if [ "$key_ok" = yes ] && [ "$cert_ok" = yes ]; then
+  key_sha="$(openssl pkey -in "$key" -pubout -outform DER 2>/dev/null | sha256sum | cut -d ' ' -f 1)"
+  cert_sha="$(openssl x509 -in "$cert" -pubkey -noout 2>/dev/null | openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | cut -d ' ' -f 1)"
+  if [ -n "$key_sha" ] && [ "$key_sha" = "$cert_sha" ]; then
+    key_ok=yes
+  else
+    echo "WSL_SIGNING_MISMATCH key=$key does not match $cert"
+    key_ok=no
+    status=4
+  fi
+fi
+if [ "$status" -eq 0 ]; then verdict=WSL_SIGNING_READY; else verdict=WSL_SIGNING_BROKEN; fi
+echo "$verdict distro=${WSL_DISTRO_NAME:-unknown} user=$(id -un 2>/dev/null || echo unknown) home=$HOME key=$key cert=$cert cer_match=$cer_match key_match=$key_ok cert_valid=$cert_valid tools=${tools# }"
+exit "$status"
+'@
+    $bashCode = $bashCode.Replace('__KEY__', $KeyInWsl).Replace('__CERT__', $CertInWsl)
+    $preamble = @(
+        'public_windows=$(printf %s ' + (To-B64 $PublicCer) + ' | base64 -d)'
+        'public_efi=$(wslpath -u "$public_windows" 2>/dev/null || true)'
+    ) -join "`n"
+    $payload = ($preamble + "`n" + $bashCode).Replace("`r`n", "`n").Replace("`r", "`n")
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+    $command = 'set -o pipefail; printf %s ' + $encoded + ' | base64 -d | bash'
+    $prefix = @()
+    if ($WslDistribution) { $prefix += @('-d', $WslDistribution) }
+    if ($WslUser) { $prefix += @('-u', $WslUser) }
+    # Same capture rule as the signing call: local 'Continue' so a stderr line
+    # cannot terminate the run, and the exit code is read on its own.
+    $restorePreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & wsl.exe @prefix --exec bash -c $command 2>&1
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $restorePreference
+    }
+    foreach ($line in @($output)) { Say ([string]$line) }
+    if ($null -eq $code) { throw 'wsl.exe reported no exit code during the signing preflight.' }
+    if ([int]$code -ne 0) {
+        $notReady = ('WSL signing is not ready (exit {0}): fix the WSL_SIGNING_* lines above. The key and ' +
+                     'certificate live in the home of the user that signs, so pass -WslDistribution and ' +
+                     '-WslUser to name that user, or put {1} and {2} in the default user''s home.')
+        throw ($notReady -f [int]$code, $KeyInWsl, $CertInWsl)
+    }
+    return [int]$code
+}
+
 function Stage-SignedEfi {
     param([string]$Drive, [string]$Root, [string]$SignedFile, [string]$SignedSha256,
           [string]$LocalOutput, [string]$ExpectedVolumeId)
@@ -653,6 +741,9 @@ try {
              'console, and there is nothing to read when Secure Boot is off). Signing continues, ' +
              'and every receipt records DB_ENROLLED=UNKNOWN: re-run elevated to prove enrollment.')
     }
+
+    # Prove the WSL target can sign before spending a whole matrix of builds on it.
+    [void](Test-WslSigningReady -PublicCer $PublicCertificate)
 
     # The builders derive their output label from the repository's own helper, so
     # probe it once and let the catalogue's expected filename use the same label.

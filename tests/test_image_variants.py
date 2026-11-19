@@ -469,6 +469,33 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
     def test_an_explicit_only_request_never_skips_silently(self):
         self.assertIn("Cannot build {0}: {1}. -Only asked for this image specifically", SCRIPT)
 
+    def test_a_signing_preflight_runs_before_the_first_build(self):
+        # A wrong -WslDistribution/-WslUser used to surface as a failed signature
+        # on the first image, after every build had already run. The preflight
+        # proves the WSL side once, at the top.
+        self.assertIn("function Test-WslSigningReady", SCRIPT)
+        self.assertIn("WSL_SIGNING_READY", SCRIPT)
+        call = SCRIPT.index("[void](Test-WslSigningReady")
+        loop = SCRIPT.index("foreach ($variant in $variants)")
+        self.assertLess(call, loop, "the preflight must run before the matrix")
+
+    def test_the_preflight_names_the_wsl_target_it_used(self):
+        # "Did my -WslDistribution / -WslUser matter?" has to be answerable from
+        # the log; the line reports what wsl.exe actually resolved.
+        block = SCRIPT[SCRIPT.index("function Test-WslSigningReady"):SCRIPT.index("function Stage-SignedEfi")]
+        for token in ("WSL_DISTRO_NAME", "id -un", "home=$HOME", "key=$key", "tools="):
+            self.assertIn(token, block)
+
+    def test_the_preflight_reports_every_gap_before_building(self):
+        block = SCRIPT[SCRIPT.index("function Test-WslSigningReady"):SCRIPT.index("function Stage-SignedEfi")]
+        # No `set -e` in this payload: one missing tool must not hide a missing key.
+        self.assertIn("set -o pipefail", block)
+        self.assertNotIn("set -euo pipefail", block)
+        for token in ("WSL_SIGNING_MISSING tool=", "WSL_SIGNING_MISSING key=",
+                      "WSL_SIGNING_MISMATCH cer=", "WSL_SIGNING_MISMATCH key=",
+                      "WSL_SIGNING_BROKEN"):
+            self.assertIn(token, block)
+
 
 class TheDocumentIsRendered(unittest.TestCase):
     def test_the_matrix_block_is_exactly_the_rendered_catalogue(self):
