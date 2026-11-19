@@ -220,6 +220,11 @@ jobs:
             "$RUNNER_TEMP/test_prom_identity_ubsan"
             python3 -m unittest discover -s tests -p test_reference_asset_integrity.py -v
             python3 tools/verify_reference_assets.py --root .
+            # D3: every payload the image can load has a provenance record that
+            # agrees with the firmware's own pin table. Authenticity is not
+            # claimed - the tool prints SIGNATURE_AUTHENTICATED=0.
+            python3 tools/verify_provenance.py --root .
+            python3 -m unittest discover -s tests -p test_provenance_records.py -v
             python3 -m unittest discover -s tests -p test_firmware_evidence.py -v
             # Parse the Python half of the hybrid batch script without CUDA.
             python3 -c 'from pathlib import Path; s=Path("Check-GPU-Unlock.bat").read_text(encoding="utf-8"); parts=s.split(chr(39)*3,2); assert len(parts)==3; compile(parts[2], "Check-GPU-Unlock.bat", "exec"); print("PASS benchmark Python syntax (no CUDA execution)")'

@@ -282,9 +282,9 @@
       "id": "D3",
       "class": "D",
       "priority": "P1",
-      "source": "none",
-      "section": null,
-      "note": "The 84 MB payloads have no provenance beyond local hashes.",
+      "source": "partial",
+      "section": "11.27",
+      "note": "Every loadable payload has a provenance record checked against the firmware's own asset table, and the gate refuses missing, mismatched, orphaned or signature-claiming records; NVIDIA signature authentication is still absent and reported as such.",
       "hardware_verified": false
     },
     {

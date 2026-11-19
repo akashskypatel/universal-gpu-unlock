@@ -13,17 +13,17 @@ no hardware was touched.
 | Source obligation | Items | Share |
 | --- | --- | --- |
 | Met - implemented, and pinned by a host test, simulator row or CI job | 11 | 26% |
-| Partial - some exit criteria implemented, the remainder named | 14 | 33% |
-| Not started | 18 | 42% |
+| Partial - some exit criteria implemented, the remainder named | 15 | 35% |
+| Not started | 17 | 40% |
 
-**Source progress: 42%** (11 met + half of 14 partial = 18 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 43%** (11 met + half of 15 partial = 18.5 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 4 | 4 | 0 | 8 |
 | B - hardware preconditions | 6 | 1 | 3 | 10 |
 | C - privileged operations never shown safe | 0 | 7 | 3 | 10 |
-| D - release engineering | 1 | 2 | 2 | 5 |
+| D - release engineering | 1 | 3 | 1 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
 Blocking `P0`: 21 items, 6 met, 8 partial, 7 not started.
@@ -306,7 +306,7 @@ These are verified from source, not inferred.
 | --- | --- | --- | --- |
 | D1 | Artifacts are unsigned; Secure Boot must be off or a certificate enrolled by hand | **partial (§11.19)** — `src/Build-Sign-Deploy-UniversalGPU.ps1` signs every one of the 29 variants with a personal certificate inside WSL and refuses to sign unless the certificate is already in the BIOS `db`; that is one machine's trust, not a distributable chain (no CA, no timestamp, no release key, no reproducibility claim) | P0 |
 | D2 | The only actuating build has no CI coverage | **Closed (§11.14):** the Windows job compiles the admitted image (app and DXE, one and two targets) with `-RuntimeEsp`, and the host job diffs it. The build is not uploaded. | P0 |
-| D3 | No provenance for the 84 MB payloads; `verify_reference_assets.py` hashes local copies only | `tools/verify_reference_assets.py` output: `NVIDIA_SIGNATURE_VERIFIED=false` | P1 |
+| D3 | Payload provenance | every payload the firmware can load now has a record (role, 610.43.03 lineage, external reference, digest, length) checked against `src/profile.c` itself, and the tool refuses a missing, mismatched, orphaned or signature-claiming record (§11.27); authenticity is still unverified and says so | `docs/asset_provenance.json`, `tools/verify_provenance.py`, `tests/test_provenance_records.py` | P1 |
 | D4 | MSVC-only toolchain, no EDK II build, installer disabled | `Setup-AdaUnlock.ps1` refuses by design (`Setup.bat`, CI asserts `STATUS=REFUSED`) | P2 |
 | D5 | No hardware-in-the-loop; CI proves compilation and host logic only | workflow jobs `host`, `efi`; **partial (§11.21)** - `tools/donor_gate.py` machine-checks whether the session may advance, but no machine runs a stage automatically | P0 (for the product claim) |
 
@@ -459,6 +459,46 @@ partial and `B10` untouched - the per-card memory footprint (~165 MB: DMA
 window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
+
+### 11.27 D3 — every payload now says where it came from, and nothing claims more
+
+`tools/verify_reference_assets.py` proves the bytes on this disk are the pinned
+bytes. It cannot answer where they came from: the 84 MB GSP payload and the four
+AD102 companions carried a local hash and nothing else.
+
+`docs/asset_provenance.json` records, for every payload the firmware can load, a
+role, the lineage (`NVIDIA 610.43.03`), the external reference the pin was taken
+from (`Windows-GPU-UNLOCK/research/firmware/ada_610/artifacts-610.43.03.json`,
+which is not part of this repository), and the same digest and length the
+firmware enforces. `tools/verify_provenance.py` reads the asset tables out of
+`src/profile.c` - not a hand-copied list - and refuses when:
+
+* a row the image can load has no record,
+* a record's digest or length disagrees with the firmware's pin,
+* a record describes an asset the firmware does not load,
+* a payload present on disk no longer matches its record, or
+* a record claims a signature check this tree cannot perform.
+
+The last one is a guarantee, not a comment: `signature_authenticated` must be
+`false`, and the tool prints `SIGNATURE_AUTHENTICATED=0 AUTHENTICITY_UNVERIFIED=1`
+on every successful run. Provenance here means named and machine-checked, never
+proven genuine.
+
+The gate also reports what it could not check: `PRESENT=10 ABSENT=5`, because the
+five TU102 rows are pinned by the parent tree and this fork carries no Turing
+payload bytes - `TU102-ASSETS/` is a README - which is the same reason the Turing
+actuation build refuses to compile.
+
+Evidence: `tests/test_provenance_records.py` runs the gate on the repository and
+then breaks it six ways - a dropped record, a changed digest, a changed length, an
+orphan record, a claimed signature, an unknown schema - and finally edits a
+payload in a scratch copy and requires the gate to catch it. CI runs both the
+tool and the module.
+
+What this still does not do: it does not verify an NVIDIA signature, so a
+payload that came from somewhere else and was pinned after the fact would still
+pass. `D3` is **partial**: provenance is recorded, enforced and honest about its
+own limit; authenticity needs a signature chain this tree does not have.
 
 ### 11.26 C10 — the resume script now says what it is, and what it cannot be
 
