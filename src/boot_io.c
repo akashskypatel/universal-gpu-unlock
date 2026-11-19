@@ -32,6 +32,18 @@
 
 static EFI_SYSTEM_TABLE *Table;
 
+/* Defined at the end of this file so the boot-file harnesses can splice the
+ * close and read paths without dragging the timer in. */
+#ifndef GU_WATCHDOG_SECONDS
+#define GU_WATCHDOG_SECONDS 0
+#endif
+/* Anything beyond this is a typo, not a budget: firmware timers that long are
+ * indistinguishable from "never", which is the failure this code exists to
+ * avoid. */
+#define GU_WATCHDOG_MAX_SECONDS 3600U
+
+static EFI_STATUS WatchdogProgram(UINTN Bound);
+
 static EFI_HANDLE Self,Windows,OwnVolume,TargetEspVolume;
 
 /* Set once at open: the image was launched from removable media. The installer
@@ -267,8 +279,11 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
    * Do not change the firmware watchdog or any active boot state. */
   return EFI_SUCCESS;
 #endif
-  if(!b->SetWatchdogTimer){s=EFI_UNSUPPORTED;goto failed;}
-  s=b->SetWatchdogTimer(0,0,0,NULL);
+  /* The only place the firmware timer is programmed. A build without a
+   * threshold disables it exactly as before; a build with one arms it here, so
+   * the bound covers preparation, the transaction and the driver work, and
+   * GuBootWatchdogCancel() removes it before the handover. */
+  s=WatchdogProgram((UINTN)GU_WATCHDOG_SECONDS);
   if(s==EFI_SUCCESS)return s;
 failed:
   {
@@ -957,5 +972,73 @@ EFI_STATUS GuAssetInstallStage(VOID) {
   GuLog("ASSET_INSTALL=STAGED FILES=%u WRITTEN=%u ALREADY=%u BUNDLE=%s BOOT_COUNT=%u\n",
         (unsigned)GU_ASSET_COUNT,(unsigned)staged,(unsigned)already,
         record.Bundle,(unsigned)record.BootCount);
+  return EFI_SUCCESS;
+}
+
+/* Bounded watchdog.
+ *
+ * The firmware timer was only ever disabled, because nobody knew how long the
+ * sequence takes. This gives it a bound: a build that sets GU_WATCHDOG_SECONDS
+ * arms the timer in GuBootOpen, so it covers preparation, the transaction and
+ * the driver work, and the handover path cancels it as soon as the outcome is
+ * recorded. A hang then reboots the machine instead of leaving a half-written
+ * card behind a frozen screen, and nothing is left armed across the handover to
+ * Windows.
+ *
+ * The threshold is a build constant, not a measurement. No timing budget has
+ * been captured on hardware yet, so the default is 0, which arms nothing and
+ * reproduces today's behaviour exactly - the timer is disabled, as before. The
+ * value in force is reported by GuBootWatchdogArmed() and by the two log lines
+ * below, so a boot record shows whether a bound existed
+ * (docs/PRODUCTION_READINESS_INVENTORY.md 11.12).
+ */
+static BOOLEAN WatchdogArmed;
+static UINTN WatchdogSeconds;
+
+/* Program the firmware timer. A zero bound is the default build: the timer is
+ * disabled and nothing is armed, which is the old behaviour exactly. */
+static EFI_STATUS WatchdogProgram(UINTN Bound) {
+  EFI_BOOT_SERVICES *b;
+  EFI_STATUS s;
+  if (!Table || !Table->BootServices || !Table->BootServices->SetWatchdogTimer)
+    return EFI_UNSUPPORTED;
+  b = Table->BootServices;
+  if (Bound > (UINTN)GU_WATCHDOG_MAX_SECONDS) {
+    GuLog("WATCHDOG=REFUSED SECONDS=%u REASON=IMPLAUSIBLE_THRESHOLD\n",
+          (unsigned)Bound);
+    return EFI_INVALID_PARAMETER;
+  }
+  /* 100 ns units; reset code 0 because the transaction owns no runtime data. */
+  s = b->SetWatchdogTimer(Bound * 10000000U, 0, 0, NULL);
+  if (s == EFI_SUCCESS && Bound) {
+    WatchdogArmed = TRUE;
+    WatchdogSeconds = Bound;
+    GuLog("WATCHDOG=ARMED SECONDS=%u\n", (unsigned)Bound);
+  }
+  return s;
+}
+
+/* Whether this build armed the timer, and for how long. Called by the handover
+ * path and by the diagnostic report; it never programs the timer. */
+BOOLEAN GuBootWatchdogArmed(UINTN *seconds) {
+  if (seconds) *seconds = WatchdogArmed ? WatchdogSeconds : 0;
+  return WatchdogArmed;
+}
+
+/* Cancel before the handover. A failure here is reported but never masked: the
+ * caller is already past the point where the card is consistent. */
+EFI_STATUS GuBootWatchdogCancel(VOID) {
+  EFI_STATUS s;
+  if (!WatchdogArmed) return EFI_SUCCESS;
+  if (!Table || !Table->BootServices || !Table->BootServices->SetWatchdogTimer)
+    return EFI_UNSUPPORTED;
+  s = Table->BootServices->SetWatchdogTimer(0, 0, 0, NULL);
+  if (EFI_ERROR(s)) {
+    GuLog("WATCHDOG=CANCEL_FAILED SECONDS=%u STATUS=%#llx\n",
+          (unsigned)WatchdogSeconds, (unsigned long long)s);
+    return s;
+  }
+  GuLog("WATCHDOG=CANCELLED SECONDS=%u\n", (unsigned)WatchdogSeconds);
+  WatchdogArmed = FALSE;
   return EFI_SUCCESS;
 }

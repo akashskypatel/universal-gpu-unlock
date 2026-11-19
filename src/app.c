@@ -295,6 +295,16 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     L"\r\nSelected GPU preparation passed. Driver release and firmware work will now begin.\r\n");
   GuLog("Operator U/P: ordered selected transactions; no automatic retry\n");
   GuBootSilence();
+  /* GuBootOpen already armed the bounded timer for this build, so the bound
+   * covers preparation and everything below. Say so once, so a boot log records
+   * whether this run had one. */
+  {
+    UINTN bound=0;
+    if(GuBootWatchdogArmed(&bound))
+      GuLog("WATCHDOG BOUND=%u SECONDS ACTIVE=1\n",(unsigned)bound);
+    else
+      GuLog("WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD\n");
+  }
   /* Name the card before the first mutation so a power loss leaves evidence. */
   (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_INTENT,0,owner->device_id,
@@ -310,6 +320,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
                           (UINT8)owner->discovery_identity.device,
                           (UINT8)owner->discovery_identity.function,
                           (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
+  /* The outcome is known and recorded: nothing may reset from here on, and the
+   * timer must not survive into Windows. */
+  (VOID)GuBootWatchdogCancel();
   if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");

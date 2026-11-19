@@ -163,17 +163,24 @@ int main(void){
         opened = BOOT[begin:end]
         guard = opened.index("#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY")
         finish_log = opened.index("if(closed!=EFI_SUCCESS){s=closed;goto failed;}")
-        watchdog = opened.index("if(!b->SetWatchdogTimer){s=EFI_UNSUPPORTED;goto failed;}")
+        watchdog = opened.index("s=WatchdogProgram((UINTN)GU_WATCHDOG_SECONDS);")
         self.assertLess(finish_log, guard)
         self.assertLess(guard, watchdog)
-        self.assertEqual(
-            opened[guard:watchdog].strip(),
-            "#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY\n"
+        guarded=opened[guard:watchdog].strip()
+        self.assertTrue(guarded.startswith("#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY"))
+        self.assertIn(
             "  /* Preparation reads PCI identity and writes only its removable USB log.\n"
             "   * Do not change the firmware watchdog or any active boot state. */\n"
             "  return EFI_SUCCESS;\n"
-            "#endif")
-        self.assertIn("s=b->SetWatchdogTimer(0,0,0,NULL);", opened[watchdog:])
+            "#endif", guarded)
+        # The guard returns before the timer is touched, whatever the bound is.
+        self.assertNotIn("SetWatchdogTimer", guarded)
+        # The old unconditional disable lives in WatchdogProgram now, reached only
+        # with a zero bound, so the prepare-only return still wins.
+        program=BOOT.split("static EFI_STATUS WatchdogProgram(UINTN Bound) {",1)[1].split("\n}\n",1)[0]
+        self.assertIn("SetWatchdogTimer(Bound * 10000000U, 0, 0, NULL)", program)
+        self.assertIn("if (s == EFI_SUCCESS && Bound)", program)
+        self.assertIn("GU_ACTIVE_SEQUENCE_PREPARE_ONLY", opened)
         self.assertIn("EFI_STATUS released=GuBootClose();",opened[watchdog:])
         for source in (APP, DXE):
             self.assertIn("/DGU_ACTIVE_SEQUENCE_PREPARE_ONLY", source)

@@ -126,12 +126,17 @@ whose stock values differ from the chosen variant, cannot use the same image.
 per-variant expectations and the same latching discipline
 (`profile.c:307-312`).
 
-**Status (2026-11-18): not fixed — deliberate.** The profile selects between
-code paths guarded by `#ifdef GU_ENTRY_LATCHED_SS1_FULL`/`_PRESERVE` across
-`port.c` (`:565`, `:570`, `:761`), not just a value. Turning it into a runtime
-choice is a behavioural change in the most destructive part of the path with no
-cold-state evidence behind it; guessing here would be exactly the failure mode
-the repository's own gates exist to prevent. See §11.7.
+**Status (2026-11-18): partly fixed — the build choice is now enforced.** An
+image built for one captured stock value refuses a card presenting another,
+before any write (§11.11). The compile-time *selection* remains compile-time:
+the profile chooses between code paths guarded by
+`#ifdef GU_ENTRY_LATCHED_SS1_FULL`/`_PRESERVE` across `port.c` (`:565`, `:570`,
+`:761`), not just a value, and the two entry-latched policies are
+indistinguishable before the write, so no probe can choose between them. Turning
+that into a runtime choice is a behavioural change in the most destructive part
+of the path with no cold-state evidence behind it; guessing here would be exactly
+the failure mode the repository's own gates exist to prevent. See §11.11 and
+§11.7.
 
 ### A5. Architecture coverage is uneven and partly absent — **P0**
 * Turing is refused in prepare (`profile.c:268-271`) *and* ships no payload:
@@ -203,12 +208,15 @@ log.
 loss, Stop hang, FLR refusal, partial multi-GPU) with a software-visible state
 that survives the failure.
 
-**Status (2026-11-18): partly addressed, deliberately incomplete.** The
-software-visible state from A7 (above) now survives a failure. The watchdog is
-*still* disabled: arming a timer whose expiry is shorter than the worst-case
-transaction would reset a machine mid-write, which is strictly worse than the
-current hang, and no bound exists yet (C2/C6). Recovery itself remains physical.
-See §11.7.
+**Status (2026-11-18): the mechanism exists; no bound is claimed.** The
+software-visible state from A7 (above) now survives a failure, and a build can
+now bound the firmware timer: it is armed once in `GuBootOpen` for a build that
+sets `GU_WATCHDOG_SECONDS`, and cancelled before the handover, so a hang inside
+the sequence resets the machine instead of freezing it with a half-written card
+(§11.12). The default build arms nothing, because no worst-case duration has been
+measured (C2/C6) — a timer shorter than the transaction would reset a machine
+mid-write, which is strictly worse than the current hang. Recovery itself remains
+physical.
 
 ---
 
@@ -550,6 +558,78 @@ launched from (that guard is the only thing preventing unattended re-application
 whose safety is unproven), and it does not authenticate the vendor signature — a
 digest proves these bytes, not who signed them. Both remain C3/C4/D1.
 
+### 11.11 A4 — a card the image was not built for is refused
+
+The compile-time profile is still compile-time. What changed is that the choice
+is now a *precondition* rather than a comment: `GU_STOCK_PROFILE_SS0` was a
+constant the image carried and never compared against anything, so a build for
+one card would run its destructive path on another card presenting a different
+cold value.
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Predicate | `src/stock_profile.h` | `GuStockProfileAccepts(Observed, HasExpected, Expected)` — a build with no expectation accepts, a build with one compares |
+| Gate | `src/profile.c`, `RegistersFor` | after the selector sanity rules, before anything else; sets `StockProfileMismatch` and logs, never faults |
+| Refusal | `GuAd104Prepare` | returns `EFI_UNSUPPORTED` with the card untouched |
+| Message | log | `STOCK_PROFILE=REFUSED COMPILED=… EXPECTED_SS0=… OBSERVED_SS0=… REASON=CARD_DOES_NOT_MATCH_BUILD`; a match logs `STOCK_PROFILE=MATCH` |
+| Linkability | `src/port.c`, `src/port.h` | the entry-latch API is declared for every profile, with an explicit no-op branch for the policies that keep no latch |
+| Selector step | `src/vendor/unlock_610.c` | the four-phase selector machine runs only in `_FULL`; every other policy refuses the step instead of writing selectors the port layer would fault on |
+
+That last row is a finding, not a nicety: before this pass three of the four
+profiles **did not link**. The latch API and the selector phase were
+unconditional call sites with `#ifdef`-guarded definitions, so
+`entryLatchedSs1Preserve`, `original03100062` and `observed03000062` compiled and
+then failed at link time — the "one image, four profiles" matrix was really one
+image. The gate above only protects a real build if the other builds exist, so
+they now do.
+
+Evidence: `tests/test_stock_profile.c` (12 checks, gcc and clang under UBSan:
+mismatch refuses, match accepts, no expectation accepts, no fault, message
+fields), `tests/test_stock_profile_contract.py` (14 tests: placement after the
+sanity rules, read-only, `EFI_UNSUPPORTED`, message fields, profile table, no
+runtime NVRAM selector), and two simulator rows that differ only in the card —
+`prepare stock-match` and `prepare stock-mismatch`, both on the
+`original03100062` build. The mismatch row reports
+`STATUS=8000000000000003 BAR_WRITES=0 FLR=0` and the refusal names the build.
+
+What this does *not* do: it does not choose a profile at runtime. The two
+entry-latched policies are indistinguishable before the write — that is what
+"entry-latched" means — so no probe can pick between them, and the expectations
+for the non-latched policies do not exist in this repository. Operator selection
+with the choice recorded in the A7 record (§11.8) is still open.
+
+### 11.12 A8 — the firmware timer can now be bounded
+
+`GuBootOpen` used to disable the firmware timer and never re-arm it, so a hang
+inside the sequence left the machine frozen with a half-written card. The timer
+is now programmed in exactly one place and cancelled at one place:
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Threshold | `GU_WATCHDOG_SECONDS` | build constant, default `0` = arms nothing, disables the timer exactly as before |
+| Arm | `WatchdogProgram`, called from `GuBootOpen` | `seconds × 10,000,000` in the firmware's 100 ns unit, reset code `0` |
+| Sanity | `GU_WATCHDOG_MAX_SECONDS` (3600) | a longer value is refused with `REASON=IMPLAUSIBLE_THRESHOLD` rather than armed |
+| Cancel | `GuBootWatchdogCancel`, called from `app.c` | after the outcome is recorded, before `GuBootWindows`; logs `WATCHDOG=CANCELLED SECONDS=…` |
+| Record | log | `WATCHDOG BOUND=… ACTIVE=1` or `REASON=NO_BUILD_THRESHOLD`, before the first mutation |
+
+The default build is unchanged on purpose: no worst-case duration has been
+measured, and a timer shorter than the transaction resets a machine mid-write,
+which is worse than the hang it replaces. A prepare-only build returns before the
+arm site, so it still touches neither the timer nor any boot state.
+
+Evidence: `tests/test_watchdog_contract.py` (10 tests: two programming sites,
+arm inside `GuBootOpen` after the prepare-only return, sanity check before
+programming, 100 ns conversion, report helper is read-only, cancel reports and
+clears, cancel after the outcome and before Windows, log states whether a bound
+was in force), and the simulator row `transaction watchdog`, which builds with
+`GU_WATCHDOG_SECONDS=600` and reports `SIM_WATCHDOG ARMS=1 BOUND=600
+CANCELLED=1` after a transaction that still completed. The default build is
+pinned too: the other transaction rows assert that nothing was armed.
+
+What this does *not* do: it does not choose a threshold. That needs the measured
+budgets from C2/C6, and it does not attempt recovery — the timer's only job is to
+turn a hang into a reboot that the A7 record then explains.
+
 ### 11.7 Items deliberately not changed
 
 * **A4 (stock profile)** and **A5 (Turing payload, per-SKU tables)** need
@@ -557,17 +637,18 @@ digest proves these bytes, not who signed them. Both remain C3/C4/D1.
   refuses what it cannot drive (§11.9). Choosing a profile or
   emitting a Turing patch from the current constants would be a guess in the
   most destructive part of the path, so nothing was changed there.
-* **A8 (watchdog)**: the transaction re-enables no timer today because nobody
-  knows its worst-case duration. Arming a watchdog without that bound could
-  reset a machine mid-transaction, which is worse than the current hang. Left
-  as inventoried until C2/C6 produce the bound.
+* **A8 (watchdog)**: the arm/cancel mechanism exists but no threshold is
+  chosen (§11.12). Nobody knows the worst-case duration, and arming a timer
+  shorter than it would reset a machine mid-transaction, which is worse than the
+  current hang. The default build still arms nothing until C2/C6 produce the
+  bound.
 * **A6/A7 (asset install, persisted state/rollback)**: the install step and the
   boot record now exist (§11.8, §11.10); what remains is the signature story
   (D1) and any behaviour that would skip or roll back a transaction.
 
 ### 11.5 Not touched by this pass
 
-A2 (build-time ESP GUID), A4 (compile-time stock profile), A5 (Turing payload),
-A6 (asset install/hash pinning), A7 (persisted state/rollback), A8 (watchdog
-recovery), and every class-C item that needs hardware remain exactly as
-inventoried above.
+A2 (build-time ESP GUID), A5 (Turing payload), A6 (asset install/hash
+pinning), A7 (persisted state/rollback), A8 (watchdog recovery), and every
+class-C item that needs hardware remain exactly as inventoried above, except
+where §11.11 and §11.12 record what did change.

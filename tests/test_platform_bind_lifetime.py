@@ -135,11 +135,17 @@ int main(void) {
                              executed.stdout + executed.stderr)
 
     def test_selector_latches_and_write_phase_are_card_private(self):
-        first = SOURCE.index("BOOLEAN GuGetEntrySelectorsFor(")
-        middle = SOURCE.index("#endif\n#ifdef GU_ENTRY_LATCHED_SS1_FULL", first)
-        last = SOURCE.index("#endif\nEFI_STATUS GuInit(", middle)
+        # The latch API is declared for every stock profile: the stored latch is
+        # one branch, and the policies without one are an explicit no-op branch.
+        guard = SOURCE.index("#ifdef GU_ENTRY_LATCHED\n")
+        first = SOURCE.index("BOOLEAN GuGetEntrySelectorsFor(", guard)
+        middle = SOURCE.index("\n#else\n", first)
+        branch_end = SOURCE.index("\n#endif\n", middle)
+        self.assertIn("no latch in this policy", SOURCE[middle:branch_end])
+        last = SOURCE.index("#endif\n#ifdef GU_ENTRY_LATCHED_SS1_FULL", branch_end)
+        region_end = SOURCE.index("#endif\nEFI_STATUS GuInit(", last)
         actual_latch = SOURCE[first:middle]
-        actual_phase = SOURCE[SOURCE.index("BOOLEAN GuSelectorPhaseFor(", middle):last]
+        actual_phase = SOURCE[SOURCE.index("BOOLEAN GuSelectorPhaseFor(", last):region_end]
         host = r"""
 #include <stdint.h>
 #include <stdio.h>

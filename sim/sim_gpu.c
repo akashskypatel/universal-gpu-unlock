@@ -968,6 +968,13 @@ void SimGpuBarWrite(SIM_GPU *gpu, UINT32 offset, UINT32 value) {
  * agree, because the identity checks compare one against the other. The BAR0
  * model is shared by every Ada SKU, which is exactly the assumption the
  * geometry gate refuses to make on the image side. */
+/* Model the cold selector pair the pinned profile is built for. */
+void SimGpuSetSelectors(SIM_GPU *gpu, UINT32 ss0, UINT32 ss1) {
+  if (!gpu) return;
+  Wr32(gpu->bar, SIM_REG_SS0, ss0);
+  Wr32(gpu->bar, SIM_REG_SS1, ss1);
+}
+
 void SimGpuSetDeviceId(SIM_GPU *gpu, UINT16 device) {
   if (!gpu) return;
   Wr16(gpu->config, 0x02, device);

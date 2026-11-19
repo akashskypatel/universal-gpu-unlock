@@ -56,6 +56,10 @@ EXTRA = os.environ.get("SIM_CFLAGS", "").split()
 
 BASE = ["-std=c11", "-fshort-wchar", "-O1", "-g", "-Wall", "-Wextra",
         "-Wno-unused-parameter", *EXTRA, *DEFINES, *INCLUDES]
+# Flags without the image's include paths: the simulator's own files must not
+# see src/compat/linux, which shadows the host headers it expects.
+BASE_ONLY = ["-std=c11", "-fshort-wchar", "-O1", "-g", "-Wall", "-Wextra",
+             "-Wno-unused-parameter", *EXTRA]
 # The image sources are compiled in the kernel-style environment they expect;
 # the simulator's own files need a hosted libc instead.
 APP_FLAGS = [*BASE, "-D__KERNEL__"]
@@ -121,26 +125,49 @@ def prepare_tree() -> None:
     (boot / "bootmgfw.efi").write_bytes(b"MZ simulator stand-in for the Windows boot manager\n")
 
 
-def build() -> Path:
+# The stock profile is a build-time choice. The default binary is built with the
+# entry-latched policy (no fixed selector expectation); the second one is built
+# for the captured original-03100062 value, so the profile gate can be exercised
+# end to end rather than only on the host predicate.
+STOCK_BUILDS = {
+    "default": [],
+    "original": ["-DGU_STOCK_PROFILE_ORIGINAL_03100062"],
+    # A bounded firmware timer, well above any plausible runtime for the
+    # sequence: the point is that a hang reboots instead of freezing.
+    "bounded": ["-DGU_WATCHDOG_SECONDS=600"],
+}
+# The default profile is replaced, not added to: exactly one profile is allowed.
+REPLACED_BY_ORIGINAL = ["-DGU_ENTRY_LATCHED_SS1_FULL"]
+
+
+def build(profile: str = "default") -> Path:
     cc = compiler()
+    defines = [flag for flag in DEFINES]
+    if profile == "original":
+        defines = [flag for flag in defines if flag not in REPLACED_BY_ORIGINAL]
+    defines += STOCK_BUILDS[profile]
+    suffix = "" if profile == "default" else "_" + profile
     objects = []
     for source in APP_SOURCES:
-        obj = BUILD / (Path(source).stem + ".o")
-        command = [cc, *APP_FLAGS, "-c", str(ROOT / "src" / source), "-o", str(obj)]
+        obj = BUILD / (Path(source).stem + suffix + ".o")
+        command = [cc, *BASE_ONLY, *defines, "-D__KERNEL__", *INCLUDES,
+                   "-c", str(ROOT / "src" / source), "-o", str(obj)]
         done = subprocess.run(command, capture_output=True, text=True)
         if done.returncode != 0:
             sys.stderr.write(done.stderr)
             raise SystemExit("compile failed: %s" % source)
         objects.append(obj)
     for source in SIM_SOURCES:
-        obj = BUILD / ("sim_" + Path(source).stem + ".o")
-        command = [cc, *SIM_FLAGS, "-c", str(SIM / source), "-o", str(obj)]
+        obj = BUILD / ("sim_" + Path(source).stem + suffix + ".o")
+        # The simulator's own files are hosted: no kernel-style environment.
+        command = [cc, *BASE_ONLY, *defines, "-D_GNU_SOURCE", *SIM_INCLUDES,
+                   "-c", str(SIM / source), "-o", str(obj)]
         done = subprocess.run(command, capture_output=True, text=True)
         if done.returncode != 0:
             sys.stderr.write(done.stderr)
             raise SystemExit("compile failed: %s" % source)
         objects.append(obj)
-    binary = BUILD / "sim_active"
+    binary = BUILD / ("sim_active" + suffix)
     command = [cc, *EXTRA, *[str(o) for o in objects], "-o", str(binary)]
     done = subprocess.run(command, capture_output=True, text=True)
     if done.returncode != 0:
@@ -151,7 +178,7 @@ def build() -> Path:
 
 VARIANTS = ("nominal", "msi-enabled", "flr-refused", "dma-high", "rebar",
             "bar-above-4g", "runtime-target", "runtime-absent", "ad104-sku",
-            "install-assets")
+            "install-assets", "stock-match", "stock-mismatch", "watchdog")
 
 # Scenario matrix: every row must pass, and the two negative rows are the
 # documented refusal and abort paths.
@@ -170,6 +197,14 @@ SCENARIOS = (
     ("prepare", "ad104-sku"),
     # The staging build: USB bundle verified, copied to the ESP, recorded.
     ("prepare", "install-assets"),
+    # The original-03100062 build: accepted on the card it was built for,
+    # refused on the other captured stock value. Both rows run the same
+    # binary, so the difference is the card, not the image.
+    ("prepare", "stock-match", "original"),
+    ("prepare", "stock-mismatch", "original"),
+    # The bounded build: the timer is armed with the configured threshold, the
+    # transaction still completes, and the cancel removes it before handover.
+    ("transaction", "watchdog", "bounded"),
 )
 
 
@@ -183,10 +218,14 @@ def main() -> int:
     stage = sys.argv[1] if len(sys.argv) > 1 else "prepare"
     if stage == "verify":
         prepare_tree()
-        binary = build()
+        binaries = {}
         results = []
-        for scenario_stage, variant in SCENARIOS:
-            done = run(binary, scenario_stage, variant)
+        for row in SCENARIOS:
+            scenario_stage, variant = row[0], row[1]
+            profile = row[2] if len(row) > 2 else "default"
+            if profile not in binaries:
+                binaries[profile] = build(profile)
+            done = run(binaries[profile], scenario_stage, variant)
             summary = ""
             for line in done.stdout.splitlines():
                 if line.startswith("SIM_RESULT=") and "CHECKS_FAILED" in line:

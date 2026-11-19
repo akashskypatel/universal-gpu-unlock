@@ -37,6 +37,30 @@ BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0,UINT32 Ss1) {
   return GuLatchEntrySelectorsFor(&Gu,Ss0,Ss1);
 }
+#else
+/* Policies without an entry latch keep no private selector copy: the values are
+ * read where they are needed and nothing is compared against them later. These
+ * definitions state that explicitly, instead of leaving the call sites
+ * unresolved - which is why the non-latched profiles could not link before. */
+BOOLEAN GuGetEntrySelectorsFor(const GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1) {
+  (void)platform;(void)Ss0;(void)Ss1;return FALSE; /* nothing was latched */
+}
+BOOLEAN GuGetEntrySelectors(UINT32 *Ss0,UINT32 *Ss1) {
+  return GuGetEntrySelectorsFor(&Gu,Ss0,Ss1);
+}
+BOOLEAN GuEntrySelectorsMatchFor(const GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
+  (void)platform;(void)Ss0;(void)Ss1;return TRUE; /* no expectation to contradict */
+}
+BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0,UINT32 Ss1) {
+  return GuEntrySelectorsMatchFor(&Gu,Ss0,Ss1);
+}
+BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
+  if(!platform||platform->fault)return FALSE;
+  (void)Ss0;(void)Ss1;return TRUE; /* no latch in this policy */
+}
+BOOLEAN GuLatchEntrySelectors(UINT32 Ss0,UINT32 Ss1) {
+  return GuLatchEntrySelectorsFor(&Gu,Ss0,Ss1);
+}
 #endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
 BOOLEAN GuSelectorPhaseFor(GU_PLATFORM *platform,UINT32 Phase) {

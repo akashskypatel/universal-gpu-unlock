@@ -285,16 +285,19 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
                                       const GU_GPU_EXEC_OBSERVATION *observations,
                                       size_t count);
 #endif
-#ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These
-   values are private to port.c; the vendor core can only read/compare them. */
+   values are private to port.c; the vendor core can only read/compare them.
+   Every profile declares this API: the non-latched policies keep no private
+   copy, so their latch is a no-op and their match has no expectation. Declaring
+   it unconditionally is what lets those builds link at all - before this, three
+   of the four policies failed to link because the call sites were unconditional
+   and the definitions were not. */
 BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1);
 BOOLEAN GuGetEntrySelectorsFor(const GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1);
 BOOLEAN GuEntrySelectorsMatchFor(const GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1);
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0, UINT32 Ss1);
 BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1);
 BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1);
-#endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
 /* The full policy owns the only permitted SS1 write phase. */
 BOOLEAN GuSelectorPhaseFor(GU_PLATFORM *platform,UINT32 Phase);

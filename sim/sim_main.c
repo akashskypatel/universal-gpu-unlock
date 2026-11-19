@@ -61,12 +61,16 @@ int main(int argc, char **argv) {
   int runtime_absent = strcmp(variant, "runtime-absent") == 0;
   int ad104_sku = strcmp(variant, "ad104-sku") == 0;
   int install_assets = strcmp(variant, "install-assets") == 0;
+  int stock_match = strcmp(variant, "stock-match") == 0;
+  int stock_mismatch = strcmp(variant, "stock-mismatch") == 0;
+  int watchdog = strcmp(variant, "watchdog") == 0;
 
   SimReportLine("SIM_VARIANT=%s", variant);
   if (!esp || !windows) {
     fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir> "
             "[nominal|msi-enabled|flr-refused|dma-high|rebar|bar-above-4g|"
-            "runtime-target|runtime-absent|ad104-sku|install-assets]\n",
+            "runtime-target|runtime-absent|ad104-sku|install-assets|"
+            "stock-match|stock-mismatch|watchdog]\n",
             argv[0]);
     return 2;
   }
@@ -88,6 +92,12 @@ int main(int argc, char **argv) {
   /* An AD104 part: admitted by the device-id list, but with no captured
    * register table of its own. */
   if (ad104_sku) SimGpuSetDeviceId(gpu, 0x2786);
+  /* The cold selector pair a stock-profile build expects. "stock-match" is the
+   * value the original-03100062 profile is compiled for; "stock-mismatch" is the
+   * other captured value, which that build must refuse. These variants are only
+   * meaningful with the matching build (see tools/run_simulation.py). */
+  if (stock_match) SimGpuSetSelectors(gpu, 0x03100062U, 2U);
+  if (stock_mismatch) SimGpuSetSelectors(gpu, 0x03000062U, 2U);
   if (dma_high) SimGpuForceHighDma(gpu, 1);
   /* Firmware is free to place BAR0 above 4 GiB, and Resizable BAR makes the
    * window larger than the 16 MiB of registers this code addresses. */
@@ -288,6 +298,39 @@ int main(int argc, char **argv) {
     if (refused) printf("%s", SimLogText());
     return refused ? 1 : 0;
   }
+  if (stock_mismatch) {
+    /* A card presenting a different stock value than the image was built for
+     * must be refused before anything is written, and the refusal must say
+     * which build the operator is holding. */
+    Check(status == EFI_UNSUPPORTED, "a mismatched stock profile was not refused");
+    Check(SimLogContains("STOCK_PROFILE=REFUSED COMPILED=original03100062"),
+          "the refusal did not name the compiled profile");
+    Check(SimLogContains("OBSERVED_SS0=0x3000062"),
+          "the refusal did not name the observed selector");
+    Check(!owner->profile_verified, "a refused profile was still latched");
+    Check(SimGpuBarWrites(gpu) == 0, "a refused profile wrote to BAR0");
+    Check(SimGpuFlrCount(gpu) == 0, "a refused profile reset the card");
+    Check(SimGpuWpr2Opens() == 0, "a refused profile opened WPR2");
+    SimReportLine("SIM_ABORT=stock-profile REFUSED=1 COMPILED=original03100062 "
+                  "OBSERVED_SS0=%#x BAR_WRITES=%zu FLR=%zu STATUS=%llx",
+                  0x03000062U, SimGpuBarWrites(gpu), SimGpuFlrCount(gpu),
+                  (unsigned long long)status);
+    SimReportLine("SIM_RESULT=%s CHECKS_FAILED=%d",
+                  SimFailures() ? "FAIL" : "PASS", SimFailures());
+    int refused = SimFailures();
+    SimWorldShutdown();
+    free(before);
+    if (refused) printf("%s", SimLogText());
+    return refused ? 1 : 0;
+  }
+  if (stock_match)
+    Check(SimLogContains("STOCK_PROFILE=MATCH COMPILED=original03100062"),
+          "a matching stock profile was not reported");
+  if (!watchdog) {
+    /* The default build must leave the firmware timer exactly as it found it:
+     * no bound, nothing armed. Programming it is opt-in per build. */
+    Check(SimWatchdogArms() == 0, "the default build armed the watchdog");
+  }
   Check(status == EFI_SUCCESS, "pre-execution preparation failed");
   Check(owner->profile_verified != 0, "profile was not verified");
   Check(owner->prom_verified != 0, "PROM readout was not accepted");
@@ -428,6 +471,24 @@ int main(int argc, char **argv) {
       free(post_tx);
     }
     free(pre_tx);
+  }
+
+  if (watchdog) {
+    /* A bounded run: the timer was armed once, with the configured bound, and
+     * the cancel path removes it before the handover. */
+    Check(SimWatchdogArms() == 1, "the bounded build did not arm the timer once");
+    Check(SimWatchdogMaxSeconds() == 600, "the timer was armed with the wrong bound");
+    Check(SimLogContains("WATCHDOG=ARMED SECONDS=600"),
+          "the arm was not logged with its bound");
+    Check(GuBootWatchdogArmed(NULL), "the image does not report the timer as armed");
+    Check(GuBootWatchdogCancel() == EFI_SUCCESS, "the timer could not be cancelled");
+    Check(SimWatchdogCancels() >= 1, "the cancel did not reach the firmware");
+    Check(!GuBootWatchdogArmed(NULL), "the timer still reports as armed");
+    Check(SimLogContains("WATCHDOG=CANCELLED SECONDS=600"),
+          "the cancel was not logged with its bound");
+    Check(SimGpuBarWrites(gpu) > 0, "the bounded run performed no transaction");
+    SimReportLine("SIM_WATCHDOG ARMS=%zu BOUND=%zu CANCELLED=%zu",
+                  SimWatchdogArms(), SimWatchdogMaxSeconds(), SimWatchdogCancels());
   }
 
   SimReportLine("SIM_CAPTURED_LOG_BYTES=%zu", SimLogLength());

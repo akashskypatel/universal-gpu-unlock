@@ -7,6 +7,12 @@ EFI_STATUS GuBootLoadWindows(VOID);
 EFI_STATUS GuBootChoose(CHAR16 *);
 EFI_STATUS GuBootWindows(VOID);
 EFI_STATUS GuBootClose(VOID);
+
+/* The bounded firmware timer. It is armed once, in GuBootOpen, for a build with
+ * GU_WATCHDOG_SECONDS!=0, and cancelled before the handover. Both are inert in
+ * the default build, which disables the timer exactly as before. */
+BOOLEAN GuBootWatchdogArmed(UINTN *seconds);
+EFI_STATUS GuBootWatchdogCancel(VOID);
 VOID GuBootSay(const CHAR16 *);
 VOID GuBootSilence(VOID);
 VOID GuBootUnsilence(VOID);

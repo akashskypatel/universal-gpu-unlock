@@ -331,6 +331,9 @@ int main(int argc,char **argv) {
 #include <stdlib.h>
 #include "gpu_inventory.h"
 #include "gpu_sku_geometry.h"
+/* The spliced prepare path records a stock-profile contradiction; this build has
+   no compiled expectation, so the flag stays false. */
+static int StockProfileMismatch;
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef size_t UINTN;

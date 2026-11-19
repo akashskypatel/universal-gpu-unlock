@@ -1546,9 +1546,18 @@ static int write_selector(struct unlock_transaction_work *work, const char *name
 	return GU_RESULT(value == unlock ? 0 : -EIO);
 }
 
-/* AD104: one SS0 and one SS1 write, after all Ada payload checks. */
+/* AD104: one SS0 and one SS1 write, after all Ada payload checks.
+ *
+ * The four-phase selector state machine (and the single permitted SS1 write) is
+ * part of the entry-latched-ss1-full stock policy only. The other policies have
+ * no phase to advance: entry-latched-preserve forbids the SS1 write outright and
+ * the non-latched policies write selectors without a phase at all. So this step
+ * exists only in the full policy, and every other profile refuses it here
+ * instead of writing selectors the port layer would fault on.
+ */
 static int unlock_transaction_selector(struct unlock_transaction_work *work)
 {
+#ifdef GU_ENTRY_LATCHED_SS1_FULL
     int ret;
     GU_PLATFORM *owner=GuCompatOwner(work->pdev);
     if (!owner || !work->payload_verified || check_entry_selectors(work)) return GU_RESULT(-EPROTO);
@@ -1558,6 +1567,16 @@ static int unlock_transaction_selector(struct unlock_transaction_work *work)
     ret=write_selector(work,"SS1",GU_FEAT_SS1_OFFSET,GU_SS1_UNLOCK);
     if (ret || !GuSelectorPhaseFor(owner,GU_SELECTOR_PHASE_TARGET)) return GU_RESULT(-EIO);
     return is_ad102(work) ? ad102_readout(work,"selectors-applied",true) : 0;
+#else
+    /* Keep the helpers referenced so a build without this policy still
+     * type-checks them, and refuse loudly: no selector contract, no write. */
+    (void)check_entry_selectors;
+    (void)write_selector;
+    if (!GuCompatOwner(work->pdev) || !work->payload_verified) return GU_RESULT(-EPROTO);
+    dev_err(&work->pdev->dev,
+            "STOCK_PROFILE=REFUSED STEP=selectors REASON=NO_PHASE_MACHINE_IN_THIS_BUILD\n");
+    return GU_RESULT(-EOPNOTSUPP);
+#endif
 }
 
 /* Reset SEC2 after FLR and leave it halted with reset released. Do not reset

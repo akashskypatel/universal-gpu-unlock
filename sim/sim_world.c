@@ -742,14 +742,34 @@ static EFI_STATUS EFIAPI SimStall(UINTN microseconds) {
   return EFI_SUCCESS;
 }
 
+/* Model watchdog programming: the harness must be able to assert that a timer
+ * was armed with a bound and cancelled before the handover, and that no other
+ * path touches it. */
+static UINTN g_watchdog_seconds;
+static UINTN g_watchdog_arm_count, g_watchdog_cancel_count;
+static UINTN g_watchdog_max_seconds;
+
 static EFI_STATUS EFIAPI SimSetWatchdog(UINTN timeout, UINT64 code,
                                         UINTN data_size, CHAR16 *data) {
-  (void)timeout;
   (void)code;
   (void)data_size;
   (void)data;
+  UINTN seconds = timeout / 10000000u; /* EFI 100 ns units */
+  g_watchdog_seconds = seconds;
+  if (seconds) {
+    g_watchdog_arm_count++;
+    if (seconds > g_watchdog_max_seconds) g_watchdog_max_seconds = seconds;
+    SimReportLine("SIM_EVENT=WATCHDOG_ARM SECONDS=%zu", (size_t)seconds);
+  } else {
+    g_watchdog_cancel_count++;
+    SimReportLine("SIM_EVENT=WATCHDOG_CANCEL");
+  }
   return EFI_SUCCESS;
 }
+
+UINTN SimWatchdogMaxSeconds(void) { return g_watchdog_max_seconds; }
+UINTN SimWatchdogArms(void) { return g_watchdog_arm_count; }
+UINTN SimWatchdogCancels(void) { return g_watchdog_cancel_count; }
 
 static EFI_STATUS EFIAPI SimGetMemoryMap(UINTN *size, EFI_MEMORY_DESCRIPTOR *map,
                                          UINTN *key, UINTN *desc_size,

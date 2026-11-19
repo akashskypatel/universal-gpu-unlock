@@ -116,6 +116,11 @@ EFI_HANDLE SimGpuHandle(SIM_GPU *gpu);
 EFI_PCI_IO_PROTOCOL *SimGpuIo(SIM_GPU *gpu);
 UINT32 SimGpuConfigRead(SIM_GPU *gpu, UINT32 offset);
 int    SimGpuStockDriverBound(SIM_GPU *gpu);
+/* Watchdog programming observed by the harness. */
+UINTN SimWatchdogMaxSeconds(void);
+UINTN SimWatchdogArms(void);
+UINTN SimWatchdogCancels(void);
+void   SimGpuSetSelectors(SIM_GPU *gpu, UINT32 ss0, UINT32 ss1);
 void   SimGpuSetDeviceId(SIM_GPU *gpu, UINT16 device);
 void   SimGpuEnableMsi(SIM_GPU *gpu, int enable);
 void   SimGpuSetBarWindow(SIM_GPU *gpu, UINT64 base, UINT64 size);

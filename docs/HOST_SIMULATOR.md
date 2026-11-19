@@ -53,7 +53,7 @@ diagnostics in `sim/sim_world.c`. The stage arguments are
 `<prepare|transaction> [variant]`; `verify` ignores them.
 
 `verify` runs every scenario in the table below and prints
-`SIM_VERIFY=PASS SCENARIOS=11 FAILED=0`.
+`SIM_VERIFY=PASS SCENARIOS=14 FAILED=0`.
 
 | Scenario | Card | Expected |
 | --- | --- | --- |
@@ -68,6 +68,17 @@ diagnostics in `sim/sim_world.c`. The stage arguments are
 | `prepare runtime-absent` | operator selection names a missing card | refuses, binds nothing, writes no BAR0 |
 | `prepare ad104-sku` | `10de:2786` (RTX 4070) | refused at prepare: no captured register table, zero BAR0 writes |
 | `prepare install-assets` | nominal | verifies the bundle from removable media, stages it on the ESP, records it as CURRENT, touches no BAR0 |
+| `prepare stock-match` | card presents `0x03100062` | the `original03100062` build accepts it, logs `STOCK_PROFILE=MATCH` |
+| `prepare stock-mismatch` | card presents `0x03000062` | the same build refuses it before any write: `EFI_UNSUPPORTED`, zero BAR0 writes, zero FLRs, `REASON=CARD_DOES_NOT_MATCH_BUILD` |
+| `transaction watchdog` | nominal, `GU_WATCHDOG_SECONDS=600` | the timer is armed once with that bound, the transaction still completes, and the cancel removes it |
+
+Rows that name a build run a separate binary of the same sources: `stock-match`
+and `stock-mismatch` use `-DGU_STOCK_PROFILE_ORIGINAL_03100062` (which replaces
+the default entry-latched policy, because exactly one profile is allowed), and
+`transaction watchdog` adds `-DGU_WATCHDOG_SECONDS=600`. Every other row uses the
+default build, whose profile carries no selector expectation and whose watchdog
+threshold is `0` — those rows assert that nothing was armed, so the default stays
+inert.
 
 ## The model
 

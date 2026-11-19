@@ -9,6 +9,11 @@
 #include "prom_identity.h"
 #include "gpu_sku_geometry.h"
 #include "asset_install.h"
+#include "stock_profile.h"
+
+/* Set when the card's cold selector contradicts the profile this image was
+ * built for. It is a refusal, not a hardware fault: nothing was written. */
+static BOOLEAN StockProfileMismatch;
 
 static const GU_ARCH_ASSETS AdaAssets={{
     {L"\\AD102-ASSETS\\booter_load_ad102.bin","gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672U},
@@ -205,6 +210,19 @@ static BOOLEAN RegistersFor(GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1) {
     GuLog("Selectors invalid: SS0=0x%x, SS1=0x%x (expected SS1 <= 7)\n",*Ss0,*Ss1);
     return FALSE;
   }
+#ifdef GU_STOCK_PROFILE_SS0
+  /* The image implements one stock policy; a card presenting another value is
+   * not a transient failure and must not reach the write path. */
+  if(!GuStockProfileAccepts(*Ss0,1,GU_STOCK_PROFILE_SS0)) {
+    StockProfileMismatch=TRUE;
+    GuLog("STOCK_PROFILE=REFUSED COMPILED=%s EXPECTED_SS0=%#x OBSERVED_SS0=%#x "
+          "REASON=CARD_DOES_NOT_MATCH_BUILD\n",
+          GU_STOCK_PROFILE_NAME,(unsigned)GU_STOCK_PROFILE_SS0,(unsigned)*Ss0);
+    return FALSE;
+  }
+  GuLog("STOCK_PROFILE=MATCH COMPILED=%s SS0=%#x\n",
+        GU_STOCK_PROFILE_NAME,(unsigned)*Ss0);
+#endif
   GuLog("Registers: cold state verified (PMC=0x%x, SS0=0x%x, SS1=%u)\n",
         pmc,*Ss0,*Ss1);
   return !platform->fault;
@@ -281,6 +299,7 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
 }
 EFI_STATUS GuAd104Prepare(VOID) {
   UINT32 ss0=0,ss1=0,after0=0,after1=0;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
+  StockProfileMismatch=FALSE;
   GuLog("GuAd104Prepare: start\n");
   /* V2 structural parsing is not signature acceptance. The dedicated
    * Turing falcon loader/selector contract is not verified in this fork. */
@@ -309,7 +328,9 @@ EFI_STATUS GuAd104Prepare(VOID) {
   }
   if(!RegistersFor(&Gu,&ss0,&ss1)) {
     GuLog("GuAd104Prepare: Registers() returned FALSE\n");
-    return EFI_NOT_READY;
+    /* A card that is not the one this image was built for is unsupported, not
+     * unready: retrying cannot help and nothing was changed. */
+    return StockProfileMismatch?EFI_UNSUPPORTED:EFI_NOT_READY;
   }
   if(!GuAd104AssetsValid(&Gu)) {
     GuLog("GuAd104Prepare: Assets invalid\n");
