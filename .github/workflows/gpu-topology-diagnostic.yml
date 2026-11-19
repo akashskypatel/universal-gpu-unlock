@@ -382,16 +382,20 @@ jobs:
             # symbols in a hosted GCC build; this shows MSVC still emits a complete
             # binary from the same sources. Neither output is uploaded: the waiver
             # exists to be reviewed, not deployed.
-            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            # -RuntimeEsp because the pinned path needs the private, gitignored
+            # local/boot_profile.h; a runner has no reviewed GUID, and the waiver
+            # may not use the synthetic host-test GUID. Runtime identification is
+            # the documented way to build an actuating image without that file.
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target waiver app compilation failed'}
             if(-not (Test-Path .\src\build\GPU-ONE-TARGET-UNVERIFIED-ACTUATION-0000-09-02-0.EFI)){throw 'One-target waiver app EFI missing'}
-            & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target waiver DXE compilation failed'}
             if(-not (Test-Path .\src\build_dxe\GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-0000-09-02-0.efi)){throw 'One-target waiver DXE EFI missing'}
-            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered waiver app compilation failed'}
             if(-not (Test-Path .\src\build\GPU-SEQUENCE-UNVERIFIED-ACTUATION-0000-09-02-0--0001-2A-03-1.EFI)){throw 'Ordered waiver app EFI missing'}
-            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered waiver DXE compilation failed'}
             if(-not (Test-Path .\src\build_dxe\GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Ordered waiver DXE EFI missing'}
             # The waiver's own interlocks must still refuse, without compiling.

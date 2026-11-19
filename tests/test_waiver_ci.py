@@ -28,7 +28,7 @@ APP = (ROOT / "src" / "Build-Experimental-MSVC.ps1").read_text(encoding="utf-8")
 DXE = (ROOT / "src" / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
 SELECTION = (ROOT / "src" / "Gpu-Selection-Build.ps1").read_text(encoding="utf-8")
 
-WAIVER_FLAGS = "-EnableSingleTargetExecution -AcceptUnverifiedActuation"
+WAIVER_FLAGS = "-EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp"
 
 # PowerShell spells paths with backslashes; compare in one spelling.
 FLAT = WORKFLOW.replace("\\", "/")
@@ -121,6 +121,23 @@ class TheWaiverIsCompiledWithTheRealToolchain(unittest.TestCase):
     def test_the_label_rule_is_still_the_one_the_names_are_derived_from(self):
         self.assertIn("$_ -replace '[:.]','-'", SELECTION)
         self.assertIn("-join '--'", SELECTION)
+
+    def test_the_admitted_build_needs_no_private_material(self):
+        # src/boot_profile.h demands the gitignored local/boot_profile.h unless
+        # GU_RUNTIME_ESP is defined, so a pinned waiver build cannot run on a
+        # hosted runner - and a waived build may not use the synthetic host-test
+        # GUID. Runtime identification is the documented third path.
+        profile = (ROOT / "src" / "boot_profile.h").read_text(encoding="utf-8-sig")
+        self.assertIn('#include "local/boot_profile.h"', profile)
+        self.assertIn("GU_RUNTIME_ESP", profile)
+        job = windows_job()
+        for _builder, _kind, prefix, extension, _directory, targets in WAIVER_BUILDS:
+            name = expected_name(prefix, extension, *targets)
+            command_start = job.rindex("& ./src/", 0, job.index(name))
+            command = job[command_start:job.index("\n", command_start)]
+            self.assertIn("-RuntimeEsp", command,
+                          f"{name} would need local/boot_profile.h to build")
+            self.assertNotIn("-SyntheticCompileProfile", command)
 
 
 class TheWaiverStillRefusesItsUnsafeCombinations(unittest.TestCase):

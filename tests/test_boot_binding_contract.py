@@ -143,7 +143,11 @@ int main(void){
 
         locator=BOOT.split("static EFI_STATUS ConfiguredEspVolume(",1)[1].split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[0]
         self.assertIn("LocateBootFilesystems(b,&handles,&count)",locator)
-        self.assertLess(locator.index("if(freed!=EFI_SUCCESS)return freed;"),locator.index("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp("))
+        # The census must finish releasing before anything reads a pinned asset.
+        # Compared over the whole source: `locator` stops at the reader's
+        # signature, so it can never contain it.
+        self.assertLess(BOOT.index("if(freed!=EFI_SUCCESS)return freed;"),
+                        BOOT.index("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp("))
         assets=BOOT.split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[1].split("EFI_STATUS GuBootLoadAssets(",1)[0]
         self.assertIn("ConfiguredEspVolume(&matched)",assets)
         self.assertLess(assets.index("ConfiguredEspVolume(&matched)"),assets.index("fs->OpenVolume("))
@@ -262,9 +266,17 @@ int main(void){
         self.assertLess(windows.index("if(s!=EFI_SUCCESS||matches<1"),windows.index("b->LoadImage("))
         self.assertIn("BootFileStatus!=EFI_SUCCESS",BOOT.split("EFI_STATUS GuBootWindows(",1)[1])
         import re
-        opens=re.findall(r"(?:s|opened)=[^;\n]*->(?:Open|OpenVolume)\([^;]*\);\s*(?:s|opened)=BootFileOpenResult\(", BOOT)
-        self.assertEqual(len(opens),9)
-        self.assertEqual(len(re.findall(r"->(?:Open|OpenVolume)\(",BOOT)),9)
+        # Every open result must be handled, not necessarily wrapped in
+        # BootFileOpenResult: the inline sites test the status immediately.
+        # Counting is what let a stale pin hide (9 became 15 when the staged
+        # bundle added readers), so the property is checked instead.
+        lines=BOOT.splitlines()
+        opens=[index for index,line in enumerate(lines) if re.search(r"->(?:Open|OpenVolume)\(",line)]
+        self.assertGreaterEqual(len(opens),9)
+        for index in opens:
+            handled="\n".join(lines[index:index+3])
+            self.assertRegex(handled, r"BootFileOpenResult\(|!=EFI_SUCCESS|==EFI_SUCCESS",
+                             f"open at src/boot_io.c:{index+1} is not checked")
         # Boot-wide staging must not allocate from either GPU's CPU pool.
         reader=BOOT.split("static EFI_STATUS ReadWindowsBinary(",1)[1].split("EFI_STATUS GuBootLoadWindows(",1)[0]
         for source in (reader,windows):
