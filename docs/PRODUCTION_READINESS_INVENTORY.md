@@ -12,21 +12,21 @@ no hardware was touched.
 
 | Source obligation | Items | Share |
 | --- | --- | --- |
-| Met - implemented, and pinned by a host test, simulator row or CI job | 6 | 14% |
-| Partial - some exit criteria implemented, the remainder named | 10 | 23% |
-| Not started | 27 | 63% |
+| Met - implemented, and pinned by a host test, simulator row or CI job | 10 | 23% |
+| Partial - some exit criteria implemented, the remainder named | 11 | 26% |
+| Not started | 22 | 51% |
 
-**Source progress: 26%** (6 met + half of 10 partial = 11 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 36%** (10 met + half of 11 partial = 15.5 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 3 | 5 | 0 | 8 |
-| B - hardware preconditions | 2 | 1 | 7 | 10 |
+| B - hardware preconditions | 6 | 1 | 3 | 10 |
 | C - privileged operations never shown safe | 0 | 3 | 7 | 10 |
-| D - release engineering | 1 | 1 | 3 | 5 |
+| D - release engineering | 1 | 2 | 2 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
-Blocking `P0`: 21 items, 4 met, 7 partial, 10 not started.
+Blocking `P0`: 21 items, 5 met, 8 partial, 8 not started.
 
 What the percentage is not: a measure of the product working. A met item means the code exists and something on the host pins it; the behaviour it would perform on a GPU is still unproven, which is why the second number is the one that decides whether this product works. It is 0% because no run has ever driven a card.
 
@@ -269,12 +269,12 @@ These are verified from source, not inferred.
 | --- | --- | --- | --- | --- |
 | B1 | An **AMD** display function must own the console | `msi_release.c:695` (`if(!amd_count||!display_count) s=EFI_ACCESS_DENIED`), plus `GuDevicePathAmdDisplayOwner` | Intel iGPU consoles and AMD-less systems are refused outright | P0 |
 | B2 | Headless mode needs a surviving non-target GOP; non-headless needs exactly one target GOP | `msi_release.c:587-597` | no iGPU + single dGPU (the common gaming build) cannot be prepared | P0 |
-| B3 | MSI must be disabled and the function in D0 | `checks.c:66-68` (MSI control bit 0 must be 0), `checks.c:99-102` (PM state must be D0) | firmware or a UEFI driver that left MSI enabled refuses forever | P0 |
-| B4 | Unknown PCI capability IDs refused | `checks.c:87-89` (`default: return FALSE`) | a real card exposing any capability outside PM/MSI/MSI-X/PCIe/vendor is refused | P1 |
-| B5 | PCIe endpoint v1/v2 only, FLR bit set, link-status bit clear | `checks.c:70-79`, `107-112` | PCIe v3 (or any other layout) refuses | P1 |
+| ~~B3~~ | ~~MSI must be disabled and the function in D0~~ | `checks.c:62-68` (PMC version 1-3, MSI/MSI-X enable clear), `checks.c:99-102` (PMCSR state must be D0), pinned by `tests/test_admission_gates.py` | **pinned in source, unverified on hardware** - a firmware or UEFI driver that left MSI on, or a function in D1-D3, is refused before anything is read (§11.20) | ~~P0~~ done |
+| ~~B4~~ | ~~Unknown PCI capability IDs refused~~ | `checks.c:87-89` (`default: return FALSE`), pinned by `tests/test_admission_gates.py` | **pinned in source, unverified on hardware** - a real card exposing any capability outside PM/MSI/MSI-X/PCIe/vendor is refused rather than guessed at; the log says `Config: cold PCI policy refused` (§11.20) | ~~P1~~ done |
+| ~~B5~~ | ~~PCIe endpoint v1/v2 only, FLR capable, no FLR already initiated~~ | `checks.c:70-79`, `107-112`, pinned by `tests/test_admission_gates.py` | **pinned in source, unverified on hardware** - PCIe v3, device type >= 2, a function without FLR capability, or one whose Device Control still has Initiate FLR set is refused; the old "link-status clear" wording described nothing the code checks (§11.20) | ~~P1~~ done |
 | ~~B6~~ | ~~BAR0 exactly 16 MiB at a base that fits the low 32 bits~~ | was `gpu_discovery.c:546-547`, `msi_release.c:773-775` | **fixed in source, unverified on hardware** — the firmware descriptor is authoritative: base decoded as 64-bit from config, any power-of-two window `>= 16 MiB`, config/attribute mismatch refused (§11.3) | ~~P0~~ done |
 | ~~B7~~ | ~~Device DMA addresses below 4 GiB~~ | was `port.c:497` with `AllocateAnyPages` | **fixed in source, unverified on hardware** — `AllocateMaxAddress` asks for a sub-4 GiB buffer up front; the mapped-address ceiling check stays as the last line of defence and the refusal is modelled in the simulator (§11.4) | ~~P1~~ done |
-| B8 | Bus Master off at admission (one narrow exception) | `checks.c:39-41`, `GuCheckConfigInitialMaster` in single-target mode | a firmware that leaves BME on changes which gate applies | P2 |
+| ~~B8~~ | ~~Bus Master off at admission (one narrow exception)~~ | `checks.c:39-41`, `GuCheckConfigInitialMaster` used only by the single-target read-only inspection (`gpu_discovery.c:822`, `:1104`, `profile.c:200-203`), pinned by `tests/test_admission_gates.py` | **pinned in source, unverified on hardware** - BME on is refused by the admission policy and tolerated only while the original UEFI driver is still the owner, so the exception cannot survive into the transaction (§11.20) | ~~P2~~ done |
 | B9 | Image launched from USB with a writable log directory | `boot_io.c:168`, `:176-180` | **relaxed in source, unverified on hardware** — `-EspResident` builds may now start from the ESP, but only when five further gates hold and the log is provably writable; the default build is unchanged and still refuses (§11.17) | P1 |
 | B10 | Per-call DMA ≤ 128 MiB, 1 MiB ROM buffer, ~80 MB radix table per card | `port.c:469`, `profile.c:289`, `unlock_610.c:1117` | multi-GPU memory footprint is multiplicative (~165 MB/card) and untested | P1 |
 
@@ -305,7 +305,7 @@ These are verified from source, not inferred.
 | D2 | The only actuating build has no CI coverage | **Closed (§11.14):** the Windows job compiles the admitted image (app and DXE, one and two targets) with `-RuntimeEsp`, and the host job diffs it. The build is not uploaded. | P0 |
 | D3 | No provenance for the 84 MB payloads; `verify_reference_assets.py` hashes local copies only | `tools/verify_reference_assets.py` output: `NVIDIA_SIGNATURE_VERIFIED=false` | P1 |
 | D4 | MSVC-only toolchain, no EDK II build, installer disabled | `Setup-AdaUnlock.ps1` refuses by design (`Setup.bat`, CI asserts `STATUS=REFUSED`) | P2 |
-| D5 | No hardware-in-the-loop; CI proves compilation and host logic only | workflow jobs `host`, `efi` | P0 (for the product claim) |
+| D5 | No hardware-in-the-loop; CI proves compilation and host logic only | workflow jobs `host`, `efi`; **partial (§11.21)** - `tools/donor_gate.py` machine-checks whether the session may advance, but no machine runs a stage automatically | P0 (for the product claim) |
 
 ---
 
@@ -400,6 +400,95 @@ means observed in the host simulator or a host contract test with
 `ENVIRONMENT=HOST_SIMULATOR`, `ACTUATION_VERIFIED=0`,
 `CAN_DETACH/CAN_UNLOCK/CAN_FLASH/RECOVERY_VERIFIED=0`. No card was touched, so
 no entry claims hardware behaviour.
+
+### 11.21 D5 — the donor session has a go/no-go gate, and still no hardware loop
+
+`tools/verify_run_log.py` answers "did this stage's log prove what the plan says
+it proves". It never answered "may the session advance", and the gap between
+those two questions is where an unverified actuation actually gets run: a
+read-only log that passes says nothing about whether preparation happened, and
+nothing compared the card one stage saw with the card the next stage would touch.
+
+`tools/donor_gate.py` composes the stage verdicts into one answer. It scores the
+read-only and preparation stages with the same manifest and the same evaluator,
+requires both to pass before an actuation stage is even considered, extracts the
+BDF every stage prints (and the PCI id wherever a stage prints one) and refuses
+unless exactly one card is named and it is the same card at every stage, and
+requires every manual gate to be acknowledged by its exact id - an unknown id is
+refused so a typo cannot stand in for `M6_STOCK_BOOT_AFTER_EVERY_RUN`.
+
+| Refusal | What it catches |
+| --- | --- |
+| `GATE_<stage>` | a stage whose own gates failed; the failing ids are named |
+| `PRIOR_STAGE_MISSING` | scoring actuation with no preparation (or preparation with no read-only contact) |
+| `IDENTITY_NOT_NAMED` / `IDENTITY_NOT_SINGLE` | a stage with no BDF, or with two - the second card that `M4` forbids |
+| `IDENTITY_CHANGED` / `PCI_ID_CHANGED` | a different card, or a renumbered one, between stages |
+| `IDENTITY_UNKNOWN` | no stage named a PCI id at all, so nothing ties the run to a piece of silicon |
+| `MANUAL_UNACKNOWLEDGED` / `UNKNOWN_ACK` | assumed or misspelled manual gates |
+| `SYNTHETIC_FIXTURE` | the shipped fixtures, unless `--self-test` is passed |
+
+Exit codes are `0` GO, `1` NO_GO, `2` a missing log, `3` a synthetic log set;
+`GO` prints `NEXT=` and `HARDWARE_VERIFIED=0`, and every verdict line carries the
+same flag.
+
+Evidence: `tests/test_donor_gate.py` (15 tests: the GO path over the shipped
+fixtures, the actuation-stage path, an unacknowledged gate, a misspelled gate, a
+failing read-only gate, a card that moved, a stage that names no PCI id, two
+cards in one stage, actuation without its predecessors, the synthetic refusal,
+both usage errors, and that a GO never prints `HARDWARE_VERIFIED=1`). The
+session document renders the gate from `docs/hardware_session.json`, so the plan
+and the checker cannot drift, and `tests/test_hardware_session.py` still pins the
+rendered file byte for byte.
+
+What this does not do: it does not create hardware-in-the-loop. Nothing here
+runs a machine, waits for a boot, or reads a log automatically; the operator
+still supplies every file and every acknowledgement, and a GO repeats evidence
+rather than producing it. `D5` therefore stays partial and `HARDWARE_VERIFIED`
+stays 0.
+
+### 11.20 B3/B4/B5/B8 — the admission policy is now tested, not just present
+
+`GuCheckConfigPolicy` (139 lines, `src/checks.c`) is the only thing that decides
+whether a discovered display function is admitted. Before this entry it had no
+test of its own: the discovery suites link a hand-written
+`GuCheckConfig` mock (`tests/gpu_discovery_mock.h`), which proves the callers
+honour the answer but says nothing about the answer itself. Every refusal it
+implements was therefore a promise, not a gate with a witness.
+
+`tests/test_admission_gates.py` extracts `ConfigByte`, `ConfigWord`,
+`GuCheckConfigPolicy`, `GuCheckConfig` and `GuCheckConfigInitialMaster` from the
+real source, links them against independent host mocks, and drives 51 crafted
+256-byte snapshots through them. The UEFI constants the policy depends on
+(`PCI_CLASS_DISPLAY`, the command/status bits, the capability ids,
+`PCI_EXPRESS_CAPABILITY_ID`, `PCI_POWER_STATE_D0`) are re-read from
+`src/vendor/edk2/Include/IndustryStandard/Pci22.h`, `Pci23.h` and
+`PciExpress21.h` and compared with the harness, so the test cannot drift away
+from the firmware's own values. The capability-walk limits are extracted from
+`checks.c` itself rather than retyped.
+
+| Gate | Asserted refusals |
+| --- | --- |
+| Identity | unsupported vendor/device, class other than `0x03`, header type 1 (bridge); the multifunction bit is masked, not rejected |
+| Decode | memory decode off, expansion ROM enable bit set, capability-list status bit clear |
+| B3 | PMC version 0 or >3, PMCSR state D1/D2/D3, MSI enable set, MSI-X enable set, duplicate MSI capability |
+| B4 | any capability id outside PM/MSI/MSI-X/PCIe/vendor; a vendor capability shorter than its 3-byte header |
+| B5 | PCIe version 0 or 3, device type 2 (root complex); FLR bit 28 clear in Device Capabilities; Initiate FLR already set in Device Control; PM or PCIe capability missing |
+| B8 | Bus Master set is refused by `GuCheckConfig` and accepted only by `GuCheckConfigInitialMaster` |
+| Structure | `Out == NULL`, `Config == NULL`, segment/bus/device/function out of range, unaligned or sub-0x40 capability pointer, pointer past `0xfc`, self-looping chain, overlapping capabilities, a capability that runs past 256 bytes |
+
+Two behaviours the harness pinned that the inventory text had wrong: only
+PMCSR bits 1:0 are the power state (a set reserved bit 2 is still D0 and is
+admitted), and the PCIe walk accepts device type 1 (legacy endpoint) while
+refusing type 2 and above - so B5's old wording "link-status bit clear"
+described nothing the code does. Both are corrected in the table above.
+
+What this does not do: it does not admit a card. The harness's
+`GuIsSupportedPciId` is a one-id stub (the real table is pinned separately by
+`tests/test_gpu_device_ids.c`), the snapshots are synthetic, and nothing here
+observes a real function's MSI/PM/PCIe registers. B1, B2 and B10 are untouched:
+they need topology and memory-footprint evidence this pass does not produce.
+The two `EFI_UNSUPPORTED` outcomes that this test makes predictable are still
+`HARDWARE_VERIFIED=0`.
 
 ### 11.1 A1 — runtime target selection
 

@@ -144,6 +144,21 @@ every line it prints, by construction.
 A `PASS` here means the run did what this document says it does. It is not a
 verdict on the card.
 
+One stage passing is still not permission to run the next one. `tools/donor_gate.py`
+composes the stage verdicts and refuses to advance unless the read-only stage and
+preparation both passed, every log names the same single card, and all six manual
+gates are acknowledged by id:
+
+```bash
+python3 tools/donor_gate.py --readonly \\media\\stick\\GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT \\
+    --prepare \\media\\stick\\AD102-UNLOCK\\RUN0001.TXT \\
+    --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,M3_LOG_MEDIUM_EMPTY,\\
+M4_ONE_CARD_ONLY,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN
+```
+
+`VERDICT=GO` is the only answer that lets the session continue, and it too prints
+`HARDWARE_VERIFIED=0`.
+
 ## 5. Capture afterwards, or the run proves nothing
 
 1. The whole `RUNnnnn.TXT`.

@@ -102,27 +102,27 @@
       "id": "B3",
       "class": "B",
       "priority": "P0",
-      "source": "none",
-      "section": null,
-      "note": "MSI must be off and the function in D0 at admission.",
+      "source": "done",
+      "section": "11.20",
+      "note": "MSI/MSI-X must be enabled-off and the function in D0 at admission; PMC version and PMCSR state are both checked (\u00a711.20).",
       "hardware_verified": false
     },
     {
       "id": "B4",
       "class": "B",
       "priority": "P1",
-      "source": "none",
-      "section": null,
-      "note": "Any PCI capability id outside PM/MSI/MSI-X/PCIe/vendor is refused.",
+      "source": "done",
+      "section": "11.20",
+      "note": "Any PCI capability id outside PM/MSI/MSI-X/PCIe/vendor is refused, as is a vendor capability shorter than its header (\u00a711.20).",
       "hardware_verified": false
     },
     {
       "id": "B5",
       "class": "B",
       "priority": "P1",
-      "source": "none",
-      "section": null,
-      "note": "PCIe endpoint v1/v2 only, FLR bit set, link-status clear.",
+      "source": "done",
+      "section": "11.20",
+      "note": "PCIe endpoint v1/v2 only (device type <= 1), FLR capability advertised, and no already-initiated FLR in Device Control (\u00a711.20).",
       "hardware_verified": false
     },
     {
@@ -147,9 +147,9 @@
       "id": "B8",
       "class": "B",
       "priority": "P2",
-      "source": "none",
-      "section": null,
-      "note": "Bus Master off at admission, with one narrow exception in single-target mode.",
+      "source": "done",
+      "section": "11.20",
+      "note": "Bus Master off at admission; the one exception is the single-target read-only inspection, which cannot survive into the transaction (\u00a711.20).",
       "hardware_verified": false
     },
     {
@@ -300,9 +300,9 @@
       "id": "D5",
       "class": "D",
       "priority": "P0",
-      "source": "none",
-      "section": null,
-      "note": "No hardware-in-the-loop; CI proves compilation and host logic only.",
+      "source": "partial",
+      "section": "11.21",
+      "note": "No hardware-in-the-loop: CI proves compilation and host logic. The session now has a machine go/no-go gate (\u00a711.21), but no stage runs or is scored automatically.",
       "hardware_verified": false
     },
     {

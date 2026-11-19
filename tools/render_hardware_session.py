@@ -96,8 +96,22 @@ that the firmware accepted anything.
 """
 
 
+def render_go_no_go(spec: dict) -> str:
+    out = ["## Advancing between stages: `donor_gate.py`\n\n", f"{spec['summary']}\n\n"]
+    out.append("```powershell\n" + spec["command"] + "\n```\n\n")
+    out.append("It refuses to advance unless:\n\n")
+    for rule in spec["rules"]:
+        out.append(f"* {rule}\n")
+    out.append(f"\nIt prints {spec['verdict']}.\n\n")
+    out.append("Exit codes: " + ", ".join(f"`{code}`" for code in spec["exit_codes"]) + ".\n\n")
+    out.append(f"What a GO does not prove: {spec['does_not_prove']}.\n\n")
+    return "".join(out)
+
+
 def render(manifest: dict) -> str:
     out = [HEADER]
+    if "go_no_go" in manifest:
+        out.append(render_go_no_go(manifest["go_no_go"]))
     for stage in manifest["stages"]:
         out.append(f"### `{stage['id']}` — {stage['title']}\n\n")
         out.append(f"*Build:*\n\n```powershell\n{stage['build']}\n```\n\n")

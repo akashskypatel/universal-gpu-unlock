@@ -56,6 +56,27 @@ card.
 
 ## The stages
 
+## Advancing between stages: `donor_gate.py`
+
+One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.
+
+```powershell
+python3 tools/donor_gate.py --readonly media/GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT --prepare media/AD102-UNLOCK/RUN0001.TXT --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,M3_LOG_MEDIUM_EMPTY,M4_ONE_CARD_ONLY,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN
+```
+
+It refuses to advance unless:
+
+* the read-only stage must pass before preparation counts as done, and preparation must pass before actuation may be attempted at all
+* every stage must name the same single BDF, so a card swap or a second card cannot slip between stages; a stage that names no PCI id at all is refused rather than assumed
+* every manual gate must be acknowledged by its exact id; an unknown id is refused, so a typo cannot silently stand in for M6
+* a log carrying the fixture marker is refused (exit 3) unless --self-test is given, and a GO from a self-test still prints SYNTHETIC=1
+
+It prints `DONOR_GATE VERDICT=GO NEXT=...` with every line carrying `HARDWARE_VERIFIED=0`; anything else prints `VERDICT=NO_GO` and one `BLOCKED` line per reason.
+
+Exit codes: `0 GO`, `1 NO_GO`, `2 a listed log is missing`, `3 the log set is synthetic and --self-test was not given`.
+
+What a GO does not prove: that any stage behaved as its gates say, or that the card is safe: a GO repeats evidence the operator supplied, it does not create any.
+
 ### `readonly` — Read-only contact
 
 *Build:*
