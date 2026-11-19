@@ -135,6 +135,21 @@ def powershell_source() -> str:
     return re.sub(r"#[^\n]*", "", text)
 
 
+def script_parameters() -> list[str]:
+    block = SCRIPT[SCRIPT.index("param("):]
+    block = block[:block.index("\n)\n")]
+    return re.findall(r"\$(\w+)", block)
+
+
+def validated_parameters() -> dict[str, str]:
+    block = SCRIPT[SCRIPT.index("param("):]
+    block = block[:block.index("\n)\n")]
+    found = {}
+    for match in re.finditer(r"\[(Validate\w+)\([^\n]*?\)\]\s*\n\s*\[[^\]]+\]\$(\w+)", block):
+        found[match.group(2)] = match.group(1)
+    return found
+
+
 class TheCatalogueMatchesTheBuilders(unittest.TestCase):
     def test_every_family_names_a_builder_that_exists(self):
         for family in MANIFEST["families"]:
@@ -298,6 +313,36 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         outside = powershell_source()
         self.assertEqual(outside.count("{"), outside.count("}"))
         self.assertEqual(outside.count("("), outside.count(")"))
+
+    def test_no_local_variable_shadows_a_parameter_of_the_script(self):
+        # PowerShell is case-insensitive, so `foreach ($family in ...)` assigns to
+        # the [ValidateSet]-constrained $Family parameter and the script dies on
+        # its first line of real work. Only these three plain strings may be
+        # reassigned; anything else is a shadowing bug.
+        allowed = {"RepoRoot", "OutputDirectory", "PublicCertificate"}
+        body = powershell_source()
+        assigned = set(m.group(1) for m in re.finditer(r"(?<![\w:])\$(\w+)\s*=[^=]", body))
+        assigned |= set(m.group(1) for m in re.finditer(r"foreach\s*\(\s*\$(\w+)\s+in", body))
+        parameters = script_parameters()
+        for name in sorted(assigned):
+            match = [p for p in parameters if p.lower() == name.lower()]
+            self.assertFalse(
+                match and match[0] not in allowed,
+                f"${name} shadows the parameter ${match[0] if match else name}; "
+                "PowerShell would validate the assigned value against the parameter")
+
+    def test_no_validated_parameter_is_written_to(self):
+        body = powershell_source()
+        for name, attribute in validated_parameters().items():
+            pattern = r"(?<![\w:])\$" + re.escape(name) + r"\s*=[^=]"
+            self.assertIsNone(re.search(pattern, body, flags=re.IGNORECASE),
+                              f"${name} carries [{attribute}] and must not be reassigned")
+
+    def test_the_script_does_not_reuse_a_switch_name(self):
+        body = powershell_source()
+        for name in ("List", "All", "Only", "Deploy", "SignOnly", "AcceptActuatingDeploy"):
+            pattern = r"(?<![\w:])\$" + name + r"\s*=[^=]"
+            self.assertIsNone(re.search(pattern, body, flags=re.IGNORECASE), name)
 
     def test_the_script_states_what_signing_does_not_prove(self):
         self.assertIn("HARDWARE_VERIFIED=0", SCRIPT)

@@ -448,7 +448,7 @@ if (-not (Test-Path -LiteralPath $cataloguePath -PathType Leaf)) {
 }
 $catalogue = Get-Content -LiteralPath $cataloguePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $familyById = @{}
-foreach ($family in $catalogue.families) { $familyById[$family.id] = $family }
+foreach ($familySpec in $catalogue.families) { $familyById[$familySpec.id] = $familySpec }
 
 function Select-Variants {
     $selected = @($catalogue.variants)
@@ -499,9 +499,9 @@ function Build-VariantArguments($Variant) {
 
 if ($List) {
     Say ('CATALOGUE {0} variants={1} families={2}' -f $cataloguePath, @($catalogue.variants).Count, @($catalogue.families).Count)
-    foreach ($family in $catalogue.families) {
-        Say ("FAMILY {0} BUILDER={1} SUBSYSTEM={2}" -f $family.id, $family.builder, $family.subsystem)
-        foreach ($variant in @($catalogue.variants | Where-Object { $_.family -eq $family.id })) {
+    foreach ($familySpec in $catalogue.families) {
+        Say ("FAMILY {0} BUILDER={1} SUBSYSTEM={2}" -f $familySpec.id, $familySpec.builder, $familySpec.subsystem)
+        foreach ($variant in @($catalogue.variants | Where-Object { $_.family -eq $familySpec.id })) {
             $needs = @()
             if ($variant.PSObject.Properties.Name -contains 'requires_selection' -and $variant.requires_selection) { $needs += "SELECTION=$($variant.requires_selection)" }
             if ($variant.PSObject.Properties.Name -contains 'requires_esp_guid' -and $variant.requires_esp_guid) { $needs += 'ESP_GUID' }
@@ -609,10 +609,10 @@ try {
     $skippedCount = 0
 
     foreach ($variant in $variants) {
-        $family = $familyById[$variant.family]
+        $familySpec = $familyById[$variant.family]
         $variantId = $variant.id
         Say ("VARIANT_BEGIN id={0} family={1} safety={2} builder={3}" -f
-             $variantId, $variant.family, $variant.safety, $family.builder)
+             $variantId, $variant.family, $variant.safety, $familySpec.builder)
         try {
             try {
                 $buildArguments = Build-VariantArguments $variant
@@ -630,7 +630,7 @@ try {
                 throw
             }
 
-            $buildScript = Join-Path $RepoRoot $family.builder
+            $buildScript = Join-Path $RepoRoot $familySpec.builder
             if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
                 throw "Builder missing for $($variant.family): $buildScript"
             }
@@ -639,13 +639,13 @@ try {
             # path from the builder's own report instead of guessing it.
             $buildOutput = @(& $buildScript @buildArguments)
             foreach ($line in $buildOutput) { Say ([string]$line) }
-            $statusPattern = '^' + [regex]::Escape($family.status_token) + ' PATH='
+            $statusPattern = '^' + [regex]::Escape($familySpec.status_token) + ' PATH='
             $statusLines = @($buildOutput | Where-Object { [string]$_ -match $statusPattern })
             if ($statusLines.Count -ne 1) {
-                throw "Builder $variantId did not emit exactly one $($family.status_token) PATH= report."
+                throw "Builder $variantId did not emit exactly one $($familySpec.status_token) PATH= report."
             }
             $statusLine = [string]$statusLines[0]
-            if ($statusLine -notmatch ('^' + [regex]::Escape($family.status_token) +
+            if ($statusLine -notmatch ('^' + [regex]::Escape($familySpec.status_token) +
                                        ' PATH=(.+?) SHA256=([0-9a-fA-F]{64})(?:\s|$)')) {
                 throw "Builder report for $variantId is malformed."
             }
@@ -660,7 +660,7 @@ try {
                     throw "Build attestation missing or wrong for $($variantId): $attestation"
                 }
             }
-            Assert-EfiImage $builtImage ([int]$family.subsystem)
+            Assert-EfiImage $builtImage ([int]$familySpec.subsystem)
             if ((Get-Sha256 $builtImage) -ne $sourceHash) {
                 throw "Reported SHA-256 does not match the built image for $variantId."
             }
@@ -684,7 +684,7 @@ try {
             if ((Get-Sha256 $builtImage) -ne $sourceHash) {
                 throw "Unsigned source changed after signing ($variantId)."
             }
-            Assert-EfiImage $signedEfi ([int]$family.subsystem)
+            Assert-EfiImage $signedEfi ([int]$familySpec.subsystem)
             $signedHash = Get-Sha256 $signedEfi
             if ($signedHash -eq $sourceHash) { throw "Signed image is byte-identical to its input ($variantId)." }
             Say "Verified signed SHA-256: $signedHash"
@@ -706,7 +706,7 @@ try {
                 Selection = $(if ($SelectionBdfs) { $SelectionBdfs } elseif ($SelectionBdf) { $SelectionBdf } else { $null })
                 Switches = $buildArguments
                 AttestationsVerified = @($variant.attestations)
-                Subsystem = [int]$family.subsystem
+                Subsystem = [int]$familySpec.subsystem
                 Repository = $RepoRoot
                 SourceEfi = $builtImage
                 SourceSha256 = $sourceHash
