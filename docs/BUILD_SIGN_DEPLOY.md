@@ -202,6 +202,7 @@ skipped and why.
 | Symptom | Meaning | What to do |
 | --- | --- | --- |
 | `STATUS=ERROR DETAIL=… DB_ENROLLED=FALSE` | The certificate is not in `db` | Enroll it, or re-run with `-SkipDbCheck` and accept `DB_ENROLLED=UNKNOWN` |
+| `DB_ENROLLED=UNKNOWN` | `Get-SecureBootUEFI` could not read `db` - not elevated, or Secure Boot off | Run the script from an elevated prompt; if Secure Boot is off, the signature is only an integrity record |
 | WSL exit 2 | A required tool is missing in the distribution | `apt install sbsign openssl` |
 | WSL exit 3 | `wslpath` could not map a Windows path | Check `[automount] enabled = true` in `/etc/wsl.conf`, and that the repository is not on an unmounted drive |
 | WSL exit 4 | Key, certificate or `.cer` disagree, or the certificate is expired | Re-export the `.cer` from the same certificate; check `openssl x509 -noout -dates` |

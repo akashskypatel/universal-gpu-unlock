@@ -584,6 +584,11 @@ try {
         throw ('The certificate {0} is not present in the BIOS db. Enroll it first, or re-run with -SkipDbCheck to sign anyway and record db_enrolled=UNKNOWN.' -f $PublicCertificate)
     }
     Say ("SIGNING_CERTIFICATE path={0} SHA256={1} DB_ENROLLED={2}" -f $PublicCertificate, $certificateSha, $dbEnrolled)
+    if ($dbEnrolled -eq 'UNKNOWN' -and -not $SkipDbCheck) {
+        Say ('WARNING: the BIOS db could not be read (the Secure Boot cmdlets need an elevated ' +
+             'console, and there is nothing to read when Secure Boot is off). Signing continues, ' +
+             'and every receipt records DB_ENROLLED=UNKNOWN: re-run elevated to prove enrollment.')
+    }
 
     # The builders derive their output label from the repository's own helper, so
     # probe it once and let the catalogue's expected filename use the same label.
