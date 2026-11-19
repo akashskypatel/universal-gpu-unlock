@@ -170,6 +170,10 @@ jobs:
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_pci_master_transition.py -v
             CC=clang python3 -m unittest discover -s tests -p test_pci_master_transition.py -v
+            # Post-Stop DMA quiescence: the PCIe Transaction Pending bit, polled
+            # a bounded number of times, refusing a card that never drains.
+            CC=gcc python3 -m unittest discover -s tests -p test_dma_quiescence.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_dma_quiescence.py -v
             # The admission policy itself, compiled from src/checks.c.
             CC=gcc python3 -m unittest discover -s tests -p test_admission_gates.py -v
             CC=clang python3 -m unittest discover -s tests -p test_admission_gates.py -v

@@ -14,6 +14,14 @@ SOURCE = (Path(__file__).resolve().parents[1] / "src" / "msi_release.c").read_te
 INCLUDE_DIR = Path(__file__).resolve().parents[1] / "src"
 
 
+def source_define(name):
+    match = re.search(r"^#define\s+" + re.escape(name) + r"\s+([^\r\n]+)",
+                      SOURCE, re.MULTILINE)
+    if not match:
+        raise AssertionError("missing real source define: " + name)
+    return re.sub(r"/\*.*?\*/", "", match.group(1)).strip()
+
+
 def source_body(name):
     match = re.search(
         r"\bstatic\s+(?:BOOLEAN|EFI_STATUS)\s+" + re.escape(name)
@@ -39,6 +47,7 @@ HARNESS = r"""
 #include "pci_master_policy.h"
 typedef uint32_t UINT32;
 typedef uint64_t UINT64;
+typedef unsigned short UINT16;
 typedef size_t UINTN;
 #define VOID void
 typedef int EFI_STATUS;
@@ -55,15 +64,20 @@ typedef int BOOLEAN;
 #define EfiPciIoAttributeOperationGet 1
 #define EfiPciIoAttributeOperationDisable 2
 #define NOTE(...) ((void)0)
+#define GU_TX_PENDING_POLLS %%s
 
 typedef struct EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
 struct EFI_PCI_IO_PROTOCOL {
   EFI_STATUS (*Attributes)(EFI_PCI_IO_PROTOCOL *, int, UINT64, UINT64 *);
 };
+typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
+struct EFI_BOOT_SERVICES { EFI_STATUS (*Stall)(UINTN); };
+typedef struct { EFI_BOOT_SERVICES *BootServices; } EFI_SYSTEM_TABLE;
 static struct {
   int ready, mutated, stage, claimed, master_normalized;
   UINT32 config[64];
-  void *table;
+  UINT16 pcie_cap;
+  EFI_SYSTEM_TABLE *table;
 } Plan;
 static struct {
   int owned,fault,retained,flrs;
@@ -182,9 +196,12 @@ int main(void) {
 
 class ActualMasterTransitionTests(unittest.TestCase):
     def test_normalization_with_independent_mock_io(self):
-        code = HARNESS.replace(
+        code = HARNESS.replace("%%s", source_define("GU_TX_PENDING_POLLS")).replace(
             "__ACTUAL_CODE__",
             "\n\n".join([source_body("ConfigStable"),
+                         source_body("TxPending"),
+                         source_body("ConfigStablePostStop"),
+                         source_body("WaitTxPendingClear"),
                          source_body("NormalizeMasterAfterStop")]),
         )
         compiler = os.environ.get("CC", "gcc")

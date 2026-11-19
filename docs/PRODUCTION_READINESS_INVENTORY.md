@@ -13,20 +13,20 @@ no hardware was touched.
 | Source obligation | Items | Share |
 | --- | --- | --- |
 | Met - implemented, and pinned by a host test, simulator row or CI job | 10 | 23% |
-| Partial - some exit criteria implemented, the remainder named | 12 | 28% |
-| Not started | 21 | 49% |
+| Partial - some exit criteria implemented, the remainder named | 13 | 30% |
+| Not started | 20 | 47% |
 
-**Source progress: 37%** (10 met + half of 12 partial = 16 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 38%** (10 met + half of 13 partial = 16.5 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 3 | 5 | 0 | 8 |
 | B - hardware preconditions | 6 | 1 | 3 | 10 |
-| C - privileged operations never shown safe | 0 | 4 | 6 | 10 |
+| C - privileged operations never shown safe | 0 | 5 | 5 | 10 |
 | D - release engineering | 1 | 2 | 2 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
-Blocking `P0`: 21 items, 5 met, 8 partial, 8 not started.
+Blocking `P0`: 21 items, 5 met, 9 partial, 7 not started.
 
 What the percentage is not: a measure of the product working. A met item means the code exists and something on the host pins it; the behaviour it would perform on a GPU is still unproven, which is why the second number is the one that decides whether this product works. It is 0% because no run has ever driven a card.
 
@@ -286,7 +286,7 @@ These are verified from source, not inferred.
 | # | Operation | Current state | Evidence | Pri |
 | --- | --- | --- | --- | --- |
 | C1 | Calling the vendor UEFI driver's `Stop` (3-stage detach) | refused by default for 0x2684/0x220a; a pre-Stop capture and a ten-requirement contract now record what is missing (§11.16), but the callback may still write BAR0 and poll without a proven bound | `stop_contract.[ch]`, `msi_release.c::GuMsiRelease`, `Driver()` at `:429-455` | P0 |
-| C2 | DMA quiescence after Stop | cleared and re-read, but no IOMMU/SMMU, no engine-queue readback, no bus trace | `msi_release.c:935-940`, `NormalizeMasterAfterStop` | P0 |
+| C2 | DMA quiescence after Stop | cleared, re-read, and now the PCIe Transaction Pending bit is polled five times and must read clear or the buffers are retained; still no IOMMU/SMMU, no engine-queue readback, no bus trace (§11.23) | `msi_release.c` `WaitTxPendingClear`, `tests/test_dma_quiescence.py` | P0 |
 | C3 | Firmware acceptance (FWSEC descriptor, ROM) | structural parse + SHA-256 log; `SIGNATURE_AUTHENTICATED=0` | `vbios_610.c:177,213`, `profile.c:78-99` | P0 |
 | C4 | Booter ↔ V67 ↔ ROM pairing | five files hash-pinned to 610.43.03; FWSEC image comes from the live ROM, V67 from the bundle; no signature chain ties them. A per-card allowlist now exists for the ROM half (§11.13) but carries no references, and it is a digest, not a signature | `profile.c`, `prom_reference.c`, `unlock_610.c` | P0 |
 | C5 | Post-state verification | proves the registers it wrote (`SS0/SS1`, permissions, PLM `0xffffff8f`/`0x8b8f`, WPR2 closed) | `unlock_610.c:1360-1395`, `:1770-1800` | P1 (by design: it cannot prove the *unlock*) |
@@ -457,6 +457,57 @@ partial and `B10` untouched - the per-card memory footprint (~165 MB: DMA
 window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
+
+### 11.23 C2 — the Stop now asks whether anything is still in flight, and refuses if it is
+
+Clearing Bus Master stops *new* transactions. It says nothing about the ones
+already posted, and every honest description of this firmware's Stop has carried
+that caveat: no IOMMU/SMMU, no engine-queue readback, no bus trace. So the
+release path claimed quiescence from a control bit, and the caveat lived in prose
+where nothing could test it.
+
+`NormalizeMasterAfterStop` (`src/msi_release.c`) now observes the one standard
+signal that is actually readable: the PCIe Device Status **Transaction Pending**
+bit (`+0x0A` of the capability, bit 5). It is polled at most
+`GU_TX_PENDING_POLLS` (5) times, 1 ms apart, stopping as soon as it reads clear:
+
+```
+POST_STOP_QUIESCENCE=BUS_MASTER_ONLY TX_PENDING_CLEAR=1 POLLS=2 IOMMU=UNMANAGED QUEUE_READBACK=0 BUS_TRACE=0
+POST_STOP_QUIESCENCE=REFUSED REASON=TX_PENDING_STUCK POLLS=5 IOMMU=UNMANAGED QUEUE_READBACK=0 BUS_TRACE=0
+POST_STOP_QUIESCENCE=BUS_MASTER_ONLY TX_PENDING=UNOBSERVED POLLS=0 IOMMU=UNMANAGED QUEUE_READBACK=0 BUS_TRACE=0
+```
+
+A card whose bit never drains is refused with `EFI_NOT_READY` and its buffers
+stay retained; a card with no PCIe capability keeps the previous behaviour and
+says `TX_PENDING=UNOBSERVED` instead of implying it was checked. The observation
+is logged on success as well, so "checked and clear" and "not checked" are
+different lines.
+
+Device Status is read-only, so its Pending bit is the one thing exempt from the
+post-Stop drift rule (`ConfigStablePostStop`): every other byte of the 256-byte
+snapshot must still match what preflight captured, and drift seen between
+observations is `EFI_COMPROMISED_DATA` with the buffers retained. The capability
+offset comes from the admission policy (`GuCheckConfigInitialMaster` →
+`GU_CAPS.pcie`), not from a search at release time, and the range check keeps a
+malformed result from pointing the read past the snapshot.
+
+`tests/test_dma_quiescence.py` compiles the real `TxPending`,
+`ConfigStablePostStop`, `WaitTxPendingClear` and `NormalizeMasterAfterStop` from
+the source against a modelled card: clear on the first observation, draining on
+the second poll (then success), stuck for all five (then refused, retained),
+exactly five observations and four waits under a stuck card, no PCIe capability
+(`UNOBSERVED`), no `Stall` service (single observation, still fail closed), a
+failed config read during the poll, drift present before the read and drift
+appearing between observations, an already-clear enable, a second call refused,
+and the offset arithmetic of a capability that does not sit at `0x50`.
+`tests/test_pci_master_transition.py` keeps its eleven transition cases on the
+same extracted source with the observation disabled.
+
+What this still does not do: it is not an IOMMU, it does not read an engine
+queue back, and it does not trace a bus - the log says so on every line. The
+five-observation bound is a **count, not a measured budget**: no card has been
+observed to drain within 4 ms, and the wait is only ever as long as the bit
+stays set. `C2` stays **partial**, and the hardware half is unchanged.
 
 ### 11.21 D5 — the donor session has a go/no-go gate, and still no hardware loop
 

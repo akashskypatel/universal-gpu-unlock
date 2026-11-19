@@ -183,9 +183,9 @@
       "id": "C2",
       "class": "C",
       "priority": "P0",
-      "source": "none",
-      "section": null,
-      "note": "DMA quiescence after Stop is cleared and re-read, with no IOMMU, queue readback or bus trace.",
+      "source": "partial",
+      "section": "11.23",
+      "note": "DMA quiescence after Stop now polls the PCIe Transaction Pending bit five times and refuses a card that never drains, retaining its buffers; there is still no IOMMU, queue readback or bus trace, and the poll bound is a count, not a measured budget.",
       "hardware_verified": false
     },
     {

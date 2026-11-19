@@ -14,6 +14,7 @@
 #include "gpu_device_path.h"
 #include "gpu_discovery.h"
 #include "pci_master_policy.h"
+#include "checks.h"
 #include "compat/compat.h"
 #include <Protocol/GraphicsOutput.h>
 #include <Protocol/DriverBinding.h>
@@ -48,7 +49,7 @@ typedef struct {
   EFI_GRAPHICS_OUTPUT_PROTOCOL *gop_interface;
   EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE mode;
   EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
-  UINT32 config[64];UINT64 attributes;
+  UINT32 config[64];UINT64 attributes;UINT16 pcie_cap;
   /* Immutable identity and path bytes survive for the context lifetime.
    * Only the per-observation seen flag can change after capture. */
   SURVIVOR_GOP *survivors;
@@ -766,6 +767,55 @@ static BOOLEAN ConfigStable(const UINT32 c[64]) {
   }
   return TRUE;
 }
+/* The Bus Master enable is the only DMA control this adapter owns. Clearing it
+ * stops new transactions; it says nothing about the ones already posted, and
+ * this image cannot consult an IOMMU, read back an engine queue or trace a bus.
+ * The one standard observable left is the PCIe Device Status "Transaction
+ * Pending" bit, which is polled a bounded number of times: a transaction that
+ * never drains keeps the caller's buffers retained instead of claiming
+ * quiescence. The bound is a count of observations, not a measured budget. */
+#define GU_TX_PENDING_POLLS 5U
+static BOOLEAN TxPending(const UINT32 c[64],UINT16 pcie) {
+  if(!pcie)return FALSE;
+  UINTN off=(UINTN)pcie+0x0aU;
+  return ((c[off/4U]>>((off&3U)*8U))&0x20U)!=0;
+}
+/* Device Status is read-only, and its Transaction Pending bit is expected to
+ * move while the card drains. It is therefore exempt from the post-Stop drift
+ * rule and checked explicitly instead; no control bit is exempt, and every
+ * other byte of the snapshot must still match what preflight captured. */
+static BOOLEAN ConfigStablePostStop(const UINT32 c[64]) {
+  if(!Plan.pcie_cap)return ConfigStable(c);
+  UINT32 copy[64];
+  UINTN off=(UINTN)Plan.pcie_cap+0x0aU;
+  memcpy(copy,c,sizeof(copy));
+  copy[off/4U]&=~(0x20U<<((off&3U)*8U));
+  return ConfigStable(copy);
+}
+static EFI_STATUS WaitTxPendingClear(UINTN *polls) {
+  UINT32 c[64];
+  EFI_STATUS s;
+  *polls=0;
+  if(!Plan.pcie_cap) {
+    NOTE("POST_STOP_QUIESCENCE=BUS_MASTER_ONLY TX_PENDING=UNOBSERVED POLLS=0 IOMMU=UNMANAGED QUEUE_READBACK=0 BUS_TRACE=0\n");
+    return EFI_SUCCESS;
+  }
+  for(UINTN i=0;i<GU_TX_PENDING_POLLS;i++) {
+    ++*polls;
+    s=ReadConfig(c);
+    if(s!=EFI_SUCCESS)return s;
+    if(!ConfigStablePostStop(c))return EFI_COMPROMISED_DATA;
+    if(!TxPending(c,Plan.pcie_cap)) {
+      NOTE("POST_STOP_QUIESCENCE=BUS_MASTER_ONLY TX_PENDING_CLEAR=1 POLLS=%u IOMMU=UNMANAGED QUEUE_READBACK=0 BUS_TRACE=0\n",(unsigned)*polls);
+      return EFI_SUCCESS;
+    }
+    if(i+1U>=GU_TX_PENDING_POLLS)break;
+    if(!Plan.table||!Plan.table->BootServices||!Plan.table->BootServices->Stall)break;
+    Plan.table->BootServices->Stall(1000U);
+  }
+  NOTE("POST_STOP_QUIESCENCE=REFUSED REASON=TX_PENDING_STUCK POLLS=%u IOMMU=UNMANAGED QUEUE_READBACK=0 BUS_TRACE=0\n",(unsigned)*polls);
+  return EFI_NOT_READY;
+}
 static EFI_STATUS Bar(VOID) {
   EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *d=NULL;UINT64 support=0;
   if(!Gu.pci->GetBarAttributes)return EFI_UNSUPPORTED;
@@ -899,6 +949,16 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(s==EFI_SUCCESS) { s=Alive(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Alive(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=Bar(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Bar(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=ReadConfigMode(Plan.config,TRUE); if(s!=EFI_SUCCESS) GuLog("Preflight failed at ReadConfig(): %#llx\n", (unsigned long long)s); }
+  if(s==EFI_SUCCESS) {
+    /* Keep the PCIe capability offset of the admitted card so the post-Stop
+     * quiescence observation does not have to walk the chain again. A card the
+     * policy will not describe leaves it zero, which disables that observation
+     * rather than guessing an offset; the range check keeps a malformed result
+     * from pointing the Device Status read past the snapshot. */
+    GU_CAPS caps;
+    if(GuCheckConfigInitialMaster(Plan.config,0,0,0,0,&caps)&&caps.pcie&&
+       (UINTN)caps.pcie+0x0cU<=(UINTN)sizeof(Plan.config))Plan.pcie_cap=caps.pcie;
+  }
   if(s==EFI_SUCCESS) { s=Gu.pci->Attributes?Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&Plan.attributes):EFI_UNSUPPORTED; if(s!=EFI_SUCCESS) GuLog("Preflight failed at Attributes: %#llx\n", (unsigned long long)s); }
   UINT64 decode=(Plan.config[1]&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|
                 (Plan.config[1]&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0)|
@@ -943,7 +1003,7 @@ static EFI_STATUS NormalizeMasterAfterStop(VOID) {
      Gu.owned||Gu.fault||Gu.flrs!=0||Plan.master_normalized)return EFI_NOT_READY;
   if(GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS)return EFI_NOT_READY;
   EFI_STATUS s=ReadConfigMode(config,TRUE);
-  if(s!=EFI_SUCCESS||!ConfigStable(config))return EFI_NOT_READY;
+  if(s!=EFI_SUCCESS||!ConfigStablePostStop(config))return EFI_NOT_READY;
   if(!Gu.pci->Attributes)return EFI_UNSUPPORTED;
   s=Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&before);
   if(s!=EFI_SUCCESS)return s;
@@ -954,13 +1014,19 @@ static EFI_STATUS NormalizeMasterAfterStop(VOID) {
     if(s!=EFI_SUCCESS){Gu.retained=TRUE;return s;}
   }
   s=ReadConfig(config);
-  if(s==EFI_SUCCESS&&!ConfigStable(config))s=EFI_COMPROMISED_DATA;
+  if(s==EFI_SUCCESS&&!ConfigStablePostStop(config))s=EFI_COMPROMISED_DATA;
   if(s==EFI_SUCCESS)s=Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&after);
   if(s!=EFI_SUCCESS||(after&master)||
      (after&~master)!=(before&~master)||
      GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS) {
     Gu.retained=TRUE;
     return s==EFI_SUCCESS?EFI_COMPROMISED_DATA:s;
+  }
+  /* The bit is clear in both views; the device may still be draining. */
+  {
+    UINTN polls=0;
+    s=WaitTxPendingClear(&polls);
+    if(s!=EFI_SUCCESS) {Gu.retained=TRUE;return s;}
   }
   Plan.master_normalized=TRUE;
   NOTE("POST_STOP_BUS_MASTER=DISABLED VERIFIED=1 PREVIOUS=%u\n",
