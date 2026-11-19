@@ -6,7 +6,7 @@ produce, using a personal Secure Boot certificate that is already enrolled in
 the BIOS db and signed inside a WSL instance.
 
 .DESCRIPTION
-The catalogue is docs/image_variants.json: 32 variants across four builders
+The catalogue is docs/image_variants.json: 29 variants across four builders
 (diagnostic, active preparation, DXE preparation, original vendor Stop). This
 script executes that catalogue, so "all possible combinations" is data, not a
 hand-maintained list, and tests/test_image_variants.py keeps the catalogue
@@ -125,7 +125,17 @@ $CertInWsl = 'secureboot-signing/uefi-db.crt'
 $X509SignatureTypeGuidBytes = [byte[]](0xa1, 0x59, 0xc0, 0xa5, 0xe4, 0x94, 0xa7, 0x4a,
                                        0x87, 0xb5, 0xab, 0x15, 0x5c, 0x2b, 0xf0, 0x72)
 
-function Say([string]$Text) { Write-Host $Text }
+function Say([string]$Text) {
+    # Write to the process stdout rather than Write-Host or Write-Output.
+    # Write-Host writes through the host's own stream, so in a redirected log its
+    # lines land at a different moment than the builder's stdout and splice into
+    # it - that is the "output misaligns after the first variant" report. A
+    # bare carriage return from a native tool would restart the line, and
+    # Write-Output would be captured by every function here that returns a value
+    # (that is how the signing exit code once turned into an array). Console.Out
+    # is the same handle the builders write to and never enters the pipeline.
+    [Console]::Out.WriteLine(($Text -replace "`r", ''))
+}
 
 function To-B64([string]$Value) {
     return [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Value))
@@ -336,9 +346,21 @@ openssl x509 -in "$cert" -noout -subject -fingerprint -sha256
     # $LASTEXITCODE` next to a live pipeline gives the caller an array such as
     # @('Signature verification OK', 'subject=...', 0), which never equals zero
     # and makes a good signature look like a failure.
-    $wslOutput = & wsl.exe @prefix --exec bash -c $command 2>&1
-    $exitCode = $LASTEXITCODE
+    # Windows PowerShell 5.1 turns a native command's stderr into error records,
+    # and $ErrorActionPreference='Stop' then terminates on the first one. sbsign
+    # prints its "Signing Unsigned original image" banner on stderr, so a good
+    # signature used to abort the variant with that banner as the message. This
+    # function reports failure through the exit code alone.
+    $restorePreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $wslOutput = & wsl.exe @prefix --exec bash -c $command 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $restorePreference
+    }
     foreach ($line in @($wslOutput)) { Say ([string]$line) }
+    if ($null -eq $exitCode) { throw 'wsl.exe reported no exit code, so the signature was never proven.' }
     return [int]$exitCode
 }
 
@@ -495,6 +517,14 @@ function Test-VariantSelection($Variant) {
     $needsEsp = $false
     if ($Variant.PSObject.Properties.Name -contains 'requires_esp_guid') { $needsEsp = [bool]$Variant.requires_esp_guid }
     if ($needsEsp -and -not $WindowsEspGuid) { return 'NEEDS_ESP_GUID' }
+    # A waived build cannot use the synthetic host-test GUID: src/boot_profile.h
+    # includes the private local/boot_profile.h and stops with an #error when it
+    # is absent. That is a setup step, not a defect in the image.
+    $needsPinnedProfile = $false
+    if ($Variant.PSObject.Properties.Name -contains 'requires_local_boot_profile') {
+        $needsPinnedProfile = [bool]$Variant.requires_local_boot_profile
+    }
+    if ($needsPinnedProfile -and -not $script:HasLocalBootProfile) { return 'NEEDS_LOCAL_BOOT_PROFILE' }
     return $null
 }
 
@@ -648,6 +678,9 @@ try {
     $skippedCount = 0
     $variantTotal = $variants.Count
     $variantIndex = 0
+    $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
+    $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
+    $localProfileSkips = 0
 
     foreach ($variant in $variants) {
         $variantIndex++
@@ -661,6 +694,12 @@ try {
                 $skipReason = Test-VariantSelection $variant
                 if ($skipReason) {
                     Say ("VARIANT_SKIPPED id={0} REASON={1}" -f $variantId, $skipReason)
+                    if ($skipReason -eq 'NEEDS_LOCAL_BOOT_PROFILE') { $localProfileSkips++ }
+                    if ($Only) {
+                        $named = ('Cannot build {0}: {1}. -Only asked for this image specifically, so ' +
+                                  'this is an error rather than a skip; -All records it and carries on.')
+                        throw ($named -f $variantId, $skipReason)
+                    }
                     $skippedCount++
                     $results.Add([pscustomobject]@{
                         id = $variantId; family = $variant.family; safety = $variant.safety
@@ -690,10 +729,30 @@ try {
             $binaryName = Get-VariantBinary $variant
             # The builders write into their own output directories, so take the
             # path from the builder's own report instead of guessing it.
-            $buildOutput = @(& $buildScript @buildArguments)
-            foreach ($line in $buildOutput) { Say ([string]$line) }
+            # Stream the builder instead of buffering it: a builder that throws
+            # after the compiler rejected a file used to discard every line it
+            # had printed, so the run reported "Compilation failed" and nothing
+            # else. Now the compiler's own message reaches the log, and the
+            # failure names the last line the builder produced.
+            $buildOutput = New-Object 'System.Collections.Generic.List[string]'
+            $buildError = $null
+            try {
+                & $buildScript @buildArguments 2>&1 | ForEach-Object {
+                    $buildText = [string]$_
+                    Say $buildText
+                    $buildOutput.Add($buildText)
+                }
+            } catch {
+                $buildError = $_
+            }
+            if ($null -ne $buildError) {
+                $printed = @($buildOutput.ToArray() | Where-Object { $_.Trim() })
+                $lastLine = if ($printed.Count) { $printed[$printed.Count - 1] } else { 'the builder printed nothing' }
+                $failed = ('Builder failed for {0}: {1}. Last builder line: {2}')
+                throw ($failed -f $variantId, $buildError.Exception.Message, $lastLine)
+            }
             $statusPattern = '^' + [regex]::Escape($familySpec.status_token) + ' PATH='
-            $statusLines = @($buildOutput | Where-Object { [string]$_ -match $statusPattern })
+            $statusLines = @($buildOutput.ToArray() | Where-Object { [string]$_ -match $statusPattern })
             if ($statusLines.Count -ne 1) {
                 throw "Builder $variantId did not emit exactly one $($familySpec.status_token) PATH= report."
             }
@@ -817,7 +876,7 @@ try {
         Failed = $failedCount
         Skipped = $skippedCount
         HardwareVerified = $false
-        Variants = @($results)
+        Variants = $results.ToArray()
         DateUtc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $matrixPath -Encoding UTF8 -ErrorAction Stop
 
@@ -826,6 +885,12 @@ try {
                  'single-target images, -SelectionBdfs with two or more builds the sequence ones, ' +
                  '-WindowsEspGuid builds the handoff ones. Run -All again with the other selection.')
         Say ($hint -f $skippedCount)
+    }
+    if ($localProfileSkips) {
+        $setup = ('SETUP_HINT {0} variants need a reviewed ESP GUID compiled in, and src\local\boot_profile.h ' +
+                  'does not exist. Copy src\boot_profile.example.h to {1} and put the GUID of this machine''s ' +
+                  'EFI system partition in it, or build the -RuntimeEsp variant instead. Nothing was staged.')
+        Say ($setup -f $localProfileSkips, $localProfilePath)
     }
     Say ("STATUS={0} SIGNED={1} FAILED={2} SKIPPED={3} DB_ENROLLED={4} HARDWARE_VERIFIED=0 MATRIX={5}" -f
         $(if ($failedCount) { 'INCOMPLETE' } else { 'COMPLETE' }),

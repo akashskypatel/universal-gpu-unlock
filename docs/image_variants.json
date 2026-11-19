@@ -304,42 +304,6 @@
       "note": "stage 2 of the donor session: runs the whole preflight, then refuses before GuInit"
     },
     {
-      "id": "prep-runtime-selection",
-      "family": "prepare",
-      "title": "preparation, target chosen at boot",
-      "switches": {
-        "RuntimeSelection": true
-      },
-      "binary": "GPU-RUNTIME-SELECTION-PREP.EFI",
-      "safety": "refuses-before-mutation",
-      "attestations": [
-        "PREPARATION_ONLY=1",
-        "RUNTIME_SELECTION=1",
-        "MULTI_GPU_MUTATION_ALLOWED=0",
-        "UNVERIFIED_ACTUATION=0"
-      ],
-      "note": "no compiled BDF: the image inventories the machine and asks, then refuses"
-    },
-    {
-      "id": "prep-runtime-selection-resident",
-      "family": "prepare",
-      "title": "preparation, target at boot, run from the ESP",
-      "switches": {
-        "RuntimeSelection": true,
-        "RuntimeEsp": true,
-        "EspResident": true
-      },
-      "binary": "GPU-RUNTIME-SELECTION-PREP.EFI",
-      "safety": "refuses-before-mutation",
-      "attestations": [
-        "PREPARATION_ONLY=1",
-        "RUNTIME_SELECTION=1",
-        "RUNTIME_ESP=1",
-        "MULTI_GPU_MUTATION_ALLOWED=0"
-      ],
-      "note": "exercises the B9 launch gates in a build that still cannot actuate"
-    },
-    {
       "id": "compile-one-target",
       "family": "prepare",
       "title": "compile-only, one target",
@@ -397,7 +361,8 @@
         "RECOVERY_VERIFIED=0"
       ],
       "requires_selection": "single",
-      "note": "stage 3 of the donor session; the only image that may write, and its own status line says it is unverified"
+      "note": "stage 3 of the donor session; the only image that may write, and its own status line says it is unverified",
+      "requires_local_boot_profile": true
     },
     {
       "id": "actuate-sequence",
@@ -416,7 +381,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "requires_selection": "sequence",
-      "note": "two or more targets, each step gated on its predecessor, no retry"
+      "note": "two or more targets, each step gated on its predecessor, no retry",
+      "requires_local_boot_profile": true
     },
     {
       "id": "actuate-one-target-resident",
@@ -456,7 +422,8 @@
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0"
       ],
-      "note": "no compiled BDF, so the operator picks the target at the machine instead of at the build"
+      "note": "no compiled BDF, so the operator picks the target at the machine instead of at the build",
+      "requires_local_boot_profile": true
     },
     {
       "id": "actuate-runtime-selection-resident",
@@ -494,22 +461,6 @@
       ],
       "requires_selection": "any",
       "note": "the same preparation as a boot-service driver; it cannot be staged as BOOTX64.EFI"
-    },
-    {
-      "id": "dxe-prep-runtime-selection",
-      "family": "prepare-dxe",
-      "title": "DXE preparation, target chosen at boot",
-      "switches": {
-        "RuntimeSelection": true
-      },
-      "binary": "GPU-RUNTIME-SELECTION-PREP-DXE.efi",
-      "safety": "refuses-before-mutation",
-      "attestations": [
-        "PREPARATION_ONLY=1",
-        "RUNTIME_SELECTION=1",
-        "MULTI_GPU_MUTATION_ALLOWED=0"
-      ],
-      "note": "loaded from a Driver#### entry, not from a volume"
     },
     {
       "id": "dxe-compile-one-target",
@@ -560,7 +511,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "requires_selection": "single",
-      "note": "NVRAM-installed driver form of the waived transaction; sign-only, never staged"
+      "note": "NVRAM-installed driver form of the waived transaction; sign-only, never staged",
+      "requires_local_boot_profile": true
     },
     {
       "id": "dxe-actuate-sequence",
@@ -578,7 +530,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "requires_selection": "sequence",
-      "note": "NVRAM-installed driver form, ordered"
+      "note": "NVRAM-installed driver form, ordered",
+      "requires_local_boot_profile": true
     },
     {
       "id": "dxe-actuate-runtime-selection",
@@ -596,7 +549,8 @@
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0"
       ],
-      "note": "NVRAM-installed driver, target at boot"
+      "note": "NVRAM-installed driver, target at boot",
+      "requires_local_boot_profile": true
     },
     {
       "id": "stop-4090-once",
@@ -727,6 +681,18 @@
     {
       "id": "esp-resident-dxe",
       "why": "GU_ESP_RESIDENT gates the launch of an application image; a Driver#### entry is not launched from a volume, so the combination would advertise a gate that cannot run"
+    },
+    {
+      "id": "prep-runtime-selection",
+      "why": "a preparation-only image cannot also read its targets at boot: src/port.h requires the ordered selected-target mode (GU_ACTIVE_SINGLE_TARGET) for GU_RUNTIME_SELECTION, and src/gpu_discovery.c refuses that mode with a preflight-only profile, so no define set satisfies both - the source needs a preparation profile for runtime target selection first"
+    },
+    {
+      "id": "prep-runtime-selection-resident",
+      "why": "a preparation-only image cannot also read its targets at boot: src/port.h requires the ordered selected-target mode (GU_ACTIVE_SINGLE_TARGET) for GU_RUNTIME_SELECTION, and src/gpu_discovery.c refuses that mode with a preflight-only profile, so no define set satisfies both - the source needs a preparation profile for runtime target selection first"
+    },
+    {
+      "id": "dxe-prep-runtime-selection",
+      "why": "a preparation-only image cannot also read its targets at boot: src/port.h requires the ordered selected-target mode (GU_ACTIVE_SINGLE_TARGET) for GU_RUNTIME_SELECTION, and src/gpu_discovery.c refuses that mode with a preflight-only profile, so no define set satisfies both - the source needs a preparation profile for runtime target selection first"
     }
   ]
 }

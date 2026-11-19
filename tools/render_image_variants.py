@@ -33,6 +33,8 @@ def needs(variant: dict) -> str:
         parts.append("one or more BDFs")
     if variant.get("requires_esp_guid"):
         parts.append("reviewed ESP GUID")
+    if variant.get("requires_local_boot_profile"):
+        parts.append("private `src/local/boot_profile.h`")
     return ", ".join(parts) if parts else "nothing"
 
 

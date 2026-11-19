@@ -401,6 +401,74 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         for claim in ('"hardware_verified": true', '"verified": true', '"safe": true'):
             self.assertNotIn(claim, text)
 
+    def test_a_failing_build_still_shows_what_the_compiler_said(self):
+        # `@(& $builder @args)` buffers the output and throws it away when the
+        # builder throws, so a real compile error reached the operator as a bare
+        # "Compilation failed" with no clue in it. The output is streamed now,
+        # and the failure names the last line the builder printed.
+        self.assertNotIn("@(& $buildScript", SCRIPT)
+        self.assertIn("$buildError = $_", SCRIPT)
+        self.assertIn("Builder failed for {0}: {1}. Last builder line: {2}", SCRIPT)
+
+    def test_no_array_subexpression_wraps_a_generic_list(self):
+        # Windows PowerShell 5.1 throws ArgumentException "Argument types do not
+        # match" from @() around a List[object] held in a variable, and reports it
+        # against the enclosing hashtable literal - which looked like the matrix
+        # JSON failing at the end of a run.
+        lists = re.findall(r"\$(\w+)\s*=\s*New-Object 'System\.Collections\.Generic\.List\[", SCRIPT)
+        self.assertTrue(lists, "the script is expected to use generic lists")
+        for name in lists:
+            self.assertIsNone(
+                re.search(r"@\(\s*\$" + re.escape(name) + r"\s*\)", SCRIPT),
+                f"@(${name}) throws on Windows PowerShell 5.1; use ${name}.ToArray()")
+        self.assertIn("Variants = $results.ToArray()", SCRIPT)
+
+    def test_signing_stderr_cannot_terminate_the_run(self):
+        # sbsign writes "Signing Unsigned original image" on stderr. With
+        # $ErrorActionPreference='Stop' and 2>&1, Windows PowerShell 5.1 turns
+        # that banner into a terminating NativeCommandError, so every variant of
+        # a good run failed with the banner as its message.
+        block = SCRIPT[SCRIPT.index("function Invoke-WslSign"):SCRIPT.index("function Stage-SignedEfi")]
+        self.assertIn("$ErrorActionPreference = 'Continue'", block)
+        self.assertIn("$restorePreference = $ErrorActionPreference", block)
+
+    def test_a_variant_that_needs_the_private_boot_profile_is_skipped(self):
+        # src/boot_profile.h includes the private local/boot_profile.h for a
+        # waived build: without it the compiler stops, which is a setup step the
+        # script should name before spending a compile on it.
+        self.assertIn("NEEDS_LOCAL_BOOT_PROFILE", SCRIPT)
+        self.assertIn("requires_local_boot_profile", SCRIPT)
+        self.assertIn("local\\boot_profile.h", SCRIPT)
+        self.assertIn("SETUP_HINT", SCRIPT)
+
+    def test_a_private_boot_profile_is_required_exactly_where_the_source_demands_it(self):
+        for variant in MANIFEST["variants"]:
+            switches = variant["switches"]
+            waived = bool(switches.get("AcceptUnverifiedActuation"))
+            runtime_esp = bool(switches.get("RuntimeEsp"))
+            self.assertEqual(
+                bool(variant.get("requires_local_boot_profile")),
+                waived and not runtime_esp,
+                f"{variant['id']}: only a waived build without -RuntimeEsp compiles a "
+                "pinned ESP, so only it may demand local/boot_profile.h")
+
+    def test_no_preparation_variant_uses_runtime_selection_while_the_source_refuses_it(self):
+        # Re-add prep-runtime-selection only if the source grows a preparation
+        # profile for runtime target selection; until then it has no legal build.
+        port = (ROOT / "src" / "port.h").read_text(encoding="utf-8")
+        self.assertIn("Runtime target selection requires the ordered selected-target execution mode", port)
+        discovery = (ROOT / "src" / "gpu_discovery.c").read_text(encoding="utf-8")
+        self.assertIn("One-target active execution requires explicit transaction mode", discovery)
+        blocked = {entry["id"] for entry in MANIFEST["not_buildable"]}
+        live = {variant["id"] for variant in MANIFEST["variants"]}
+        for name in ("prep-runtime-selection", "prep-runtime-selection-resident",
+                     "dxe-prep-runtime-selection"):
+            self.assertIn(name, blocked)
+            self.assertNotIn(name, live)
+
+    def test_an_explicit_only_request_never_skips_silently(self):
+        self.assertIn("Cannot build {0}: {1}. -Only asked for this image specifically", SCRIPT)
+
 
 class TheDocumentIsRendered(unittest.TestCase):
     def test_the_matrix_block_is_exactly_the_rendered_catalogue(self):
