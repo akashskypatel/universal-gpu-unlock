@@ -95,6 +95,7 @@ try {
         'gpu_execution_state.c',
         'gpu_windows_path.c',
         'profile.c',
+        'prom_reference.c',
         'gpu_sku_geometry.c',
         'sha256.c',
         'runtime.c',

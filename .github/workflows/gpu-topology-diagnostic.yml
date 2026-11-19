@@ -49,13 +49,11 @@ jobs:
       - name: Compile and execute bounded host tests
         shell: bash
         run: |
-          set -euo pipefail
-          # Mirror the step to a file so a failure can be reported as an
-          # annotation: the uploaded log is not always reachable from outside.
-          HOST_LOG="$RUNNER_TEMP/host.log"
-          exec > >(tee -a "$HOST_LOG") 2>&1
+          set -uo pipefail
+          HOST_LOG="$RUNNER_TEMP/gu-log/host.log"
           (
-            trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .; if [ "$rc" -ne 0 ]; then printf "::error::HOST_EXIT=%s %s\n" "$rc" "$(tail -n 4 "$HOST_LOG" | tr "\n" "|" | cut -c1-1000)"; fi; exit "$rc"' EXIT
+            set -euo pipefail
+            trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .' EXIT
             # MSI 7E56 requires an exact passive dual-NVIDIA hardware fingerprint.
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_msi_b850_rom_diag.c -o "$RUNNER_TEMP/test_msi_b850_rom_diag_$compiler"
@@ -287,7 +285,14 @@ jobs:
             "$RUNNER_TEMP/test_gpu_pci_observation_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
             "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
-          ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
+          ) 2>&1 | tee -a "$HOST_LOG"
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            # The activity log needs artifact access to read; an annotation does
+            # not, so a failing command is named where a reviewer will see it.
+            printf '::error::HOST_EXIT=%s %s\n' "$rc" "$(grep -v -e '^HOST_EXIT=' -e '^Filesystem' -e '^/dev/' "$HOST_LOG" | tail -n 3 | tr '\n' '|' | cut -c1-1200)"
+          fi
+          exit "$rc"
       - name: Run the host simulator scenarios
         shell: bash
         run: |
@@ -560,7 +565,8 @@ jobs:
           } catch {
             "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # Annotations are readable without artifact access; the log is not.
-            Write-Host "::error title=EFI build::BUILD_EXIT=1 $($_.Exception.Message)"
+            $efiTail = (Get-Content -LiteralPath "$env:RUNNER_TEMP\gu-log\efi.log" -Tail 4) -join ' | '
+            Write-Host "::error title=EFI build::BUILD_EXIT=1 $($_.Exception.Message) :: $efiTail"
             throw
           }
       - name: Preserve final EFI status
