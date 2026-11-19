@@ -126,6 +126,8 @@ jobs:
             # checked one - one macro flips, no module gains or loses code.
             python3 tools/waiver_build_diff.py
             python3 -m unittest discover -s tests -p test_waiver_build_diff.py -v
+            # The recovery matrix must stay grounded in code that exists.
+            python3 -m unittest discover -s tests -p test_recovery_matrix.py -v
             # Every stock profile must link, and keep its own selector contract.
             python3 tools/run_simulation.py matrix
             python3 -m unittest discover -s tests -p test_stock_profile_matrix.py -v

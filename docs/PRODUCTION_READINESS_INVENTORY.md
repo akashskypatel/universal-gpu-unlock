@@ -212,7 +212,12 @@ log.
 loss, Stop hang, FLR refusal, partial multi-GPU) with a software-visible state
 that survives the failure.
 
-**Status (2026-11-18): the mechanism exists; no bound is claimed.** The
+**Status (2026-11-18): the mechanism and the documented matrix exist; no bound
+is claimed and nothing is verified on hardware.** A per-class recovery matrix now
+exists (§11.15), grounded in log lines this source prints and in the A7 record,
+with the simulator row that exercises each software half.
+
+**The mechanism.** The
 software-visible state from A7 (above) now survives a failure, and a build can
 now bound the firmware timer: it is armed once in `GuBootOpen` for a build that
 sets `GU_WATCHDOG_SECONDS`, and cancelled before the handover, so a hang inside
@@ -306,7 +311,7 @@ cleanup in our own code*, not any of C1–C10.
 | **S2 — make selection dynamic** (weeks) | A1 runtime selector + policy; A4 profile detection; B3/B6 relaxation with evidence (MSI state handling, ReBAR/BAR>4 GiB) | one image, two different machines with different BDFs and different stock profiles, each completes without a rebuild |
 | **S3 — prove the privileged path** (the long pole) | C1 bounded Stop or a replacement detach; C2 DMA quiescence proof; C3/C4 authenticated firmware acceptance | a written harness that shows the Stop callback returns within a bound, DMA is provably idle, and firmware acceptance is decided by signature, not hash |
 | **S4 — multi-GPU** (after S3) | A3 verified multi-target admission; C9 interference testing; memory budget (B10) | two cards, ordered, peers unchanged, handover verified, no retained buffers |
-| **S5 — recovery and coverage** (parallel from S1) | A8 recovery matrix; C6 timeout policy; A5 SKU coverage; E1–E5 campaign | documented recovery for each failure class; per-SKU evidence; Windows-side acceptance measured |
+| **S5 — recovery and coverage** (parallel from S1) | A8 recovery matrix (**documented and pinned, §11.15**); C6 timeout policy; A5 SKU coverage; E1–E5 campaign | documented recovery for each failure class; per-SKU evidence; Windows-side acceptance measured |
 
 S3 is the item that cannot be shortened by more code review: it needs hardware
 and vendor-behaviour evidence. S1 and S2 are ordinary engineering and are the
@@ -751,6 +756,46 @@ Evidence: the tool itself (CI runs it), `tests/test_waiver_build_diff.py` (9
 tests: the diff passes, a missing compiler is a skip rather than a pass, the pin
 is exactly the reviewed pair, no unit may gain or lose code, the profile matches
 the runbook, every compiled source is covered).
+
+### 11.15 S5/A8 — the recovery matrix, checked against the code
+
+A8's exit criteria ask for a "documented, tested recovery matrix (mid-transaction
+power loss, Stop hang, FLR refusal, partial multi-GPU) with a software-visible
+state that survives the failure". The state exists (§11.8, §11.12); the matrix did
+not, and prose written from memory is exactly what this repository keeps finding
+to be wrong.
+
+`docs/recovery_matrix.json` is the source of truth and
+`docs/RECOVERY_MATRIX.md` is rendered from it, so the two cannot drift. Eight
+classes, each with the same shape:
+
+| Field | Must be |
+| --- | --- |
+| Symptom | a log line the named source file actually emits (the token is the format string) |
+| Record | fields of `GU_BOOT_STATE`, the only state that outlives a failed boot |
+| Record state | what those fields read in this class |
+| Card / machine state | what the code leaves behind, and why |
+| Steps | ordered, per card, no retries |
+| Proof | what a later boot must show |
+| Simulator | the row that exercises the software half, or `none` |
+| Not verified | what nobody has demonstrated |
+
+The four classes A8 names are all present (`power-loss-mid-transaction`,
+`stop-hang`, `function-reset-refused`, `partial-multi-target`), plus
+`dma-buffers-retained`, `wpr2-left-open`, `card-refused-before-any-write` and
+`asset-install-incomplete`.
+
+Evidence: `tests/test_recovery_matrix.py` (10 tests) fails if a symptom token is
+absent from the file it names, if a cited record field is not a `GU_BOOT_STATE`
+field, if a named simulator row does not exist, if a class disappears, if any
+class claims `verified: true`, or if the rendered document is not byte-identical
+to the manifest. `tools/render_recovery_matrix.py --write` regenerates the
+document.
+
+What this does not do: it does not demonstrate any recovery. Every class is marked
+unverified with the reason, `RECOVERY_VERIFIED` stays false, and no procedure here
+has been executed on hardware. It also cannot cover C6 (timeout policy) - a bound
+is still unmeasured, which is why the watchdog stays opt-in (§11.12).
 
 ### 11.7 Items deliberately not changed
 
