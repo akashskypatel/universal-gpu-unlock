@@ -35,6 +35,13 @@ one.
 | Power-removal recovery within reach | Physical, not software | There is no software recovery. Do not run this remotely or headless. |
 | An independent console | Serial or a second display that the NVIDIA firmware does not own | Without it the ordered log may be the only output, and it lives on the ESP you may need to remove. |
 
+CI compiles the same waiver configuration on a Windows runner, with
+`-RuntimeEsp` instead of a reviewable GUID and a synthetic BDF
+(`tests/test_waiver_ci.py` pins that wiring). That job proves the sources build
+with MSVC and the interlock refusals still fire; it does not run, boot or publish
+anything. An operator building for a real machine still needs the reviewed
+`local/boot_profile.h` below, or an explicit `-RuntimeEsp` build.
+
 ## 2. Build
 
 ```powershell

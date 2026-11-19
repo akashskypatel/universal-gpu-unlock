@@ -296,6 +296,35 @@ default is never widened:
    isolation between the GPUs is currently unverified, so "dynamic multi-GPU"
    means *ordered sequential* targets, not simultaneous ownership.
 
+#### CI builds the admitted image (2026-11-18)
+
+Step 1's last exit criterion - "CI builds and diffs the admitted image" - is met,
+and it is the only one in this section that CI can meet:
+
+* the **host** job builds all 26 sources twice, checked and admitted, and diffs
+  the define and symbol sets per translation unit
+  (`tools/waiver_build_diff.py`): `WAIVER_DIFF=PASS SOURCES=26 MACRO_DELTAS=41
+  ADMITTED_UNITS=15 SYMBOL_DELTAS=0`. The waiver flips
+  `GU_ACTUATION_ADMITTED` and adds no code to any module;
+* the **Windows** job compiles the admitted image with MSVC - application and DXE,
+  one target and an ordered two-target sequence - and asserts the exact binary
+  each selection implies. A hosted runner has no reviewed partition GUID, and a
+  waived image may not use the synthetic host-test GUID, so these builds pass
+  `-RuntimeEsp`. Nothing is uploaded.
+
+The admitted artifact stays out of the artifact set by construction: the upload
+globs name `GPU-ACTIVE-PREP-*`/`GPU-ACTIVE-PREP-DXE-*`, and
+`tests/test_waiver_ci.py` fails if a glob could ever match an
+`*UNVERIFIED-ACTUATION*` name.
+
+What this is not: a statement about behaviour. Compiling proves the instrument is
+buildable from this tree; it says nothing about the Stop bound, DMA quiescence,
+firmware acceptance or recovery, which is why steps 3-6 remain untouched. It also
+found three defects that the host suite had been hiding - a missing
+`prom_reference.c` in both MSVC source lists, two test pins that only execute
+where clang exists, and a mock scanning past its own array - each now covered by a
+test. Inventory §11.14.
+
 ### 4.4 What still cannot be established from source
 
 | Requirement | Remains |

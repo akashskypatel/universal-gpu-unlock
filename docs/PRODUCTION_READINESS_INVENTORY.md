@@ -271,7 +271,7 @@ These are verified from source, not inferred.
 | # | Gap | Evidence | Pri |
 | --- | --- | --- | --- |
 | D1 | Artifacts are unsigned; Secure Boot must be off or `AdaUnlock_SecureBoot.cer` enrolled by hand | builders link only (`Build-Experimental-MSVC.ps1:133-141`, `Build-Dxe-Driver.ps1:127-135`); no `signtool` anywhere | P0 |
-| D2 | The only actuating build has no CI coverage | CI has no `-AcceptUnverifiedActuation` and no `local/boot_profile.h` | P0 |
+| D2 | The only actuating build has no CI coverage | **Closed (§11.14):** the Windows job compiles the admitted image (app and DXE, one and two targets) with `-RuntimeEsp`, and the host job diffs it. The build is not uploaded. | P0 |
 | D3 | No provenance for the 84 MB payloads; `verify_reference_assets.py` hashes local copies only | `tools/verify_reference_assets.py` output: `NVIDIA_SIGNATURE_VERIFIED=false` | P1 |
 | D4 | MSVC-only toolchain, no EDK II build, installer disabled | `Setup-AdaUnlock.ps1` refuses by design (`Setup.bat`, CI asserts `STATUS=REFUSED`) | P2 |
 | D5 | No hardware-in-the-loop; CI proves compilation and host logic only | workflow jobs `host`, `efi` | P0 (for the product claim) |
@@ -307,7 +307,7 @@ cleanup in our own code*, not any of C1–C10.
 
 | Stage | Work | Exit criteria |
 | --- | --- | --- |
-| **S1 — make one machine repeatable** (weeks) | A2 runtime ESP identification (done, §11.6); A6 asset install (done, §11.10); D1 signing (open); D2 CI build of the waiver path (**diff done, §11.14**; synthetic-GUID build open) | one image booted twice on the same machine, both boots verified from the USB log; CI builds and diffs the admitted image |
+| **S1 — make one machine repeatable** (weeks) | A2 runtime ESP identification (done, §11.6); A6 asset install (done, §11.10); D1 signing (open); D2 CI build of the waiver path (**done, §11.14**: diffed on the host, compiled by MSVC, never published) | one image booted twice on the same machine, both boots verified from the USB log; CI builds and diffs the admitted image |
 | **S2 — make selection dynamic** (weeks) | A1 runtime selector + policy; A4 profile detection; B3/B6 relaxation with evidence (MSI state handling, ReBAR/BAR>4 GiB) | one image, two different machines with different BDFs and different stock profiles, each completes without a rebuild |
 | **S3 — prove the privileged path** (the long pole) | C1 bounded Stop or a replacement detach; C2 DMA quiescence proof; C3/C4 authenticated firmware acceptance | a written harness that shows the Stop callback returns within a bound, DMA is provably idle, and firmware acceptance is decided by signature, not hash |
 | **S4 — multi-GPU** (after S3) | A3 verified multi-target admission; C9 interference testing; memory budget (B10) | two cards, ordered, peers unchanged, handover verified, no retained buffers |
@@ -752,10 +752,40 @@ the same image. It also does not build with a synthetic GUID, the second half of
 D2 - that is a build-script change in `src/Build-Experimental-MSVC.ps1`, which
 cannot be executed here and is left open rather than claimed.
 
-Evidence: the tool itself (CI runs it), `tests/test_waiver_build_diff.py` (9
+**The second half - the same image, built by MSVC.** The diff is evidence about
+source shape under GCC. The Windows job now compiles the admitted image for real:
+application and DXE, one target and an ordered two-target sequence, each asserting
+the exact binary its selection label implies. The admitted build passes
+`-RuntimeEsp`, because the pinned path needs the private, gitignored
+`local/boot_profile.h`, a hosted runner has no reviewed GUID, and a waived build
+may not use the synthetic host-test GUID. Nothing is uploaded: the artifact globs
+cannot match an admitted name, and `tests/test_waiver_ci.py` fails if one ever
+could. The waiver's interlocks are asserted to still refuse before any compiler
+runs.
+
+Making the Windows and host jobs actually execute this branch's code found three
+defects the host suite had been hiding - each is now covered:
+
+* `src/prom_reference.c` was compiled into no MSVC image, so every variant failed
+  to link its own `profile.c` calls. `tests/test_build_source_lists.py` now pins
+  each builder's source list to the program the simulator compiles, and checks
+  that every `Gu*` symbol a unit imports is defined by some listed unit;
+* `test_boot_binding_contract.py` held two pins that only run where clang exists,
+  so they had never executed locally: an ordering assertion made inside a slice
+  that cannot contain the thing it looked for, and open-site counts pinned to 9
+  where the staged bundle had added sites. The ordering is now compared over the
+  whole source and the counts are replaced by the property (every open result is
+  handled);
+* the discovery mock scanned `&gpu[i].bar` to 4096 over a 24-entry array, so which
+  compiler's static layout put the pool buffer there decided whether the free was
+  counted. Bounded by the array size.
+
+Evidence: the tool itself (CI runs it), `tests/test_waiver_build_diff.py` (10
 tests: the diff passes, a missing compiler is a skip rather than a pass, the pin
 is exactly the reviewed pair, no unit may gain or lose code, the profile matches
-the runbook, every compiled source is covered).
+the runbook, every compiled source is covered, no dependency on generated state),
+`tests/test_waiver_ci.py` (10 tests), `tests/test_build_source_lists.py` (4 tests).
+Workflow run 44445509664 and later on this branch: `host=success efi=success`.
 
 ### 11.15 S5/A8 — the recovery matrix, checked against the code
 
