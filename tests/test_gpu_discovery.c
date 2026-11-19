@@ -250,7 +250,18 @@ static int CheckHandleBufferLifetime(void) {
     if(scenario==2)fail_state_alloc=1;
     if(scenario==3)gpu[0].read_fail=1;
     fail_pool_free=1;
-    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+    {
+      EFI_STATUS census_status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
+      /* Printed only when the lifetime contract breaks, so a compiler-specific
+       * difference names its own numbers instead of costing a round trip. */
+      if(census_status!=EFI_UNSUPPORTED||init_calls||locate_calls!=1||free_calls!=1)
+        fprintf(stderr,
+                "CENSUS scenario=%d status=%#x count=%u init_calls=%d "
+                "locate_calls=%d free_calls=%d state_allocs=%u\n",
+                scenario,(unsigned)census_status,(unsigned)count,init_calls,
+                locate_calls,free_calls,state_allocs);
+      CHECK(census_status==EFI_UNSUPPORTED);
+    }
     CHECK(!init_calls&&locate_calls==1&&free_calls==1);
     CHECK(UnreleasedPciHandles==handles&&UnreleasedPciHandles==failed_handle_buffer);
     CHECK(state_allocs==(unsigned)(scenario>=2));
