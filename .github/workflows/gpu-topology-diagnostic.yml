@@ -49,7 +49,7 @@ jobs:
       - name: Compile and execute bounded host tests
         shell: bash
         run: |
-          set -uo pipefail
+          set +e -uo pipefail
           HOST_LOG="$RUNNER_TEMP/gu-log/host.log"
           (
             set -euo pipefail
