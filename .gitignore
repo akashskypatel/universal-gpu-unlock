@@ -1,4 +1,4 @@
-build/
+**/build*/
 *.obj
 *.o
 *.log
@@ -12,5 +12,6 @@ src/local/
 local/
 src/build_diagnostic/
 build_diagnostic/
-__pycache__/
-*.pyc
+.claude/
+.codex/
+.agents/
