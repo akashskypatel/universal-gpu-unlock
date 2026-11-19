@@ -987,8 +987,8 @@ Three properties make it hard to misuse:
 * **Signing cannot promote an image.** Each variant carries a safety class
   (`read-only`, `refuses-before-mutation`, `compile-only`, `stop-only`,
   `actuates`) and the catalogue's expected output filename; the script fails when
-  the builder's own `STATUS=` line disagrees with either. Only `-Only <id> -Deploy
-  <id>` stages anything, `stop-only`/`actuates` additionally need
+  the builder's own `STATUS=` line disagrees with either. Only `-Only <id>
+  -StageDrive <letter>` stages anything, `stop-only`/`actuates` additionally need
   `-AcceptActuatingDeploy`, and a DXE driver can never be staged because the
   firmware will not run a PE subsystem 11 image as `BOOTX64.EFI`.
 

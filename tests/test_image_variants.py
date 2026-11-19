@@ -496,11 +496,20 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
                       "WSL_SIGNING_BROKEN"):
             self.assertIn(token, block)
 
-    def test_a_stage_drive_without_a_deploy_is_refused(self):
-        # -StageDrive names a destination, -Deploy is the action. Accepting the
-        # drive alone signed the image, printed COMPLETE and copied nothing.
-        self.assertIn("-StageDrive only names the stick; nothing is copied without -Deploy <id>", SCRIPT)
-        self.assertIn("if ($StageDrive -and -not $Deploy)", SCRIPT)
+    def test_stage_drive_alone_stages_the_selected_image(self):
+        # -StageDrive is the intent, -Only is which image. Requiring a second copy
+        # of the id was redundant, and the run that forgot it looked successful.
+        self.assertIn("if ($StageDrive) {", SCRIPT)
+        self.assertIn("$stageVariantId = $deployVariant.id", SCRIPT)
+        self.assertIn("-StageDrive stages exactly one image", SCRIPT)
+        self.assertNotIn("nothing is copied without -Deploy", SCRIPT)
+
+    def test_a_deploy_that_disagrees_with_the_selection_is_refused(self):
+        # -Deploy survives only as an assertion about what gets staged.
+        self.assertIn("-Deploy {0} is not the selected variant {1}", SCRIPT)
+
+    def test_deploy_without_a_stage_drive_is_refused(self):
+        self.assertIn("-Deploy names the image to stage, so it needs -StageDrive <letter>", SCRIPT)
 
     def test_a_deploy_run_says_what_it_staged(self):
         self.assertIn('Say (("STAGED {0} PATH={1} DRIVE={2}:")', SCRIPT)

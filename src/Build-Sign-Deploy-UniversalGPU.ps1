@@ -44,7 +44,7 @@ of the file being replaced, and - for stop-only/actuates - only with
 Build and sign every variant the catalogue permits with the arguments given.
 Variants that need a GPU selection or a reviewed ESP GUID are skipped, with the
 reason recorded, when you do not supply one. -All cannot be combined with
--Deploy: a matrix run never stages anything.
+-StageDrive: a matrix run never stages anything.
 
 .PARAMETER Only
 One or more variant ids (see -List). Cannot be combined with -All.
@@ -54,13 +54,15 @@ diagnostic, prepare, prepare-dxe or stop-observation. Selects a whole family;
 combine with -Only to narrow further.
 
 .PARAMETER Deploy
-The single variant id to stage onto -StageDrive. Anything actuating also needs
--AcceptActuatingDeploy.
+Optional. The variant id you expect to stage, checked against the selection. The
+image to stage is whatever -Only selected; naming it a second time is a typed
+assertion, not a requirement, and a mismatch is an error rather than a guess.
 
 .PARAMETER StageDrive
-The USB drive letter -Deploy writes to. A drive letter on its own is only a
-destination: without -Deploy <id> nothing is copied, so the run is refused rather
-than reporting COMPLETE over an untouched stick.
+The USB drive letter to stage onto. This is the switch that stages: it takes the
+one image -Only selected, builds it, signs it and copies it to
+EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
+-AcceptActuatingDeploy, and a matrix run (-All) can never stage.
 
 .PARAMETER SkipDbCheck
 Do not prove the certificate is in the BIOS db. Records db_enrolled=UNKNOWN in
@@ -82,15 +84,17 @@ Print the catalogue and exit. Nothing is built, signed or staged.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -All -SkipDbCheck -SignOnly
 
 .EXAMPLE
-# Everything, then stage the read-only image on G:.
+# Everything, signed, nothing staged.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -All -SelectionBdfs '0000:01:00.0,0000:04:00.0' `
     -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -SignOnly
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -Deploy diag-topology-log -StageDrive G
+
+# Stage one image on G: -StageDrive is the staging switch, -Only names the image.
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G
 
 .EXAMPLE
 # The waived one-target image, staged deliberately, on a donor card.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target -SelectionBdf '0000:01:00.0' `
-    -Deploy actuate-one-target -StageDrive G -AcceptActuatingDeploy
+    -StageDrive G -AcceptActuatingDeploy
 
 .NOTES
 Signed images are authentic, not safe. No variant in this catalogue has been
@@ -673,24 +677,29 @@ if ($List) {
 # --- preflight ------------------------------------------------------------
 
 try {
+    $stageVariantId = $null
     if ($All -and $Only) { throw '-All and -Only are mutually exclusive.' }
-    if ($All -and $Deploy) { throw '-All must not stage: a matrix run signs only. Use -Only <id> -Deploy <id> for one image.' }
-    if ($Deploy -and -not $StageDrive) { throw '-Deploy requires -StageDrive.' }
+    if ($All -and $StageDrive) { throw '-All must not stage: a matrix run signs only. Name one image with -Only <id> -StageDrive <letter>.' }
+    if ($SignOnly -and $StageDrive) { throw '-SignOnly and -StageDrive are mutually exclusive: -SignOnly never touches a stick. Drop -StageDrive, or drop -SignOnly to stage the selected image.' }
+    if ($Deploy -and -not $StageDrive) { throw '-Deploy names the image to stage, so it needs -StageDrive <letter>. Add the drive, or drop -Deploy.' }
     if ($Deploy -and $SignOnly) { throw '-SignOnly and -Deploy are mutually exclusive: a sign-only run never touches a USB stick.' }
-    if ($SignOnly -and $StageDrive) { throw '-SignOnly and -StageDrive are mutually exclusive: -SignOnly never touches a stick. Drop -StageDrive, or drop -SignOnly and name one image with -Deploy <id>.' }
-    if ($StageDrive -and -not $Deploy) {
-        # -StageDrive names a destination; -Deploy is the action. Accepting the
-        # drive alone meant a run signed an image, said COMPLETE, and copied
-        # nothing - the stick looked untouched because it was.
-        throw ('-StageDrive only names the stick; nothing is copied without -Deploy <id>. ' +
-               'Use -Only <id> -Deploy <id> -StageDrive <letter>, or drop -StageDrive to sign only.')
-    }
     if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
     $variants = @(Select-Variants)
-    if ($Deploy) {
-        if ($variants.Count -ne 1) { throw "-Deploy needs exactly one selected variant; got $($variants.Count)." }
-        if ($variants[0].id -ne $Deploy) { throw "-Deploy $Deploy does not match the selected variant $($variants[0].id)." }
+    if ($StageDrive) {
+        # The selection is what names the image; a stick holds one BOOTX64.EFI, so
+        # staging more than one variant is not a thing.
+        if ($variants.Count -ne 1) {
+            $notOne = ('-StageDrive stages exactly one image, but {0} variants are selected. ' +
+                       'Name it with -Only <id> (see -List).')
+            throw ($notOne -f $variants.Count)
+        }
+        if ($Deploy -and $variants[0].id -ne $Deploy) {
+            $disagrees = ('-Deploy {0} is not the selected variant {1}. -Deploy is only an ' +
+                          'assertion about what gets staged; drop it, or make both flags name one image.')
+            throw ($disagrees -f $Deploy, $variants[0].id)
+        }
         $deployVariant = $variants[0]
+        $stageVariantId = $deployVariant.id
         $safety = $catalogue.safety_classes.($deployVariant.safety)
         if ($deployVariant.binary -match 'DXE' -or $familyById[$deployVariant.family].subsystem -eq 11) {
             throw 'A DXE boot-service driver cannot be staged as BOOTX64.EFI. Sign it and install it as a Driver#### entry.'
@@ -730,7 +739,7 @@ try {
     }
 
     $drive = $null; $usbRoot = $null; $targetVolumeId = $null
-    if ($Deploy) {
+    if ($stageVariantId) {
         $drive = $StageDrive.ToUpperInvariant()
         $usbRoot = Assert-UsbVolume $drive
         $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
@@ -911,7 +920,7 @@ try {
             Say "Verified signed SHA-256: $signedHash"
 
             $deployment = $null
-            if ($Deploy -and $Deploy -eq $variantId) {
+            if ($stageVariantId -and $stageVariantId -eq $variantId) {
                 $deployment = Stage-SignedEfi -Drive $drive -Root $usbRoot -SignedFile $signedEfi `
                                   -SignedSha256 $signedHash -LocalOutput $OutputDirectory `
                                   -ExpectedVolumeId $targetVolumeId
@@ -963,7 +972,7 @@ try {
                 id = $variantId; family = $variant.family; safety = $variant.safety
                 status = 'FAILED'; reason = $_.Exception.Message
             })
-            if ($Deploy -and $Deploy -eq $variantId) { throw }
+            if ($stageVariantId -and $stageVariantId -eq $variantId) { throw }
         }
     }
 
@@ -1000,10 +1009,10 @@ try {
     Say ("STATUS={0} SIGNED={1} FAILED={2} SKIPPED={3} DB_ENROLLED={4} HARDWARE_VERIFIED=0 MATRIX={5}" -f
         $(if ($failedCount) { 'INCOMPLETE' } else { 'COMPLETE' }),
         $signedCount, $failedCount, $skippedCount, $dbEnrolled, $matrixPath)
-    if ($Deploy) {
-        # Reaching this line with -Deploy means the copy and its hash check
-        # succeeded; a staging failure throws out of the loop.
-        Say (("STAGED {0} PATH={1} DRIVE={2}:") -f $Deploy, $stagedPath, $drive)
+    if ($stageVariantId) {
+        # Reaching this line means the copy and its hash check succeeded; a
+        # staging failure throws out of the loop.
+        Say (("STAGED {0} PATH={1} DRIVE={2}:") -f $stageVariantId, $stagedPath, $drive)
     }
     Say 'Signing proves authenticity only: the certificate is the one the firmware trusts, and the image is the one that was built.'
     Say 'It does not establish firmware or GPU compatibility, a Windows device start, or the 617.42 Booter provenance.'

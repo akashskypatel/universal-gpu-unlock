@@ -139,14 +139,16 @@ renaming an image.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -All -SelectionBdfs '0000:01:00.0,0000:04:00.0' `
     -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -SignOnly
 
-# Stage exactly one image onto G:.
+# Stage one image onto G:. -StageDrive is the staging switch; -Only names the image.
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G
+
+# A handoff diagnostic needs the reviewed GUID as well.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-handoff `
-    -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' `
-    -Deploy diag-topology-handoff -StageDrive G
+    -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -StageDrive G
 
 # The waived transaction, staged deliberately on a donor card.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target `
-    -SelectionBdf '0000:01:00.0' -Deploy actuate-one-target -StageDrive G -AcceptActuatingDeploy
+    -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy
 ```
 
 `-All` never stages, and it is bounded: 29 variants, one `VARIANT_BEGIN` and one
@@ -157,21 +159,25 @@ A selection has a shape, and `-All` respects it instead of failing. With two
 BDFs the single-target variants are skipped (`REASON=NEEDS_EXACTLY_ONE_BDF`) and
 the sequence ones build; with one BDF it is the other way round
 (`REASON=NEEDS_TWO_OR_MORE_BDFS`). Run `-All` twice with both shapes, or use
-Staging takes two flags: `-Deploy <id>` is the action, `-StageDrive <letter>` is
-the destination, and `-Deploy` must name the same variant `-Only` selected. A
-drive letter on its own is refused - it used to sign the image, print `COMPLETE`
-and copy nothing. A staging run ends with `STAGED <id> PATH=… DRIVE=…:`.
+`-Only` for the images you actually need.
 
-`-Only` for the images you actually need. `-SignOnly` is
-exclusive with both `-Deploy` and `-StageDrive`.
+Staging takes two things, and neither is a duplicate of the other:
+`-StageDrive <letter>` is the intent to write a stick, and `-Only <id>` is which
+image - exactly one, because a stick holds one `BOOTX64.EFI`. `-SignOnly` is
+exclusive with `-StageDrive`, and `-All` can never stage. A staging run ends with
+`STAGED <id> PATH=… DRIVE=…:`, so a successful summary cannot be read as "signed
+but not copied".
+
+`-Deploy <id>` still exists as an optional assertion: if you pass it, it must be
+the image the selection named, and a disagreement is an error rather than a
+guess. Omit it - the selection already decides. `-Deploy` without `-StageDrive`
+is refused, because it names an image and no destination.
 
 The six waived images that compile a real ESP identity also need the private
 `src\local\boot_profile.h`. When it is absent `-All` skips them with
 `REASON=NEEDS_LOCAL_BOOT_PROFILE` and prints one `SETUP_HINT` naming the file -
 while `-Only` on one of them is an error, because a named image that silently
-does not build is worse than a failed command. `-Deploy`
-must name the same variant `-Only` selected, and exactly one variant can be
-selected when deploying - because a stick has exactly one `BOOTX64.EFI`.
+does not build is worse than a failed command.
 
 ## 4. The gates, in the order they bite
 
@@ -235,7 +241,9 @@ skipped and why.
 | WSL exit 3 | `wslpath` could not map a Windows path | Check `[automount] enabled = true` in `/etc/wsl.conf`, and that the repository is not on an unmounted drive |
 | WSL exit 4 | Key, certificate or `.cer` disagree, or the certificate is expired | Re-export the `.cer` from the same certificate; check `openssl x509 -noout -dates` |
 | WSL exit 5 | The unsigned image changed, or the signed file already existed | Re-run; if it repeats, something else is writing the build directory |
-| `-StageDrive only names the stick; nothing is copied without -Deploy <id>` | `-StageDrive` was passed without `-Deploy`, so the run signed and stopped | Add `-Deploy <id>` with the id from `-Only <id>`, e.g. `-Only diag-topology-log -Deploy diag-topology-log -StageDrive G` |
+| `-StageDrive stages exactly one image, but N variants are selected` | `-StageDrive` was given with a selection that names more than one image (or none) | Add `-Only <id>` naming one variant, e.g. `-Only diag-topology-log -StageDrive G` |
+| `-Deploy X is not the selected variant Y` | `-Deploy` disagrees with `-Only` | Drop `-Deploy` (the selection decides), or make both flags name one image |
+| `-Deploy names the image to stage, so it needs -StageDrive <letter>` | `-Deploy` was given without a destination | Add `-StageDrive G`, or drop `-Deploy` to sign only |
 | `VARIANT_SKIPPED … REASON=NEEDS_SELECTION` | `-All` was run without a BDF | Pass `-SelectionBdf` or `-SelectionBdfs` |
 | `REASON=NEEDS_EXACTLY_ONE_BDF` | Two or more BDFs given, a single-target variant selected | Re-run with `-SelectionBdf '0000:01:00.0'` |
 | `REASON=NEEDS_TWO_OR_MORE_BDFS` | One BDF given, a sequence variant selected | Re-run with `-SelectionBdfs 'a,b'` |
