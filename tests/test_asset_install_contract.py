@@ -182,9 +182,13 @@ class TheRecordIsTheCommitPoint(unittest.TestCase):
 
 class TheBundleMatchesWhatLoads(unittest.TestCase):
     def test_pinned_version_is_single_and_named_by_every_path(self):
-        self.assertEqual(PROFILE_H.count("GU_ASSET_BUNDLE_VERSION"), 1)
+        # One literal, two widths: the wide macro is derived from the narrow one,
+        # so a version bump cannot drift between the bundle record and the
+        # per-card reference comparison.
+        self.assertEqual(PROFILE_H.count('#define GU_ASSET_BUNDLE_VERSION_CHAR8 "'), 1)
+        self.assertIn("#define GU_ASSET_BUNDLE_VERSION GU_WIDEN_LITERAL(", PROFILE_H)
         self.assertIn("GU_ASSET_BUNDLE_VERSION", PROFILE)
-        version = re.search(r'#define GU_ASSET_BUNDLE_VERSION L"([0-9.]+)"',
+        version = re.search(r'#define GU_ASSET_BUNDLE_VERSION_CHAR8 "([0-9.]+)"',
                             PROFILE_H).group(1)
         # Every pinned vendor path names the one firmware version, so a manifest
         # cannot mix bundles behind a single digest.

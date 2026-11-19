@@ -53,7 +53,7 @@ diagnostics in `sim/sim_world.c`. The stage arguments are
 `<prepare|transaction> [variant]`; `verify` ignores them.
 
 `verify` runs every scenario in the table below and prints
-`SIM_VERIFY=PASS SCENARIOS=16 FAILED=0`.
+`SIM_VERIFY=PASS SCENARIOS=18 FAILED=0`.
 
 | Scenario | Card | Expected |
 | --- | --- | --- |
@@ -73,6 +73,8 @@ diagnostics in `sim/sim_world.c`. The stage arguments are
 | `transaction watchdog` | nominal, `GU_WATCHDOG_SECONDS=600` | the timer is armed once with that bound, the transaction still completes, and the cancel removes it |
 | `transaction preserve` | nominal, `entryLatchedSs1Preserve` build | writes SS0 only, never SS1, and completes - the policy preserves the selector it must not touch |
 | `transaction untracked` | card presents `0x03100062`, `original03100062` build | writes both selectors in stock order with no phase tracking, and says so |
+| `prepare prom-refused` | nominal, `GU_PROM_REFERENCE_REQUIRED` build | refused at prepare: no captured reference for this card, `EFI_UNSUPPORTED`, zero BAR0 writes, diagnostic still allowed |
+| `prepare prom-admitted` | nominal, same build plus the model's pinned reference | admitted, `PROM_IDENTITY=VERIFIED`, preparation completes |
 
 Rows that name a build run a separate binary of the same sources: `stock-match`,
 `stock-mismatch` and `transaction untracked` use
@@ -82,6 +84,11 @@ policy, because exactly one profile is allowed), and `transaction watchdog` adds
 `-DGU_WATCHDOG_SECONDS=600`. Every other row uses the default build, whose
 profile carries no selector expectation and whose watchdog threshold is `0` —
 those rows assert that nothing was armed, so the default stays inert.
+
+`SIM_MODEL_PROM_SHA256` prints the digest of the model's ROM, so a scenario can
+pin it: the synthetic reference is exactly that digest, and if `sim_gpu.c` builds
+a different ROM the `prom-admitted` row fails instead of quietly admitting a
+different card.
 
 `python3 tools/run_simulation.py matrix` builds and links every profile without
 running anything and prints `SIM_MATRIX=PASS PROFILES=5`. It exists because the

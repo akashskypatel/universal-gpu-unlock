@@ -6,7 +6,12 @@
 /* The one pinned firmware version every manifest below refers to. The staged
  * bundle records it, and the contract test checks that every pinned path still
  * names it. */
-#define GU_ASSET_BUNDLE_VERSION L"610.43.03"
+#define GU_ASSET_BUNDLE_VERSION_CHAR8 "610.43.03"
+#define GU_WIDEN_LITERAL_(x) L##x
+#define GU_WIDEN_LITERAL(x) GU_WIDEN_LITERAL_(x)
+/* Narrow form for the modules that compare against ASCII (the PROM reference
+ * record is hosted-testable and has no CHAR16). One literal, two widths. */
+#define GU_ASSET_BUNDLE_VERSION GU_WIDEN_LITERAL(GU_ASSET_BUNDLE_VERSION_CHAR8)
 
 typedef struct {
   const CHAR16 *path;
@@ -32,7 +37,12 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner);
 BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform);
 /* CPU-only ownership proof; no content validation or hardware dispatch. */
 BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *platform);
-BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *, UINTN);
+/* Structural validity, plus the per-card reference decision. `RequireReference`
+ * is the caller's policy: the diagnostic reports, preparation requires. */
+BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *, UINTN,
+                           BOOLEAN RequireReference);
+/* How many captured card references this build carries (0 in the shipped image). */
+UINTN GuAd104PromReferenceCount(VOID);
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *);
 /* Prepare is read-only on the GPU. It validates ROM, assets, exact PCI/card
  * state and creates the immutable selector latch. No driver release here. */

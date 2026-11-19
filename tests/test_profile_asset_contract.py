@@ -138,8 +138,8 @@ static BOOLEAN GuCopyFromIo(GU_PLATFORM *o,VOID *dst,const VOID *src,size_t n){
   if(mode==19)buffer_owner=&p[1];
   return TRUE;
 }
-static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *o,const VOID *m,size_t n){
-  (void)n;if(o!=&p[0]||o!=GuPlatformActive||m!=buffer)wrong++;
+static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *o,const VOID *m,size_t n,BOOLEAN require){
+  (void)n;(void)require;if(o!=&p[0]||o!=GuPlatformActive||m!=buffer)wrong++;
   return TRUE;
 }
 static int gpu_unlock_vbios_fwsec(const VOID *m,size_t n,struct gpu_unlock_fwsec *f){

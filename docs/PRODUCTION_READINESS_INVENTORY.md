@@ -251,7 +251,7 @@ These are verified from source, not inferred.
 | C1 | Calling the vendor UEFI driver's `Stop` (3-stage detach) | refused by default for 0x2684/0x220a; the callback may write BAR0 and poll without a proven bound | `msi_release.c:1080-1112`, `:1051-1060`, `Driver()` at `:429-455` | P0 |
 | C2 | DMA quiescence after Stop | cleared and re-read, but no IOMMU/SMMU, no engine-queue readback, no bus trace | `msi_release.c:935-940`, `NormalizeMasterAfterStop` | P0 |
 | C3 | Firmware acceptance (FWSEC descriptor, ROM) | structural parse + SHA-256 log; `SIGNATURE_AUTHENTICATED=0` | `vbios_610.c:177,213`, `profile.c:78-99` | P0 |
-| C4 | Booter ↔ V67 ↔ ROM pairing | five files hash-pinned to 610.43.03; FWSEC image comes from the live ROM, V67 from the bundle; no signature chain ties them | `profile.c:10-40`, `unlock_610.c:1240-1270`, `:1871-1883` | P0 |
+| C4 | Booter ↔ V67 ↔ ROM pairing | five files hash-pinned to 610.43.03; FWSEC image comes from the live ROM, V67 from the bundle; no signature chain ties them. A per-card allowlist now exists for the ROM half (§11.13) but carries no references, and it is a digest, not a signature | `profile.c`, `prom_reference.c`, `unlock_610.c` | P0 |
 | C5 | Post-state verification | proves the registers it wrote (`SS0/SS1`, permissions, PLM `0xffffff8f`/`0x8b8f`, WPR2 closed) | `unlock_610.c:1360-1395`, `:1770-1800` | P1 (by design: it cannot prove the *unlock*) |
 | C6 | Time budgets | 20 s boot/PLM (`unlock_610.c:28`), 1 s post-FLR BAR (`:1629-1645`), GFW budget (`:1656`) | on timeout buffers are retained and the box must be power-cycled | P1 |
 | C7 | FLR assumptions | requires FLR bit; post-FLR expectations are board-observed values | `checks.c:107-112`, `unlock_610.c:1770-1800` | P1 |
@@ -672,6 +672,53 @@ pinned too: the other transaction rows assert that nothing was armed.
 What this does *not* do: it does not choose a threshold. That needs the measured
 budgets from C2/C6, and it does not attempt recovery — the timer's only job is to
 turn a hang into a reboot that the A7 record then explains.
+
+### 11.13 Multi-GPU step 2 — per-card firmware acceptance
+
+The structural PROM check answers a weak question: is this 1 MiB readout a valid
+VBIOS naming this PCI device. Any card of the right family can present one, and
+the log has always said `SIGNATURE_AUTHENTICATED=0`. Step 2 of the multi-GPU plan
+asks for an authenticated per-device reference instead, which is the part that can
+be settled without hardware.
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| Allowlist | `src/prom_reference.c` | static const table of (device id, subsystem id, ROM SHA-256, loader version); **empty in the shipped image** |
+| Decision | `GuPromReferenceDecide` | exact hit on all four, or one of `UNKNOWN_CARD`, `DIGEST_MISMATCH`, `LOADER_MISMATCH`, `MALFORMED` |
+| Requirement | `GU_PROM_REFERENCE_REQUIRED` | a miss becomes a refusal; a build without it keeps the structural check and says so |
+| Preparation | `profile.c`, `GuAd104Prepare` | passes `TRUE`: with the requirement, a miss is `EFI_UNSUPPORTED` and nothing is written |
+| Transaction | `unlock_610.c`, FWSEC step | passes `TRUE` as well: the same requirement before the first write |
+| Diagnostic | `profile.c`, `GuDiagnosticScan` | passes `FALSE`: it reports the digest, device and subsystem, which is how a reference is captured in the first place |
+| Message | log | `PROM_IDENTITY=VERIFIED …` or `PROM_IDENTITY=REFUSED DEVICE=… SUBSYS=… SHA256=… REASON=… REFS=… DIAGNOSTIC_ALLOWED=1` |
+
+**No reference is committed, and that is the finding.** This repository contains
+no card dumps, so the allowlist is empty and a build with the requirement admits
+nothing. That is the fail-closed default doing its job rather than a defect: a
+digest invented to make the admitted path look green would be worse than no
+reference at all, because it would assert provenance nobody observed.
+
+The one entry that exists is synthetic and cannot ship: `GU_PROM_REFERENCE_SYNTHETIC`
+pins the *simulator's* model ROM, is rejected with `#error` in any unhosted build
+or next to `GU_SIMULATED_ACTUATION`, and names itself in its `Origin` field. It
+exists so the admitted path is executed rather than merely compiled.
+
+What this does not do: it does not authenticate a signature. Both decision paths
+keep `SIGNATURE_AUTHENTICATED=0`, and the Windows 617.42 Booter provenance
+comparison is still mandatory evidence that nothing here provides. It also does
+not replace the per-target admission gates; it narrows what counts as "the right
+card" inside them.
+
+Evidence: `tests/test_prom_reference.c` (two builds of the same module: the
+synthetic table accepts the exact tuple and refuses wrong device, wrong subsystem,
+wrong digest, wrong loader, short/long/uppercase/non-hex digests; the shipped
+table admits nothing including the synthetic identity), `tests/test_prom_reference_contract.py`
+(17 tests: no runtime registration, empty table, exact matching, requirement is
+compile-time and applied at preparation and in the transaction but not in the
+diagnostic, `EFI_UNSUPPORTED` mapping, message fields, no authentication claim,
+synthetic cannot reach firmware, one version literal), and two simulator rows:
+`prepare prom-refused` (`STATUS=8000000000000003 BAR_WRITES=0 FLR=0`,
+`REASON=UNKNOWN_CARD REFS=0`) and `prepare prom-admitted`
+(`PROM_IDENTITY=VERIFIED`).
 
 ### 11.7 Items deliberately not changed
 

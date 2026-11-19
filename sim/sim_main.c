@@ -12,6 +12,7 @@
 #include "sim_world.h"
 
 #include "boot_io.h"
+#include "sha256.h"
 #include "asset_install.h"
 #include "gpu_discovery.h"
 #include "profile.h"
@@ -45,6 +46,20 @@ static void ReportIdentity(SIM_GPU *gpu) {
   SimReportLine("SIM_MODEL PROM_BYTES=%u BAR_BYTES=%u STOCK_DRIVER_BOUND=%d",
                 (unsigned)SIM_PROM_BYTES, (unsigned)SIM_BAR_BYTES,
                 SimGpuStockDriverBound(gpu));
+  /* The digest of the model ROM, so a scenario can pin it and a change to the
+   * model shows up as a failed row instead of a silently different card. */
+  {
+    UINT8 digest[32];
+    static const char hex[] = "0123456789abcdef";
+    char text[65];
+    GuSha256(SimGpuProm(gpu), SIM_PROM_BYTES, digest);
+    for (int i = 0; i < 32; i++) {
+      text[i * 2] = hex[(digest[i] >> 4) & 0xf];
+      text[i * 2 + 1] = hex[digest[i] & 0xf];
+    }
+    text[64] = 0;
+    SimReportLine("SIM_MODEL_PROM_SHA256=%s", text);
+  }
 }
 
 int main(int argc, char **argv) {
@@ -66,13 +81,16 @@ int main(int argc, char **argv) {
   int watchdog = strcmp(variant, "watchdog") == 0;
   int preserve = strcmp(variant, "preserve") == 0;
   int untracked = strcmp(variant, "untracked") == 0;
+  int prom_refused = strcmp(variant, "prom-refused") == 0;
+  int prom_admitted = strcmp(variant, "prom-admitted") == 0;
 
   SimReportLine("SIM_VARIANT=%s", variant);
   if (!esp || !windows) {
     fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir> "
             "[nominal|msi-enabled|flr-refused|dma-high|rebar|bar-above-4g|"
             "runtime-target|runtime-absent|ad104-sku|install-assets|"
-            "stock-match|stock-mismatch|watchdog|preserve|untracked]\n",
+            "stock-match|stock-mismatch|watchdog|preserve|untracked|"
+            "prom-refused|prom-admitted]\n",
             argv[0]);
     return 2;
   }
@@ -329,6 +347,42 @@ int main(int argc, char **argv) {
   if (stock_match)
     Check(SimLogContains("STOCK_PROFILE=MATCH COMPILED=original03100062"),
           "a matching stock profile was not reported");
+  if (prom_refused) {
+    /* No card has been captured, so nothing is admitted: the check is that the
+     * refusal is explicit, names the digest the operator needs, and touches
+     * nothing on the card. */
+    Check(status == EFI_UNSUPPORTED, "a card with no captured reference was admitted");
+    Check(SimLogContains("PROM_IDENTITY=REFUSED"), "the refusal did not say REFUSED");
+    Check(SimLogContains("REASON=UNKNOWN_CARD"), "the refusal did not name the reason");
+    Check(SimLogContains("REFS=0"), "the refusal did not say how many references exist");
+    Check(SimLogContains("SHA256="), "the refusal did not print the observed digest");
+    Check(SimLogContains("DIAGNOSTIC_ALLOWED=1"),
+          "the refusal closed the diagnostic that captures the reference");
+    Check(!owner->profile_verified && !owner->prom_verified,
+          "a refused card was still prepared");
+    Check(SimGpuBarWrites(gpu) == 0, "a refused card saw BAR0 writes");
+    Check(SimGpuPromWrites(gpu) == 0, "a refused card saw PROM writes");
+    Check(SimGpuFlrCount(gpu) == 0, "a refused card was reset");
+    SimReportLine("SIM_ABORT=prom-reference REFUSED=1 REASON=UNKNOWN_CARD REFS=0 "
+                  "BAR_WRITES=%zu FLR=%zu STATUS=%llx",
+                  SimGpuBarWrites(gpu), SimGpuFlrCount(gpu),
+                  (unsigned long long)status);
+    SimReportLine("SIM_RESULT=%s CHECKS_FAILED=%d",
+                  SimFailures() ? "FAIL" : "PASS", SimFailures());
+    int refused = SimFailures();
+    SimWorldShutdown();
+    free(before);
+    if (refused) printf("%s", SimLogText());
+    return refused ? 1 : 0;
+  }
+  if (prom_admitted) {
+    Check(status == EFI_SUCCESS, "a card with a captured reference was refused");
+    Check(SimLogContains("PROM_IDENTITY=VERIFIED"),
+          "the admitted card did not report a verified identity");
+    Check(SimLogContains("SYNTHETIC"),
+          "the admitted path did not name the reference it used");
+    Check(owner->prom_verified, "the admitted card was not marked verified");
+  }
   if (!watchdog) {
     /* The default build must leave the firmware timer exactly as it found it:
      * no bound, nothing armed. Programming it is opt-in per build. */

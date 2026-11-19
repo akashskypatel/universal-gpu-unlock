@@ -43,8 +43,11 @@ class AssetLifetimeTests(unittest.TestCase):
             compiled = subprocess.run(
                 [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
                  "-Werror", "-pedantic", "-I", str(ROOT / "src"),
-                 # The record and hashing modules are compiled on the host.
+                 "-DGU_PROM_REFERENCE_HOST_TEST",
+                 # The record, geometry and per-card reference modules are
+                 # compiled on the host.
                  str(source), str(ROOT / "src/gpu_sku_geometry.c"),
+                 str(ROOT / "src/prom_reference.c"),
                  "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
@@ -331,9 +334,10 @@ int main(int argc,char **argv) {
 #include <stdlib.h>
 #include "gpu_inventory.h"
 #include "gpu_sku_geometry.h"
-/* The spliced prepare path records a stock-profile contradiction; this build has
-   no compiled expectation, so the flag stays false. */
+/* The spliced prepare path records a stock-profile contradiction and a missing
+   per-card reference; this build has neither compiled expectation. */
 static int StockProfileMismatch;
+static int PromReferenceMismatch;
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef size_t UINTN;
@@ -407,8 +411,9 @@ static BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,void *p,const void *source,size_t
   if(read_fails){owner->fault=1;return FALSE;}
   return TRUE;
 }
-static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const void *p,size_t bytes){
-  (void)platform;
+static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const void *p,size_t bytes,
+                                  BOOLEAN require){
+  (void)platform;(void)require;
   (void)p;(void)bytes;rom_checks++;return TRUE;
 }
 struct gpu_unlock_fwsec {int valid;};
@@ -491,6 +496,8 @@ int main(int argc,char **argv){
 #include "gpu_device_ids.h"
 /* The spliced Turing table carries the build-time row-count tripwire. */
 #include "turing_assets.h"
+/* The spliced manifest reports the reference count the image carries. */
+#include "prom_reference.h"
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef unsigned long UINTN;

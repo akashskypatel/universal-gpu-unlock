@@ -1251,7 +1251,10 @@ static int unlock_transaction_fwsec(struct unlock_transaction_work *work)
 	dev_info(&work->pdev->dev, "FWSEC: PROM bytes=%zu signature=%#x\n",
 		 mapped, (unsigned int)(rom[0] | (rom[1] << 8)));
 	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
-	if (!owner || owner->fault || !GuAd104PromMatches(owner,rom,mapped)) { ret=-EBADMSG; goto out; }
+	/* The transaction re-reads the same ROM, so it holds the same requirement
+	 * preparation did: a card with no captured reference is refused here too,
+	 * before the first write. */
+	if (!owner || owner->fault || !GuAd104PromMatches(owner,rom,mapped,TRUE)) { ret=-EBADMSG; goto out; }
 	ret = gpu_unlock_vbios_fwsec(rom, mapped, &fw);
 	if (ret) {
 		dev_err(&work->pdev->dev, "FWSEC-FRTS not found in board ROM (%d)\n", ret);

@@ -7,6 +7,7 @@
 #include "compat/compat.h"
 #include "port.h"
 #include "prom_identity.h"
+#include "prom_reference.h"
 #include "gpu_sku_geometry.h"
 #include "asset_install.h"
 #include "stock_profile.h"
@@ -15,6 +16,10 @@
 /* Set when the card's cold selector contradicts the profile this image was
  * built for. It is a refusal, not a hardware fault: nothing was written. */
 static BOOLEAN StockProfileMismatch;
+/* Set when this build requires a captured per-card reference and the card in
+ * front of it is not in the allowlist. Also a refusal, not a fault: the card may
+ * be perfectly healthy, it is simply not a card this image has a reference for. */
+static BOOLEAN PromReferenceMismatch;
 
 static const GU_ARCH_ASSETS AdaAssets={{
     {L"\\AD102-ASSETS\\booter_load_ad102.bin","gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672U},
@@ -96,6 +101,9 @@ VOID GuAssetBundleFromArch(const GU_ARCH_ASSETS *arch,GU_ASSET_REF *files,
   }
 }
 
+UINTN GuAd104PromReferenceCount(VOID) {
+  return (UINTN)GuPromReferenceCount();
+}
 BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
   const GU_ARCH_ASSETS *arch=PlatformManifest(platform);
   if(!arch||!GuPlatformAssetsOwned(platform))return FALSE;
@@ -106,7 +114,12 @@ BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
   }
   return TRUE;
 }
-BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *Data,UINTN Bytes) {
+/* `RequireReference` is the caller's policy, not a compile-time fact: the
+ * read-only diagnostic passes FALSE because it exists to capture the reference a
+ * refusal would otherwise demand, and preparation passes TRUE so a build that
+ * requires a reference cannot proceed without one. */
+BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *Data,UINTN Bytes,
+                           BOOLEAN RequireReference) {
   /* The live NV_PROM_DATA window is 1 MiB, unlike the accepted 2 MiB
    * archive. Compare live PCI identity and validate the PROM structure;
    * the FWSEC descriptor and cold/PCI snapshots are checked separately.
@@ -125,6 +138,36 @@ BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *Data,UINTN By
   s[64]=0;
   GuLog("PROM readout SHA256: %s PCIR_device=%04x STRUCTURE_VALID=1 SIGNATURE_AUTHENTICATED=0\n",
         s,(unsigned)platform->device_id);
+  /* The authenticated half: an exact hit on device, subsystem, ROM digest and
+   * loader version, or nothing. */
+  const GU_PROM_REFERENCE *reference=NULL;
+  UINT32 subsystem=platform->discovery_identity.subsystem_id;
+  GU_PROM_REF_DECISION decision=GuPromReferenceDecide(platform->device_id,subsystem,
+                                                      s,GU_ASSET_BUNDLE_VERSION_CHAR8,
+                                                      &reference);
+  if(decision==GU_PROM_REF_ACCEPTED) {
+    GuLog("PROM_IDENTITY=VERIFIED DEVICE=%04x SUBSYS=%08x LOADER=%s REFERENCE=%s "
+          "SIGNATURE_AUTHENTICATED=0\n",
+          (unsigned)platform->device_id,(unsigned)subsystem,
+          GU_ASSET_BUNDLE_VERSION_CHAR8,reference&&reference->Origin?reference->Origin:"none");
+    return TRUE;
+  }
+  GuLog("PROM_IDENTITY=%s DEVICE=%04x SUBSYS=%08x SHA256=%s REASON=%s REFS=%u "
+        "DIAGNOSTIC_ALLOWED=1\n",
+        RequireReference?"REFUSED":"UNVERIFIED",(unsigned)platform->device_id,
+        (unsigned)subsystem,s,GuPromReferenceReason(decision),
+        (unsigned)GuPromReferenceCount());
+#if defined(GU_PROM_REFERENCE_REQUIRED)
+  if(RequireReference) {
+    PromReferenceMismatch=TRUE;
+    return FALSE;
+  }
+#else
+  (void)RequireReference;
+#endif
+  /* No reference was required, so structural validity stands - and the log says
+   * exactly that, with the digest an operator needs to capture one. */
+  GuLog("PROM_IDENTITY MODE=STRUCTURAL AUTHENTICATION=0\n");
   return TRUE;
 }
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
@@ -283,7 +326,7 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   BOOLEAN copied=GuCopyFromIo(owner,prom,(VOID *)(UINTN)(owner->bar_base+0x300000),1048576U);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
-  BOOLEAN prom_ok=copied&&!owner->fault&&GuAd104PromMatches(owner,prom,1048576U);
+  BOOLEAN prom_ok=copied&&!owner->fault&&GuAd104PromMatches(owner,prom,1048576U,FALSE);
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
@@ -307,6 +350,7 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
 EFI_STATUS GuAd104Prepare(VOID) {
   UINT32 ss0=0,ss1=0,after0=0,after1=0;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
   StockProfileMismatch=FALSE;
+  PromReferenceMismatch=FALSE;
   GuLog("GuAd104Prepare: start\n");
   /* V2 structural parsing is not signature acceptance. The dedicated
    * Turing falcon loader/selector contract is not verified in this fork. */
@@ -349,7 +393,7 @@ EFI_STATUS GuAd104Prepare(VOID) {
     return EFI_OUT_OF_RESOURCES;
   }
   BOOLEAN copied=GuCopyFromIo(&Gu,prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
-  BOOLEAN prom_match = copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576);
+  BOOLEAN prom_match = copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576,TRUE);
   int fwsec_res = prom_match?gpu_unlock_vbios_fwsec(prom,1048576,&fw):-1;
   BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2 = ConfigFor(&Gu);
@@ -359,7 +403,9 @@ EFI_STATUS GuAd104Prepare(VOID) {
         prom_match, fwsec_res, fwsec_match, cfg2, reg2, (ss0==after0 && ss1==after1));
   GuFree(prom);
   if(Gu.fault||Gu.retained)return EFI_DEVICE_ERROR;
-  if(!valid) return EFI_COMPROMISED_DATA;
+  /* A card with no captured reference is not compromised data: it is a card
+   * this image has no reference for, which retrying cannot change. */
+  if(!valid) return PromReferenceMismatch?EFI_UNSUPPORTED:EFI_COMPROMISED_DATA;
   Gu.prom_verified=TRUE;
   if(!GuLatchEntrySelectors(ss0,ss1)) {
     Gu.prom_verified=FALSE;

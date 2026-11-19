@@ -263,6 +263,21 @@ default is never widened:
    version, stored as an explicit allowlist that fails closed on a miss.
    Offline verification can be completed with committed digests; the Windows
    617.42 Booter provenance comparison remains mandatory evidence.
+   *Status (2026-11-18): **the contract is implemented; it has no references
+   yet.*** `src/prom_reference.[ch]` is the allowlist - a reference is
+   (device id, subsystem id, ROM SHA-256, loader version) and a card is admitted
+   only by an exact hit on all four. `GU_PROM_REFERENCE_REQUIRED` makes a miss a
+   refusal (`EFI_UNSUPPORTED`, nothing written); the default build keeps the
+   structural check and logs `PROM_IDENTITY MODE=STRUCTURAL AUTHENTICATION=0`, so
+   no log implies otherwise. **Zero references are committed**, because this
+   repository contains no card dumps: with the requirement enabled, the image
+   admits nothing, which is the correct fail-closed answer. The read-only
+   diagnostic deliberately still runs and prints the digest, device and
+   subsystem to capture one. Signature authentication is *not* part of this -
+   both decision paths keep `SIGNATURE_AUTHENTICATED=0`. Evidence:
+   `tests/test_prom_reference.c` (both table variants), 17 contract tests,
+   simulator rows `prepare prom-refused` and `prepare prom-admitted`; inventory
+   §11.13.
 3. **Vendor Stop with a bounded poll (hardware-qualified change).** Add a
    documented bound and a pre-Stop state capture for the AD102/GA102 Stop
    callback, then replace the wholesale `device_id` refusal with a

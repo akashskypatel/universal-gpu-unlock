@@ -25,7 +25,7 @@ INCLUDE = BUILD / "include"
 APP_SOURCES = [
     "app.c", "driver_nvram.c", "boot_io.c", "msi_release.c", "unlock_execution.c",
     "port.c", "compat.c", "checks.c", "gpu_inventory.c", "gpu_discovery.c",
-    "gpu_execution_state.c", "gpu_windows_path.c", "profile.c", "gpu_selection.c", "gpu_sku_geometry.c", "boot_state.c", "asset_install.c", "sha256.c",
+    "gpu_execution_state.c", "gpu_windows_path.c", "profile.c", "prom_reference.c", "gpu_selection.c", "gpu_sku_geometry.c", "boot_state.c", "asset_install.c", "sha256.c",
     "runtime.c", "format.c", "vendor/unlock_610.c", "vendor/prep_610.c",
     "vendor/layout_610.c", "vendor/vbios_610.c", "vendor/gfw_eval.c",
 ]
@@ -137,6 +137,12 @@ STOCK_BUILDS = {
     # A bounded firmware timer, well above any plausible runtime for the
     # sequence: the point is that a hang reboots instead of freezing.
     "bounded": ["-DGU_WATCHDOG_SECONDS=600"],
+    # Per-card acceptance: nothing captured, so nothing admitted.
+    "prom": ["-DGU_PROM_REFERENCE_REQUIRED"],
+    # The same gate with the model's own digest pinned, so the admitted path is
+    # exercised too. Test-only by construction (see prom_reference.c).
+    "prom-synthetic": ["-DGU_PROM_REFERENCE_REQUIRED",
+                       "-DGU_PROM_REFERENCE_SYNTHETIC"],
 }
 # The default profile is replaced, not added to: exactly one profile is allowed.
 # Exactly one stock profile is allowed, so a row that names a policy replaces the
@@ -185,7 +191,7 @@ def build(profile: str = "default") -> Path:
 VARIANTS = ("nominal", "msi-enabled", "flr-refused", "dma-high", "rebar",
             "bar-above-4g", "runtime-target", "runtime-absent", "ad104-sku",
             "install-assets", "stock-match", "stock-mismatch", "watchdog",
-            "preserve", "untracked")
+            "preserve", "untracked", "prom-refused", "prom-admitted")
 
 # Scenario matrix: every row must pass, and the two negative rows are the
 # documented refusal and abort paths.
@@ -216,6 +222,11 @@ SCENARIOS = (
     # compiled: preserve writes SS0 only, the non-latched build writes both.
     ("transaction", "preserve", "preserve"),
     ("transaction", "untracked", "original"),
+    # Per-card firmware acceptance: with no captured reference the card is
+    # refused before any write, and with the model's reference pinned it is
+    # admitted - the two rows differ only in what the build knows.
+    ("prepare", "prom-refused", "prom"),
+    ("prepare", "prom-admitted", "prom-synthetic"),
 )
 
 
