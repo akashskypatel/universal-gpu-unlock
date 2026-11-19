@@ -13,16 +13,16 @@ no hardware was touched.
 | Source obligation | Items | Share |
 | --- | --- | --- |
 | Met - implemented, and pinned by a host test, simulator row or CI job | 11 | 26% |
-| Partial - some exit criteria implemented, the remainder named | 13 | 30% |
-| Not started | 19 | 44% |
+| Partial - some exit criteria implemented, the remainder named | 14 | 33% |
+| Not started | 18 | 42% |
 
-**Source progress: 41%** (11 met + half of 13 partial = 17.5 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 42%** (11 met + half of 14 partial = 18 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 4 | 4 | 0 | 8 |
 | B - hardware preconditions | 6 | 1 | 3 | 10 |
-| C - privileged operations never shown safe | 0 | 6 | 4 | 10 |
+| C - privileged operations never shown safe | 0 | 7 | 3 | 10 |
 | D - release engineering | 1 | 2 | 2 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
@@ -296,7 +296,7 @@ These are verified from source, not inferred.
 | C7 | FLR assumptions | requires FLR bit; post-FLR expectations are board-observed values | `checks.c:107-112`, `unlock_610.c:1770-1800` | P1 |
 | C8 | PCIe error/training, AER, ASPM, hot-plug, Thunderbolt/USB4 tunnels | the link is now read at admission: logged errors, ASPM requests, untrained/down/unusable links refuse the active path (§11.24); AER is unobservable in a 256-byte snapshot and is logged as such, and hot-plug events, training recovery and tunnels stay unhandled | `checks.c` `GuCheckLinkState`, `tests/test_link_state.py` | P2 |
 | C9 | Multi-GPU interference | peer protection is 2× full config-space snapshot per target | **partial (§11.22)** — `tests/test_two_card_contract.py` runs the shipped mock in three selection configurations and `tests/test_multi_target.py` executes selection plus per-snapshot admission from real code; two physical cards and the ~165 MB/card footprint (B10) are still unmeasured | P1 |
-| C10 | S3/resume | boot-script writes of SS0/SS1 at resume, needs 16 MiB BAR, no resume verification | `unlock_execution.c:211-260` | P1 |
+| C10 | S3/resume | the two resume writes, their addresses, widths and failure handling are pinned by an executed host model, and the log now says `S3_RESUME=UNVERIFIED WHY=NO_RESUME_HOOK BAR_BASE_MAY_MOVE=1` (§11.26); a resume itself cannot be verified - nothing of ours runs, and a BAR reassignment would move the target | `unlock_execution.c` `GuRegisterS3`, `tests/test_unlock_execution_contract.py` | P1 |
 
 ---
 
@@ -459,6 +459,43 @@ partial and `B10` untouched - the per-card memory footprint (~165 MB: DMA
 window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
+
+### 11.26 C10 — the resume script now says what it is, and what it cannot be
+
+Resume is the one part of this transaction that runs when no code of ours does.
+`GuRegisterS3` installs two boot-script writes - `SS0` at `BAR+0x82381c`,
+`SS1` at `BAR+0x823820`, each a single 32-bit write - and firmware executes them
+on wake. Everything after that is Windows' driver.
+
+That was described as "no resume verification" in prose and nowhere else. The
+log now carries the claim it can actually support:
+
+```
+S3_RESUME=UNVERIFIED WHY=NO_RESUME_HOOK BAR_BASE_MAY_MOVE=1 ADDRESSES=2 WIDTH=UINT32
+```
+
+The second field is the hazard worth naming: a boot script writes a **physical
+address**, computed from this boot's BAR base. If Windows reassigns BAR0 before
+the machine sleeps, the resume writes land in unrelated MMIO - and the image has
+no way to observe that it happened, because nothing of ours runs at resume and
+the card is not addressable from the next boot's read-only path. Arming the
+script is therefore a statement about what was registered, not about what will
+be true when the machine wakes.
+
+Evidence: `tests/test_unlock_execution_contract.py` already compiled the real
+`GuRegisterS3` against a modelled `EFI_S3_SAVE_STATE_PROTOCOL` and pinned the two
+addresses, both values, the single 32-bit width, one attempt per card, a failure
+on either write retaining the platform, a lost platform between writes, and the
+refusals before any firmware call (no BAR, BAR too small or wrapping, unsafe
+state, no protocol, no `Write`). It now captures the log and pins the new line,
+so a future change cannot quietly drop the admission or upgrade it into a claim
+of a verified resume.
+
+What this still does not do: it cannot verify a resume, because nothing of ours
+runs after one, and it cannot keep the addresses valid across a BAR reassignment
+it does not control. `C10` is therefore **partial**: the registered action set is
+pinned and its limit is named, the verification half needs a resume-time hook or
+hardware evidence this tree cannot produce.
 
 ### 11.25 A2 — BootOrder now decides, and an unreadable order never counts as a pass
 

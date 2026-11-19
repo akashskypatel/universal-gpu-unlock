@@ -255,9 +255,9 @@
       "id": "C10",
       "class": "C",
       "priority": "P1",
-      "source": "none",
-      "section": null,
-      "note": "S3/resume behaviour is written but never verified.",
+      "source": "partial",
+      "section": "11.26",
+      "note": "The resume boot-script writes are pinned by an executed host model - addresses, widths, one attempt, failure retention - and the log states S3_RESUME=UNVERIFIED WHY=NO_RESUME_HOOK BAR_BASE_MAY_MOVE=1. A resume cannot be verified from this image, and a BAR reassignment would move the write target.",
       "hardware_verified": false
     },
     {

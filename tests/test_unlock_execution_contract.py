@@ -89,6 +89,7 @@ class SharedExecutionContract(unittest.TestCase):
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 typedef void VOID;
 typedef uint64_t UINT64;
 typedef uint32_t UINT32;
@@ -144,7 +145,21 @@ static EFI_STATUS Locate(EFI_GUID *guid,VOID *registration,VOID **out) {
 }
 static BOOLEAN GuSafeToReturnFor(const GU_PLATFORM *owner) {return safe && !owner->retained;}
 static BOOLEAN GuMsiReadyForWindows(VOID) {return ready;}
-static void GuLog(const char *fmt,...) {(void)fmt;}
+static char logtext[8192];
+static size_t logused;
+static int LogHas(const char *needle);
+static void GuLog(const char *fmt,...) {
+  va_list ap;
+  int n;
+  if(!fmt)return;
+  va_start(ap,fmt);
+  n=vsnprintf(logtext+logused,sizeof(logtext)-logused,fmt,ap);
+  va_end(ap);
+  if(n>0)logused+=(size_t)n;
+  if(logused>=sizeof(logtext))logused=sizeof(logtext)-1;
+  logtext[logused]=0;
+}
+static int __attribute__((unused)) LogHas(const char *needle) {return strstr(logtext,needle)!=NULL;}
 """ + s3_source + r"""
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d: %s\n",__LINE__,#x);return 1;}} while(0)
 int main(int argc,char **argv) {
@@ -164,6 +179,12 @@ int main(int argc,char **argv) {
     CHECK(first_address==Gu.bar_base+0x82381cULL && first_value==0x88888888U);
     CHECK(second_address==Gu.bar_base+0x823820ULL && second_value==8U);
     CHECK(GuRegisterS3(&Gu,&table)==EFI_ALREADY_STARTED && write_calls==2);
+    /* A registered script is not a verified resume, and the log says which of
+     * the two it is, and why it cannot be the other. */
+    CHECK(LogHas("S3_RESUME=UNVERIFIED"));
+    CHECK(LogHas("WHY=NO_RESUME_HOOK"));
+    CHECK(LogHas("BAR_BASE_MAY_MOVE=1"));
+    CHECK(LogHas("ADDRESSES=2 WIDTH=UINT32"));
   } else if(mode==2){
     fail_at=1;CHECK(GuRegisterS3(&Gu,&table)==EFI_DEVICE_ERROR);
     CHECK(write_calls==1 && Gu.retained);
@@ -239,6 +260,7 @@ int main(int argc,char **argv) {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #define GU_ACTIVE_SINGLE_TARGET 1
 #define VOID void
 #define EFI_SUCCESS 0
@@ -259,7 +281,21 @@ static GU_PLATFORM gpus[4],*active;
 #define Gu (*active)
 static int current,count,scenario,failed_at,aborted,violations,final_calls,select_calls;
 static int executions,loads,diagnostics,profiles,script_calls;
-static void GuLog(const char *fmt,...) {(void)fmt;}
+static char logtext[8192];
+static size_t logused;
+static int LogHas(const char *needle);
+static void GuLog(const char *fmt,...) {
+  va_list ap;
+  int n;
+  if(!fmt)return;
+  va_start(ap,fmt);
+  n=vsnprintf(logtext+logused,sizeof(logtext)-logused,fmt,ap);
+  va_end(ap);
+  if(n>0)logused+=(size_t)n;
+  if(logused>=sizeof(logtext))logused=sizeof(logtext)-1;
+  logtext[logused]=0;
+}
+static int __attribute__((unused)) LogHas(const char *needle) {return strstr(logtext,needle)!=NULL;}
 static void GuAbortSelectedGpuStep(void){aborted=1;}
 static EFI_STATUS GuBootLoadAssets(void){
   loads++;

@@ -248,5 +248,12 @@ EFI_STATUS GuRegisterS3(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table)
   if(b!=EFI_SUCCESS||owner!=GuPlatformActive)owner->retained=TRUE;
   GuLog("S3 selected-card write result: SS0=%#llx SS1=%#llx PARTIAL=%u\n",
         (unsigned long long)a,(unsigned long long)b,(unsigned)owner->retained);
+  /* Registering a resume write is not knowing that it worked. Nothing in this
+   * image runs at resume: the boot script executes in firmware, the card's
+   * post-resume state is whatever the Windows driver leaves, and the absolute
+   * addresses below only stay correct if the BAR is not reassigned. Say so
+   * instead of letting a registered script read as a verified resume. */
+  GuLog("S3_RESUME=UNVERIFIED WHY=NO_RESUME_HOOK BAR_BASE_MAY_MOVE=1 "
+        "ADDRESSES=2 WIDTH=UINT32\n");
   return b!=EFI_SUCCESS?b:owner==GuPlatformActive?EFI_SUCCESS:EFI_NOT_READY;
 }
