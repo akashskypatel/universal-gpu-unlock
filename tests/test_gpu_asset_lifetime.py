@@ -43,6 +43,7 @@ class AssetLifetimeTests(unittest.TestCase):
             compiled = subprocess.run(
                 [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
                  "-Werror", "-pedantic", "-I", str(ROOT / "src"),
+                 # The record and hashing modules are compiled on the host.
                  str(source), str(ROOT / "src/gpu_sku_geometry.c"),
                  "-o", str(binary)],
                 capture_output=True, text=True)
@@ -206,9 +207,38 @@ static LOADED GuAssets[GU_ASSET_COUNT];
 typedef struct {int started,fault,retained,asset_load_attempted;} GU_PLATFORM;
 static GU_PLATFORM Gu;
 static VOID *Root=(VOID *)(uintptr_t)1;
+static VOID *Table=(VOID *)(uintptr_t)1;
+typedef uint32_t UINT32;
+typedef uint64_t UINT64;
 static VOID *UnreleasedFilesystemHandles;
 static EFI_STATUS BootFileStatus;
 static int read_calls,freed,fail_at,corrupt_at,available=1;
+/* The load path reports what removable media staged; this harness does not
+ * compile the record module, so the report is stood in for here. Its own
+ * behaviour is covered by tests/test_asset_install.c and the contract test. */
+typedef struct { uint32_t Magic, Files; uint64_t BootCount; CHAR16 Version[32];
+                 char Bundle[65]; } GU_ASSET_INSTALL;
+typedef struct { const char *Name; unsigned long long Bytes;
+                 const char *Sha256; } GU_ASSET_REF;
+typedef struct { const CHAR16 *Version; unsigned Count;
+                 const GU_ASSET_REF *Files; } GU_ASSET_BUNDLE;
+#define GU_ASSET_INSTALL_ABSENT 0u
+#define GU_ASSET_INSTALL_CORRUPT 3u
+static EFI_STATUS GuAssetInstallRead(VOID *table, GU_ASSET_INSTALL *out) {
+  (void)table; (void)out; return EFI_NOT_FOUND;
+}
+static uint32_t GuAssetInstallState(const GU_ASSET_INSTALL *record,
+                                    const GU_ASSET_BUNDLE *bundle) {
+  (void)bundle; return record ? GU_ASSET_INSTALL_CORRUPT : GU_ASSET_INSTALL_ABSENT;
+}
+static const char *GuAssetInstallStateName(uint32_t state) {
+  (void)state; return "ABSENT";
+}
+static VOID GuAssetBundleFromArch(const GU_ARCH_ASSETS *arch, GU_ASSET_REF *files,
+                                  GU_ASSET_BUNDLE *bundle) {
+  (void)arch; (void)files;
+  if (bundle) { bundle->Version = 0; bundle->Count = 0; bundle->Files = files; }
+}
 static const GU_ARCH_ASSETS bundle={{
   {L"a","A","1",8},{L"b","B","2",8},{L"c","C","3",8},
   {L"d","D","4",8},{L"e","E","5",8}},NULL};
@@ -467,6 +497,11 @@ typedef int BOOLEAN;
 #define GU_ASSET_COUNT 5U
 typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
 typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
+#define GU_ASSET_BUNDLE_VERSION L"610.43.03"
+typedef struct { const char *Name; unsigned long long Bytes;
+                 const char *Sha256; } GU_ASSET_REF;
+typedef struct { const CHAR16 *Version; unsigned Count;
+                 const GU_ASSET_REF *Files; } GU_ASSET_BUNDLE;
 struct firmware {size_t size;const unsigned char *data;};
 typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
 typedef struct {int is_turing,is_ampere;UINT16 device_id;GU_ASSET asset_entries[GU_ASSET_COUNT];} GU_PLATFORM;

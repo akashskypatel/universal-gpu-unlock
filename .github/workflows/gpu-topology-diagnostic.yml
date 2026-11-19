@@ -101,6 +101,12 @@ jobs:
               "$RUNNER_TEMP/test_sku_geometry_$compiler"
             done
             python3 -m unittest discover -s tests -p test_sku_geometry_contract.py -v
+            # Staged firmware bundle: digest, CURRENT/STALE decision, refusals.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_ASSET_INSTALL_HOST_TEST -DGU_SHA256_HOST_TEST -Isrc -Itests tests/test_asset_install.c src/asset_install.c src/sha256.c -o "$RUNNER_TEMP/test_asset_install_$compiler"
+              "$RUNNER_TEMP/test_asset_install_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_asset_install_contract.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v

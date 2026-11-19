@@ -1,6 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 
-/* USB log/assets only. Windows ESP is opened read-only. No boot variables. */
+/* USB log/assets, and the one configured Windows ESP as a pinned read-only
+ * fallback. The exception is the explicit asset-install build
+ * (GU_ASSET_INSTALL_ONLY), whose GuAssetInstallStage writes the verified bundle
+ * to that ESP and records it as an NVRAM variable; nothing else writes there and
+ * nothing here changes where the image may be launched from. */
 
 #include "boot_io.h"
 #include "version.h"
@@ -8,6 +12,7 @@
 
 #include "boot_profile.h"
 #include "boot_state.h"
+#include "asset_install.h"
 
 #include "compat/compat.h"
 
@@ -28,6 +33,12 @@
 static EFI_SYSTEM_TABLE *Table;
 
 static EFI_HANDLE Self,Windows,OwnVolume,TargetEspVolume;
+
+/* Set once at open: the image was launched from removable media. The installer
+ * refuses to stage firmware anywhere unless that holds. */
+static BOOLEAN BootFromUsb;
+/* The boot counter the record carried, so a staged bundle names its boot. */
+static UINT32 OpenBootCount;
 
 static EFI_FILE_PROTOCOL *Root,*Log;
 static EFI_HANDLE *UnreleasedFilesystemHandles;
@@ -169,6 +180,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   UINTN length=0;BOOLEAN usb=FALSE,windows=FALSE;
 
   if(s!=EFI_SUCCESS||!Inspect(path,&length,&usb,&windows)||!usb)return EFI_ACCESS_DENIED;
+  BootFromUsb=TRUE;
 
   s=b->HandleProtocol(OwnVolume,&FsGuid,(VOID **)&fs);if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
 
@@ -209,6 +221,22 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   if(closed!=EFI_SUCCESS){s=closed;goto failed;}
   if(s!=EFI_SUCCESS||!Log){if(s==EFI_SUCCESS)s=EFI_OUT_OF_RESOURCES;goto failed;}
 
+  /* What removable media last staged on the ESP, if anything. Reported before
+   * discovery because it is a property of the medium, not of the card; the
+   * CURRENT/STALE decision needs a manifest and is reported at load. */
+  {
+    GU_ASSET_INSTALL staged;
+    EFI_STATUS read=GuAssetInstallRead(Table,&staged);
+    if(read==EFI_SUCCESS)
+      GuLog("ASSET_INSTALL PRESENT=1 FILES=%u BOOT_COUNT=%u BUNDLE=%s\n",
+            (unsigned)staged.Files,(unsigned)staged.BootCount,staged.Bundle);
+    else if(read==EFI_NOT_FOUND)
+      GuLog("ASSET_INSTALL PRESENT=0\n");
+    else
+      GuLog("ASSET_INSTALL PRESENT=0 READ_STATUS=%#llx IGNORED=1\n",
+            (unsigned long long)read);
+  }
+
   /* The persisted record is the only state that survives a failed boot, so it
    * is reported here, once, for every entrypoint. It stays inert: it never
    * admits, refuses, skips or repeats a transaction. */
@@ -225,6 +253,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
             (unsigned)previous.Armed);
       if(previous.Phase==GU_BOOT_STATE_INTENT)
         GuLog("BOOT_STATE WARNING=previous boot stopped during a transaction\n");
+      OpenBootCount=previous.BootCount;
     } else if(read==EFI_NOT_FOUND) {
       GuLog("BOOT_STATE PRESENT=0\n");
     } else {
@@ -371,9 +400,12 @@ static BOOLEAN EspCarriesWindowsManager(EFI_BOOT_SERVICES *b,EFI_HANDLE handle) 
 }
 #endif
 
-static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
-                                                    const CHAR16 *path,VOID **out) {
-  if(!asset||!path||!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
+/* The one configured Windows ESP, or EFI_NOT_FOUND when no volume qualifies and
+ * EFI_UNSUPPORTED when more than one does. Reads use it as a fallback source;
+ * the installer uses it as the staging destination, so both must agree on
+ * which volume that is. */
+static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {
+  if(!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
   *out=NULL;
   EFI_BOOT_SERVICES *b=Table->BootServices;
   EFI_HANDLE *handles=NULL,matched=NULL;
@@ -403,6 +435,18 @@ static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
   EFI_STATUS freed=ReleaseBootFilesystemHandles(b,&handles);
   if(freed!=EFI_SUCCESS)return freed;
   if(matches!=1U)return matches?EFI_UNSUPPORTED:EFI_NOT_FOUND;
+  *out=matched;
+  return EFI_SUCCESS;
+}
+
+static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(const GU_ARCH_ASSET *asset,
+                                                    const CHAR16 *path,VOID **out) {
+  if(!asset||!path||!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
+  *out=NULL;
+  EFI_BOOT_SERVICES *b=Table->BootServices;
+  EFI_HANDLE matched=NULL;
+  EFI_STATUS s=ConfiguredEspVolume(&matched);
+  if(s!=EFI_SUCCESS)return s;
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
   s=b->HandleProtocol(matched,&FsGuid,(VOID **)&fs);
   if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
@@ -428,6 +472,20 @@ EFI_STATUS GuBootLoadAssets(VOID) {
        GuAssets[i].firmware.size)return EFI_ALREADY_STARTED;
   const GU_ARCH_ASSETS *arch=GuGetArchAssets();
   if(!arch)return EFI_UNSUPPORTED;
+  /* Whether the staged copy is still the bundle this image would load. Purely
+   * a report: the load order below is unchanged, and the digest check on every
+   * file is what actually decides what may be used. */
+  {
+    GU_ASSET_INSTALL staged;
+    GU_ASSET_REF refs[GU_ASSET_COUNT];
+    GU_ASSET_BUNDLE bundle;
+    GuAssetBundleFromArch(arch,refs,&bundle);
+    EFI_STATUS read=GuAssetInstallRead(Table,&staged);
+    UINT32 state=read==EFI_SUCCESS?GuAssetInstallState(&staged,&bundle)
+                :(read==EFI_NOT_FOUND?GU_ASSET_INSTALL_ABSENT:GU_ASSET_INSTALL_CORRUPT);
+    GuLog("ASSET_INSTALL STATE=%s FILES=%u\n",GuAssetInstallStateName(state),
+          (unsigned)GU_ASSET_COUNT);
+  }
 #ifdef GU_ACTIVE_SINGLE_TARGET
   /* Build an independently owned immutable firmware table first. */
   EFI_STATUS reserved=GuAssetReserveEntries(&Gu,Gu.bs);
@@ -719,3 +777,185 @@ VOID GuBootHalt(VOID) {
 
 }
 
+/* ---- staged firmware bundle (installer) -------------------------------
+ *
+ * The load path above can only read pinned assets from the media the image was
+ * launched from, or - as a pinned fallback - from the one configured Windows
+ * ESP. This section is the only code in the image that *writes* to the ESP, and
+ * it runs only in the explicit asset-install build (GU_ASSET_INSTALL_ONLY) from
+ * a USB-launched image, without an owning GPU. Every file is verified against
+ * its pinned digest before it is written, and verified again by reading it back
+ * before the record that says "staged" is written. Nothing here changes where
+ * the image may be launched from: the removable-media launch rule stands.
+ */
+
+/* The directory part of a root-relative asset path ("\AD102-ASSETS\x" ->
+ * "\AD102-ASSETS"), so the ESP gets the same layout the loader looks for. */
+static BOOLEAN AssetDirectory(const CHAR16 *path,CHAR16 *out,UINTN capacity) {
+  UINTN last=0,i=0;
+  if(!path||!out||capacity<2)return FALSE;
+  for(;path[i];i++)if(path[i]==L'\\'||path[i]==L'/')last=i;
+  if(last==0||last+1>capacity)return FALSE;
+  for(i=0;i<last;i++)out[i]=path[i];
+  out[last]=0;
+  return TRUE;
+}
+
+static EFI_STATUS EnsureEspDirectory(EFI_FILE_PROTOCOL *root,const CHAR16 *path) {
+  EFI_FILE_PROTOCOL *dir=NULL;
+  EFI_STATUS s=root->Open(root,&dir,(CHAR16 *)path,
+     EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,EFI_FILE_DIRECTORY);
+  if(s!=EFI_SUCCESS)return s;
+  return dir->Close(dir);
+}
+
+/* Stage one verified file. An existing file is accepted only when it already
+ * holds exactly the pinned content; a mismatch is refused, never overwritten,
+ * because this image has no way to prove that overwriting is safe. */
+static EFI_STATUS StageAsset(EFI_FILE_PROTOCOL *esp,const CHAR16 *path,
+                             const VOID *data,UINTN bytes,const char *sha256) {
+  EFI_FILE_PROTOCOL *file=NULL;
+  EFI_STATUS s=esp->Open(esp,&file,(CHAR16 *)path,EFI_FILE_MODE_READ,0);
+  if(s==EFI_SUCCESS&&file) {
+    UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
+    EFI_FILE_INFO *info=(VOID *)info_words;
+    EFI_STATUS sized=file->GetInfo(file,&InfoGuid,&info_bytes,info_words);
+    BOOLEAN exact=sized==EFI_SUCCESS&&info_bytes>=sizeof(EFI_FILE_INFO)&&
+                  info->FileSize==bytes;
+    EFI_STATUS closed=file->Close(file);
+    if(closed!=EFI_SUCCESS)return closed;
+    if(!exact)return EFI_ACCESS_DENIED;
+    VOID *existing=NULL;
+    s=ReadFile(esp,path,bytes,&existing);
+    if(s!=EFI_SUCCESS)return s;
+    BOOLEAN match=GuHashMatches(existing,bytes,sha256);
+    GuFree(existing);
+    return match?EFI_ALREADY_STARTED:EFI_ACCESS_DENIED;
+  }
+  if(s!=EFI_NOT_FOUND)return s;
+  s=esp->Open(esp,&file,(CHAR16 *)path,
+              EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+  if(s!=EFI_SUCCESS||!file)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+  const UINT8 *source=(const UINT8 *)data;
+  for(UINTN done=0;s==EFI_SUCCESS&&done<bytes;) {
+    UINTN n=bytes-done;if(n>1048576)n=1048576;UINTN wanted=n;
+    s=file->Write(file,&n,(VOID *)(source+done));
+    if(s==EFI_SUCCESS&&n!=wanted)s=EFI_DEVICE_ERROR;
+    done+=n;
+  }
+  if(s==EFI_SUCCESS&&file->Flush)s=file->Flush(file);
+  EFI_STATUS closed=file->Close(file);
+  if(s==EFI_SUCCESS)s=closed;
+  if(s!=EFI_SUCCESS)return s;
+  /* Read back what the firmware actually stored: the record below is a claim
+   * about bytes, so it is only written after the bytes are proven. */
+  VOID *written=NULL;
+  s=ReadFile(esp,path,bytes,&written);
+  if(s!=EFI_SUCCESS)return s;
+  BOOLEAN match=GuHashMatches(written,bytes,sha256);
+  GuFree(written);
+  return match?EFI_SUCCESS:EFI_CRC_ERROR;
+}
+
+/* Copy the pinned bundle for the selected architecture to the configured ESP and
+ * record which bundle it was. Returns the first refusal, and never writes the
+ * record when a file could not be staged. */
+EFI_STATUS GuAssetInstallStage(VOID) {
+  if(!Table||!Root)return EFI_NOT_READY;
+  if(!BootFromUsb) {
+    GuLog("ASSET_INSTALL=REFUSED REASON=IMAGE_NOT_ON_REMOVABLE_MEDIA\n");
+    return EFI_ACCESS_DENIED;
+  }
+  /* Installing firmware while a card is owned or a transaction is in flight
+   * would put a file write in the middle of the destructive path. */
+  if(Gu.started||Gu.fault||Gu.retained||Gu.owned||Gu.allocations) {
+    GuLog("ASSET_INSTALL=REFUSED REASON=GPU_STATE_NOT_IDLE\n");
+    return EFI_NOT_READY;
+  }
+  const GU_ARCH_ASSETS *arch=GuGetArchAssets();
+  if(!arch) {
+    GuLog("ASSET_INSTALL=REFUSED REASON=NO_MANIFEST_FOR_TARGET\n");
+    return EFI_UNSUPPORTED;
+  }
+  EFI_STATUS s=ConfiguredEspVolume(&TargetEspVolume);
+  if(s!=EFI_SUCCESS) {
+    GuLog("ASSET_INSTALL=REFUSED REASON=ESP_NOT_IDENTIFIED STATUS=%#llx\n",
+          (unsigned long long)s);
+    return s;
+  }
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
+  s=Table->BootServices->HandleProtocol(TargetEspVolume,&FsGuid,(VOID **)&fs);
+  if(s!=EFI_SUCCESS||!fs)return EFI_UNSUPPORTED;
+  EFI_FILE_PROTOCOL *esp=NULL;
+  s=fs->OpenVolume(fs,&esp);
+  s=BootFileOpenResult(s,&esp);
+  if(s!=EFI_SUCCESS||!esp)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+
+  UINTN staged=0,already=0;
+  for(UINTN i=0;s==EFI_SUCCESS&&i<GU_ASSET_COUNT;i++) {
+    const GU_ARCH_ASSET *a=&arch->entries[i];
+    const CHAR16 *path=a->path;
+    VOID *p=NULL;
+    s=ReadFile(Root,path,a->bytes,&p);
+    if(s==EFI_NOT_FOUND&&i==2&&arch->alternate_gsp_path) {
+      path=arch->alternate_gsp_path;
+      s=ReadFile(Root,path,a->bytes,&p);
+    }
+    if(s!=EFI_SUCCESS) {
+      GuLog("ASSET_INSTALL=REFUSED REASON=SOURCE_UNAVAILABLE FILE=%s STATUS=%#llx\n",
+            a->name,(unsigned long long)s);
+      break;
+    }
+    if(!GuHashMatches(p,a->bytes,a->sha256)) {
+      GuFree(p);
+      GuLog("ASSET_INSTALL=REFUSED REASON=SOURCE_DIGEST_MISMATCH FILE=%s\n",a->name);
+      s=EFI_CRC_ERROR;
+      break;
+    }
+    CHAR16 directory[64];
+    if(!AssetDirectory(path,directory,sizeof(directory)/sizeof(directory[0]))) {
+      GuFree(p);
+      s=EFI_INVALID_PARAMETER;
+      break;
+    }
+    EFI_STATUS made=EnsureEspDirectory(esp,directory);
+    EFI_STATUS wrote=made==EFI_SUCCESS?StageAsset(esp,path,p,a->bytes,a->sha256):made;
+    GuFree(p);
+    if(wrote==EFI_ALREADY_STARTED) {already++;continue;}
+    if(wrote!=EFI_SUCCESS) {
+      GuLog("ASSET_INSTALL=REFUSED FILE=%s STATUS=%#llx EXISTING_MISMATCH=%u\n",
+            a->name,(unsigned long long)wrote,(unsigned)(wrote==EFI_ACCESS_DENIED));
+      s=wrote;
+      break;
+    }
+    staged++;
+  }
+  EFI_STATUS closed=CloseBootFile(&esp);
+  if(s==EFI_SUCCESS)s=closed;
+  if(s!=EFI_SUCCESS)return s;
+
+  GU_ASSET_INSTALL record={0};
+  GU_ASSET_REF files[GU_ASSET_COUNT];
+  GU_ASSET_BUNDLE bundle;
+  GuAssetBundleFromArch(arch,files,&bundle);
+  record.Magic=GU_ASSET_INSTALL_MAGIC;
+  record.Files=(UINT32)GU_ASSET_COUNT;
+  record.BootCount=(UINT64)OpenBootCount+1;
+  for(UINTN i=0;i<GU_ASSET_INSTALL_VERSION_CHARS-1&&GU_ASSET_BUNDLE_VERSION[i];i++)
+    record.Version[i]=GU_ASSET_BUNDLE_VERSION[i];
+  GuAssetInstallBundleDigest(&bundle,record.Bundle);
+  if(!record.Bundle[0]) {
+    GuLog("ASSET_INSTALL=REFUSED REASON=MANIFEST_DIGEST_UNAVAILABLE\n");
+    return EFI_UNSUPPORTED;
+  }
+  s=GuAssetInstallWrite(Table,&record);
+  if(s!=EFI_SUCCESS) {
+    GuLog("ASSET_INSTALL=INCOMPLETE FILES=%u STAGED=%u RECORD_STATUS=%#llx\n",
+          (unsigned)GU_ASSET_COUNT,(unsigned)staged,(unsigned long long)s);
+    return s;
+  }
+  GuLog("ASSET_INSTALL=STAGED FILES=%u WRITTEN=%u ALREADY=%u BUNDLE=%s BOOT_COUNT=%u\n",
+        (unsigned)GU_ASSET_COUNT,(unsigned)staged,(unsigned)already,
+        record.Bundle,(unsigned)record.BootCount);
+  return EFI_SUCCESS;
+}

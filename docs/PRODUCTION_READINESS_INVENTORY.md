@@ -166,10 +166,14 @@ the runtime, not just the installer.
 *Exit criteria:* an install step that places assets on the ESP with an
 integrity check, or embedding, plus a defined story for the 84 MB payload.
 
-**Status (2026-11-18): not fixed — needs an installer and a signing story.**
-Hash equality is checked today; signature acceptance is C3/C4/D1. Installing
-84 MB of assets onto the ESP is an off-line install-step design, not a source
-edit. See §11.7.
+**Status (2026-11-18): partly fixed — the install step exists.** An explicit
+`GU_ASSET_INSTALL_ONLY` build verifies the pinned bundle from removable media,
+copies it to the configured Windows ESP, reads every file back and re-verifies
+it, and only then records the bundle in NVRAM (`asset_install.[ch]`,
+`GuAssetInstallStage`). The launch rule is unchanged: the image must still be
+started from USB, and the record authorizes nothing — it reports
+`CURRENT`/`STALE`/`ABSENT`/`CORRUPT` at load. Signature acceptance (C3/C4/D1) is
+still open, and so is the 84 MB embed-versus-stream decision. See §11.10.
 
 ### A7. Nothing persists across boots; the transaction is re-applied every boot — **P1**
 `dxe_main.c:18-21`, `:112-125` registers a `ReadyToBoot` event and runs the whole
@@ -512,6 +516,40 @@ transaction. `ACTUATION_VERIFIED=0` still holds for the reference AD102, and the
 AD104/106/107 rows stay empty until a dump exists. Ampere keeps its documented
 generic path, unchanged by this gate.
 
+### 11.10 A6 — the bundle can be staged once, and says so
+
+| What | Where |
+| --- | --- |
+| Fixed-size validated record, `GuAssetInstall` variable | `src/asset_install.[ch]` |
+| Bundle digest over names, sizes and pinned hashes | `GuAssetInstallBundleDigest` |
+| `ABSENT`/`CURRENT`/`STALE`/`CORRUPT` decision | `GuAssetInstallState` |
+| Staging build: verify → copy → read back → record | `boot_io.c`, `GuAssetInstallStage` |
+| Entrypoint, never reaches prepare or the sequence | `app.c` (`GU_ASSET_INSTALL_ONLY`) |
+| Report at open and at load | `boot_io.c` (`ASSET_INSTALL PRESENT=…`, `STATE=…`) |
+
+Every file is verified against its pinned SHA-256 before it is written, written
+in ≤1 MiB pieces, flushed, closed, and then read back and hashed again; the
+record is written only after all five succeed. An existing file is accepted only
+when it already holds the pinned bytes — a mismatch is refused
+(`REASON=… EXISTING_MISMATCH=1`), never overwritten, so an interrupted install is
+resumable and a foreign file is not silently replaced. The installer refuses
+when the image was not launched from removable media, or when any GPU state is
+non-idle, and it touches no BAR: zero writes, zero FLRs.
+
+Evidence: `tests/test_asset_install.c` (112 checks: digest determinism and
+sensitivity, validation matrix, CURRENT/STALE/CORRUPT, NVRAM round trip, refused
+write is inert), `tests/test_asset_install_contract.py` (24 tests: the launch
+rule is not relaxed, only the install build stages, every file is verified twice,
+no overwrite and no delete, the record is the commit point, the pinned version is
+singular), the simulator scenario `prepare install-assets` (stages 5 files,
+reports `CURRENT`, repeated install is idempotent, zero BAR writes), and
+`tests/test_gpu_asset_lifetime.py` (host load path over the staged report).
+
+What this does *not* do: it does not make the ESP a place the image may be
+launched from (that guard is the only thing preventing unattended re-application,
+whose safety is unproven), and it does not authenticate the vendor signature — a
+digest proves these bytes, not who signed them. Both remain C3/C4/D1.
+
 ### 11.7 Items deliberately not changed
 
 * **A4 (stock profile)** and **A5 (Turing payload, per-SKU tables)** need
@@ -523,9 +561,9 @@ generic path, unchanged by this gate.
   knows its worst-case duration. Arming a watchdog without that bound could
   reset a machine mid-transaction, which is worse than the current hang. Left
   as inventoried until C2/C6 produce the bound.
-* **A6/A7 (asset install, persisted state/rollback)**: both require an
-  off-line installer and a signature story (D1) that this repository does not
-  have yet.
+* **A6/A7 (asset install, persisted state/rollback)**: the install step and the
+  boot record now exist (§11.8, §11.10); what remains is the signature story
+  (D1) and any behaviour that would skip or roll back a transaction.
 
 ### 11.5 Not touched by this pass
 

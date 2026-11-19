@@ -158,6 +158,18 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND) {stage="selection";goto failed;}
 #endif
   s=GuDiscoverSingleGpu(image,t);if(s!=EFI_SUCCESS)goto failed;
+#ifdef GU_ASSET_INSTALL_ONLY
+  /* Staging build: copy the pinned bundle for the selected card to the Windows
+   * ESP and stop. It never prepares, releases or mutates the GPU, and the
+   * discovery above is only there to resolve which manifest applies. */
+  GuLog("ACTIVE_APP=ASSET_INSTALL_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1\n");
+  s=GuAssetInstallStage();
+  if(s!=EFI_SUCCESS)goto failed;
+  stage="close-USB-log";s=GuBootClose();if(s!=EFI_SUCCESS)goto failed;
+  GuLog("ASSET_INSTALL=DONE no driver release, no firmware, no reset\n");
+  GuBootHalt();
+  return EFI_ABORTED; /* never hand control to Windows from an installer */
+#endif
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
   /* Defense in depth: selected active preparation images never enter the
    * asset, driver-release, firmware, DMA or FLR stages even if discovery

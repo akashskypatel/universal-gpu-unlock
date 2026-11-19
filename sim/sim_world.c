@@ -108,6 +108,17 @@ static EFI_STATUS EFIAPI SimFreePool(VOID *p) {
 /* Log capture                                                         */
 /* ------------------------------------------------------------------ */
 
+/* A log line is printable ASCII plus the whitespace a line ends with. */
+static int LooksLikeText(const char *bytes, size_t n) {
+  if (!bytes || !n) return 0;
+  for (size_t i = 0; i < n; i++) {
+    unsigned char c = (unsigned char)bytes[i];
+    if (c == '\n' || c == '\r' || c == '\t') continue;
+    if (c < 0x20 || c > 0x7e) return 0;
+  }
+  return 1;
+}
+
 static void LogAppend(const char *bytes, size_t n) {
   if (!bytes || !n) return;
   size_t room = sizeof(g_log) - g_log_used;
@@ -457,9 +468,12 @@ static EFI_STATUS EFIAPI SimFileWrite(EFI_FILE_PROTOCOL *self, UINTN *size,
   if (!file->writable) return EFI_ACCESS_DENIED;
   size_t n = fwrite(buffer, 1, *size, file->fp);
   *size = n;
-  /* Mirror every durable line into the run log so the harness can assert on
-   * exactly what the image wrote. */
-  LogAppend((const char *)buffer, n);
+  /* Mirror durable text into the run log so the harness can assert on exactly
+   * what the image wrote. Binary payloads (a staged firmware image is the large
+   * case) are written to storage but never into the log buffer, which is the
+   * image's own diagnostic channel, not a copy of every file it saves. */
+  if (LooksLikeText((const char *)buffer, n))
+    LogAppend((const char *)buffer, n);
   return (n == *size) ? EFI_SUCCESS : EFI_DEVICE_ERROR;
 }
 
@@ -838,10 +852,75 @@ static int WideEquals(const CHAR16 *left, const char *ascii) {
   }
 }
 
+/* ---- NVRAM store ---------------------------------------------------- *
+ *
+ * A small byte-exact variable store, so a record written during one boot can be
+ * read back during the same run. It models storage and the size contract only:
+ * attributes are accepted and echoed, never enforced.
+ */
+#define SIM_MAX_VARIABLES 8
+#define SIM_MAX_VARIABLE_BYTES 4096
+
+typedef struct {
+  int    used;
+  CHAR16 name[40];
+  EFI_GUID vendor;
+  UINT32 attributes;
+  UINT8  data[SIM_MAX_VARIABLE_BYTES];
+  UINTN  size;
+} SIM_VARIABLE;
+
+static SIM_VARIABLE g_variables[SIM_MAX_VARIABLES];
+
+static int VariableNameEquals(const CHAR16 *a, const CHAR16 *b) {
+  UINTN i;
+  if (!a || !b) return 0;
+  for (i = 0; a[i] || b[i]; i++) {
+    if (i >= 39) return 0;
+    if (a[i] != b[i]) return 0;
+  }
+  return 1;
+}
+
+static SIM_VARIABLE *VariableFind(const CHAR16 *name, const EFI_GUID *vendor) {
+  for (unsigned i = 0; i < SIM_MAX_VARIABLES; i++)
+    if (g_variables[i].used &&
+        memcmp(&g_variables[i].vendor, vendor, sizeof(EFI_GUID)) == 0 &&
+        VariableNameEquals(g_variables[i].name, name))
+      return &g_variables[i];
+  return NULL;
+}
+
+static SIM_VARIABLE *VariableSlot(const CHAR16 *name, const EFI_GUID *vendor) {
+  SIM_VARIABLE *slot = VariableFind(name, vendor);
+  if (slot) return slot;
+  for (unsigned i = 0; i < SIM_MAX_VARIABLES; i++) {
+    if (g_variables[i].used) continue;
+    memset(&g_variables[i], 0, sizeof(g_variables[i]));
+    g_variables[i].used = 1;
+    g_variables[i].vendor = *vendor;
+    for (unsigned c = 0; c < 39 && name[c]; c++) g_variables[i].name[c] = name[c];
+    return &g_variables[i];
+  }
+  return NULL;
+}
+
 static EFI_STATUS EFIAPI SimGetVariable(CHAR16 *name, EFI_GUID *vendor,
                                         UINT32 *attributes, UINTN *size,
                                         VOID *data) {
   if (!name || !vendor || !size) return EFI_INVALID_PARAMETER;
+  SIM_VARIABLE *stored = VariableFind(name, vendor);
+  if (stored) {
+    if (*size < stored->size) {
+      *size = stored->size;
+      return EFI_BUFFER_TOO_SMALL;
+    }
+    if (!data) return EFI_INVALID_PARAMETER;
+    memcpy(data, stored->data, stored->size);
+    *size = stored->size;
+    if (attributes) *attributes = stored->attributes;
+    return EFI_SUCCESS;
+  }
   if (memcmp(vendor, &g_gu_targets_guid, sizeof(EFI_GUID)) == 0) {
     if (!g_gu_targets) return EFI_NOT_FOUND;
     if (!WideEquals(name, "GuTargets")) return EFI_NOT_FOUND;
@@ -876,7 +955,19 @@ static EFI_STATUS EFIAPI SimGetVariable(CHAR16 *name, EFI_GUID *vendor,
 static EFI_STATUS EFIAPI SimSetVariable(CHAR16 *name, EFI_GUID *vendor,
                                         UINT32 attributes, UINTN size,
                                         VOID *data) {
-  (void)name; (void)vendor; (void)attributes; (void)size; (void)data;
+  if (!name || !vendor) return EFI_INVALID_PARAMETER;
+  SIM_VARIABLE *stored = VariableFind(name, vendor);
+  if (!data || !size) {
+    /* Size zero with no data deletes the variable. */
+    if (stored) stored->used = 0;
+    return stored ? EFI_SUCCESS : EFI_NOT_FOUND;
+  }
+  if (size > SIM_MAX_VARIABLE_BYTES) return EFI_OUT_OF_RESOURCES;
+  SIM_VARIABLE *slot = VariableSlot(name, vendor);
+  if (!slot) return EFI_OUT_OF_RESOURCES;
+  memcpy(slot->data, data, size);
+  slot->size = size;
+  slot->attributes = attributes;
   return EFI_SUCCESS;
 }
 
@@ -904,8 +995,9 @@ static void BuildDevicePath(UINT8 *buffer, const UINT8 *guid16, int usb,
   buffer[at + 4] = 1;              /* partition number */
   buffer[at + 8] = 0x00;           /* partition start (LBA 2048) */
   buffer[at + 9] = 0x08;
-  buffer[at + 12] = 0xff;          /* partition end (open ended) */
-  buffer[at + 13] = 0xff;
+  /* A nonempty partition size: the pinned ESP matcher rejects a zero one, as
+   * the firmware would never report it. */
+  buffer[at + 18] = 0x10;          /* 0x00100000 sectors */
   memcpy(buffer + at + 24, guid16, 16);
   buffer[at + 40] = 2;             /* GPT signature */
   buffer[at + 41] = 2;

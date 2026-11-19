@@ -8,6 +8,7 @@
 #include "port.h"
 #include "prom_identity.h"
 #include "gpu_sku_geometry.h"
+#include "asset_install.h"
 
 static const GU_ARCH_ASSETS AdaAssets={{
     {L"\\AD102-ASSETS\\booter_load_ad102.bin","gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672U},
@@ -66,6 +67,23 @@ BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *platform) {
   }
   return TRUE;
 }
+/* The compiled manifest as the staged-asset record module sees it: the same
+ * names, sizes and pinned digests the loader verifies. No file access. */
+VOID GuAssetBundleFromArch(const GU_ARCH_ASSETS *arch,GU_ASSET_REF *files,
+                           GU_ASSET_BUNDLE *bundle) {
+  if(!bundle)return;
+  bundle->Version=GU_ASSET_BUNDLE_VERSION;
+  bundle->Count=0;
+  bundle->Files=files;
+  if(!arch||!files)return;
+  for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
+    files[i].Name=arch->entries[i].name;
+    files[i].Bytes=(unsigned long long)arch->entries[i].bytes;
+    files[i].Sha256=arch->entries[i].sha256;
+    bundle->Count++;
+  }
+}
+
 BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
   const GU_ARCH_ASSETS *arch=PlatformManifest(platform);
   if(!arch||!GuPlatformAssetsOwned(platform))return FALSE;

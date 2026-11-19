@@ -25,7 +25,7 @@ INCLUDE = BUILD / "include"
 APP_SOURCES = [
     "app.c", "driver_nvram.c", "boot_io.c", "msi_release.c", "unlock_execution.c",
     "port.c", "compat.c", "checks.c", "gpu_inventory.c", "gpu_discovery.c",
-    "gpu_execution_state.c", "gpu_windows_path.c", "profile.c", "gpu_selection.c", "gpu_sku_geometry.c", "boot_state.c", "sha256.c",
+    "gpu_execution_state.c", "gpu_windows_path.c", "profile.c", "gpu_selection.c", "gpu_sku_geometry.c", "boot_state.c", "asset_install.c", "sha256.c",
     "runtime.c", "format.c", "vendor/unlock_610.c", "vendor/prep_610.c",
     "vendor/layout_610.c", "vendor/vbios_610.c", "vendor/gfw_eval.c",
 ]
@@ -111,6 +111,11 @@ def prepare_tree() -> None:
         target.symlink_to(source, target_is_directory=True)
 
     windows = BUILD / "windows"
+    # Start every run with an empty ESP: the install scenario must prove the
+    # staging path, not inherit a previous run's files.
+    staged = windows / "AD102-ASSETS"
+    if staged.is_dir() and not staged.is_symlink():
+        shutil.rmtree(staged)
     boot = windows / "EFI" / "Microsoft" / "Boot"
     boot.mkdir(parents=True, exist_ok=True)
     (boot / "bootmgfw.efi").write_bytes(b"MZ simulator stand-in for the Windows boot manager\n")
@@ -145,7 +150,8 @@ def build() -> Path:
 
 
 VARIANTS = ("nominal", "msi-enabled", "flr-refused", "dma-high", "rebar",
-            "bar-above-4g", "runtime-target", "runtime-absent", "ad104-sku")
+            "bar-above-4g", "runtime-target", "runtime-absent", "ad104-sku",
+            "install-assets")
 
 # Scenario matrix: every row must pass, and the two negative rows are the
 # documented refusal and abort paths.
@@ -162,6 +168,8 @@ SCENARIOS = (
     ("prepare", "runtime-absent"),
     # An Ada SKU admitted by the id list but with no captured register table.
     ("prepare", "ad104-sku"),
+    # The staging build: USB bundle verified, copied to the ESP, recorded.
+    ("prepare", "install-assets"),
 )
 
 

@@ -2,6 +2,12 @@
 #pragma once
 #include "port.h"
 #include "vendor/vbios_610.h"
+#include "asset_install.h"
+/* The one pinned firmware version every manifest below refers to. The staged
+ * bundle records it, and the contract test checks that every pinned path still
+ * names it. */
+#define GU_ASSET_BUNDLE_VERSION L"610.43.03"
+
 typedef struct {
   const CHAR16 *path;
   const char *name;
@@ -17,6 +23,10 @@ typedef struct {
  * assets only; it does not establish Windows 617.42 signature acceptance. */
 const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id);
 const GU_ARCH_ASSETS *GuGetArchAssets(VOID);
+/* Project the compiled manifest into the record module's view (names, sizes,
+ * pinned digests, version). CPU-only; reads no file and touches no card. */
+VOID GuAssetBundleFromArch(const GU_ARCH_ASSETS *,GU_ASSET_REF *,
+                           GU_ASSET_BUNDLE *);
 /* Read-only report; reject a null, inactive or unbound owner. */
 EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner);
 BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform);

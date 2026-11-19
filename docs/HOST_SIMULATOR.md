@@ -53,7 +53,7 @@ diagnostics in `sim/sim_world.c`. The stage arguments are
 `<prepare|transaction> [variant]`; `verify` ignores them.
 
 `verify` runs every scenario in the table below and prints
-`SIM_VERIFY=PASS SCENARIOS=4 FAILED=0`.
+`SIM_VERIFY=PASS SCENARIOS=11 FAILED=0`.
 
 | Scenario | Card | Expected |
 | --- | --- | --- |
@@ -61,6 +61,13 @@ diagnostics in `sim/sim_world.c`. The stage arguments are
 | `transaction` | nominal | unlock completes, WPR2 opened once then closed |
 | `prepare msi-enabled` | MSI enable bit set | refused at discovery, zero BAR0 writes, zero FLRs |
 | `transaction flr-refused` | DEVCTL FLR bit clear | fails at the firmware transaction, WPR2 stays open, buffers and device reference retained |
+| `transaction dma-high` | allocator ignores the ceiling | refuses to place DMA above the card's limit |
+| `transaction rebar` | 256 MiB BAR0 above 4 GiB | addresses registers through the firmware-assigned window |
+| `transaction bar-above-4g` | BAR0 at 4 GiB | works without truncating a 32-bit BAR address |
+| `prepare runtime-target` | operator selection names the card | binds the requested BDF from NVRAM |
+| `prepare runtime-absent` | operator selection names a missing card | refuses, binds nothing, writes no BAR0 |
+| `prepare ad104-sku` | `10de:2786` (RTX 4070) | refused at prepare: no captured register table, zero BAR0 writes |
+| `prepare install-assets` | nominal | verifies the bundle from removable media, stages it on the ESP, records it as CURRENT, touches no BAR0 |
 
 ## The model
 

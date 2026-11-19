@@ -27,14 +27,22 @@ class BootBinding(unittest.TestCase):
         self.assertIn("const CHAR16 *GuBootGetLogPath(VOID)",BOOT)
         self.assertIn("EFI_HANDLE GuBootGetTargetEspVolume(VOID);",HEADER)
     def test_asset_fallback_is_only_pinned_read_only_esp(self):
+        # One locator decides which volume the ESP is; the reader itself may not
+        # write to it, and the installer (a separate, explicit build) may.
+        locator=BOOT.split("static EFI_STATUS ConfiguredEspVolume(",1)[1].split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[0]
+        self.assertIn("GuWindowsEspPathMatches(",locator)
+        self.assertIn("(const uint8_t *)&WindowsPartition",locator)
+        self.assertIn("matches!=1U",locator)
         c=BOOT.split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[1].split("EFI_STATUS GuBootLoadAssets(",1)[0]
-        self.assertIn("GuWindowsEspPathMatches(",c)
-        self.assertIn("(const uint8_t *)&WindowsPartition",c)
-        self.assertIn("matches!=1U",c)
+        self.assertIn("ConfiguredEspVolume(",c)
         self.assertIn("GuHashMatches(",c)
         self.assertNotIn("SetVariable(",c)
         self.assertNotIn("EFI_FILE_MODE_WRITE",c)
         self.assertNotIn("EFI_FILE_MODE_CREATE",c)
+        self.assertNotIn("GuAssetInstallStage(",c)
+        loader=BOOT.split("EFI_STATUS GuBootLoadAssets(VOID) {",1)[1].split("static EFI_STATUS ReadWindowsBinary(",1)[0]
+        self.assertNotIn("EFI_FILE_MODE_WRITE",loader)
+        self.assertNotIn("GuAssetInstallStage(",loader)
         loader=BOOT.split("EFI_STATUS GuBootLoadAssets(",1)[1].split("static EFI_STATUS ReadWindowsBinary(",1)[0]
         self.assertIn("ReadPinnedAssetFromConfiguredEsp(",loader)
         self.assertIn("GuFree((VOID *)GuAssets[i].firmware.data)",loader)
@@ -133,9 +141,12 @@ int main(void){
                 result=subprocess.run([str(binary)],capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+        locator=BOOT.split("static EFI_STATUS ConfiguredEspVolume(",1)[1].split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[0]
+        self.assertIn("LocateBootFilesystems(b,&handles,&count)",locator)
+        self.assertLess(locator.index("if(freed!=EFI_SUCCESS)return freed;"),locator.index("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp("))
         assets=BOOT.split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[1].split("EFI_STATUS GuBootLoadAssets(",1)[0]
-        self.assertIn("LocateBootFilesystems(b,&handles,&count)",assets)
-        self.assertLess(assets.index("if(freed!=EFI_SUCCESS)return freed;"),assets.index("fs->OpenVolume("))
+        self.assertIn("ConfiguredEspVolume(&matched)",assets)
+        self.assertLess(assets.index("ConfiguredEspVolume(&matched)"),assets.index("fs->OpenVolume("))
         windows=BOOT.split("EFI_STATUS GuBootLoadWindows(",1)[1].split("EFI_STATUS GuBootChoose(",1)[0]
         self.assertIn("UnreleasedFilesystemHandles",windows)
         self.assertIn("LocateBootFilesystems(b,&h,&count)",windows)

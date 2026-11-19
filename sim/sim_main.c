@@ -12,6 +12,7 @@
 #include "sim_world.h"
 
 #include "boot_io.h"
+#include "asset_install.h"
 #include "gpu_discovery.h"
 #include "profile.h"
 #include "msi_release.h"
@@ -20,6 +21,7 @@
 #include "vendor/gfw_eval.h"
 
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -58,12 +60,13 @@ int main(int argc, char **argv) {
   int runtime_target = strcmp(variant, "runtime-target") == 0;
   int runtime_absent = strcmp(variant, "runtime-absent") == 0;
   int ad104_sku = strcmp(variant, "ad104-sku") == 0;
+  int install_assets = strcmp(variant, "install-assets") == 0;
 
   SimReportLine("SIM_VARIANT=%s", variant);
   if (!esp || !windows) {
     fprintf(stderr, "usage: %s <prepare|transaction> <esp-dir> <windows-dir> "
             "[nominal|msi-enabled|flr-refused|dma-high|rebar|bar-above-4g|"
-            "runtime-target|runtime-absent|ad104-sku]\n",
+            "runtime-target|runtime-absent|ad104-sku|install-assets]\n",
             argv[0]);
     return 2;
   }
@@ -189,6 +192,66 @@ int main(int argc, char **argv) {
               owner->discovery_identity.function == 0,
           "the image bound a card other than the selected one");
     SimReportLine("SIM_SELECTION=TARGET 0000:01:00.0 SOURCE=VARIABLE");
+  }
+  if (install_assets) {
+    /* The staging build: verify the bundle from removable media, copy it to the
+     * Windows ESP, and record it. It must not touch the GPU at all. */
+    GU_ASSET_REF refs[GU_ASSET_COUNT];
+    GU_ASSET_BUNDLE bundle;
+    GU_ASSET_INSTALL record;
+    const GU_ARCH_ASSETS *arch = GuGetArchAssets();
+    Check(arch != NULL, "no manifest for the modelled card");
+    GuAssetBundleFromArch(arch, refs, &bundle);
+    Check(SimLogContains("ASSET_INSTALL PRESENT=0"),
+          "the world already held a staged record");
+    SimReportLine("SIM_STAGE=GuAssetInstallStage");
+    EFI_STATUS first = GuAssetInstallStage();
+    SimReportLine("SIM_RESULT=GuAssetInstallStage STATUS=%llx",
+                  (unsigned long long)first);
+    Check(first == EFI_SUCCESS, "a clean USB bundle was not staged");
+    Check(SimLogContains("ASSET_INSTALL=STAGED FILES=5"),
+          "the installer did not report the staged bundle");
+    /* A second run must accept the files already on the ESP rather than
+     * rewriting them, so an interrupted install is resumable. */
+    EFI_STATUS second = GuAssetInstallStage();
+    Check(second == EFI_SUCCESS, "a repeated install was refused");
+    Check(SimLogContains("ALREADY=5"), "a repeated install rewrote files");
+    Check(GuAssetInstallRead(table, &record) == EFI_SUCCESS,
+          "the staged record was not stored");
+    Check(GuAssetInstallState(&record, &bundle) == GU_ASSET_INSTALL_CURRENT,
+          "the stored record is not CURRENT for the compiled manifest");
+    Check(record.Files == GU_ASSET_COUNT, "the record counts the wrong files");
+    /* The ESP really holds what the loader will look for. */
+    char path[512];
+    int missing = 0;
+    for (UINTN i = 0; i < GU_ASSET_COUNT; i++) {
+      struct stat st;
+      /* The loader reads \AD102-ASSETS\<basename>; the pin name carries the
+       * vendor directory, so only its basename is used here. */
+      const char *name = arch->entries[i].name;
+      const char *base = name;
+      for (const char *scan = name; *scan; scan++)
+        if (*scan == '/' || *scan == '\\') base = scan + 1;
+      snprintf(path, sizeof(path), "%s/AD102-ASSETS/%s", windows, base);
+      if (stat(path, &st) != 0 || (unsigned long long)st.st_size !=
+                                       (unsigned long long)arch->entries[i].bytes)
+        missing++;
+    }
+    Check(missing == 0, "a staged file is missing from the ESP or has the wrong size");
+    Check(SimGpuBarWrites(gpu) == 0, "the installer wrote to BAR0");
+    Check(SimGpuFlrCount(gpu) == 0, "the installer reset the card");
+    Check(!owner->profile_verified && !owner->prom_verified,
+          "the installer prepared the card");
+    SimReportLine("SIM_INSTALL STAGED=%u STATE=%s ESP=%s",
+                  (unsigned)record.Files,
+                  missing ? "INCOMPLETE" : "CURRENT", windows);
+    SimReportLine("SIM_RESULT=%s CHECKS_FAILED=%d",
+                  SimFailures() ? "FAIL" : "PASS", SimFailures());
+    int failed = SimFailures();
+    SimWorldShutdown();
+    free(before);
+    if (failed) printf("%s", SimLogText());
+    return failed ? 1 : 0;
   }
   SimReportLine("SIM_STAGE=GuPrepareBoundGpu");
   const char *prepare_stage = "none";
