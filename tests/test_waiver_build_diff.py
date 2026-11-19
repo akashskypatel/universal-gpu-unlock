@@ -46,6 +46,15 @@ class TheToolRuns(unittest.TestCase):
         self.assertGreater(admitted, 0, "the waiver reached no translation unit")
         self.assertNotIn("WAIVER_DIFF_PROBLEM", done.stdout)
 
+    def test_the_tool_needs_no_generated_state(self):
+        # CI runs it on a clean checkout, before the simulator has generated
+        # anything, and `src/local/` is gitignored - so the tool must supply its
+        # own placeholder boot profile rather than depend on `sim/build`.
+        source = (ROOT / "tools" / "waiver_build_diff.py").read_text(encoding="utf-8")
+        self.assertNotIn('"sim" / "build"', source)
+        self.assertIn('(local / "boot_profile.h").write_text', source)
+        self.assertIn("#define GU_WINDOWS_PARTITION_INITIALIZER", source)
+
     def test_a_missing_compiler_is_a_skip_not_a_pass(self):
         done = subprocess.run([sys.executable, str(ROOT / "tools" / "waiver_build_diff.py")],
                               capture_output=True, text=True, cwd=ROOT,
