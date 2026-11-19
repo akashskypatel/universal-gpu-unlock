@@ -152,6 +152,11 @@ jobs:
             python3 tools/verify_run_log.py tests/fixtures/hardware_session/actuate_boot1.txt tests/fixtures/hardware_session/actuate_boot2.txt --self-test --stage actuate
             python3 tools/session_preflight.py --help > /dev/null
             python3 -m unittest discover -s tests -p test_hardware_session.py -v
+            # The variant catalogue is data: every builder, switch, output name
+            # and attestation is checked against the source, and the matrix in
+            # the user document must be its render.
+            python3 tools/render_image_variants.py > /dev/null
+            python3 -m unittest discover -s tests -p test_image_variants.py -v
             # The readiness headline is generated, not typed into prose.
             python3 -m unittest discover -s tests -p test_readiness_summary.py -v
             # Every stock profile must link, and keep its own selector contract.
@@ -349,6 +354,19 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\gu-log" | Out-Null
           @("event=$env:GITHUB_EVENT_NAME sha=$env:GITHUB_SHA ref=$env:GITHUB_REF run=$env:GITHUB_RUN_ID", "utc=$((Get-Date).ToUniversalTime().ToString('o'))", "host=$env:RUNNER_OS", "powershell=$($PSVersionTable.PSVersion)") | Out-File -Encoding utf8 "$env:RUNNER_TEMP\gu-log\efi.log"
       - uses: actions/checkout@v4
+      - name: Parse the build/sign/deploy script (syntax only, never run)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'src\Build-Sign-Deploy-UniversalGPU.ps1'),
+            [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) {
+            $errors | ForEach-Object { Write-Error ("{0}: {1}" -f $_.Extent.StartLineNumber, $_.Message) }
+            throw 'Build-Sign-Deploy-UniversalGPU.ps1 does not parse'
+          }
+          Write-Output 'PARSE_OK src/Build-Sign-Deploy-UniversalGPU.ps1 (not executed)'
       - name: Compile isolated diagnostic EFI with MSVC
         shell: pwsh
         run: |

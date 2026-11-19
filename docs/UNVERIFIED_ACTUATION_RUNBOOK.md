@@ -82,6 +82,12 @@ Compile-time guarantees you can rely on (enforced in `src/port.h`):
 * it forces `GU_PREFLIGHT_ONLY 0`, so the guarded MMIO/PCI-write, DMA and FLR
   helpers are the only thing between this image and silicon.
 
+To build, sign and stage any of these - including the read-only diagnostics and
+the DXE forms - `src/Build-Sign-Deploy-UniversalGPU.ps1` wraps the same builders,
+signs the result inside WSL with the personal certificate enrolled in the BIOS
+`db`, and refuses to stage anything it did not build. See
+[`BUILD_SIGN_DEPLOY.md`](BUILD_SIGN_DEPLOY.md); `-List` prints every variant.
+
 ## 3. Read the ordered log
 
 The log is written to the ESP as `\AD102-UNLOCK\RUNnnnn.TXT`. Markers, in the

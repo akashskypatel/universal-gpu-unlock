@@ -1,0 +1,732 @@
+{
+  "schema": 1,
+  "reviewed": "2026-11-18",
+  "note": "Every image this repository can build from its own builders, as data. src/Build-Sign-Deploy-UniversalGPU.ps1 executes this catalogue, docs/BUILD_SIGN_DEPLOY.md is rendered from it, and tests/test_image_variants.py checks every builder, switch, output name and attestation against the source. Signing proves authenticity only: nothing here says an image is safe, bootable, or verified on hardware.",
+  "selection": {
+    "single_placeholder": "<label>",
+    "single_example": "0000:01:00.0",
+    "sequence_example": "0000:01:00.0,0000:04:00.0",
+    "label_rule": "src/Gpu-Selection-Build.ps1: each SSSS:BB:DD.F with ':' and '.' replaced by '-', joined by '--' for two targets, or N<count>-<12 hex> above two"
+  },
+  "signing": {
+    "transport": "WSL (wsl.exe) with a base64-encoded bash payload; Windows paths are decoded inside WSL and never cross the command line as path arguments",
+    "key_in_wsl": "$HOME/secureboot-signing/uefi-db.key",
+    "cert_in_wsl": "$HOME/secureboot-signing/uefi-db.crt",
+    "public_cer_on_windows": "uefi-db.cer (DER) beside the script, or -PublicCertificate",
+    "tools_required_in_wsl": [
+      "base64",
+      "wslpath",
+      "sha256sum",
+      "openssl",
+      "cmp",
+      "sbsign",
+      "sbverify"
+    ],
+    "verifies": [
+      "the WSL cert's DER form is byte-identical to the Windows .cer you enrolled in the BIOS",
+      "the WSL key matches the WSL cert",
+      "the cert is not expired",
+      "the unsigned image did not change before, during or after signing",
+      "sbverify accepts the signed image with that cert",
+      "the signed image is a different file from the unsigned one"
+    ],
+    "db_enrollment": "Get-SecureBootUEFI -Name db (X509 EFI_SIGNATURE_LIST scan) proves the signature is the one the firmware already trusts; -SkipDbCheck records db_enrolled=UNKNOWN instead"
+  },
+  "safety_classes": {
+    "read-only": {
+      "writes_gpu": false,
+      "may_be_staged": true,
+      "why": "the diagnostic reads the PCI tree and BAR0-free descriptors; it never writes a GPU register, resets a Falcon, calls a vendor Stop or loads firmware"
+    },
+    "refuses-before-mutation": {
+      "writes_gpu": false,
+      "may_be_staged": true,
+      "why": "the preparation build links the active source and refuses before GuInit; it logs BEFORE_MUTATION=1 and returns"
+    },
+    "compile-only": {
+      "writes_gpu": false,
+      "may_be_staged": false,
+      "why": "a synthetic-profile image returns before any firmware or GPU operation; it exists to prove the sources compile"
+    },
+    "stop-only": {
+      "writes_gpu": true,
+      "may_be_staged": "with -AcceptActuatingDeploy",
+      "why": "calls the original vendor Stop and may hang; unlock, flash and reset stay disabled"
+    },
+    "actuates": {
+      "writes_gpu": true,
+      "may_be_staged": "with -AcceptActuatingDeploy",
+      "why": "the waived transaction image; every eligibility flag it prints is still false"
+    }
+  },
+  "families": [
+    {
+      "id": "diagnostic",
+      "title": "Read-only diagnostic",
+      "builder": "src/Build-Gpu-Topology-Diagnostic.ps1",
+      "subsystem": 10,
+      "status_token": "STATUS=COMPLETE"
+    },
+    {
+      "id": "prepare",
+      "title": "Active preparation (application)",
+      "builder": "src/Build-Experimental-MSVC.ps1",
+      "subsystem": 10,
+      "status_token": "STATUS=COMPLETE"
+    },
+    {
+      "id": "prepare-dxe",
+      "title": "Active preparation (DXE driver)",
+      "builder": "src/Build-Dxe-Driver.ps1",
+      "subsystem": 11,
+      "status_token": "STATUS=COMPLETE"
+    },
+    {
+      "id": "stop-observation",
+      "title": "Original vendor Stop experiment",
+      "builder": "src/Build-Msi-Stop-Observation.ps1",
+      "subsystem": 10,
+      "status_token": "STATUS=BUILT"
+    }
+  ],
+  "variants": [
+    {
+      "id": "diag-topology",
+      "family": "diagnostic",
+      "title": "topology only, no log",
+      "switches": {},
+      "binary": "GPU-TOPOLOGY-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLR=0",
+        "SAVE_LOG=0",
+        "WINDOWS_HANDOFF=0",
+        "SELECTION_COUNT=0"
+      ],
+      "note": "the smallest read-only image: it prints to the console and writes nothing"
+    },
+    {
+      "id": "diag-topology-log",
+      "family": "diagnostic",
+      "title": "topology with a numbered USB log",
+      "switches": {
+        "SaveLog": true
+      },
+      "binary": "GPU-TOPOLOGY-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "SAVE_LOG=1",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "stage 1 of the donor session: the log this build writes is what tools/verify_run_log.py scores"
+    },
+    {
+      "id": "diag-topology-handoff",
+      "family": "diagnostic",
+      "title": "topology with a log and automatic Windows handoff",
+      "switches": {
+        "SaveLog": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "SAVE_LOG=1",
+        "WINDOWS_HANDOFF=1"
+      ],
+      "requires_esp_guid": true,
+      "note": "starts the pinned Windows Boot Manager after the log is saved; needs a reviewed ESP GUID"
+    },
+    {
+      "id": "diag-selection",
+      "family": "diagnostic",
+      "title": "selected-GPU observation with a log",
+      "switches": {
+        "SaveLog": true
+      },
+      "binary": "GPU-SELECTION-<label>-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "SAVE_LOG=1",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "requires_selection": "any",
+      "note": "the builder refuses a selected diagnostic with Windows handoff, so this one always returns to the launch environment"
+    },
+    {
+      "id": "diag-msi-rom",
+      "family": "diagnostic",
+      "title": "MSI B850 ROM variables",
+      "switches": {
+        "SaveLog": true,
+        "MsiB850RomVariables": true
+      },
+      "binary": "MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "MSI_B850_ROM_VARIABLES=1",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "reads the MS-7E56 UEFI variables; cannot be combined with a GPU selection"
+    },
+    {
+      "id": "diag-msi-rom-handoff",
+      "family": "diagnostic",
+      "title": "MSI B850 ROM variables with handoff",
+      "switches": {
+        "SaveLog": true,
+        "MsiB850RomVariables": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "MSI-B850-ROM-VARIABLES-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "MSI_B850_ROM_VARIABLES=1",
+        "WINDOWS_HANDOFF=1"
+      ],
+      "requires_esp_guid": true,
+      "note": "as above, then hands off to Windows"
+    },
+    {
+      "id": "diag-msi-fuse",
+      "family": "diagnostic",
+      "title": "MSI B850 fuse version",
+      "switches": {
+        "SaveLog": true,
+        "MsiB850FuseVersion": true
+      },
+      "binary": "MSI-B850-FUSE-VERSION-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "MSI_B850_FUSE_VERSION=1",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "reads the FWSEC/GSP signature-slot fuse on each verified NVIDIA GPU"
+    },
+    {
+      "id": "diag-msi-fuse-handoff",
+      "family": "diagnostic",
+      "title": "MSI B850 fuse version with handoff",
+      "switches": {
+        "SaveLog": true,
+        "MsiB850FuseVersion": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "MSI-B850-FUSE-VERSION-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "MSI_B850_FUSE_VERSION=1",
+        "WINDOWS_HANDOFF=1"
+      ],
+      "requires_esp_guid": true,
+      "note": "the fuse read that fixes the signature slot; still not the Windows 617.42 provenance"
+    },
+    {
+      "id": "diag-msi-sec2",
+      "family": "diagnostic",
+      "title": "MSI B850 SEC2 ucode version",
+      "switches": {
+        "SaveLog": true,
+        "MsiB850Sec2Ucode1": true
+      },
+      "binary": "MSI-B850-SEC2-UCODE1-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "MSI_B850_SEC2_UCODE1=1",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "reads BAR0 0x824140 only, and prints WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN"
+    },
+    {
+      "id": "diag-msi-sec2-handoff",
+      "family": "diagnostic",
+      "title": "MSI B850 SEC2 ucode version with handoff",
+      "switches": {
+        "SaveLog": true,
+        "MsiB850Sec2Ucode1": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "MSI-B850-SEC2-UCODE1-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "MSI_B850_SEC2_UCODE1=1",
+        "WINDOWS_HANDOFF=1"
+      ],
+      "requires_esp_guid": true,
+      "note": "as above, then hands off to Windows"
+    },
+    {
+      "id": "prep-selected",
+      "family": "prepare",
+      "title": "preparation for explicit targets",
+      "switches": {},
+      "binary": "GPU-ACTIVE-PREP-<label>.EFI",
+      "safety": "refuses-before-mutation",
+      "attestations": [
+        "PREPARATION_ONLY=1",
+        "SINGLE_TARGET_ACTIVE=0",
+        "MULTI_GPU_MUTATION_ALLOWED=0",
+        "SYNTHETIC_PROFILE=0",
+        "UNVERIFIED_ACTUATION=0",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "requires_selection": "any",
+      "note": "stage 2 of the donor session: runs the whole preflight, then refuses before GuInit"
+    },
+    {
+      "id": "prep-runtime-selection",
+      "family": "prepare",
+      "title": "preparation, target chosen at boot",
+      "switches": {
+        "RuntimeSelection": true
+      },
+      "binary": "GPU-RUNTIME-SELECTION-PREP.EFI",
+      "safety": "refuses-before-mutation",
+      "attestations": [
+        "PREPARATION_ONLY=1",
+        "RUNTIME_SELECTION=1",
+        "MULTI_GPU_MUTATION_ALLOWED=0",
+        "UNVERIFIED_ACTUATION=0"
+      ],
+      "note": "no compiled BDF: the image inventories the machine and asks, then refuses"
+    },
+    {
+      "id": "prep-runtime-selection-resident",
+      "family": "prepare",
+      "title": "preparation, target at boot, run from the ESP",
+      "switches": {
+        "RuntimeSelection": true,
+        "RuntimeEsp": true,
+        "EspResident": true
+      },
+      "binary": "GPU-RUNTIME-SELECTION-PREP.EFI",
+      "safety": "refuses-before-mutation",
+      "attestations": [
+        "PREPARATION_ONLY=1",
+        "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
+        "MULTI_GPU_MUTATION_ALLOWED=0"
+      ],
+      "note": "exercises the B9 launch gates in a build that still cannot actuate"
+    },
+    {
+      "id": "compile-one-target",
+      "family": "prepare",
+      "title": "compile-only, one target",
+      "switches": {
+        "SyntheticCompileProfile": true
+      },
+      "binary": "GPU-ONE-TARGET-COMPILE-ONLY-<label>.EFI",
+      "safety": "compile-only",
+      "attestations": [
+        "PREPARATION_ONLY=0",
+        "SYNTHETIC_PROFILE=1",
+        "MULTI_GPU_MUTATION_ALLOWED=0",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "requires_selection": "single",
+      "note": "the CI-equivalent compile check for an operator's own selection"
+    },
+    {
+      "id": "compile-sequence",
+      "family": "prepare",
+      "title": "compile-only, ordered sequence",
+      "switches": {
+        "SyntheticCompileProfile": true
+      },
+      "binary": "GPU-SEQUENCE-COMPILE-ONLY-<label>.EFI",
+      "safety": "compile-only",
+      "attestations": [
+        "PREPARATION_ONLY=0",
+        "SYNTHETIC_PROFILE=1",
+        "ORDERED_SEQUENCE_COMPILE_ONLY=1",
+        "MULTI_GPU_MUTATION_ALLOWED=0"
+      ],
+      "requires_selection": "sequence",
+      "note": "two or more targets, one active at a time"
+    },
+    {
+      "id": "actuate-one-target",
+      "family": "prepare",
+      "title": "waived transaction, one target",
+      "switches": {
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true
+      },
+      "binary": "GPU-ONE-TARGET-UNVERIFIED-ACTUATION-<label>.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "SINGLE_TARGET_ACTIVE=1",
+        "MULTI_GPU_MUTATION_ALLOWED=1",
+        "UNVERIFIED_ACTUATION=1",
+        "SYNTHETIC_PROFILE=0",
+        "ACTUATION_VERIFIED=0",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLASH=0",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "requires_selection": "single",
+      "note": "stage 3 of the donor session; the only image that may write, and its own status line says it is unverified"
+    },
+    {
+      "id": "actuate-sequence",
+      "family": "prepare",
+      "title": "waived transaction, ordered sequence",
+      "switches": {
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true
+      },
+      "binary": "GPU-SEQUENCE-UNVERIFIED-ACTUATION-<label>.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "SINGLE_TARGET_ACTIVE=1",
+        "MULTI_GPU_MUTATION_ALLOWED=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "requires_selection": "sequence",
+      "note": "two or more targets, each step gated on its predecessor, no retry"
+    },
+    {
+      "id": "actuate-one-target-resident",
+      "family": "prepare",
+      "title": "waived transaction, one target, run from the ESP",
+      "switches": {
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "RuntimeEsp": true,
+        "EspResident": true
+      },
+      "binary": "GPU-ONE-TARGET-UNVERIFIED-ACTUATION-<label>.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "SINGLE_TARGET_ACTIVE=1",
+        "RUNTIME_ESP=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "requires_selection": "single",
+      "note": "the B9 relaxation combined with the waiver: the riskiest image this repository can build"
+    },
+    {
+      "id": "actuate-runtime-selection",
+      "family": "prepare",
+      "title": "waived transaction, target chosen at boot",
+      "switches": {
+        "RuntimeSelection": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true
+      },
+      "binary": "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "RUNTIME_SELECTION=1",
+        "MULTI_GPU_MUTATION_ALLOWED=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "note": "no compiled BDF, so the operator picks the target at the machine instead of at the build"
+    },
+    {
+      "id": "actuate-runtime-selection-resident",
+      "family": "prepare",
+      "title": "waived transaction, target at boot, run from the ESP",
+      "switches": {
+        "RuntimeSelection": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "RuntimeEsp": true,
+        "EspResident": true
+      },
+      "binary": "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "note": "no compiled BDF and no compiled ESP GUID: both are resolved at boot"
+    },
+    {
+      "id": "dxe-prep-selected",
+      "family": "prepare-dxe",
+      "title": "DXE preparation for explicit targets",
+      "switches": {},
+      "binary": "GPU-ACTIVE-PREP-DXE-<label>.efi",
+      "safety": "refuses-before-mutation",
+      "attestations": [
+        "PREPARATION_ONLY=1",
+        "SINGLE_TARGET_ACTIVE=0",
+        "MULTI_GPU_MUTATION_ALLOWED=0",
+        "UNVERIFIED_ACTUATION=0"
+      ],
+      "requires_selection": "any",
+      "note": "the same preparation as a boot-service driver; it cannot be staged as BOOTX64.EFI"
+    },
+    {
+      "id": "dxe-prep-runtime-selection",
+      "family": "prepare-dxe",
+      "title": "DXE preparation, target chosen at boot",
+      "switches": {
+        "RuntimeSelection": true
+      },
+      "binary": "GPU-RUNTIME-SELECTION-PREP-DXE.efi",
+      "safety": "refuses-before-mutation",
+      "attestations": [
+        "PREPARATION_ONLY=1",
+        "RUNTIME_SELECTION=1",
+        "MULTI_GPU_MUTATION_ALLOWED=0"
+      ],
+      "note": "loaded from a Driver#### entry, not from a volume"
+    },
+    {
+      "id": "dxe-compile-one-target",
+      "family": "prepare-dxe",
+      "title": "DXE compile-only, one target",
+      "switches": {
+        "SyntheticCompileProfile": true
+      },
+      "binary": "GPU-ONE-TARGET-COMPILE-ONLY-DXE-<label>.efi",
+      "safety": "compile-only",
+      "attestations": [
+        "SYNTHETIC_PROFILE=1",
+        "MULTI_GPU_MUTATION_ALLOWED=0"
+      ],
+      "requires_selection": "single",
+      "note": "proves the DXE entrypoint links for this selection"
+    },
+    {
+      "id": "dxe-compile-sequence",
+      "family": "prepare-dxe",
+      "title": "DXE compile-only, ordered sequence",
+      "switches": {
+        "SyntheticCompileProfile": true
+      },
+      "binary": "GPU-SEQUENCE-COMPILE-ONLY-DXE-<label>.efi",
+      "safety": "compile-only",
+      "attestations": [
+        "SYNTHETIC_PROFILE=1",
+        "ORDERED_SEQUENCE_COMPILE_ONLY=1",
+        "MULTI_GPU_MUTATION_ALLOWED=0"
+      ],
+      "requires_selection": "sequence",
+      "note": "two or more targets, compile-checked only"
+    },
+    {
+      "id": "dxe-actuate-one-target",
+      "family": "prepare-dxe",
+      "title": "DXE waived transaction, one target",
+      "switches": {
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true
+      },
+      "binary": "GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-<label>.efi",
+      "safety": "actuates",
+      "attestations": [
+        "SINGLE_TARGET_ACTIVE=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "requires_selection": "single",
+      "note": "NVRAM-installed driver form of the waived transaction; sign-only, never staged"
+    },
+    {
+      "id": "dxe-actuate-sequence",
+      "family": "prepare-dxe",
+      "title": "DXE waived transaction, ordered sequence",
+      "switches": {
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true
+      },
+      "binary": "GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-<label>.efi",
+      "safety": "actuates",
+      "attestations": [
+        "SINGLE_TARGET_ACTIVE=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "requires_selection": "sequence",
+      "note": "NVRAM-installed driver form, ordered"
+    },
+    {
+      "id": "dxe-actuate-runtime-selection",
+      "family": "prepare-dxe",
+      "title": "DXE waived transaction, target chosen at boot",
+      "switches": {
+        "RuntimeSelection": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true
+      },
+      "binary": "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi",
+      "safety": "actuates",
+      "attestations": [
+        "RUNTIME_SELECTION=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0"
+      ],
+      "note": "NVRAM-installed driver, target at boot"
+    },
+    {
+      "id": "stop-4090-once",
+      "family": "stop-observation",
+      "title": "RTX 4090 Stop once",
+      "switches": {
+        "AcceptUnboundedStopRisk": true
+      },
+      "binary": "MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI",
+      "safety": "stop-only",
+      "attestations": [
+        "STOP_ONLY=1",
+        "TARGET=0000:01:00.0",
+        "STOP_COUNT=1",
+        "NO_KEY_INPUT=1",
+        "UNLOCK=0",
+        "FLASH=0",
+        "RESET=0",
+        "AMD_STOP=0",
+        "RECOVERY_VERIFIED=0",
+        "HARDWARE_TESTED=0",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "halts after the Stop; the vendor callback can hang without a timeout"
+    },
+    {
+      "id": "stop-4090-handoff",
+      "family": "stop-observation",
+      "title": "RTX 4090 Stop, then Windows",
+      "switches": {
+        "AcceptUnboundedStopRisk": true,
+        "AcceptWindowsHandoffRisk": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI",
+      "safety": "stop-only",
+      "attestations": [
+        "STOP_ONLY=1",
+        "TARGET=0000:01:00.0",
+        "STOP_COUNT=1",
+        "NO_KEY_INPUT=1",
+        "WINDOWS_HANDOFF=1",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "requires_esp_guid": true,
+      "note": "starts the pinned Windows Boot Manager after the Stop returns"
+    },
+    {
+      "id": "stop-3080-once",
+      "family": "stop-observation",
+      "title": "RTX 3080 Stop once",
+      "switches": {
+        "AcceptUnboundedStopRisk": true,
+        "Target3080": true
+      },
+      "binary": "MSI-RTX3080-STOP-ONCE-EXPERIMENT.EFI",
+      "safety": "stop-only",
+      "attestations": [
+        "STOP_ONLY=1",
+        "TARGET=0000:04:00.0",
+        "STOP_COUNT=1",
+        "NO_KEY_INPUT=1",
+        "UNLOCK=0",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "GA102 variant: requires the original 148,992-byte ROM and the original GOP driver"
+    },
+    {
+      "id": "stop-3080-handoff",
+      "family": "stop-observation",
+      "title": "RTX 3080 Stop, then Windows",
+      "switches": {
+        "AcceptUnboundedStopRisk": true,
+        "Target3080": true,
+        "AcceptWindowsHandoffRisk": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "MSI-RTX3080-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI",
+      "safety": "stop-only",
+      "attestations": [
+        "STOP_ONLY=1",
+        "TARGET=0000:04:00.0",
+        "STOP_COUNT=1",
+        "WINDOWS_HANDOFF=1",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "requires_esp_guid": true,
+      "note": "GA102 variant, then hands off to Windows"
+    },
+    {
+      "id": "stop-dual-handoff",
+      "family": "stop-observation",
+      "title": "RTX 4090 then RTX 3080 Stop, then Windows",
+      "switches": {
+        "AcceptUnboundedStopRisk": true,
+        "BothNvidia": true,
+        "AcceptWindowsHandoffRisk": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "MSI-DUAL-NVIDIA-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI",
+      "safety": "stop-only",
+      "attestations": [
+        "STOP_ONLY=1",
+        "TARGETS=0000:01:00.0,0000:04:00.0",
+        "STOP_COUNT=2",
+        "PEER_STOP=1",
+        "NO_KEY_INPUT=1",
+        "WINDOWS_HANDOFF=1",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "requires_esp_guid": true,
+      "note": "one boot, two Stops, AMD left attached; the builder refuses this without pinned handoff"
+    }
+  ],
+  "not_buildable": [
+    {
+      "id": "legacy-experimental",
+      "why": "the unselected mutating Experimental image is deliberately disabled: its mutation path is not generally hardware-safe, and the builder throws if asked"
+    },
+    {
+      "id": "stop-dual-without-handoff",
+      "why": "the dual Stop requires a pinned Windows handoff, so a no-handoff dual image has no legal build"
+    },
+    {
+      "id": "dxe-as-bootx64",
+      "why": "a DXE boot-service driver is PE subsystem 11; firmware will not run it as BOOTX64.EFI, and the script refuses to stage one"
+    },
+    {
+      "id": "esp-resident-dxe",
+      "why": "GU_ESP_RESIDENT gates the launch of an application image; a Driver#### entry is not launched from a volume, so the combination would advertise a gate that cannot run"
+    }
+  ]
+}

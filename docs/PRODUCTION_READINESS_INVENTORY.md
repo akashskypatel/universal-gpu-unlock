@@ -13,20 +13,20 @@ no hardware was touched.
 | Source obligation | Items | Share |
 | --- | --- | --- |
 | Met - implemented, and pinned by a host test, simulator row or CI job | 6 | 14% |
-| Partial - some exit criteria implemented, the remainder named | 9 | 21% |
-| Not started | 28 | 65% |
+| Partial - some exit criteria implemented, the remainder named | 10 | 23% |
+| Not started | 27 | 63% |
 
-**Source progress: 24%** (6 met + half of 9 partial = 10.5 of 43). **Verified on hardware: 0 of 43 (0%).**
+**Source progress: 26%** (6 met + half of 10 partial = 11 of 43). **Verified on hardware: 0 of 43 (0%).**
 
 | Class | Met | Partial | Not started | Total |
 | --- | --- | --- | --- | --- |
 | A - architecture coupling to the build machine | 3 | 5 | 0 | 8 |
 | B - hardware preconditions | 2 | 1 | 7 | 10 |
 | C - privileged operations never shown safe | 0 | 3 | 7 | 10 |
-| D - release engineering | 1 | 0 | 4 | 5 |
+| D - release engineering | 1 | 1 | 3 | 5 |
 | E - evidence the product depends on | 0 | 0 | 10 | 10 |
 
-Blocking `P0`: 21 items, 4 met, 6 partial, 11 not started.
+Blocking `P0`: 21 items, 4 met, 7 partial, 10 not started.
 
 What the percentage is not: a measure of the product working. A met item means the code exists and something on the host pins it; the behaviour it would perform on a GPU is still unproven, which is why the second number is the one that decides whether this product works. It is 0% because no run has ever driven a card.
 
@@ -301,7 +301,7 @@ These are verified from source, not inferred.
 
 | # | Gap | Evidence | Pri |
 | --- | --- | --- | --- |
-| D1 | Artifacts are unsigned; Secure Boot must be off or `AdaUnlock_SecureBoot.cer` enrolled by hand | builders link only (`Build-Experimental-MSVC.ps1:133-141`, `Build-Dxe-Driver.ps1:127-135`); no `signtool` anywhere | P0 |
+| D1 | Artifacts are unsigned; Secure Boot must be off or a certificate enrolled by hand | **partial (§11.19)** — `src/Build-Sign-Deploy-UniversalGPU.ps1` signs every one of the 32 variants with a personal certificate inside WSL and refuses to sign unless the certificate is already in the BIOS `db`; that is one machine's trust, not a distributable chain (no CA, no timestamp, no release key, no reproducibility claim) | P0 |
 | D2 | The only actuating build has no CI coverage | **Closed (§11.14):** the Windows job compiles the admitted image (app and DXE, one and two targets) with `-RuntimeEsp`, and the host job diffs it. The build is not uploaded. | P0 |
 | D3 | No provenance for the 84 MB payloads; `verify_reference_assets.py` hashes local copies only | `tools/verify_reference_assets.py` output: `NVIDIA_SIGNATURE_VERIFIED=false` | P1 |
 | D4 | MSVC-only toolchain, no EDK II build, installer disabled | `Setup-AdaUnlock.ps1` refuses by design (`Setup.bat`, CI asserts `STATUS=REFUSED`) | P2 |
@@ -958,6 +958,56 @@ contain, marked `SYNTHETIC_FIXTURE_NOT_A_HARDWARE_RUN` so they can never be
 mistaken for a capture. The gates say what a run must do; they do not say a card
 will survive it, and the readiness tracker still counts hardware evidence as
 0 of 43.
+
+### 11.19 D1 — the images are signed, and the signing says what it proves
+
+D1 listed "artifacts are unsigned; Secure Boot must be off or a certificate
+enrolled by hand". The second half is now a script instead of a manual step, and
+the first half is answered only for one machine.
+
+`docs/image_variants.json` is every image this repository can build - 32 variants
+across the four builders - as data. `src/Build-Sign-Deploy-UniversalGPU.ps1`
+executes that catalogue: build, prove the reported flags, sign inside WSL with a
+personal certificate, verify, receipt. `docs/BUILD_SIGN_DEPLOY.md` is the user
+document and its matrix table is rendered from the same file.
+
+Three properties make it hard to misuse:
+
+* **The signature is checked against the firmware, not against itself.** Before
+  signing, the script reads `db` with `Get-SecureBootUEFI`, walks the
+  `EFI_SIGNATURE_LIST` entries and refuses unless the DER certificate it is about
+  to sign with is byte-identical to one already enrolled. A signature the
+  firmware will not trust is a boot loop, not a security property, and the script
+  cannot produce one silently. `-SkipDbCheck` records `DB_ENROLLED=UNKNOWN`.
+* **The private key never leaves WSL.** `sbsign` runs there, the key lives in the
+  WSL user's home, and Windows only ever passes base64 blobs inside a
+  base64-encoded bash payload - the same transport the reference helper needed
+  because path-shaped arguments across the boundary corrupt backslashes.
+* **Signing cannot promote an image.** Each variant carries a safety class
+  (`read-only`, `refuses-before-mutation`, `compile-only`, `stop-only`,
+  `actuates`) and the catalogue's expected output filename; the script fails when
+  the builder's own `STATUS=` line disagrees with either. Only `-Only <id> -Deploy
+  <id>` stages anything, `stop-only`/`actuates` additionally need
+  `-AcceptActuatingDeploy`, and a DXE driver can never be staged because the
+  firmware will not run a PE subsystem 11 image as `BOOTX64.EFI`.
+
+Evidence: `tests/test_image_variants.py` (30 tests: every builder exists and links
+the subsystem the catalogue claims, every switch is a parameter of that builder,
+every output name is recomputed from the builders' own naming rules, every
+attestation names a field the builder prints, the safety classes agree with the
+switches, the dual Stop never appears without pinned handoff, the script refuses
+matrix staging and DXE staging and checks `db`, its PowerShell is 5.1-compatible
+and brace-balanced, and the rendered matrix is byte-identical to the catalogue).
+CI runs the renderer and the suite on Linux, and parses the script with
+`[Parser]::ParseFile` on `windows-latest` - parse only, never executed.
+
+What it is not: a release signing story. There is no CA, no timestamp, no
+reproducibility claim, and the certificate is personal to one machine. A signed
+image is the image you built and the firmware will load it; nothing here says the
+firmware accepts it, that the card survives it, or that Windows starts the
+device. Every receipt carries `HardwareVerified: false` and
+`Windows61742BooterProven: false`, and the closing status line carries
+`HARDWARE_VERIFIED=0`.
 
 ### 11.15 S5/A8 — the recovery matrix, checked against the code
 

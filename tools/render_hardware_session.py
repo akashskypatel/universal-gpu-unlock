@@ -56,6 +56,12 @@ Exit codes: `0` every gate in the stage passed, `1` a gate failed, `2` a listed
 log does not exist, `3` the log set is synthetic, `4` reserved for too few logs
 (reported inline as a failing gate today).
 
+The images each stage needs are in [`image_variants.json`](image_variants.json):
+`src/Build-Sign-Deploy-UniversalGPU.ps1 -Only <id>` builds and signs them, and
+[`BUILD_SIGN_DEPLOY.md`](BUILD_SIGN_DEPLOY.md) is the user document for that
+script. The session stages map to `diag-topology-log`, `prep-selected` and
+`actuate-one-target`.
+
 Before the boot, `tools/session_preflight.py` checks the bench the same way:
 that the medium carries no earlier `RUNnnnn.TXT` (a stale one is
 indistinguishable from a live one), that the ESP profile holds a reviewed GUID

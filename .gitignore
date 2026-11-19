@@ -18,3 +18,11 @@ build_diagnostic/
 # Python bytecode from the host test suite: never an artifact to commit.
 __pycache__/
 *.py[cod]
+
+# Signing material and signed artifacts. The public DER certificate is fine to
+# commit (AdaUnlock_SecureBoot.cer is one); private keys never are.
+*.key
+*.pvk
+*.pfx
+*.crt
+artifacts/

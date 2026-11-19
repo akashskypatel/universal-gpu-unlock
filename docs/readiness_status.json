@@ -264,9 +264,9 @@
       "id": "D1",
       "class": "D",
       "priority": "P0",
-      "source": "none",
-      "section": null,
-      "note": "Artifacts are unsigned; Secure Boot must be off or the certificate enrolled by hand.",
+      "source": "partial",
+      "section": "11.19",
+      "note": "Every variant is signed inside WSL with a personal certificate, and signing refuses unless that certificate is already in the BIOS db. One machine's trust, no CA, no timestamp, no release key.",
       "hardware_verified": false
     },
     {
