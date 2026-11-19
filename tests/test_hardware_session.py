@@ -33,6 +33,7 @@ MANIFEST = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encodi
 DOC = (ROOT / "docs" / "DONOR_HARDWARE_SESSION.md").read_text(encoding="utf-8")
 FIXTURES = ROOT / "tests" / "fixtures" / "hardware_session"
 VERIFIER = ROOT / "tools" / "verify_run_log.py"
+PREFLIGHT = ROOT / "tools" / "session_preflight.py"
 
 STAGES = ("readonly", "prepare", "actuate")
 
@@ -50,6 +51,11 @@ def groups():
 
 def run_verifier(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(VERIFIER), *args],
+                          capture_output=True, text=True, cwd=ROOT)
+
+
+def run_preflight(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(PREFLIGHT), *args],
                           capture_output=True, text=True, cwd=ROOT)
 
 
@@ -220,6 +226,83 @@ class TheVerifierScoresRuns(unittest.TestCase):
             result = run_verifier(str(path), "--self-test", "--stage", "prepare")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("FORBIDDEN", result.stdout)
+
+
+class TheBenchIsCheckedBeforehand(unittest.TestCase):
+    """The pre-flight scores the bench; the verifier scores the run."""
+
+    def make_bench(self, tmp: str, *, logs: tuple[str, ...] = ()) -> Path:
+        stick = Path(tmp) / "stick"
+        (stick / "AD102-UNLOCK").mkdir(parents=True)
+        for name in logs:
+            (stick / "AD102-UNLOCK" / name).write_text("stale\n", encoding="utf-8")
+        return stick
+
+    def make_profiles(self, tmp: str, guid: str = "0xdeadbeef") -> Path:
+        profile = Path(tmp) / "boot_profile.h"
+        profile.write_text(
+            f"#define GU_WINDOWS_PARTITION_INITIALIZER {{{guid},0x2222,0x3333,"
+            "{0x84,0x44,0x55,0x66,0x77,0x88,0x99,0xaa}}\n", encoding="utf-8")
+        return profile
+
+    def test_a_clean_bench_passes_and_never_claims_hardware(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stick = self.make_bench(tmp)
+            image = Path(tmp) / "image.efi"
+            image.write_bytes(b"MZ" + b"\0" * 64)
+            result = run_preflight("--stick", str(stick), "--image", str(image),
+                                   "--profile", str(self.make_profiles(tmp)))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("PREFLIGHT_VERDICT=PASS", result.stdout)
+        self.assertIn("HARDWARE_VERIFIED=0", result.stdout)
+        self.assertIn("SHA256=", result.stdout)
+        self.assertNotIn("HARDWARE_VERIFIED=1", result.stdout)
+
+    def test_a_stale_log_on_the_medium_fails_the_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stick = self.make_bench(tmp, logs=("RUN0001.TXT",))
+            result = run_preflight("--stick", str(stick), "--skip-profile")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("STALE_LOGS=1", result.stdout)
+        self.assertIn("ACTION=wipe the medium", result.stdout)
+
+    def test_the_placeholder_guid_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stick = self.make_bench(tmp)
+            result = run_preflight("--stick", str(stick),
+                                   "--profile", str(self.make_profiles(tmp, guid="0x11111111")))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("GUID=SYNTHETIC", result.stdout)
+
+    def test_a_missing_profile_is_a_failure_with_an_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            stick = self.make_bench(tmp)
+            result = run_preflight("--stick", str(stick),
+                                   "--profile", str(Path(tmp) / "absent.h"))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("PROFILE", result.stdout)
+        self.assertIn("ACTION=", result.stdout)
+
+    def test_a_zero_byte_image_is_not_a_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "image.efi"
+            image.write_bytes(b"")
+            result = run_preflight("--image", str(image), "--skip-profile")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("IMAGE EMPTY=1", result.stdout)
+
+    def test_a_named_path_that_does_not_exist_is_a_usage_error(self):
+        result = run_preflight("--stick", "/nonexistent/stick", "--skip-profile")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("PREFLIGHT_ERROR=NO_SUCH_PATH", result.stderr)
+
+    def test_the_preflight_and_the_verifier_print_the_same_manual_gates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            preflight = run_preflight("--stick", str(self.make_bench(tmp)), "--skip-profile")
+        verifier = run_verifier(str(FIXTURES / "readonly.txt"), "--self-test")
+        for item in MANIFEST["manual_gates"]:
+            self.assertIn(f"MANUAL {item['id']}", preflight.stdout)
+            self.assertIn(f"MANUAL {item['id']}", verifier.stdout)
 
 
 class SyntheticLogsAreRefused(unittest.TestCase):

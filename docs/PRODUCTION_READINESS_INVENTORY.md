@@ -938,13 +938,19 @@ ending the session rather than the loop, and Windows started with the card
 enumerated afterwards. They are printed on every run so that they are skipped
 only deliberately.
 
-Evidence: `tests/test_hardware_session.py` (35 tests: token grounding, stage
+The bench has its own half: `tools/session_preflight.py` refuses a medium that
+already carries a `RUNnnnn.TXT` (a stale file is indistinguishable from a live
+one), a `local/boot_profile.h` that still holds the committed placeholder GUID,
+and an image that is empty or not a PE, while recording the image's SHA256 for
+the session log.
+
+Evidence: `tests/test_hardware_session.py` (42 tests: token grounding, stage
 well-formedness, printf-to-pattern conversion, the verifier passing a good
 read-only/prepare/actuation log and failing a truncated one, a simulated one, a
 doubled waiver and a Stop in a preparation session, the synthetic refusal, the
-rendered document being byte-identical to the manifest, and no output ever
-printing `HARDWARE_VERIFIED=1`). CI runs the renderer, two scored fixtures and
-the suite.
+rendered document being byte-identical to the manifest, the pre-flight failing a
+stale medium and the placeholder GUID, and no output ever printing
+`HARDWARE_VERIFIED=1`). CI runs the renderer, two scored fixtures and the suite.
 
 What it is not: no gate has been evaluated against a real log, because no donor
 run has happened. The fixtures are hand-written models of what such a log would

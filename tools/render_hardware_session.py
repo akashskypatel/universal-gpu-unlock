@@ -56,6 +56,20 @@ Exit codes: `0` every gate in the stage passed, `1` a gate failed, `2` a listed
 log does not exist, `3` the log set is synthetic, `4` reserved for too few logs
 (reported inline as a failing gate today).
 
+Before the boot, `tools/session_preflight.py` checks the bench the same way:
+that the medium carries no earlier `RUNnnnn.TXT` (a stale one is
+indistinguishable from a live one), that the ESP profile holds a reviewed GUID
+and not the committed placeholder, and that the image is a non-empty PE with its
+SHA256 recorded:
+
+```bash
+python3 tools/session_preflight.py --stick /media/stick --image out/<the built>.EFI
+```
+
+It prints the same `MANUAL` gates and the same `HARDWARE_VERIFIED=0`. A clean
+bench means nothing is obviously wrong before the run; it says nothing about a
+card.
+
 ## The stages
 
 """
