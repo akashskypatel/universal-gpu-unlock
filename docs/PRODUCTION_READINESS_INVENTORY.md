@@ -302,7 +302,7 @@ cleanup in our own code*, not any of C1–C10.
 
 | Stage | Work | Exit criteria |
 | --- | --- | --- |
-| **S1 — make one machine repeatable** (weeks) | A2 runtime ESP identification; A6 asset install; D1 signing; D2 CI build of the waiver path with a synthetic GUID | one image booted twice on the same machine, both boots verified from the USB log; CI builds and diffs the admitted image |
+| **S1 — make one machine repeatable** (weeks) | A2 runtime ESP identification (done, §11.6); A6 asset install (done, §11.10); D1 signing (open); D2 CI build of the waiver path (**diff done, §11.14**; synthetic-GUID build open) | one image booted twice on the same machine, both boots verified from the USB log; CI builds and diffs the admitted image |
 | **S2 — make selection dynamic** (weeks) | A1 runtime selector + policy; A4 profile detection; B3/B6 relaxation with evidence (MSI state handling, ReBAR/BAR>4 GiB) | one image, two different machines with different BDFs and different stock profiles, each completes without a rebuild |
 | **S3 — prove the privileged path** (the long pole) | C1 bounded Stop or a replacement detach; C2 DMA quiescence proof; C3/C4 authenticated firmware acceptance | a written harness that shows the Stop callback returns within a bound, DMA is provably idle, and firmware acceptance is decided by signature, not hash |
 | **S4 — multi-GPU** (after S3) | A3 verified multi-target admission; C9 interference testing; memory budget (B10) | two cards, ordered, peers unchanged, handover verified, no retained buffers |
@@ -719,6 +719,38 @@ synthetic cannot reach firmware, one version literal), and two simulator rows:
 `prepare prom-refused` (`STATUS=8000000000000003 BAR_WRITES=0 FLR=0`,
 `REASON=UNKNOWN_CARD REFS=0`) and `prepare prom-admitted`
 (`PROM_IDENTITY=VERIFIED`).
+
+### 11.14 S1/D2 — the admitted image is built and diffed
+
+S1's exit criteria end with "CI builds and diffs the admitted image", and D2 asks
+for a CI build of the waiver path. Neither had a mechanism: the workflow built
+preparation-only images, and `GU_ACTIVE_UNVERIFIED_ACTUATION` - the single switch
+that turns "refuses to actuate" into "may attempt the unverified transaction" -
+was described only in a runbook.
+
+`tools/waiver_build_diff.py` builds every source in the image twice from the same
+tree and diffs each translation unit:
+
+| Compared | Expected |
+| --- | --- |
+| Preprocessor defines | exactly two deltas: `GU_ACTIVE_UNVERIFIED_ACTUATION` appears, `GU_ACTUATION_ADMITTED` flips `0 -> 1`; anything else is an unreviewed change and fails |
+| Defined object symbols | none, in either direction: the waiver flips a gate inside the same program, it does not compile a different one |
+| Reach | `GU_ACTUATION_ADMITTED` must flip in at least one unit, so a waiver that admits nothing cannot pass as evidence |
+
+Current result: `WAIVER_DIFF=PASS SOURCES=26 MACRO_DELTAS=41 ADMITTED_UNITS=15
+SYMBOL_DELTAS=0`. The 41 deltas are the flag reaching all 26 units plus the
+admission constant in the 15 that include `port.h`.
+
+What this does not do: it is a hosted GCC build of the same sources with the
+simulator's define shim, so it witnesses source shape, not that MSVC/EDK II emit
+the same image. It also does not build with a synthetic GUID, the second half of
+D2 - that is a build-script change in `src/Build-Experimental-MSVC.ps1`, which
+cannot be executed here and is left open rather than claimed.
+
+Evidence: the tool itself (CI runs it), `tests/test_waiver_build_diff.py` (9
+tests: the diff passes, a missing compiler is a skip rather than a pass, the pin
+is exactly the reviewed pair, no unit may gain or lose code, the profile matches
+the runbook, every compiled source is covered).
 
 ### 11.7 Items deliberately not changed
 

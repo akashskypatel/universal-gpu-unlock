@@ -15,3 +15,6 @@ build_diagnostic/
 .claude/
 .codex/
 .agents/
+# Python bytecode from the host test suite: never an artifact to commit.
+__pycache__/
+*.py[cod]

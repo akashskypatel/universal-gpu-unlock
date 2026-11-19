@@ -122,6 +122,10 @@ jobs:
               "$RUNNER_TEMP/test_prom_reference_empty_$compiler"
             done
             python3 -m unittest discover -s tests -p test_prom_reference_contract.py -v
+            # S1/D2: build the admitted (waiver) image and diff it against the
+            # checked one - one macro flips, no module gains or loses code.
+            python3 tools/waiver_build_diff.py
+            python3 -m unittest discover -s tests -p test_waiver_build_diff.py -v
             # Every stock profile must link, and keep its own selector contract.
             python3 tools/run_simulation.py matrix
             python3 -m unittest discover -s tests -p test_stock_profile_matrix.py -v
