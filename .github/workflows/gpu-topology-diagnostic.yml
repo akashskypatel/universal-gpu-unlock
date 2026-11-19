@@ -50,8 +50,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Mirror the step to a file so a failure can be reported as an
+          # annotation: the uploaded log is not always reachable from outside.
+          HOST_LOG="$RUNNER_TEMP/host.log"
+          exec > >(tee -a "$HOST_LOG") 2>&1
           (
-            trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .; exit "$rc"' EXIT
+            trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .; if [ "$rc" -ne 0 ]; then printf "::error::HOST_EXIT=%s %s\n" "$rc" "$(tail -n 4 "$HOST_LOG" | tr "\n" "|" | cut -c1-1000)"; fi; exit "$rc"' EXIT
             # MSI 7E56 requires an exact passive dual-NVIDIA hardware fingerprint.
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_msi_b850_rom_diag.c -o "$RUNNER_TEMP/test_msi_b850_rom_diag_$compiler"
@@ -555,6 +559,8 @@ jobs:
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
           } catch {
             "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Annotations are readable without artifact access; the log is not.
+            Write-Host "::error title=EFI build::BUILD_EXIT=1 $($_.Exception.Message)"
             throw
           }
       - name: Preserve final EFI status
