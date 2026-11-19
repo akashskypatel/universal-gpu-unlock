@@ -8,6 +8,662 @@
     "line_endings": "the diagnostic writes CRLF; the active app writes LF. Both are accepted",
     "order": "the file number is the boot order; pass the logs to the verifier in that order"
   },
+  "readonly_guide": {
+    "title": "Read-only hardware execution guide, step by step",
+    "intro": [
+      "The sections after this one describe the gates. This one is the sequence that produces a log to score, for every image in the catalogue that writes nothing to the GPU, and names the fact in each log that a hardware-dependent item is waiting for.",
+      "Nothing below has been executed against this tree. No log described here exists, every tool in the chain prints `HARDWARE_VERIFIED=0`, and no step changes a row in `docs/readiness_status.json`: a captured log is something a reviewer reads, not a flag this repository flips."
+    ],
+    "naming": "There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with two switches: `-Only <id>` chooses the image from `docs/image_variants.json`, and `-StageDrive <letter>` copies the signed `EFI\\BOOT\\BOOTX64.EFI` onto the stick after a verified backup of whatever was there. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.",
+    "preconditions": [
+      {
+        "id": "M1_RECOVERY_TOOLKIT_READY",
+        "why": "the programmer, the known-good firmware image and the SPI part number are on the bench before the first boot; none of the images below writes the GPU, but the bench rule does not depend on that"
+      },
+      {
+        "id": "M2_DONOR_CARD_RECORDED",
+        "why": "serial, slot, board model and the vendor tool's VBIOS version, so the BDF and device ID in the log can be tied to a piece of silicon afterwards"
+      },
+      {
+        "id": "M3_LOG_MEDIUM_EMPTY",
+        "why": "no `GPU-TOPOLOGY-DIAGNOSTIC-*.TXT` and no `AD102-UNLOCK\\RUN*.TXT` on the stick; a stale file is indistinguishable from a live one and `session_preflight.py` refuses a medium that carries one"
+      },
+      {
+        "id": "M4_ONE_CARD_ONLY",
+        "why": "recorded for the waived stages; a read-only candidate may run with one card or two, and the log must be read against the cabling you actually had connected"
+      },
+      {
+        "id": "M6_STOCK_BOOT_AFTER_EVERY_RUN",
+        "why": "after each candidate, boot Windows once and record the build, driver version and device status: the read-only images promise the card is untouched, and this is the observation that would notice if it were not"
+      },
+      {
+        "id": "SIGNING_KEY",
+        "why": "the signing certificate lives in WSL (`$HOME/secureboot-signing/uefi-db.key` and `.crt`) and the same certificate must be enrolled in the BIOS `db`; the script refuses to sign when it is not, unless you pass `-SkipDbCheck` and accept a receipt that reads `DB_ENROLLED=UNKNOWN`"
+      },
+      {
+        "id": "REPOSITORY_ROOT",
+        "why": "every command is written from the repository root, with the signed outputs landing in `artifacts\\signed`"
+      }
+    ],
+    "steps": [
+      {
+        "n": 1,
+        "title": "confirm the catalogue accepts the candidate",
+        "shell": "powershell",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -List",
+        "expect": "one `CATALOGUE ... variants=29 families=4` line, then a `VARIANT <id> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.",
+        "expect_tokens": [
+          {
+            "token": "CATALOGUE {0} variants={1} families={2}",
+            "emitter": "src/Build-Sign-Deploy-UniversalGPU.ps1"
+          },
+          {
+            "token": "VARIANT {0} SAFETY={1} BINARY={2}",
+            "emitter": "src/Build-Sign-Deploy-UniversalGPU.ps1"
+          }
+        ],
+        "if_not": "a missing id is a catalogue problem, not a bench problem: fix the tree before touching the stick."
+      },
+      {
+        "n": 2,
+        "title": "build, sign and stage in one command",
+        "shell": "powershell",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G",
+        "expect": "`VARIANT_BEGIN` for the one image, `SIGNING_CERTIFICATE ... DB_ENROLLED=TRUE`, the verified signed SHA-256, `STAGED diag-topology-log PATH=... DRIVE=G:`, and a final `STATUS=SIGNED=1 FAILED=0 ... HARDWARE_VERIFIED=0`. A stick holds one `BOOTX64.EFI`, so this is one candidate per stick: the previous image is backed up locally before it is replaced.",
+        "expect_tokens": [
+          {
+            "token": "VARIANT_BEGIN [{0}/{1}] id={2} family={3} safety={4} builder={5}",
+            "emitter": "src/Build-Sign-Deploy-UniversalGPU.ps1"
+          },
+          {
+            "token": "SIGNING_CERTIFICATE path={0} SHA256={1} DB_ENROLLED={2}",
+            "emitter": "src/Build-Sign-Deploy-UniversalGPU.ps1"
+          },
+          {
+            "token": "STAGED {0} PATH={1} DRIVE={2}:",
+            "emitter": "src/Build-Sign-Deploy-UniversalGPU.ps1"
+          },
+          {
+            "token": "STATUS={0} SIGNED={1} FAILED={2} SKIPPED={3} DB_ENROLLED={4} HARDWARE_VERIFIED=0 MATRIX={5}",
+            "emitter": "src/Build-Sign-Deploy-UniversalGPU.ps1"
+          }
+        ],
+        "if_not": "`Refusing to stage` names the safety class and the missing switch. `-AcceptActuatingDeploy` exists for images that write the GPU; no read-only candidate in this guide needs it. `-SignOnly` builds and signs without touching a stick."
+      },
+      {
+        "n": 3,
+        "title": "check the bench before the boot",
+        "shell": "bash",
+        "command": "python3 tools/session_preflight.py --stick /media/stick \\\n    --image /media/stick/EFI/BOOT/BOOTX64.EFI --skip-profile",
+        "expect": "`STICK FREE_OF_OLD_LOGS=1`, `IMAGE ... BYTES=... SHA256=...` for the file that will actually boot, the six `MANUAL` gates, and `PREFLIGHT_VERDICT=PASS ... CHECKS=2 HARDWARE_VERIFIED=0`. `--skip-profile` is right for every candidate here: the reviewed ESP profile belongs to the waived stages.",
+        "expect_tokens": [
+          {
+            "token": "PREFLIGHT_VERDICT={verdict}{failed} CHECKS={checked} HARDWARE_VERIFIED=0",
+            "emitter": "tools/session_preflight.py"
+          },
+          {
+            "token": "STICK FREE_OF_OLD_LOGS=1",
+            "emitter": "tools/session_preflight.py"
+          }
+        ],
+        "if_not": "`STALE_LOGS=` with an `ACTION=` line means the medium is not empty: archive and wipe it (M3) rather than rebooting over an old log. `IMAGE EMPTY=1` or `PE_HEADER=0` means step 2 did not produce the file you think it did."
+      },
+      {
+        "n": 4,
+        "title": "boot the stick once, from the firmware boot menu",
+        "shell": "none",
+        "command": "",
+        "expect": "choose the USB entry once and let the image run to its own end. Do not retry inside the same session: the file number is the boot order, and a second boot writes a second file. The read-only candidates print `GPU hardware untouched` and return, and the handoff candidates start Windows after the log is closed.",
+        "expect_tokens": [
+          {
+            "token": "DIAGNOSTIC FINISHED; GPU hardware untouched.",
+            "emitter": "src/gpu_topology_efi.c"
+          }
+        ],
+        "if_not": "a hang is a finding: power-cycle, keep the stick as it is, and record what the screen last showed. Nothing in a read-only session writes the card, so a hang here is a firmware or console fault, not a damaged GPU."
+      },
+      {
+        "n": 5,
+        "title": "capture the log, then empty the medium",
+        "shell": "powershell",
+        "command": "$evidence = Join-Path $env:USERPROFILE ('donor-evidence\\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))\nNew-Item -ItemType Directory -Force -Path $evidence | Out-Null\n$log = Get-ChildItem G:\\ -Filter 'GPU-TOPOLOGY-DIAGNOSTIC-*.TXT' | Sort-Object Name | Select-Object -Last 1\nCopy-Item -LiteralPath $log.FullName -Destination $evidence\nGet-FileHash -Algorithm SHA256 (Join-Path $evidence $log.Name)\n(Get-Content -LiteralPath $log.FullName | Measure-Object -Line).Lines",
+        "expect": "the file named by the log's own `LOG_FILE=` line is the newest number on the stick; copy it off before wiping anything, and record its SHA-256, byte count and line count next to the candidate id. Wipe the stick afterwards so the next candidate starts from an empty medium.",
+        "expect_tokens": [
+          {
+            "token": "LOG_FILE=\\\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT",
+            "emitter": "src/gpu_topology_efi.c"
+          }
+        ],
+        "if_not": "an empty stick with no log means the image never reached its save step. The screen said why: the last line before it stopped is the finding, and there is nothing to score."
+      },
+      {
+        "n": 6,
+        "title": "score the log against the gates",
+        "shell": "bash",
+        "command": "python3 tools/verify_run_log.py ~/donor-evidence/<stamp>/GPU-TOPOLOGY-DIAGNOSTIC-0011.TXT --stage readonly",
+        "expect": "one `GATE <id> STAGE=<stage> RESULT=PASS` line per gate in the stage, the `NOTE` advisories, the six `MANUAL` gates, the `NOT_PROVEN` list, and `RUN_LOG_VERDICT=PASS ... HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`. Exit code `0` means every gate in that stage passed; `1` names the first failure in `FIRST_FAILED=`.",
+        "expect_tokens": [
+          {
+            "token": "HARDWARE_SESSION stage={stage} logs={len(logs)} ",
+            "emitter": "tools/verify_run_log.py"
+          },
+          {
+            "token": "RUN_LOG_VERDICT={verdict}{first} ",
+            "emitter": "tools/verify_run_log.py"
+          },
+          {
+            "token": "GATES_FAILED={len(failed)}",
+            "emitter": "tools/verify_run_log.py"
+          }
+        ],
+        "if_not": "exit `2` is a missing log, exit `3` is a log carrying the fixture marker (a synthetic log can never score as hardware evidence), and exit `1` is a real gate failure: `FIRST_FAILED=` names it, and the gate's own paragraph above says what it does not prove. For `prep-selected` and `dxe-prep-selected` the same command takes `--stage prepare` and the app's numbered log."
+      }
+    ],
+    "after_the_steps": "That is the loop: build-sign-stage, boot once, capture, score. The verdict is written into the session record beside the candidate id and the goal it was collected for. It does not change `hardware_verified` for anything, and the next section says why: a green read-only log is a statement about one image on one machine, not about a card.",
+    "candidates": [
+      {
+        "id": "diag-topology-log",
+        "title": "topology with a numbered USB log",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "The baseline read-only contact: PCI tree, GPU identities, GOP and console ownership, one numbered log. This is the image the R1-R3 gates were written for.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G",
+        "evidence": [
+          {
+            "goal": "B1",
+            "token": "TOPOLOGY_VERDICT=%s NVIDIA_CONOUT_BLOCKER=%u",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "names the configured-console finding on the machine in front of you: whether an AMD display function owns the console, or an NVIDIA path is configured and blocks it"
+          },
+          {
+            "goal": "B1",
+            "token": "ERROR_CONSOLE_ISOLATION=%s",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the error-console half of the same question: an independent AMD `ErrOut` observation is what a console-handover refactor would rest on"
+          },
+          {
+            "goal": "B2",
+            "token": "GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x PCI_INDEX=%zu PARENT=%zu ROOT_PORT=%zu DEPTH=%u ANCESTRY=%u ROOT_VALID=%u GOP_COUNT=%u",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "one line per GPU with its GOP count, so the surviving-non-target-GOP question B2 is about is answered for this cabling instead of assumed"
+          },
+          {
+            "goal": "B9",
+            "token": "LOG_FILE=\\\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "a numbered log written by an image launched from USB is the writable-medium half of B9 observed rather than assumed"
+          },
+          {
+            "goal": "E8",
+            "token": "PCI[%zu] %04x:%02x:%02x.%u %04x:%04x SUB=%04x:%04x CLASS=%04x ROOTPORT=%u PRIMARY=%02x BUSWINDOW=%02x-%02x BY_DRIVER=%u KNOWN=%u AGENT=%p PATH=%zu",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "device and subsystem id of every PCI node: the identity row a per-SKU entry (AD104/AD106/AD107, other GA102 ids) starts from"
+          }
+        ],
+        "does_not_prove": "that the card can be detached, unlocked or flashed: every eligibility flag in the log is zero by construction, and the report ends with `GPU hardware untouched`."
+      },
+      {
+        "id": "diag-topology-handoff",
+        "title": "topology with a log and automatic Windows handoff",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "The same report, then the explicitly pinned Windows Boot Manager. The added value is not the topology: it is the observation that the reviewed ESP GUID boots Windows on this machine, after the log is closed.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G",
+        "also_collects": "diag-topology-log",
+        "evidence": [
+          {
+            "goal": "A2",
+            "token": "WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the handoff is pinned to one ESP GUID, and the image states it neither resets nor rewrites BootOrder"
+          },
+          {
+            "goal": "A2",
+            "token": "Starting the explicitly pinned Windows Boot Manager directly.",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the line that must be followed by a Windows boot: the reviewed GUID is right only if Windows actually starts"
+          },
+          {
+            "goal": "B9",
+            "token": "SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the log is durably written before the handoff begins, so a failed handoff still leaves the evidence"
+          }
+        ],
+        "does_not_prove": "that the GUID names the only Windows loader, or that BitLocker, Secure Boot policy or anti-cheat accept that path (E10); it shows one pinned partition started Windows once."
+      },
+      {
+        "id": "diag-selection",
+        "title": "selected-GPU observation with a log",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "The passive diagnostic with an ordered selection: one snapshot, every requested BDF resolved before any report, then per-target identity and a summary. This is the read-only image that says something about two cards.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-selection -SelectionBdfs '0000:01:00.0,0000:04:00.0' -StageDrive G",
+        "evidence": [
+          {
+            "goal": "A1",
+            "token": "PASSIVE_SELECTION=GPU_IDENTIFIED TARGET=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the requested BDF resolved to a device and subsystem id from the live snapshot: the runtime selector's positive case on real handles"
+          },
+          {
+            "goal": "A1",
+            "token": "SELECTION_SEQUENCE=REFUSED CODE=%d COMPLETED=0 REQUESTED=%u TOPOLOGY_VERDICT=%d",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "a wrong or absent BDF refuses the whole sequence with no partial selection: the negative half of the same feature"
+          },
+          {
+            "goal": "C9",
+            "token": "SELECTION_STEP[%zu]=PASSIVE_IDENTIFIED ID=%04x:%04x SUB=%04x:%04x CLASS=%04x ROOT_INDEX=%zu DEPTH=%u GOP_COUNT=%u BY_DRIVER=%u OPENERS_KNOWN=%u",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "one numbered report per selected card in order, with its own GOP count and driver-owner status: the per-card data a multi-GPU refactor has to be written against"
+          },
+          {
+            "goal": "C9",
+            "token": "SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=%u NON_SELECTED_NVIDIA_COUNT=%zu TOPOLOGY_VERDICT=%d CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the aggregate says how many NVIDIA cards were seen but not selected, which is the peer set the interference question is about"
+          }
+        ],
+        "does_not_prove": "that two cards can be actuated in order: the sequence is CPU-side reporting over one immutable snapshot, and B10's memory cost per additional card is untouched by it."
+      },
+      {
+        "id": "diag-msi-rom",
+        "title": "MSI B850 ROM variables",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "Reads the MS-7E56 firmware's `ROM_CMN`/`CSM_CMN` variables and dumps them raw, on the board fingerprint the earlier console analysis was done on. This is the only passive route to the firmware's own display-selection policy; it changes nothing.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-rom -StageDrive G",
+        "evidence": [
+          {
+            "goal": "B1",
+            "token": "MSI_B850_ROM_VARIABLES PLATFORM_FINGERPRINT=MATCH SMBIOS_VERIFIED=0 BIOS_VERSION_VERIFIED=0 GPU_MUTATION=NONE",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the probe only runs on the exact board and GPU fingerprint, and it says in the same line that SMBIOS and the BIOS version are not verified"
+          },
+          {
+            "goal": "B1",
+            "token": "MSI_B850_VARIABLE NAME=%s EFI_STATUS=%#llx BYTES=%zu ATTRS=%#x CAP=%u RAW_ONLY=1 READ_ONLY=1",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the raw bytes of the variable, with `RAW_ONLY=1`: the firmware's display policy is in there, and the log does not pretend to interpret it"
+          },
+          {
+            "goal": "B1",
+            "token": "MSI_B850_BDS_POLICY_END NO_VENDOR_CALLBACK=1 NO_LIST_TRAVERSAL=1 NO_GPU_ACTION=1 POOL_UNCERTAIN=%u",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the line that bounds the probe: no vendor callback, no list traversal, no GPU action, so the dump cannot have changed the console state it describes"
+          }
+        ],
+        "does_not_prove": "which byte is `Initiate Graphic Adapter`, or that clearing it in firmware would give an AMD-exclusive `ConOut`/`ErrOut`: the dump is raw, there is no schema, and nothing here authorises an NVRAM rewrite."
+      },
+      {
+        "id": "diag-msi-rom-handoff",
+        "title": "MSI B850 ROM variables with handoff",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "The ROM-variable dump plus the pinned Windows handoff, so a passive capture of the firmware's display policy does not end with the operator hunting for a boot entry.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-rom-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G",
+        "also_collects": "diag-msi-rom",
+        "evidence": [
+          {
+            "goal": "A2",
+            "token": "WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the handoff is pinned to one ESP GUID and does not touch BootOrder"
+          },
+          {
+            "goal": "B9",
+            "token": "SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the dump is written before the handoff, so the evidence survives a handoff that fails"
+          }
+        ],
+        "does_not_prove": "anything the base ROM-variable probe does not prove, plus the handoff's own limit: one pinned partition started Windows once."
+      },
+      {
+        "id": "diag-msi-fuse",
+        "title": "MSI B850 fuse version",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "One 32-bit read of the GSP fuse register per identity-verified card, plus one of the SEC2 register, and nothing else. The only image that reports which firmware signature slot a physical card's fuse selects.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-fuse -StageDrive G",
+        "evidence": [
+          {
+            "goal": "C4",
+            "token": "MSI_B850_FWSEC_FUSE GPU=%s STATUS=OBSERVED BAR0_OFFSET=0x8241e0 RAW=%#x LOW16=%#x FUSE_VERSION=%u ARCHIVED_ROM_SIG_MASK=%#x CANDIDATE_SLOT=%u ARCHIVED_SLOT_NONZERO=%u ACCEPTANCE=UNVERIFIED",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the fuse word and the slot it implies for each card: the per-card half of the Booter/V67/ROM pairing question, and the line ends `ACCEPTANCE=UNVERIFIED`"
+          },
+          {
+            "goal": "C3",
+            "token": "MSI_B850_FWSEC_FUSE_BEGIN SOURCE=NOVA_CORE_GA102_PLUS READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 NO_STOP=1 NO_DMA=1 NO_RESET=1",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the first line of the probe says it reads only, so it can never establish firmware acceptance: C3 stays where it is whatever the value is"
+          },
+          {
+            "goal": "E7",
+            "token": "MSI_B850_SEC2_FUSE_BEGIN SOURCE=NOVA_CORE_GA102_PLUS REFERENCE_BOOTER=LINUX_610_43_03 ENGINE_MASK=0x1 UCODE_ID=3 WINDOWS_61742_DESCRIPTOR=UNKNOWN READ_ONLY=1",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the probe names the reference it decoded against (the Linux 610.43.03 header) and states that the Windows 617.42 descriptor is unknown: the asset-coupling claim, bounded in the log"
+          }
+        ],
+        "does_not_prove": "that the slot this fuse names is the slot Windows 617.42 selects; the same line prints `WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN`, and no signature is authenticated anywhere in this path."
+      },
+      {
+        "id": "diag-msi-fuse-handoff",
+        "title": "MSI B850 fuse version with handoff",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "The fuse read plus the pinned Windows handoff: a card that is left alone still has to end the session in Windows, and this is the variant that says so in one boot.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-fuse-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G",
+        "also_collects": "diag-msi-fuse",
+        "evidence": [
+          {
+            "goal": "A2",
+            "token": "WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the handoff is pinned to one ESP GUID and does not touch BootOrder"
+          },
+          {
+            "goal": "B9",
+            "token": "SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the fuse reads are written before the handoff begins"
+          }
+        ],
+        "does_not_prove": "anything the base fuse probe does not prove, plus the handoff's own limit: one pinned partition started Windows once."
+      },
+      {
+        "id": "diag-msi-sec2",
+        "title": "MSI B850 SEC2 ucode version",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "One read of the SEC2 version register at BAR0+0x824140 per card, named as the Windows 617.42 register by the Linux 610.43.03 header. It reports a version and refuses to infer a signature from it.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-sec2 -StageDrive G",
+        "evidence": [
+          {
+            "goal": "C4",
+            "token": "MSI_B850_SEC2_UCODE1 GPU=%s STATUS=OBSERVED BDF=0000:%02x:00.0 BAR0_OFFSET=0x824140 RAW=%#x LOW16=%#x FUSE_VERSION=%u ENGINE_ID=1 UCODE_ID=1 SELECTED_SIGNATURE=UNVERIFIED SECURE_ACCEPTANCE=UNVERIFIED READ_ONLY=1",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the SEC2 version per card, with the selected signature and the secure-acceptance result stated as unverified in the same line"
+          },
+          {
+            "goal": "C4",
+            "token": "MSI_B850_SEC2_UCODE1_END READS_SUCCEEDED=%u EXPECTED=2 NO_GPU_WRITES=1 SECURE_ACCEPTANCE=UNVERIFIED",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the completion line says how many of the expected reads landed and that no GPU write happened: a failed read is visible as a count, not as a silent zero"
+          }
+        ],
+        "does_not_prove": "that this version is the one Windows 617.42 uses. The register is named by a Linux header, the log prints `SELECTED_SIGNATURE=UNVERIFIED`, and the Windows signature slot stays `UNKNOWN`."
+      },
+      {
+        "id": "diag-msi-sec2-handoff",
+        "title": "MSI B850 SEC2 ucode version with handoff",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "The SEC2 read plus the pinned Windows handoff, for a bench where the read-only image is expected to return to Windows by itself.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-sec2-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G",
+        "also_collects": "diag-msi-sec2",
+        "evidence": [
+          {
+            "goal": "A2",
+            "token": "WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the handoff is pinned to one ESP GUID and does not touch BootOrder"
+          },
+          {
+            "goal": "B9",
+            "token": "SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the read is written before the handoff begins"
+          }
+        ],
+        "does_not_prove": "anything the base SEC2 probe does not prove, plus the handoff's own limit: one pinned partition started Windows once."
+      },
+      {
+        "id": "prep-selected",
+        "title": "preparation for explicit targets",
+        "safety": "refuses-before-mutation",
+        "stage": "prepare",
+        "log": "\\AD102-UNLOCK\\RUNnnnn.TXT, one file per boot, never overwritten",
+        "summary": "The active application, built without the waiver: it runs the real inventory and selection, prepares its state, and refuses before `GuInit`. This is the only image here that executes the app's own entrypoint on hardware, which is why it is the one the P gates score.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected -SelectionBdf '0000:01:00.0' -StageDrive G",
+        "evidence": [
+          {
+            "goal": "D5",
+            "token": "ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0",
+            "emitter": "src/gpu_discovery.c",
+            "why": "the app's inventory, selection and preparation completed on real firmware and the log says mutation was not authorised: the manual loop D5 says does not exist, run once, by hand"
+          },
+          {
+            "goal": "B9",
+            "token": "LAUNCH_SOURCE DECISION=%s REASON=%s REMOVABLE=%u PARTITION=%u",
+            "emitter": "src/boot_io.c",
+            "why": "the app's own launch decision, printed before anything else: the USB-launch requirement observed rather than inferred"
+          },
+          {
+            "goal": "A7",
+            "token": "BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x",
+            "emitter": "src/boot_io.c",
+            "why": "the persistent record is read at boot on real firmware, so a later boot's `PRESENT=1` is a record this tree wrote, not a fixture"
+          },
+          {
+            "goal": "A4",
+            "token": "ACTIVE_PREPARE=SELECTED_UNSUPPORTED_CARD BDF=%04x:%02x:%02x.%u ID=%04x:%04x",
+            "emitter": "src/gpu_discovery.c",
+            "why": "building for one BDF and booting with a different card produces this refusal: the negative case of the image-refuses-a-card-it-was-not-built-for rule"
+          },
+          {
+            "goal": "E8",
+            "token": "ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x LEGACY_UNLOCK_DEVICE_ID=%u",
+            "emitter": "src/gpu_discovery.c",
+            "why": "the identity the app itself resolved, with the device id it would act on: the first row of a per-SKU entry"
+          },
+          {
+            "goal": "M4",
+            "token": "ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1",
+            "emitter": "src/gpu_discovery.c",
+            "why": "how many NVIDIA cards the app saw, which is the number M4's one-card rule has to be recorded against"
+          }
+        ],
+        "does_not_prove": "that any admission gate passed on the card: the preparation image stops before `GuCheckConfig` and before the link check, so a preparation log cannot speak to B3-B8 or C8 at all. It proves the entrypoint ran and refused, nothing about the card's state."
+      },
+      {
+        "id": "dxe-prep-selected",
+        "title": "DXE preparation for explicit targets",
+        "safety": "refuses-before-mutation",
+        "stage": "prepare",
+        "log": "\\AD102-UNLOCK\\RUNnnnn.TXT, one file per boot, never overwritten",
+        "summary": "The same preparation as a boot-service driver, loaded from a `Driver####` entry instead of `EFI\\BOOT\\BOOTX64.EFI`. It answers one question the application cannot: whether the same preflight runs under a driver loaded at `ReadyToBoot`.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only dxe-prep-selected -SelectionBdf '0000:01:00.0' -SignOnly",
+        "evidence": [
+          {
+            "goal": "D5",
+            "token": "ACTIVE_APP=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1",
+            "emitter": "src/app.c",
+            "why": "the DXE entrypoint reaches the same refusal line as the application, which is what a resident-driver design has to be built on"
+          }
+        ],
+        "does_not_prove": "that the driver is safe to leave installed, or that `ReadyToBoot` timing is compatible with anything: the catalogue refuses to stage a DXE driver as `BOOTX64.EFI`, so the only path is a `Driver####` entry you add and remove by hand, and that is a firmware change, not a read-only act."
+      }
+    ],
+    "unscoreable": [
+      {
+        "id": "diag-topology",
+        "why": "no `-SaveLog`: it prints to the console and writes nothing. A photograph of a screen is not a log, and `verify_run_log.py` scores files: use `diag-topology-log`, which is the same report with the save compiled in."
+      },
+      {
+        "id": "compile-one-target",
+        "why": "compile-only (`may_be_staged` is false): the image returns before any firmware or GPU operation, and CI already builds it. A boot would add nothing a compile does not already prove."
+      },
+      {
+        "id": "compile-sequence",
+        "why": "compile-only, as above: it exists to prove the ordered sources compile together."
+      },
+      {
+        "id": "dxe-compile-one-target",
+        "why": "compile-only DXE: nothing runs, so there is no log to score."
+      },
+      {
+        "id": "dxe-compile-sequence",
+        "why": "compile-only DXE, as above."
+      },
+      {
+        "id": "actuate-one-target",
+        "why": "writes the GPU: this is the `actuate` stage, needs `-AcceptActuatingDeploy`, and is outside a read-only session by definition."
+      },
+      {
+        "id": "actuate-sequence",
+        "why": "writes the GPU, ordered over several cards: `actuate` stage, and it needs the selection to be exactly what the catalogue says."
+      },
+      {
+        "id": "actuate-one-target-resident",
+        "why": "writes the GPU from the ESP: `actuate` stage, and it is the only image that could observe B9's ESP-resident half."
+      },
+      {
+        "id": "actuate-runtime-selection",
+        "why": "writes the GPU with the target chosen at boot: `actuate` stage."
+      },
+      {
+        "id": "actuate-runtime-selection-resident",
+        "why": "writes the GPU, resident, target at boot: `actuate` stage."
+      },
+      {
+        "id": "dxe-actuate-one-target",
+        "why": "writes the GPU from a driver: `actuate` stage."
+      },
+      {
+        "id": "dxe-actuate-sequence",
+        "why": "writes the GPU, ordered, from a driver: `actuate` stage."
+      },
+      {
+        "id": "dxe-actuate-runtime-selection",
+        "why": "writes the GPU from a driver with the target chosen at boot: `actuate` stage."
+      },
+      {
+        "id": "stop-4090-once",
+        "why": "calls the vendor `Stop` on the 4090: `stop-only`, writes the GPU, needs `-AcceptActuatingDeploy` and the recovery toolkit. It is the image C1 is about, and it is not read-only."
+      },
+      {
+        "id": "stop-4090-handoff",
+        "why": "vendor `Stop` then Windows: `stop-only`, writes the GPU."
+      },
+      {
+        "id": "stop-3080-once",
+        "why": "vendor `Stop` on the 3080: `stop-only`, writes the GPU."
+      },
+      {
+        "id": "stop-3080-handoff",
+        "why": "vendor `Stop` on the 3080 then Windows: `stop-only`, writes the GPU."
+      },
+      {
+        "id": "stop-dual-handoff",
+        "why": "vendor `Stop` on both cards then Windows: `stop-only`, writes the GPU, and it is the only image that would say anything about C9's interference on real silicon."
+      }
+    ],
+    "ceiling": [
+      {
+        "goal": "B1",
+        "after": "observed on one board, one cabling and one BIOS revision",
+        "why_not": "the policy still refuses every other configuration, and the firmware-policy question stays uninterpreted until someone maps the raw dump"
+      },
+      {
+        "goal": "B2",
+        "after": "the GOP inventory and console ownership of this machine are recorded per card",
+        "why_not": "a headless build's surviving non-target GOP is a different cabling; it needs its own capture"
+      },
+      {
+        "goal": "B9",
+        "after": "a USB launch with a writable numbered log, observed",
+        "why_not": "the ESP-resident half is printed only by an `-EspResident` actuation build, not by anything in this guide"
+      },
+      {
+        "goal": "A1",
+        "after": "the selector resolved and refused real BDFs on real handles",
+        "why_not": "two machines with different BDFs, which is A1's own exit criterion, is a second session"
+      },
+      {
+        "goal": "A2",
+        "after": "one reviewed ESP GUID started Windows from the passive image",
+        "why_not": "the app's own ESP identification and BootOrder cross-check is exercised by the preparation image only when it runs from the ESP"
+      },
+      {
+        "goal": "A4",
+        "after": "the app refused a card it was not built for",
+        "why_not": "the refusal is one observation; the profile-detection half still has no per-SKU table"
+      },
+      {
+        "goal": "A7",
+        "after": "the boot record was read on real firmware",
+        "why_not": "whether re-applying on the Nth boot is safe is exactly what the record is not allowed to decide"
+      },
+      {
+        "goal": "C3",
+        "after": "nothing",
+        "why_not": "firmware acceptance needs the vendor path; the read-only probes print `ACCEPTANCE=UNVERIFIED` by construction"
+      },
+      {
+        "goal": "C4",
+        "after": "one card's fuse words and the reference the probe decoded them against",
+        "why_not": "no signature chain ties Booter, V67 and ROM; the Windows 617.42 slot stays `UNKNOWN`"
+      },
+      {
+        "goal": "C8",
+        "after": "nothing",
+        "why_not": "`PCI_LINK=` is printed only by the waived admission path, after the preparation image has already returned"
+      },
+      {
+        "goal": "C1",
+        "after": "nothing",
+        "why_not": "the vendor `Stop` is the `stop-only` image; C2, C5, C6 and C7 go with it"
+      },
+      {
+        "goal": "C9",
+        "after": "two cards enumerated, selected and reported in one snapshot",
+        "why_not": "interference is about what happens when one of them is actuated; that is the waived stage, and B10's memory cost per card is unmeasured"
+      },
+      {
+        "goal": "C10",
+        "after": "nothing",
+        "why_not": "resume needs a suspend and a resume, and nothing of ours runs during either"
+      },
+      {
+        "goal": "D5",
+        "after": "the loop above was executed by hand, once per candidate",
+        "why_not": "no machine runs a stage automatically; a GO from `donor_gate.py` is still paperwork plus captured evidence"
+      },
+      {
+        "goal": "E6",
+        "after": "the same BDF recorded across firmware updates",
+        "why_not": "one capture is one firmware revision; stability is a series"
+      },
+      {
+        "goal": "E7",
+        "after": "the reference each probe decoded against is in the log",
+        "why_not": "that an asset bundle matches the card is a signature question, not an observation"
+      },
+      {
+        "goal": "E8",
+        "after": "the identity rows for the cards actually on the bench",
+        "why_not": "a row per SKU needs the geometry capture, and Turing still ships no payload"
+      },
+      {
+        "goal": "E10",
+        "after": "nothing",
+        "why_not": "Secure Boot, BitLocker and anti-cheat interaction is a Windows-side observation after an actuation, which is E1's campaign"
+      }
+    ],
+    "closing": "Every candidate above ends at `tools/verify_run_log.py`, and every verdict it prints carries `HARDWARE_VERIFIED=0`. When all of them have been scored, `tools/donor_gate.py --readonly ... --ack M1_...` says whether the session may enter preparation at all; it composes the same verdicts and adds the requirement that every stage saw the same single card. Neither tool, and nothing in this document, turns a captured log into a verified card."
+  },
   "stages": [
     {
       "id": "readonly",

@@ -171,6 +171,142 @@ class TheBuildCommandsExist(unittest.TestCase):
         self.assertEqual(waiver, ["actuate"])
 
 
+class TheReadOnlyGuideIsGrounded(unittest.TestCase):
+    """The step-by-step guide is data, and every line of it is checked.
+
+    A guide is the easiest place for a document to drift: a rename, a dropped
+    switch or a reworded log line leaves prose that reads like an instruction and
+    does nothing. These tests resolve the guide against the catalogue, the
+    builders, the tools and the sources it names.
+    """
+
+    def setUp(self):
+        self.guide = MANIFEST["readonly_guide"]
+        self.catalogue = json.loads((ROOT / "docs" / "image_variants.json").read_text(encoding="utf-8"))
+        self.variants = {variant["id"]: variant for variant in self.catalogue["variants"]}
+        self.status = json.loads((ROOT / "docs" / "readiness_status.json").read_text(encoding="utf-8"))
+
+    def goal_ids(self):
+        ids = {item["id"] for item in self.status["items"]}
+        ids.update(item["id"].split("_")[0] for item in MANIFEST["manual_gates"])
+        return ids
+
+    def test_every_read_only_variant_is_either_a_candidate_or_named_unscoreable(self):
+        covered = {candidate["id"] for candidate in self.guide["candidates"]}
+        covered.update(item["id"] for item in self.guide["unscoreable"])
+        for variant in self.catalogue["variants"]:
+            self.assertIn(variant["id"], covered,
+                          f"{variant['id']} ({variant['safety']}) is neither executed nor explained")
+
+    def test_the_candidates_are_exactly_the_variants_that_write_nothing(self):
+        writes_nothing = {variant["id"] for variant in self.catalogue["variants"]
+                          if variant["safety"] in ("read-only", "refuses-before-mutation")}
+        executed = {candidate["id"] for candidate in self.guide["candidates"]}
+        excluded = {item["id"] for item in self.guide["unscoreable"]}
+        self.assertEqual(executed | (excluded & writes_nothing), writes_nothing)
+        self.assertEqual(executed & excluded, set())
+        # The one read-only image that is not in the loop is the one with no log.
+        self.assertEqual(writes_nothing - executed, {"diag-topology"})
+        reason = [item["why"] for item in self.guide["unscoreable"] if item["id"] == "diag-topology"][0]
+        self.assertIn("-SaveLog", reason)
+
+    def test_every_excluded_variant_says_why(self):
+        for item in self.guide["unscoreable"]:
+            self.assertTrue(item["why"], item["id"])
+            self.assertIn(item["id"], self.variants, item["id"])
+
+    def test_every_candidate_names_the_command_that_selects_it(self):
+        for candidate in self.guide["candidates"]:
+            self.assertIn(f"-Only {candidate['id']}", candidate["command"], candidate["id"])
+            self.assertEqual(self.variants[candidate["id"]]["safety"], candidate["safety"], candidate["id"])
+
+    def test_every_switch_in_a_candidate_command_exists_in_the_builder(self):
+        text = (ROOT / "src" / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
+        for candidate in self.guide["candidates"]:
+            for switch in re.findall(r"(?:^|\s)(-[A-Z][\w]*)", candidate["command"]):
+                self.assertIn(switch, text, f"{candidate['id']}: {switch}")
+
+    def test_a_candidate_that_cannot_be_staged_does_not_ask_to_be_staged(self):
+        for candidate in self.guide["candidates"]:
+            if "DXE" in self.variants[candidate["id"]]["binary"]:
+                self.assertNotIn("-StageDrive", candidate["command"], candidate["id"])
+                self.assertIn("-SignOnly", candidate["command"], candidate["id"])
+
+    def test_every_quoted_log_line_is_printed_by_the_file_it_names(self):
+        for candidate in self.guide["candidates"]:
+            self.assertTrue(candidate["evidence"], candidate["id"])
+            for entry in candidate["evidence"]:
+                text = (ROOT / entry["emitter"]).read_text(encoding="utf-8")
+                self.assertIn(entry["token"], text,
+                              f"{candidate['id']}/{entry['goal']}: {entry['token']!r} is not in {entry['emitter']}")
+
+    def test_a_quoted_log_line_is_specific_enough_to_identify_itself(self):
+        for candidate in self.guide["candidates"]:
+            for entry in candidate["evidence"]:
+                weight = verify_run_log.literal_weight(entry["token"])
+                self.assertGreaterEqual(
+                    weight, 12,
+                    f"{candidate['id']}/{entry['goal']}: {entry['token']!r} has only {weight} literal characters")
+
+    def test_every_quoted_line_explains_what_it_advances(self):
+        for candidate in self.guide["candidates"]:
+            for entry in candidate["evidence"]:
+                self.assertTrue(entry["why"], f"{candidate['id']}/{entry['goal']}")
+                self.assertIn(entry["goal"], self.goal_ids(),
+                              f"{candidate['id']}: {entry['goal']} is not an inventory item or a manual gate")
+
+    def test_every_candidate_says_what_it_does_not_prove(self):
+        for candidate in self.guide["candidates"]:
+            self.assertTrue(candidate["does_not_prove"], candidate["id"])
+            self.assertTrue(candidate["stage"] in STAGES, candidate["id"])
+
+    def test_a_handoff_candidate_names_the_probe_it_extends(self):
+        ids = {candidate["id"] for candidate in self.guide["candidates"]}
+        for candidate in self.guide["candidates"]:
+            base = candidate.get("also_collects")
+            if base:
+                self.assertIn(base, ids, candidate["id"])
+                self.assertNotEqual(base, candidate["id"])
+
+    def test_every_quoted_tool_line_is_printed_by_that_tool(self):
+        for step in self.guide["steps"]:
+            for group in step.get("expect_tokens", []):
+                text = (ROOT / group["emitter"]).read_text(encoding="utf-8")
+                self.assertIn(group["token"], text,
+                              f"step {step['n']}: {group['token']!r} is not in {group['emitter']}")
+
+    def test_the_guide_starts_at_the_staging_command_and_ends_at_the_verifier(self):
+        shells = [step for step in self.guide["steps"] if step.get("command")]
+        self.assertIn("Build-Sign-Deploy-UniversalGPU.ps1", shells[1]["command"])
+        self.assertIn("-StageDrive", shells[1]["command"])
+        self.assertIn("tools/verify_run_log.py", shells[-1]["command"])
+        self.assertEqual([step["n"] for step in self.guide["steps"]],
+                         list(range(1, len(self.guide["steps"]) + 1)))
+
+    def test_the_guide_says_the_build_sign_stage_script_does_not_exist(self):
+        self.assertIn("no script called `build-sign-stage`", DOC)
+        self.assertIn("src/Build-Sign-Deploy-UniversalGPU.ps1", DOC)
+
+    def test_every_ceiling_row_is_an_item_the_inventory_lists(self):
+        for item in self.guide["ceiling"]:
+            self.assertIn(item["goal"], self.goal_ids(), item["goal"])
+            self.assertTrue(item["after"], item["goal"])
+            self.assertTrue(item["why_not"], item["goal"])
+
+    def test_the_guide_never_claims_a_run_happened(self):
+        self.assertIn("Nothing below has been executed against this tree", DOC)
+        self.assertNotIn("HARDWARE_VERIFIED=1", DOC)
+        for item in self.status["items"]:
+            self.assertFalse(item["hardware_verified"],
+                             f"{item['id']} is marked hardware verified by a document update")
+
+    def test_the_guide_is_in_the_document_in_the_order_it_renders(self):
+        self.assertIn("## Read-only hardware execution guide, step by step", DOC)
+        guide_at = DOC.index("## Read-only hardware execution guide, step by step")
+        stages_at = DOC.index("## The stages")
+        self.assertLess(guide_at, stages_at)
+
+
 class TheVerifierScoresRuns(unittest.TestCase):
     def test_a_good_read_only_run_passes_its_own_stage(self):
         result = run_verifier(str(FIXTURES / "readonly.txt"), "--self-test", "--stage", "readonly")

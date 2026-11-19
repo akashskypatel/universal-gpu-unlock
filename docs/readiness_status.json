@@ -301,8 +301,8 @@
       "class": "D",
       "priority": "P0",
       "source": "partial",
-      "section": "11.21",
-      "note": "No hardware-in-the-loop: CI proves compilation and host logic. The session now has a machine go/no-go gate (\u00a711.21), but no stage runs or is scored automatically.",
+      "section": "11.28",
+      "note": "`tools/donor_gate.py` machine-checks whether the session may advance, and the read-only session now has a step-by-step guide (build-sign-stage, preflight, boot, capture, `verify_run_log.py`) whose commands and quoted log lines are pinned by `tests/test_hardware_session.py`; no machine runs a stage automatically.",
       "hardware_verified": false
     },
     {

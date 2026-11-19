@@ -308,7 +308,7 @@ These are verified from source, not inferred.
 | D2 | The only actuating build has no CI coverage | **Closed (§11.14):** the Windows job compiles the admitted image (app and DXE, one and two targets) with `-RuntimeEsp`, and the host job diffs it. The build is not uploaded. | P0 |
 | D3 | Payload provenance | every payload the firmware can load now has a record (role, 610.43.03 lineage, external reference, digest, length) checked against `src/profile.c` itself, and the tool refuses a missing, mismatched, orphaned or signature-claiming record (§11.27); authenticity is still unverified and says so | `docs/asset_provenance.json`, `tools/verify_provenance.py`, `tests/test_provenance_records.py` | P1 |
 | D4 | MSVC-only toolchain, no EDK II build, installer disabled | `Setup-AdaUnlock.ps1` refuses by design (`Setup.bat`, CI asserts `STATUS=REFUSED`) | P2 |
-| D5 | No hardware-in-the-loop; CI proves compilation and host logic only | workflow jobs `host`, `efi`; **partial (§11.21)** - `tools/donor_gate.py` machine-checks whether the session may advance, but no machine runs a stage automatically | P0 (for the product claim) |
+| D5 | No hardware-in-the-loop; CI proves compilation and host logic only | workflow jobs `host`, `efi`; **partial (§11.28)** - `tools/donor_gate.py` machine-checks whether the session may advance and the read-only session now has a step-by-step guide whose every command and quoted line is pinned by `tests/test_hardware_session.py`, but no machine runs a stage automatically | P0 (for the product claim) |
 
 ---
 
@@ -459,6 +459,42 @@ partial and `B10` untouched - the per-card memory footprint (~165 MB: DMA
 window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
+
+### 11.28 D5 — the read-only session now has a script to follow, and every line of it is checked
+
+`docs/DONOR_HARDWARE_SESSION.md` described the gates a log has to pass, but not
+the order of operations that produces the log: which image to build for which
+question, what to type, and what in the resulting file answers what. An operator
+with a card on the bench had the verdict tool and no runbook.
+
+The document now carries a step-by-step guide, rendered (like the rest of it)
+from `docs/hardware_session.json`: six steps from `.\src\Build-Sign-Deploy-UniversalGPU.ps1 -List`
+through the build-sign-stage command, `tools/session_preflight.py`, one boot,
+capture, and `tools/verify_run_log.py`; then a row for every image in
+`docs/image_variants.json` whose safety class writes nothing to the GPU -
+`diag-topology-log`, the three MSI B850 probes and their handoff variants,
+`diag-selection`, `diag-topology-handoff`, `prep-selected` and
+`dxe-prep-selected` - with the log line each one puts on paper and the inventory
+item that line is waiting for. There is no script called `build-sign-stage` in
+this tree, and the guide says so: `-Only <id> -StageDrive <letter>` is the
+build, sign and stage step.
+
+Two things keep it from being prose. First, the guide is data: every candidate
+id, builder switch, `-StageDrive`/`-SignOnly` choice and manual-gate reference is
+resolved against `docs/image_variants.json` and `src/`, and every quoted log line
+is required to appear in the file named beside it with at least 12 literal
+characters, so a renamed format string fails the suite instead of leaving an
+instruction that does nothing. Second, the guide carries its own ceiling: a table
+of what the read-only stage cannot advance - `C8` is not moved by any of it
+(the `PCI_LINK=` line is printed only by the waived admission path), `C1`/`C2`/
+`C5`/`C6`/`C7`/`C10` need the waived stage, and `B10`/`C9`/`E1`-`E5` need two
+cards and an actuation.
+
+What this does not do: it does not run anything. `D5` stays **partial** - the
+loop is now documented and checked, and it is still a human pressing keys on a
+bench. No row in `docs/readiness_status.json` moves, `hardware_verified` is
+`false` for all 43 items, and the guide's own first paragraph says that no log it
+describes exists.
 
 ### 11.27 D3 — every payload now says where it came from, and nothing claims more
 

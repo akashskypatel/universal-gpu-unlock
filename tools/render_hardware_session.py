@@ -76,8 +76,6 @@ It prints the same `MANUAL` gates and the same `HARDWARE_VERIFIED=0`. A clean
 bench means nothing is obviously wrong before the run; it says nothing about a
 card.
 
-## The stages
-
 """
 
 FOOTER = """
@@ -96,6 +94,82 @@ that the firmware accepted anything.
 """
 
 
+def render_readonly_guide(spec: dict) -> str:
+    """The build-sign-stage -> verify-run-log loop, one candidate per row.
+
+    Every command here is one this repository ships and every quoted line is a
+    format string the named file prints; `tests/test_hardware_session.py` grounds
+    both, so the guide cannot describe a command or a log line that does not
+    exist.
+    """
+    by_id = {candidate["id"]: candidate for candidate in spec["candidates"]}
+    out = [f"## {spec['title']}\n\n"]
+    for paragraph in spec["intro"]:
+        out.append(f"{paragraph}\n\n")
+    out.append(f"**The name.** {spec['naming']}\n\n")
+
+    out.append("### Before the first boot\n\n")
+    for item in spec["preconditions"]:
+        out.append(f"* `{item['id']}` — {item['why']}\n")
+    out.append("\n")
+
+    out.append("### The steps\n\n")
+    for step in spec["steps"]:
+        out.append(f"**Step {step['n']} — {step['title']}**\n\n")
+        if step.get("command"):
+            fence = "powershell" if step["shell"] == "powershell" else "bash"
+            out.append(f"```{fence}\n{step['command']}\n```\n\n")
+        out.append(f"*Expect:* {step['expect']}\n\n")
+        if step.get("expect_tokens"):
+            out.append("*Look for:*\n\n")
+            for group in step["expect_tokens"]:
+                out.append(f"* `{group['token']}` — printed by `{group['emitter']}`\n")
+            out.append("\n")
+        out.append(f"*If it does not:* {step['if_not']}\n\n")
+    out.append(f"{spec['after_the_steps']}\n\n")
+
+    out.append("### The read-only candidates\n\n")
+    out.append("Every image in the catalogue whose safety class writes nothing to the GPU. One candidate per stick, "
+               "one boot per candidate, one scored log per boot.\n\n")
+    out.append("| Candidate | Safety | Stage | Log | Facts it puts on paper |\n")
+    out.append("| --- | --- | --- | --- | --- |\n")
+    for candidate in spec["candidates"]:
+        goals = " ".join(f"`{goal}`" for goal in dict.fromkeys(
+            entry["goal"] for entry in candidate["evidence"]))
+        out.append(f"| `{candidate['id']}` | {candidate['safety']} | `{candidate['stage']}` | "
+                   f"{candidate['log']} | {goals} |\n")
+    out.append("\n")
+
+    for candidate in spec["candidates"]:
+        out.append(f"#### `{candidate['id']}` — {candidate['title']}\n\n")
+        out.append(f"{candidate['summary']}\n\n")
+        out.append(f"```powershell\n{candidate['command']}\n```\n\n")
+        out.append(f"*Log:* {candidate['log']}\n\n")
+        out.append(f"*Score:* `python3 tools/verify_run_log.py <log> --stage {candidate['stage']}`\n\n")
+        if candidate.get("also_collects"):
+            out.append(f"*Also collects* everything `{candidate['also_collects']}` collects, plus:\n\n")
+        for entry in candidate["evidence"]:
+            out.append(f"* `{entry['goal']}` — `{entry['token']}` (`{entry['emitter']}`): {entry['why']}\n")
+        out.append(f"\n*Does not prove:* {candidate['does_not_prove']}\n\n")
+        del by_id[candidate["id"]]  # keeps the mapping honest if a candidate is duplicated
+
+    out.append("### Candidates that produce no scoreable log, and why\n\n")
+    for item in spec["unscoreable"]:
+        out.append(f"* `{item['id']}` — {item['why']}\n")
+    out.append("\n")
+
+    out.append("### What the read-only stage cannot advance\n\n")
+    out.append("The ceiling of the loop above, item by item. This is the table to read before promising that a clean "
+               "session means anything beyond what it says.\n\n")
+    out.append("| Item | After every candidate above has been scored | Why it does not go further |\n")
+    out.append("| --- | --- | --- |\n")
+    for item in spec["ceiling"]:
+        out.append(f"| `{item['goal']}` | {item['after']} | {item['why_not']} |\n")
+    out.append("\n")
+    out.append(f"{spec['closing']}\n\n")
+    return "".join(out)
+
+
 def render_go_no_go(spec: dict) -> str:
     out = ["## Advancing between stages: `donor_gate.py`\n\n", f"{spec['summary']}\n\n"]
     out.append("```powershell\n" + spec["command"] + "\n```\n\n")
@@ -110,8 +184,11 @@ def render_go_no_go(spec: dict) -> str:
 
 def render(manifest: dict) -> str:
     out = [HEADER]
+    if "readonly_guide" in manifest:
+        out.append(render_readonly_guide(manifest["readonly_guide"]))
     if "go_no_go" in manifest:
         out.append(render_go_no_go(manifest["go_no_go"]))
+    out.append("## The stages\n\n")
     for stage in manifest["stages"]:
         out.append(f"### `{stage['id']}` — {stage['title']}\n\n")
         out.append(f"*Build:*\n\n```powershell\n{stage['build']}\n```\n\n")
