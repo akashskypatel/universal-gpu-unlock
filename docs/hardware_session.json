@@ -1,0 +1,360 @@
+{
+  "schema": 1,
+  "reviewed": "2026-11-18",
+  "note": "The donor-hardware session, as gates a script can check. Nothing here claims a run works: it checks that a captured log proves what the plan says it proves, and it refuses to score a log as hardware evidence when it cannot tell.",
+  "log_shape": {
+    "active_app": "\\AD102-UNLOCK\\RUNnnnn.TXT on the USB stick, one file per boot, never overwritten",
+    "read_only_diagnostic": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the USB stick",
+    "line_endings": "the diagnostic writes CRLF; the active app writes LF. Both are accepted",
+    "order": "the file number is the boot order; pass the logs to the verifier in that order"
+  },
+  "stages": [
+    {
+      "id": "readonly",
+      "title": "Read-only contact",
+      "what_it_costs": "nothing: the diagnostic never writes a GPU register, resets a Falcon, calls the vendor Stop or loads firmware",
+      "exit": "the card is enumerated, its BDF and PCI identity are in the log, and the eligibility flags are printed as false"
+    },
+    {
+      "id": "prepare",
+      "title": "Preparation only",
+      "what_it_costs": "the active app runs its preflight and preparation, logs a refusal before any mutation, and hands back to Windows",
+      "exit": "preparation completes with MUTATION_AUTHORIZED=0 and no Stop, no waiver and no step line"
+    },
+    {
+      "id": "actuate",
+      "title": "Waived actuation",
+      "what_it_costs": "the one admission that may write: a single card, ordered, no retry, with the firmware timer bounded or explicitly off",
+      "exit": "the waiver is recorded once, the pre-Stop contract is captured, the step reaches a terminal record, and the next boot reads the record it left"
+    }
+  ],
+  "gates": [
+    {
+      "id": "R1_IMAGE_RAN_READ_ONLY",
+      "stage": "readonly",
+      "title": "the read-only image ran",
+      "requires": [
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls",
+          "why": "the banner is printed before any observation, so its presence is the cheapest proof that this build and not another one ran"
+        }
+      ],
+      "forbids": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu",
+          "why": "a read-only session must not contain the waiver admission, which only the actuating build prints"
+        },
+        {
+          "emitter": "src/msi_release.c",
+          "token": "STOP_CONTRACT device=%04x stage=%zu",
+          "why": "the Stop contract is captured inside the release path; its presence means a Stop was attempted, which no read-only run does"
+        }
+      ],
+      "proves": "the read-only diagnostic started and wrote its own log",
+      "does_not_prove": "that the enumeration below finished, or anything about the card"
+    },
+    {
+      "id": "R2_ENUMERATION_COMPLETED",
+      "stage": "readonly",
+      "title": "the inventory finished without a vendor callback",
+      "requires": [
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES INCLUDED=%zu EXCLUDED=%zu",
+          "why": "printed once the display and bridge scan has counted its handles, with the count in the line"
+        },
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "NVIDIA_DRIVER_OWNER_INVENTORY=READ_ONLY IMAGE_PROVENANCE_UNVERIFIED=1",
+          "why": "the driver-owner inventory is the part that says which image owns the card, and it is explicitly not provenance"
+        },
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0",
+          "why": "the eligibility flags are printed as false, so the log itself states the session could not detach or unlock"
+        }
+      ],
+      "forbids": [
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "PCI_ENUM_FAILURE STAGE=device-read INDEX=%zu",
+          "why": "a partial enumeration is not an inventory; the failure line means some handle could not be read"
+        }
+      ],
+      "proves": "the scan reached its end and reported counts, with eligibility explicitly false",
+      "does_not_prove": "that the card is in a state any later stage could use"
+    },
+    {
+      "id": "R3_CARD_IDENTIFIED",
+      "stage": "readonly",
+      "title": "at least one NVIDIA card is named",
+      "requires_any": [
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "NVIDIA_DRIVER_OWNER[%zu] BDF=%04x:%02x:%02x.%u BY_DRIVER=%u",
+          "why": "the driver-owner line carries BDF, driver binding and opener state for one card"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x",
+          "why": "the active-app inventory line carries BDF and PCI identity for one card"
+        }
+      ],
+      "proves": "the run is about a real card with an address and an identity, not an empty machine",
+      "does_not_prove": "that the identity matches the donor card the operator recorded by hand"
+    },
+    {
+      "id": "P1_PREPARATION_REFUSED_BEFORE_MUTATION",
+      "stage": "prepare",
+      "title": "the app refused to actuate and said so first",
+      "requires": [
+        {
+          "emitter": "src/app.c",
+          "token": "ACTIVE_APP=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1",
+          "why": "printed by the preparation-only entrypoint before any transaction, so the session is bounded by the entrypoint and not by luck"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0",
+          "why": "preparation reached its end with mutation explicitly unauthorized"
+        }
+      ],
+      "forbids": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu",
+          "why": "a step that may write must not appear in a preparation session"
+        },
+        {
+          "emitter": "src/msi_release.c",
+          "token": "STOP_CONTRACT device=%04x stage=%zu",
+          "why": "no Stop may be attempted in a preparation session"
+        }
+      ],
+      "proves": "the entrypoint refused actuation and the preflight completed",
+      "does_not_prove": "that the preflight's conclusions are right; the counts say what was selected, not what was safe"
+    },
+    {
+      "id": "P2_BOOT_RECORD_READ",
+      "stage": "prepare",
+      "title": "the persistent record was read before anything else",
+      "requires_any": [
+        {
+          "emitter": "src/boot_io.c",
+          "token": "BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x",
+          "why": "a record from an earlier boot was found and decoded"
+        },
+        {
+          "emitter": "src/boot_io.c",
+          "token": "BOOT_STATE PRESENT=0",
+          "why": "no record was found, which is the correct state for the first boot on a wiped machine"
+        }
+      ],
+      "proves": "the record path works on this machine, in one of its two honest states",
+      "does_not_prove": "that the record can be written, or that it survives a power loss; that needs a run that is interrupted"
+    },
+    {
+      "id": "A1_WAIVER_RECORDED_ONCE",
+      "stage": "actuate",
+      "title": "the waiver is in this boot's log, exactly once",
+      "requires": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu ORDERED_SEQUENTIAL=1",
+          "max_per_log": 1,
+          "why": "the waiver is a boot-level decision: more than one occurrence means a retry or a second entrypoint, which the plan forbids"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION",
+          "why": "names the waiver the diff admits, so the log cannot be mistaken for a verified build"
+        }
+      ],
+      "forbids": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=SIMULATED SELECTED=%zu",
+          "why": "a simulator run prints SIMULATED instead of WAIVED_UNVERIFIED; if both appear the log is not a clean hardware record"
+        }
+      ],
+      "proves": "an actuating image reached its admission exactly once",
+      "does_not_prove": "that the admission was safe; the waiver is the reason it is not"
+    },
+    {
+      "id": "A2_STOP_CONTRACT_CAPTURED",
+      "stage": "actuate",
+      "title": "the pre-Stop capture exists and names what it is missing",
+      "requires": [
+        {
+          "emitter": "src/msi_release.c",
+          "token": "STOP_CONTRACT device=%04x stage=%zu OWNER=%d COLD=%d CONSOLE=%d PEERS=%d",
+          "why": "the capture names the device, the stage and the four observations that just held; the rest of the line is the requirements"
+        },
+        {
+          "emitter": "src/msi_release.c",
+          "token": "DECISION=%s MISSING=%s",
+          "why": "the same line ends with the decision and the missing set, so a capture that found nothing missing cannot be confused with one that did"
+        }
+      ],
+      "proves": "the image captured its pre-Stop state and stated which requirements it cannot establish",
+      "does_not_prove": "that any of the six unobservable facts hold - by construction they are the ones this image cannot see"
+    },
+    {
+      "id": "A3_ONE_ORDERED_STEP_STARTED",
+      "stage": "actuate",
+      "title": "the step that may write began, in order",
+      "requires": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu",
+          "why": "the only line printed immediately before a card may be written"
+        }
+      ],
+      "proves": "an ordered step was admitted after every preflight",
+      "does_not_prove": "how the step ended; that is the next gate"
+    },
+    {
+      "id": "A4_STEP_TERMINATED",
+      "stage": "actuate",
+      "title": "the step reached a terminal record instead of the log ending",
+      "requires_any": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "SELECTED_GPU_STEP=COMPLETE NEXT=%zu PEERS_VERIFIED=%zu",
+          "why": "the step completed and peer state was re-observed"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "SELECTED_GPU_STEP=HALTED NEXT=%zu MUTATION_AUTHORIZED=0",
+          "why": "the coordinator halted deliberately and promised no successor; this is a legitimate ending, not a failure"
+        },
+        {
+          "emitter": "src/app.c",
+          "token": "STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u",
+          "why": "the application recorded the transaction result, including whether the card was mutated, retained or faulted"
+        }
+      ],
+      "proves": "the log ends at a decision the image recorded itself, so truncation is distinguishable from an ending",
+      "does_not_prove": "that the ending was a good one; HALTED passes this gate on purpose"
+    },
+    {
+      "id": "A5_NEXT_BOOT_READ_THE_RECORD",
+      "stage": "actuate",
+      "title": "a later boot read the record this run left",
+      "requires": [
+        {
+          "emitter": "src/boot_io.c",
+          "token": "BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x",
+          "why": "the state that is supposed to survive a failed boot is only proved by a boot that comes after it"
+        }
+      ],
+      "min_logs": 2,
+      "proves": "the record survived whatever the actuation did, and a later boot could read it",
+      "does_not_prove": "that the record was correct, or that the machine came back warm rather than through a power cycle"
+    }
+  ],
+  "advisories": [
+    {
+      "id": "WATCHDOG_REPORTED",
+      "token": "WATCHDOG BOUND=%u SECONDS ACTIVE=1",
+      "alternatives": [
+        "WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD"
+      ],
+      "emitter": "src/app.c",
+      "why": "the application prints whether the firmware timer is armed or deliberately off. The DXE entrypoint does not print this, so it is a note rather than a gate"
+    },
+    {
+      "id": "LAUNCH_SOURCE_LOGGED",
+      "token": "LAUNCH_SOURCE DECISION=%s REASON=%s",
+      "emitter": "src/boot_io.c",
+      "why": "every boot now records where it started from and, when it refuses, which gate failed"
+    },
+    {
+      "id": "ASSET_INSTALL_REPORTED",
+      "token": "ASSET_INSTALL PRESENT=1 FILES=%u",
+      "emitter": "src/boot_io.c",
+      "why": "says whether a bundle was ever staged on the stick, before discovery assumes anything about assets",
+      "alternatives": [
+        "ASSET_INSTALL PRESENT=0"
+      ]
+    }
+  ],
+  "manual_gates": [
+    {
+      "id": "M1_RECOVERY_TOOLKIT_READY",
+      "title": "the physical recovery path is on the bench before the first run",
+      "why": "an external programmer and a known-good firmware image are the only way back from a card that no longer answers; they cannot be fetched afterwards",
+      "record": "the programmer model, the image digest, and the SPI flash part number, noted in the session log"
+    },
+    {
+      "id": "M2_DONOR_CARD_RECORDED",
+      "title": "the donor card's identity is written down before the run",
+      "why": "the log will name a BDF and a device ID; without the card's serial and the slot it was in, those cannot be tied to a piece of silicon afterwards",
+      "record": "serial number, slot, board model, the VBIOS version the vendor tool reports"
+    },
+    {
+      "id": "M3_LOG_MEDIUM_EMPTY",
+      "title": "the log medium starts empty",
+      "why": "RUN0001.TXT must be this boot, or a stale file is indistinguishable from a live one and the gate verdicts describe the wrong run",
+      "record": "a directory listing of the stick before the boot, photographed or copied"
+    },
+    {
+      "id": "M4_ONE_CARD_ONLY",
+      "title": "exactly one NVIDIA card, no peers",
+      "why": "the waived path admits ordered single steps; a second card changes which gates apply and has never been exercised",
+      "record": "the R2 inventory line, which must show one NVIDIA driver owner"
+    },
+    {
+      "id": "M5_HALT_STOPS_THE_SESSION",
+      "title": "a HALTED step ends the day, not the loop",
+      "why": "no retry is a property of the image; re-running after a halt is the operator reintroducing the risk the image refused",
+      "record": "the halt line, and the decision to stop, in the session log"
+    },
+    {
+      "id": "M6_STOCK_BOOT_AFTER_EVERY_RUN",
+      "title": "Windows is started normally with the card enumerated after every run",
+      "why": "the log cannot see Windows; device start, driver binding and a display output have to be observed by a person",
+      "record": "the Windows build, the driver version, and the device status in Device Manager"
+    }
+  ],
+  "never_established_by_a_log": [
+    {
+      "id": "WINDOWS_61742_SIGNED_BOOTER",
+      "why": "no code in this tree observes the Windows 617.42 Booter; the comparison is external evidence that has to be produced separately and has never been produced"
+    },
+    {
+      "id": "TARGET_FIRMWARE_GOP_GONE",
+      "why": "the Stop contract's TARGET_GOP requirement is never observed - the image does not read the target's firmware GOP ownership"
+    },
+    {
+      "id": "LOG_DIRECTORY_CLOSED",
+      "why": "the contract's LOG requirement needs the log closed before the Stop; the image cannot close the file it is writing to"
+    },
+    {
+      "id": "RECOVERY_EXECUTED",
+      "why": "no recovery procedure has been executed on this card, so the requirement stays false no matter what the log shows"
+    },
+    {
+      "id": "STOP_BOUND_MEASURED",
+      "why": "the vendor Stop callback has no measured worst-case duration; a log line that shows it returned says nothing about how long it could take"
+    },
+    {
+      "id": "DMA_IDLE_PROVEN",
+      "why": "the contract's DMA requirement is not observable here; bus-master state is checked, engine idleness is not"
+    },
+    {
+      "id": "WINDOWS_DEVICE_START",
+      "why": "the log ends at the handover; whether Windows started the device is only visible in Windows"
+    },
+    {
+      "id": "CUDA_THROUGHPUT",
+      "why": "a benchmark number is a measurement on a machine, not a property of this source"
+    },
+    {
+      "id": "COLD_STATE_AFTER_POWER_LOSS",
+      "why": "the state after cutting power mid-transaction has never been observed, and a clean run says nothing about it"
+    }
+  ]
+}

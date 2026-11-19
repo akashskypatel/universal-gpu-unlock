@@ -117,6 +117,27 @@ Do not re-run in the same boot. The ordered coordinator refuses a repeated
 step by design (`EFI_ALREADY_STARTED`), and a partially completed transaction
 is not a state to experiment in.
 
+## 4a. Score the captured log before you believe a word of it
+
+[`DONOR_HARDWARE_SESSION.md`](DONOR_HARDWARE_SESSION.md) is the session plan as
+gates, and `tools/verify_run_log.py` is the check:
+
+```bash
+python3 tools/verify_run_log.py \\media\\stick\\AD102-UNLOCK\\RUN0001.TXT \
+                                \\media\\stick\\AD102-UNLOCK\\RUN0002.TXT --stage actuate
+```
+
+It evaluates the gates in `docs/hardware_session.json` against the format
+strings the source actually prints, prints `MANUAL` for the six things only the
+operator can confirm (the recovery toolkit on the bench, the donor card recorded,
+the medium empty, one card only, a halt ending the session, Windows started
+afterwards), and prints `NOT_PROVEN` for the nine things no log can establish -
+starting with the Windows 617.42 Booter comparison. `HARDWARE_VERIFIED=0` is on
+every line it prints, by construction.
+
+A `PASS` here means the run did what this document says it does. It is not a
+verdict on the card.
+
 ## 5. Capture afterwards, or the run proves nothing
 
 1. The whole `RUNnnnn.TXT`.

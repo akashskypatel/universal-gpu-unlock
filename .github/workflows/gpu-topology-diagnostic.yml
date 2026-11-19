@@ -145,6 +145,12 @@ jobs:
               "$RUNNER_TEMP/test_launch_source_$compiler"
             done
             python3 -m unittest discover -s tests -p test_launch_source_contract.py -v
+            # Donor-hardware session gates: every gate token is a format string
+            # this source prints, and the verifier never claims hardware proof.
+            python3 tools/render_hardware_session.py > /dev/null
+            python3 tools/verify_run_log.py tests/fixtures/hardware_session/readonly.txt --self-test --stage readonly
+            python3 tools/verify_run_log.py tests/fixtures/hardware_session/actuate_boot1.txt tests/fixtures/hardware_session/actuate_boot2.txt --self-test --stage actuate
+            python3 -m unittest discover -s tests -p test_hardware_session.py -v
             # The readiness headline is generated, not typed into prose.
             python3 -m unittest discover -s tests -p test_readiness_summary.py -v
             # Every stock profile must link, and keep its own selector contract.

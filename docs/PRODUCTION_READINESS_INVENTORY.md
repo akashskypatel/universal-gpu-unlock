@@ -903,6 +903,56 @@ real log, and the simulator cannot produce it (its image is not a UEFI volume). 
 stays partial until a donor run shows that line and the six `MISSING` facts from
 the Stop contract on the same boot.
 
+### 11.18 S5 / D-class — the donor session as gates, not a checklist
+
+The donor card and the programmer are on the bench, so the first hardware run is
+now defined as three stages with a mechanical check after each:
+`docs/hardware_session.json` is the source of truth, `docs/DONOR_HARDWARE_SESSION.md`
+is rendered from it, and `tools/verify_run_log.py` scores a captured log against
+the same manifest.
+
+| Stage | What it may do | The gate that ends it |
+| --- | --- | --- |
+| `readonly` | enumerate, print eligibility as false | `R2_ENUMERATION_COMPLETED`: the scan reached its count line, with `CAN_DETACH=0 CAN_UNLOCK=0` in the log |
+| `prepare` | run the preflight, refuse before any mutation | `P1_...`: the entrypoint prints `BEFORE_MUTATION=1` and no step, waiver or Stop line appears |
+| `actuate` | one ordered card, waiver recorded once | `A5_...`: a *later* boot reads the record the run left, with `TOO_FEW_LOGS` when the operator supplies only one |
+
+Two design choices make it hard to fool:
+
+* **The tokens are format strings.** A gate requires the printf format string
+  that emits the line, converted to a pattern at check time, so a gate cannot be
+  satisfied by text no build of this tree writes. `tests/test_hardware_session.py`
+  asserts every token is present in the file the manifest names and that none is
+  mostly wildcards.
+* **The verdict is bounded.** `HARDWARE_VERIFIED=0` is printed on every run; the
+  nine `NOT_PROVEN` facts (617.42 Booter, target GOP, closed log, executed
+  recovery, Stop bound, DMA idleness, Windows device start, CUDA throughput,
+  cold state after power loss) are printed on every run, pass or fail; a log
+  carrying the fixture marker is refused outright unless `--self-test` is given,
+  and a self-test verdict can never read `PASS`.
+
+The six `MANUAL` gates are the ones no script can check and the ones that matter
+most on a donor: the programmer and known-good image on the bench, the card's
+serial recorded, the log medium empty, exactly one NVIDIA card, a `HALTED` step
+ending the session rather than the loop, and Windows started with the card
+enumerated afterwards. They are printed on every run so that they are skipped
+only deliberately.
+
+Evidence: `tests/test_hardware_session.py` (35 tests: token grounding, stage
+well-formedness, printf-to-pattern conversion, the verifier passing a good
+read-only/prepare/actuation log and failing a truncated one, a simulated one, a
+doubled waiver and a Stop in a preparation session, the synthetic refusal, the
+rendered document being byte-identical to the manifest, and no output ever
+printing `HARDWARE_VERIFIED=1`). CI runs the renderer, two scored fixtures and
+the suite.
+
+What it is not: no gate has been evaluated against a real log, because no donor
+run has happened. The fixtures are hand-written models of what such a log would
+contain, marked `SYNTHETIC_FIXTURE_NOT_A_HARDWARE_RUN` so they can never be
+mistaken for a capture. The gates say what a run must do; they do not say a card
+will survive it, and the readiness tracker still counts hardware evidence as
+0 of 43.
+
 ### 11.15 S5/A8 — the recovery matrix, checked against the code
 
 A8's exit criteria ask for a "documented, tested recovery matrix (mid-transaction
