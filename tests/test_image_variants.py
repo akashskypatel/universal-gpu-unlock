@@ -344,6 +344,53 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
             pattern = r"(?<![\w:])\$" + name + r"\s*=[^=]"
             self.assertIsNone(re.search(pattern, body, flags=re.IGNORECASE), name)
 
+    def test_the_signing_call_cannot_leak_output_into_the_exit_code(self):
+        # A live `& wsl.exe` line next to `return $LASTEXITCODE` hands the caller
+        # an array of sbverify output plus the code, so a good signature reads as
+        # a failure. The output must be captured and the code returned alone.
+        self.assertIn("$wslOutput = & wsl.exe", SCRIPT)
+        self.assertIn("return [int]$exitCode", SCRIPT)
+        self.assertNotIn("return $LASTEXITCODE", SCRIPT)
+        bare = [line for line in SCRIPT.splitlines() if line.strip().startswith("& wsl.exe")]
+        self.assertEqual(bare, [], "the wsl.exe call must be captured, not left on the pipeline")
+        self.assertIn("-isnot [int]", SCRIPT)
+
+    def test_a_selection_that_cannot_build_a_variant_skips_it(self):
+        # -All with two BDFs must not fail the single-target variants: the builder
+        # would produce the sequence image under a name this catalogue gives to
+        # something else.
+        self.assertIn("function Test-VariantSelection", SCRIPT)
+        self.assertIn("NEEDS_EXACTLY_ONE_BDF", SCRIPT)
+        self.assertIn("NEEDS_TWO_OR_MORE_BDFS", SCRIPT)
+        self.assertIn("VARIANT_SKIPPED", SCRIPT)
+        self.assertIn("SKIPPED_HINT", SCRIPT)
+
+    def test_the_catalogue_has_variants_that_need_each_selection_shape(self):
+        shapes = {v.get("requires_selection") for v in MANIFEST["variants"]}
+        self.assertEqual(shapes, {None, "any", "single", "sequence"})
+
+    def test_no_format_operator_hides_after_a_concatenation(self):
+        # `"a" + 'b' -f $x` formats the second string only and leaves {0} literal.
+        lines = SCRIPT.splitlines()
+        for index, line in enumerate(lines):
+            if not line.rstrip().endswith(("' +", '" +')):
+                continue
+            # Walk the continuation: every line that begins with a quote is part
+            # of this concatenation, and none of them may carry a -f operator.
+            following = index + 1
+            while following < len(lines) and lines[following].lstrip().startswith(("'", '"')):
+                self.assertNotIn("-f", lines[following],
+                                 f"line {following + 1}: a -f operator hides in a "
+                                 "concatenation and would format only the last string")
+                following += 1
+
+    def test_a_long_matrix_run_shows_a_progress_count(self):
+        self.assertIn("VARIANT_BEGIN [{0}/{1}]", SCRIPT)
+        self.assertIn("$variantTotal = $variants.Count", SCRIPT)
+
+    def test_sign_only_refuses_a_stage_drive(self):
+        self.assertIn("-SignOnly and -StageDrive are mutually exclusive", SCRIPT)
+
     def test_the_script_states_what_signing_does_not_prove(self):
         self.assertIn("HARDWARE_VERIFIED=0", SCRIPT)
         self.assertIn("HardwareVerified = $false", SCRIPT)

@@ -331,8 +331,15 @@ openssl x509 -in "$cert" -noout -subject -fingerprint -sha256
     $prefix = @()
     if ($WslDistribution) { $prefix += @('-d', $WslDistribution) }
     if ($WslUser) { $prefix += @('-u', $WslUser) }
-    & wsl.exe @prefix --exec bash -c $command
-    return $LASTEXITCODE
+    # wsl.exe writes sbverify and openssl output to the success stream. Capture
+    # it, print it as host output, and return ONLY the exit code: a `return
+    # $LASTEXITCODE` next to a live pipeline gives the caller an array such as
+    # @('Signature verification OK', 'subject=...', 0), which never equals zero
+    # and makes a good signature look like a failure.
+    $wslOutput = & wsl.exe @prefix --exec bash -c $command 2>&1
+    $exitCode = $LASTEXITCODE
+    foreach ($line in @($wslOutput)) { Say ([string]$line) }
+    return [int]$exitCode
 }
 
 function Stage-SignedEfi {
@@ -465,6 +472,32 @@ function Select-Variants {
     return $selected
 }
 
+function Get-SelectionCount {
+    if ($SelectionBdf) { return 1 }
+    if ($SelectionBdfs) { return @(($SelectionBdfs -split ',') | Where-Object { $_.Trim() }).Count }
+    return 0
+}
+
+function Test-VariantSelection($Variant) {
+    # Returns a skip reason when the operator's arguments cannot build this
+    # variant, or $null when they can. A single-target variant under a two-target
+    # selection is a skip, not a failure: the builder would produce the sequence
+    # image under a name this catalogue gives to a different variant.
+    $count = Get-SelectionCount
+    $needs = $null
+    if ($Variant.PSObject.Properties.Name -contains 'requires_selection') { $needs = $Variant.requires_selection }
+    if ($needs -eq 'single' -and $count -ne 1) {
+        if ($count -eq 0) { return 'NEEDS_SELECTION' }
+        return 'NEEDS_EXACTLY_ONE_BDF'
+    }
+    if ($needs -eq 'sequence' -and $count -lt 2) { return 'NEEDS_TWO_OR_MORE_BDFS' }
+    if ($needs -eq 'any' -and $count -lt 1) { return 'NEEDS_SELECTION' }
+    $needsEsp = $false
+    if ($Variant.PSObject.Properties.Name -contains 'requires_esp_guid') { $needsEsp = [bool]$Variant.requires_esp_guid }
+    if ($needsEsp -and -not $WindowsEspGuid) { return 'NEEDS_ESP_GUID' }
+    return $null
+}
+
 function Get-VariantBinary($Variant) {
     # The label is whatever src/Gpu-Selection-Build.ps1 would compute, so the
     # expectation and the builder cannot use different spellings.
@@ -521,6 +554,7 @@ try {
     if ($All -and $Deploy) { throw '-All must not stage: a matrix run signs only. Use -Only <id> -Deploy <id> for one image.' }
     if ($Deploy -and -not $StageDrive) { throw '-Deploy requires -StageDrive.' }
     if ($Deploy -and $SignOnly) { throw '-SignOnly and -Deploy are mutually exclusive: a sign-only run never touches a USB stick.' }
+    if ($SignOnly -and $StageDrive) { throw '-SignOnly and -StageDrive are mutually exclusive: -SignOnly never touches a stick. Drop -StageDrive, or drop -SignOnly and name one image with -Deploy <id>.' }
     if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
     $variants = @(Select-Variants)
     if ($Deploy) {
@@ -612,14 +646,28 @@ try {
     $signedCount = 0
     $failedCount = 0
     $skippedCount = 0
+    $variantTotal = $variants.Count
+    $variantIndex = 0
 
     foreach ($variant in $variants) {
+        $variantIndex++
         $familySpec = $familyById[$variant.family]
         $variantId = $variant.id
-        Say ("VARIANT_BEGIN id={0} family={1} safety={2} builder={3}" -f
-             $variantId, $variant.family, $variant.safety, $familySpec.builder)
+        # A count, so a long -All run reads as progress instead of a loop.
+        Say ("VARIANT_BEGIN [{0}/{1}] id={2} family={3} safety={4} builder={5}" -f
+             $variantIndex, $variantTotal, $variantId, $variant.family, $variant.safety, $familySpec.builder)
         try {
             try {
+                $skipReason = Test-VariantSelection $variant
+                if ($skipReason) {
+                    Say ("VARIANT_SKIPPED id={0} REASON={1}" -f $variantId, $skipReason)
+                    $skippedCount++
+                    $results.Add([pscustomobject]@{
+                        id = $variantId; family = $variant.family; safety = $variant.safety
+                        status = 'SKIPPED'; reason = $skipReason
+                    })
+                    continue
+                }
                 $buildArguments = Build-VariantArguments $variant
             } catch {
                 $reason = $_.Exception.Message
@@ -677,6 +725,11 @@ try {
             Say "Unsigned SHA-256: $sourceHash"
             $signExit = Invoke-WslSign -SourceEfi $builtImage -SignedEfi $signedEfi `
                             -ExpectedSha $sourceHash -PublicCer $PublicCertificate
+            if ($signExit -isnot [int]) {
+                $leak = ('Internal: the signing call returned {0} separate values instead of ' +
+                         'one exit code. Nothing was staged; report this with the output above.')
+                throw ($leak -f @($signExit).Count)
+            }
             if ($signExit -ne 0) {
                 if (Test-Path -LiteralPath $signedEfi) {
                     Remove-Item -LiteralPath $signedEfi -Force -ErrorAction SilentlyContinue
@@ -768,6 +821,12 @@ try {
         DateUtc = [DateTime]::UtcNow.ToString('o')
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $matrixPath -Encoding UTF8 -ErrorAction Stop
 
+    if ($skippedCount) {
+        $hint = ('SKIPPED_HINT {0} variants needed different arguments: -SelectionBdf builds the ' +
+                 'single-target images, -SelectionBdfs with two or more builds the sequence ones, ' +
+                 '-WindowsEspGuid builds the handoff ones. Run -All again with the other selection.')
+        Say ($hint -f $skippedCount)
+    }
     Say ("STATUS={0} SIGNED={1} FAILED={2} SKIPPED={3} DB_ENROLLED={4} HARDWARE_VERIFIED=0 MATRIX={5}" -f
         $(if ($failedCount) { 'INCOMPLETE' } else { 'COMPLETE' }),
         $signedCount, $failedCount, $skippedCount, $dbEnrolled, $matrixPath)

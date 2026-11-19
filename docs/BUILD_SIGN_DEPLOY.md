@@ -145,7 +145,16 @@ renaming an image.
     -SelectionBdf '0000:01:00.0' -Deploy actuate-one-target -StageDrive G -AcceptActuatingDeploy
 ```
 
-`-All` never stages. `-SignOnly` and `-Deploy` are mutually exclusive. `-Deploy`
+`-All` never stages, and it is bounded: 32 variants, one `VARIANT_BEGIN` and one
+`SIGNED`/`FAILED`/`SKIPPED` line each - it is not a retry loop, so a long scroll
+is expected and a failing variant does not stop the rest.
+
+A selection has a shape, and `-All` respects it instead of failing. With two
+BDFs the single-target variants are skipped (`REASON=NEEDS_EXACTLY_ONE_BDF`) and
+the sequence ones build; with one BDF it is the other way round
+(`REASON=NEEDS_TWO_OR_MORE_BDFS`). Run `-All` twice with both shapes, or use
+`-Only` for the images you actually need. `-SignOnly` is
+exclusive with both `-Deploy` and `-StageDrive`. `-Deploy`
 must name the same variant `-Only` selected, and exactly one variant can be
 selected when deploying - because a stick has exactly one `BOOTX64.EFI`.
 
@@ -208,6 +217,10 @@ skipped and why.
 | WSL exit 4 | Key, certificate or `.cer` disagree, or the certificate is expired | Re-export the `.cer` from the same certificate; check `openssl x509 -noout -dates` |
 | WSL exit 5 | The unsigned image changed, or the signed file already existed | Re-run; if it repeats, something else is writing the build directory |
 | `VARIANT_SKIPPED … REASON=NEEDS_SELECTION` | `-All` was run without a BDF | Pass `-SelectionBdf` or `-SelectionBdfs` |
+| `REASON=NEEDS_EXACTLY_ONE_BDF` | Two or more BDFs given, a single-target variant selected | Re-run with `-SelectionBdf '0000:01:00.0'` |
+| `REASON=NEEDS_TWO_OR_MORE_BDFS` | One BDF given, a sequence variant selected | Re-run with `-SelectionBdfs 'a,b'` |
+| `Internal: the signing call returned N separate values` | The WSL call leaked output into the exit code | Upgrade the script: it captures the output and returns the code alone |
+| Every variant fails with `exit Signature verification OK … 0` | The same leak, in a version before this fix | Upgrade; the signature itself succeeded |
 | `VARIANT_FAILED … expects` | The builder produced a filename the catalogue does not predict | Fix `docs/image_variants.json`; the script will not rename an image |
 | Staged, but the machine ignores it | Secure Boot refused the image, or the firmware is booting another entry | Confirm `DB_ENROLLED=TRUE`, then check the boot order and the file hash on the stick |
 | Staged, boots, black screen | A read-only diagnostic that writes nothing is not supposed to be quiet for long | Re-read the log on the stick; the console output is duplicated there when `-SaveLog` was used |
