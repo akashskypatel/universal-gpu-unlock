@@ -292,8 +292,10 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             # The activity log needs artifact access to read; an annotation does
             # not, so a failing command is named where a reviewer will see it.
-            detail=$(grep -v -e '^HOST_EXIT=' -e '^Filesystem' -e '^/dev/' "$HOST_LOG" | tail -n 14 \
-                     | grep -iE 'error|fail|terminated|undefined|no such file' | tail -n 4 | tr '\n' ' ' | cut -c1-900)
+            # The last lines before this trap ran: the failing check names now,
+            # not the shell noise of the trap itself.
+            detail=$(grep -v -e '^HOST_EXIT=' -e '^Filesystem' -e '^/dev/' -e '^ [MADRCU?!][ MADRCU?!]* ' \
+                       "$HOST_LOG" | tail -n 6 | tr '\n' '|' | cut -c1-900)
             printf '::error::HOST_EXIT=%s %s\n' "$rc" "${detail:-(no diagnostic line in the log)}"
           fi
           exit "$rc"
