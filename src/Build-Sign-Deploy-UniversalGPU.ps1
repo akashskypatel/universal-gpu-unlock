@@ -57,6 +57,11 @@ combine with -Only to narrow further.
 The single variant id to stage onto -StageDrive. Anything actuating also needs
 -AcceptActuatingDeploy.
 
+.PARAMETER StageDrive
+The USB drive letter -Deploy writes to. A drive letter on its own is only a
+destination: without -Deploy <id> nothing is copied, so the run is refused rather
+than reporting COMPLETE over an untouched stick.
+
 .PARAMETER SkipDbCheck
 Do not prove the certificate is in the BIOS db. Records db_enrolled=UNKNOWN in
 the receipt, so a later reader can tell the difference.
@@ -673,6 +678,13 @@ try {
     if ($Deploy -and -not $StageDrive) { throw '-Deploy requires -StageDrive.' }
     if ($Deploy -and $SignOnly) { throw '-SignOnly and -Deploy are mutually exclusive: a sign-only run never touches a USB stick.' }
     if ($SignOnly -and $StageDrive) { throw '-SignOnly and -StageDrive are mutually exclusive: -SignOnly never touches a stick. Drop -StageDrive, or drop -SignOnly and name one image with -Deploy <id>.' }
+    if ($StageDrive -and -not $Deploy) {
+        # -StageDrive names a destination; -Deploy is the action. Accepting the
+        # drive alone meant a run signed an image, said COMPLETE, and copied
+        # nothing - the stick looked untouched because it was.
+        throw ('-StageDrive only names the stick; nothing is copied without -Deploy <id>. ' +
+               'Use -Only <id> -Deploy <id> -StageDrive <letter>, or drop -StageDrive to sign only.')
+    }
     if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
     $variants = @(Select-Variants)
     if ($Deploy) {
@@ -769,6 +781,7 @@ try {
     $skippedCount = 0
     $variantTotal = $variants.Count
     $variantIndex = 0
+    $stagedPath = $null
     $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
     $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
     $localProfileSkips = 0
@@ -902,6 +915,7 @@ try {
                 $deployment = Stage-SignedEfi -Drive $drive -Root $usbRoot -SignedFile $signedEfi `
                                   -SignedSha256 $signedHash -LocalOutput $OutputDirectory `
                                   -ExpectedVolumeId $targetVolumeId
+                $stagedPath = $deployment.Path
             }
 
             $receiptPath = "$signedEfi.json"
@@ -986,6 +1000,11 @@ try {
     Say ("STATUS={0} SIGNED={1} FAILED={2} SKIPPED={3} DB_ENROLLED={4} HARDWARE_VERIFIED=0 MATRIX={5}" -f
         $(if ($failedCount) { 'INCOMPLETE' } else { 'COMPLETE' }),
         $signedCount, $failedCount, $skippedCount, $dbEnrolled, $matrixPath)
+    if ($Deploy) {
+        # Reaching this line with -Deploy means the copy and its hash check
+        # succeeded; a staging failure throws out of the loop.
+        Say (("STAGED {0} PATH={1} DRIVE={2}:") -f $Deploy, $stagedPath, $drive)
+    }
     Say 'Signing proves authenticity only: the certificate is the one the firmware trusts, and the image is the one that was built.'
     Say 'It does not establish firmware or GPU compatibility, a Windows device start, or the 617.42 Booter provenance.'
     if ($failedCount) { exit 1 }

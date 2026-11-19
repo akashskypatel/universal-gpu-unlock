@@ -496,6 +496,16 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
                       "WSL_SIGNING_BROKEN"):
             self.assertIn(token, block)
 
+    def test_a_stage_drive_without_a_deploy_is_refused(self):
+        # -StageDrive names a destination, -Deploy is the action. Accepting the
+        # drive alone signed the image, printed COMPLETE and copied nothing.
+        self.assertIn("-StageDrive only names the stick; nothing is copied without -Deploy <id>", SCRIPT)
+        self.assertIn("if ($StageDrive -and -not $Deploy)", SCRIPT)
+
+    def test_a_deploy_run_says_what_it_staged(self):
+        self.assertIn('Say (("STAGED {0} PATH={1} DRIVE={2}:")', SCRIPT)
+        self.assertIn("$stagedPath = $deployment.Path", SCRIPT)
+
 
 class TheDocumentIsRendered(unittest.TestCase):
     def test_the_matrix_block_is_exactly_the_rendered_catalogue(self):

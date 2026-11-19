@@ -157,6 +157,11 @@ A selection has a shape, and `-All` respects it instead of failing. With two
 BDFs the single-target variants are skipped (`REASON=NEEDS_EXACTLY_ONE_BDF`) and
 the sequence ones build; with one BDF it is the other way round
 (`REASON=NEEDS_TWO_OR_MORE_BDFS`). Run `-All` twice with both shapes, or use
+Staging takes two flags: `-Deploy <id>` is the action, `-StageDrive <letter>` is
+the destination, and `-Deploy` must name the same variant `-Only` selected. A
+drive letter on its own is refused - it used to sign the image, print `COMPLETE`
+and copy nothing. A staging run ends with `STAGED <id> PATH=… DRIVE=…:`.
+
 `-Only` for the images you actually need. `-SignOnly` is
 exclusive with both `-Deploy` and `-StageDrive`.
 
@@ -230,6 +235,7 @@ skipped and why.
 | WSL exit 3 | `wslpath` could not map a Windows path | Check `[automount] enabled = true` in `/etc/wsl.conf`, and that the repository is not on an unmounted drive |
 | WSL exit 4 | Key, certificate or `.cer` disagree, or the certificate is expired | Re-export the `.cer` from the same certificate; check `openssl x509 -noout -dates` |
 | WSL exit 5 | The unsigned image changed, or the signed file already existed | Re-run; if it repeats, something else is writing the build directory |
+| `-StageDrive only names the stick; nothing is copied without -Deploy <id>` | `-StageDrive` was passed without `-Deploy`, so the run signed and stopped | Add `-Deploy <id>` with the id from `-Only <id>`, e.g. `-Only diag-topology-log -Deploy diag-topology-log -StageDrive G` |
 | `VARIANT_SKIPPED … REASON=NEEDS_SELECTION` | `-All` was run without a BDF | Pass `-SelectionBdf` or `-SelectionBdfs` |
 | `REASON=NEEDS_EXACTLY_ONE_BDF` | Two or more BDFs given, a single-target variant selected | Re-run with `-SelectionBdf '0000:01:00.0'` |
 | `REASON=NEEDS_TWO_OR_MORE_BDFS` | One BDF given, a sequence variant selected | Re-run with `-SelectionBdfs 'a,b'` |
