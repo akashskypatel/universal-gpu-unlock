@@ -484,7 +484,7 @@ register. The values split on both cards:
 
 | Card | SEC2 window | GSP window | Selectors |
 | --- | --- | --- | --- |
-| 4090 `01:00.0` | 15 of 20 refused; only `ENGINE_ID`, `CHIP`, `MAILBOX0/1`, `BCR` read | 17 of 20 refused; only `ENGINE_ID`, `CHIP`, `MAILBOX0/1`, `CPUCTL` read | `SS0=0x74301123`, `SS1=0` |
+| 4090 `01:00.0` | 15 of 20 refused; only `ENGINE_ID`, `CHIP`, `MAILBOX0/1`, `BCR` read | 15 of 20 refused; only `ENGINE_ID`, `CHIP`, `MAILBOX0/1`, `CPUCTL` read | `SS0=0x74301123`, `SS1=0` |
 | 3080 `04:00.0` | the same 15 of 20 refused | all 20 read: `UCODE_ID=9`, `ENGINE_MASK=0x400`, `SIG_DMEM=0x5a4`, `BOOTVEC=1`, `BCR=1`, `DMA_CMD=2`, `DMA_CTRL=0x80`, `CPUCTL=0x10` | `SS0=0x71306153`, `SS1=7` |
 
 "Refused" is `RAW=0xbadf5620` - the identical value, at unrelated registers, on
