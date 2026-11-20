@@ -460,6 +460,116 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.33 C5 — the first interlock run: addressable, and half of it not readable
+
+The probe from §11.32 has now run on the donor bench, in the same session as the
+two-card preparation. `diag-vram-blocks` produced
+`GPU-TOPOLOGY-DIAGNOSTIC-0006.TXT` and `prep-selected -SelectionBdfs
+'0000:01:00.0,0000:04:00.0'` produced `RUN0003.TXT`; both are stored under
+`tests/data/hardware_session/` and re-scored by the suite on every run.
+
+Scored, not read: R1-R4 `PASS` on the probe log - R4's first pass on physical
+hardware - and P1-P2 `PASS` on the preparation log.
+`tools/donor_gate.py` composes them to `VERDICT=GO ... TARGETS=2` with
+`OBSERVED=2` and `STAGES=readonly,prepare`.
+
+**What the probe answered.** All 88 reads landed: 42 write-set words plus 2
+context words per card, `READS_FAILED=0`. The address list in
+`src/vram_blocks.h` is addressable through PCI I/O on both cards, which is what
+the interlock was built to establish - the addresses are not a surprise waiting
+for the first write.
+
+**What it found instead.** A successful read is not the same as a readable
+register. The values split on both cards:
+
+| Card | SEC2 window | GSP window | Selectors |
+| --- | --- | --- | --- |
+| 4090 `01:00.0` | 15 of 20 refused; only `ENGINE_ID`, `CHIP`, `MAILBOX0/1`, `BCR` read | 17 of 20 refused; only `ENGINE_ID`, `CHIP`, `MAILBOX0/1`, `CPUCTL` read | `SS0=0x74301123`, `SS1=0` |
+| 3080 `04:00.0` | the same 15 of 20 refused | all 20 read: `UCODE_ID=9`, `ENGINE_MASK=0x400`, `SIG_DMEM=0x5a4`, `BOOTVEC=1`, `BCR=1`, `DMA_CMD=2`, `DMA_CTRL=0x80`, `CPUCTL=0x10` | `SS0=0x71306153`, `SS1=7` |
+
+"Refused" is `RAW=0xbadf5620` - the identical value, at unrelated registers, on
+two different GPUs. 45 of the 84 write-set words across the two cards. The value
+is not unknown to this tree: `src/vendor/unlock_610.c` defines
+
+```c
+static bool inaccessible(u32 value)
+{
+	return value == ~0u || (value & 0xffff0000u) == 0xbadf0000u;
+}
+```
+
+and `poll_us()` returns `-EIO` - "poll inaccessible" - on exactly those two
+shapes. `src/vendor/prep_610.c` carries the same test. So the log is reporting a
+read the engine refuses, in the encoding the transaction already knows. Its
+being identical on an Ada and an Ampere part, at twenty different deltas, is why
+it cannot be device state.
+
+**Why this matters before the first write.** `falcon_reset()` - the first
+function the transaction calls - begins with `poll_us(work, eng->base + 0xf4,
+1u << 31, 1u << 31, 1000, false)` and then `read_bar(work, eng->base + 0x3c0,
+&engine)`. On this bench `0x8403c0` and `0x1103c0` read `0x0` (not the refusal
+shape, so `inaccessible()` is false and the sequence would not stop there). The
+`0xf4` word was **not** in the probed set, so which of two things happens at the
+first actuation is still open, and both are cheap to settle:
+
+* if `0xf4` is refused, `poll_us` returns `-EIO` and the transaction stops
+  before its first write, with `poll inaccessible: reg=0x8400f4` in the log;
+* if `0xf4` reads, the sequence proceeds to write `engine | 1` into `0x8403c0`
+  on an engine whose twenty neighbour words are refused.
+
+The probe now reports `0xf4` on both engines (`SEC2.HWCFG`, `GSP.HWCFG`) and
+`BAR0+0` (`BAR0.CHIP`), so the next read-only boot answers it directly. Neither
+outcome damages a card - one refuses, the other makes a single documented halt
+write - but the plan is not allowed to assume the first, and until this run
+nobody knew which it would be.
+
+The read path is the same one the transaction uses: `GuRead32For`
+(`src/port.c`) is `Mem.Read(... EfiPciIoWidthUint32, 0, O, 1, &Value)`, the call
+the probe makes, with the same bar index and width. So the refusal should
+reproduce inside the actuating image rather than being an artifact of reading
+BAR0 from outside it. That is an expectation from the source, not a measurement:
+the actuating image has never run.
+
+**What changed in the tree because of it.** A probe that prints
+`STATUS=OBSERVED` for a refused read is worse than no probe, so:
+
+* every word now carries `ACCESS=STATE` or `ACCESS=NOT_ACCESSIBLE`, classified
+  by `GuVramBlockAccessible` using the writer's own predicate, and a host test
+  compiles both functions from both files and drives them over seventeen values
+  to prove they agree;
+* each card with any refused word prints `VRAM_BLOCK_PROBE_REFUSED GPU=... WORDS=...
+  OF=... SIGNATURE=0xbadf0000 ... CAUSE=UNKNOWN`, surfaced by the verifier as
+  `NOTE WRITE_SET_NOT_READABLE`;
+* `CARD` and `END` carry `OBSERVED=` and `NOT_ACCESSIBLE=` counts, appended
+  after the fields they already had so a log captured before they existed still
+  satisfies R4 - `-0006` scores the same way after the change as before it;
+* `-0006` is recorded with `history`/`does_not_show` text that says the probe as
+  built printed refused reads as observed state, because that is what happened.
+
+**The two-card preparation.** §11.31 named one boot that prepares both cards as
+the next unmeasured thing. `RUN0003.TXT` is that boot:
+`ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=2`,
+`ACTIVE_PREPARE=COMPLETE SELECTED=2 MUTATION_AUTHORIZED=0`, two
+`ACTIVE_CONTEXT[n]=PREPARED` lines, `ACTIVE_SEQUENCE=PREPARED_NOT_STARTED
+SELECTED=2 TRACKED=2 NEXT=0`, `ACTIVE_REFRESH=PASSIVE_REVALIDATED TARGETS=2`, and
+`ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1`.
+Two distinct per-card platform contexts existed at once in a build that wrote
+nothing - the observation §11.31 could only describe. It is still not a
+multi-target **write**, and `MUTATION_AUTHORIZED=0` is on every line that could
+be mistaken for one.
+
+What has been measured, and what has not. Measured on this bench: addressability
+of the whole write set (88/88), per-card readability of it (30 of 42 refused on
+the 4090, 15 of 42 on the 3080), and the two-card preparation. Not measured: the
+refused words' cause, whether `0xf4` is among them, whether any engine state can
+be reached from a pre-boot image on this board, and - unchanged - any write.
+
+What this does not do: no inventory row moves. `C5` stays `none`: the write set
+is now identifiable per word, and the post-state half still needs an actuation.
+`C9` stays `partial`, with its note corrected to say a two-card preparation has
+run and a multi-target write still has not. `hardware_verified` stays `false` for
+all 43, and the counts stay at 11 met / 15 partial / 17 not started.
+
 ### 11.32 C5 — a read-only probe of the write set, before the first actuation
 
 Every image in this tree that can write to a GPU has been handed to an operator
@@ -583,11 +693,11 @@ The workbench now says that instead of contradicting it:
 What has been measured, and what has not. Measured: the read-only stage observes
 both cards and can be asked to walk both in order (`-0002`); the preparation
 stage prepares one card per boot and refuses, twice, once per card
-(`physical-prepare-0001/0002`). Not measured, and next on the list: **one boot
-that prepares both cards** - `prep-selected -SelectionBdfs
-'0000:01:00.0,0000:04:00.0'`, which should log two `ACTIVE_PREPARED_STEP[n]`
-lines, two `ACTIVE_CONTEXT[n]=PREPARED` lines and `SELECTED=2`,
-`MUTATION_AUTHORIZED=0`. `PreparePlatformContexts` allocates one platform context
+(`physical-prepare-0001/0002`); and, since this section was written, **one boot
+that prepares both cards** - `physical-prepare-0003`, `prep-selected
+-SelectionBdfs '0000:01:00.0,0000:04:00.0'`, which logged two
+`ACTIVE_PREPARED_STEP[n]` lines, two `ACTIVE_CONTEXT[n]=PREPARED` lines,
+`SELECTED=2` and `MUTATION_AUTHORIZED=0`. It is described in §11.33. `PreparePlatformContexts` allocates one platform context
 per selected card and refuses an alias to the active context or a duplicate
 pointer, so that log would be the first evidence that two distinct per-card
 contexts coexisted in a read-only build. Never measured: any multi-target

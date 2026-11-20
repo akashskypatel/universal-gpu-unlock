@@ -247,8 +247,8 @@
       "class": "C",
       "priority": "P1",
       "source": "partial",
-      "section": "11.22",
-      "note": "A two-card host model now executes selection and per-target admission from real code (§11.22); nothing has run with two physical cards, and the per-card memory footprint (B10) is still unmeasured.",
+      "section": "11.33",
+      "note": "A two-card host model executes selection and per-target admission from real code (§11.22); one boot has now prepared both cards and held two per-card contexts (§11.33, RUN0003), and no multi-target write has run.",
       "hardware_verified": false
     },
     {

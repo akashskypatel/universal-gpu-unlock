@@ -12,7 +12,7 @@
     "title": "Read-only hardware execution guide, step by step",
     "intro": [
       "The sections after this one describe the gates. This one is the sequence that produces a log to score, for every image in the catalogue that writes nothing to the GPU, and names the fact in each log that a hardware-dependent item is waiting for.",
-      "Nothing below has been executed against this tree. No log described here exists, every tool in the chain prints `HARDWARE_VERIFIED=0`, and no step changes a row in `docs/readiness_status.json`: a captured log is something a reviewer reads, not a flag this repository flips."
+      "Every read-only and preparation run stored under `captured_runs` below was executed on this bench; **no actuating image has ever run**. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips."
     ],
     "naming": "There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with two switches: `-Only <id>` chooses the image from `docs/image_variants.json`, and `-StageDrive <letter>` copies the signed `EFI\\BOOT\\BOOTX64.EFI` onto the stick after a verified backup of whatever was there. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.",
     "preconditions": [
@@ -446,19 +446,19 @@
           },
           {
             "goal": "C5",
-            "token": "VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED",
+            "token": "VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x ACCESS=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED",
             "emitter": "src/gpu_topology_efi.c",
             "why": "one line per word the actuating sequence writes: block name, the absolute BAR0 address, and the value there before any write exists. Forty-two of them (twenty per engine plus both selectors) is the evidence that this image addresses the same blocks as the transaction. It does not move C5: a readable address identifies the target, and there is no post-state yet to verify."
           },
           {
             "goal": "C3",
-            "token": "VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED",
+            "token": "VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u OBSERVED=%u NOT_ACCESSIBLE=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED",
             "emitter": "src/gpu_topology_efi.c",
             "why": "the per-card digest is labelled a change detector in the line itself, and the line carries the failed-read count beside it: a digest over a partial read set would otherwise look complete. A digest over register values is not firmware acceptance, so C3 stays where it is."
           },
           {
             "goal": "C5",
-            "token": "VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED",
+            "token": "VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=%u NOT_ACCESSIBLE=%u",
             "emitter": "src/gpu_topology_efi.c",
             "why": "the totals: cards probed, expected reads, reads that landed and reads that did not. A block that does not read back is a number here instead of a silent gap, which is the whole point of probing before the first write."
           }
@@ -1083,6 +1083,12 @@
       ]
     },
     {
+      "id": "WRITE_SET_NOT_READABLE",
+      "token": "VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE",
+      "emitter": "src/gpu_topology_efi.c",
+      "why": "the probe met words inside the actuating write set that the engine returns its own inaccessible() shape for: the read succeeded at the PCI I/O level and the value is not device state. Printed once per card that has any, so a run cannot look fully observed while part of the write set was refused"
+    },
+    {
       "id": "SUPPLEMENTARY_PCI_OBSERVATION",
       "token": "PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0",
       "emitter": "src/gpu_topology_efi.c",
@@ -1619,6 +1625,78 @@
         ],
         "history": "Prepared the second card to test that the selection is honoured per target rather than by index. Diffing the two preparation logs shows exactly one changed line - the prepared step - which is what makes the pair useful: the preparation path behaves identically for a 4090 and a 3080 up to the refusal. This pair is also what showed that a gate keyed on a stage's *census* cannot describe a one-target session.",
         "does_not_show": "that the 3080's preparation conclusions hold for the 4090 or vice versa: each log speaks only for its own target, and neither says anything about actuation."
+      },
+      {
+        "id": "physical-readonly-0006",
+        "captured": "2026-11-18",
+        "image": "diag-vram-blocks",
+        "stage": "readonly",
+        "file": "tests/data/hardware_session/physical-readonly-0006.txt",
+        "sha256": "b101089391a189fc5882fcb79549950b14b9b111f5b9cacbeb14d6335667d50e",
+        "bytes": 27929,
+        "captured_bytes": 28172,
+        "lines": 243,
+        "line_endings": "CRLF as captured; stored with LF so a checkout cannot change the digest",
+        "bench": "one display on the AMD iGPU, no cable on either NVIDIA card; the NVIDIA UEFI driver bound both cards (BY_DRIVER=1) in this boot; Windows started after the image returned",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=42 CONTEXT=2 MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1",
+            "why": "the first image in this tree that reads the transaction's own address list, and it says how many words that is before it reads any"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE_END CARDS=2 BLOCKS=42 CONTEXT=2 EXPECTED_READS=88 READS_SUCCEEDED=88 READS_FAILED=0 DIGESTS=2 NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED",
+            "why": "88 of 88 reads landed on two cards: the whole write set is addressable through PCI I/O on this machine"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE GPU=3080 BDF=0000:04:00.0 BLOCK=GSP.UCODE_ID BAR0_OFFSET=0x111198 ROLE=WRITE STATUS=OBSERVED RAW=0x00000009",
+            "why": "GSP ucode ID 9 on the 3080, the value Linux nova-core GA102+ uses to select BAR0+0x8241e0: this is a real engine register, not a decode artifact"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE GPU=4090 BDF=0000:01:00.0 BLOCK=SEC2.CPUCTL BAR0_OFFSET=0x840100 ROLE=WRITE STATUS=OBSERVED RAW=0xbadf5620",
+            "why": "the other half of the same run: a word in the write set that reads as the transaction's own inaccessible() shape, which is why section 11.33 exists"
+          }
+        ],
+        "history": "First run of the block probe, and the first read-only image here that reads the transaction's own address list. It answers the question it was built for: 88 of 88 reads landed on both cards, so the forty-two words `src/vendor/unlock_610.c` writes are all addressable through PCI I/O on this machine. It also found something the plan did not have. On both cards the five falcon-bridge words read as state, while the rest of the SEC2 window - and, on the 4090, nearly all of the GSP window as well - returns `0xbadf5620`, which is the shape `inaccessible()` treats as a refused read: 45 of the 84 write-set words across the two cards. The probe as built printed those as `STATUS=OBSERVED`, so section 11.33 teaches it to classify them, adds the two `HwCfg` words `falcon_reset()` polls before its first write, and records the finding here.",
+        "does_not_show": "that the actuating image will see the same values. It reads through the same `Mem.Read` call with the same width and bar index (`src/port.c`'s `GuRead32For`), so the values should reproduce, but that image has never run. It does not say why the engine refuses those words, or how a run would lift the refusal; and `0x8400f4`, the word `falcon_reset()` polls first, was not in the probed set, so whether the transaction stops at that poll or gets as far as its first write is still open."
+      },
+      {
+        "id": "physical-prepare-0003",
+        "captured": "2026-11-18",
+        "image": "prep-selected, both BDFs in one boot",
+        "stage": "prepare",
+        "file": "tests/data/hardware_session/physical-prepare-0003.txt",
+        "sha256": "cfe29f56032fdd826acba3cd38cb8bd16211f65f57ba72a943d8666f2584eed3",
+        "bytes": 1047,
+        "captured_bytes": 1047,
+        "lines": 14,
+        "line_endings": "LF as captured; stored unchanged",
+        "bench": "same boot and same two cards as physical-readonly-0006; built with -SelectionBdfs '0000:01:00.0,0000:04:00.0'",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=2 READ_ONLY=1",
+            "why": "the inventory saw both cards and the build asked for both: the first time that number is 2 rather than 1"
+          },
+          {
+            "token": "ACTIVE_PREPARE=COMPLETE SELECTED=2 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0",
+            "why": "preparation completed for two targets and states that no mutation was authorised"
+          },
+          {
+            "token": "ACTIVE_CONTEXT[1]=PREPARED CPU_ONLY=1 MUTATION_AUTHORIZED=0",
+            "why": "a second per-card platform context existed at the same time as the first - what PreparePlatformContexts' alias refusal makes meaningful"
+          },
+          {
+            "token": "ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=2 TRACKED=2 NEXT=0 MUTATION_AUTHORIZED=0",
+            "why": "the ordered two-target sequence was built and left unstarted: the list the waiver would later execute"
+          },
+          {
+            "token": "ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0",
+            "why": "execution refused at the shared discovery boundary, before GuInit, with detach/unlock/FLR all zero"
+          }
+        ],
+        "history": "The two-card preparation section 11.31 listed as next and unmeasured: one boot, `-SelectionBdfs '0000:01:00.0,0000:04:00.0'`, built without the waiver. It prepares both cards in the order the selection names them, holds two per-card contexts at the same time, and refuses execution before `GuInit`.",
+        "does_not_show": "that the ordered list may execute - execution needs `-AcceptUnverifiedActuation`, which this build does not have - or anything about a second card while the first is being written. No write, Stop, detach, reset or FLR was called, and `MUTATION_AUTHORIZED=0` is printed on every line that could be mistaken for one."
       }
     ]
   }

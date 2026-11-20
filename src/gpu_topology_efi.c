@@ -335,6 +335,19 @@ typedef struct {
   UINT32 offset;
 } GU_VRAM_BLOCK_ROW;
 
+/* The transaction already knows what an unreadable register looks like:
+ * src/vendor/unlock_610.c's inaccessible() is
+ *   value == ~0u || (value & 0xffff0000u) == 0xbadf0000u
+ * and poll_us() refuses with -EIO on the same two shapes. A read can succeed at
+ * the PCI I/O level and still return one of them, so the probe classifies every
+ * word with the same predicate instead of presenting a read-rejection signature
+ * as entry state. The first physical run returned 0xbadf5620 on 45 of the 84
+ * write-set words across the two cards (docs/PRODUCTION_READINESS_INVENTORY.md
+ * section 11.33), which is why this exists. */
+static UINT32 GuVramBlockAccessible(UINT32 value) {
+  return (value == 0xffffffffU || (value & 0xffff0000U) == 0xbadf0000U) ? 0U : 1U;
+}
+
 static const GU_VRAM_BLOCK_ROW VramWriteSet[] = {
   {"SEC2.ENGINE_ID",GU_VRAM_BLOCK_SEC2_ENGINE_ID},
   {"SEC2.CHIP",GU_VRAM_BLOCK_SEC2_CHIP},
@@ -381,9 +394,16 @@ static const GU_VRAM_BLOCK_ROW VramWriteSet[] = {
 };
 #define GU_VRAM_BLOCK_WRITE_COUNT (sizeof(VramWriteSet)/sizeof(VramWriteSet[0]))
 
-/* The writer reads these to decide what to write; the probe reports them for
- * context and keeps them out of the write-set digest. */
+/* The writer reads these to decide what to write, and to decide whether to run
+ * at all; the probe reports them for context and keeps them out of the
+ * write-set digest. HWCFG is the word falcon_reset() polls first: poll_us()
+ * returns -EIO on an inaccessible read, so this line predicts whether an
+ * actuating run reaches its first write. CHIP is BAR0+0, which the transaction
+ * copies into each engine's 0x84. */
 static const GU_VRAM_BLOCK_ROW VramReadContext[] = {
+  {"SEC2.HWCFG",GU_VRAM_BLOCK_CONTEXT_SEC2_HWCFG},
+  {"GSP.HWCFG",GU_VRAM_BLOCK_CONTEXT_GSP_HWCFG},
+  {"BAR0.CHIP",GU_VRAM_BLOCK_CONTEXT_CHIP},
   {"FEAT.PLM",GU_VRAM_BLOCK_CONTEXT_FEAT_PLM},
   {"FEAT.READOUT1",GU_VRAM_BLOCK_CONTEXT_FEAT_READOUT1}
 };
@@ -393,6 +413,7 @@ static void ReportVramBlocks(int pci_ok) {
   static const char digits[]="0123456789abcdef";
   size_t i,j;
   unsigned cards=0U,reads=0U,failed=0U,digests=0U;
+  unsigned observed=0U,refused=0U;
   Say("VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1\r\n",
       (unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
       (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT);
@@ -405,6 +426,7 @@ static void ReportVramBlocks(int pci_ok) {
     const GU_GPU_RECORD *id=&node->identity;
     EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)id->pci;
     unsigned ada,expected_bus,card_reads=0U,card_failed=0U;
+    unsigned card_observed=0U,card_refused=0U;
     UINT8 words[GU_VRAM_BLOCK_WRITE_COUNT*4U];
     UINT8 digest[32];
     char hex[65];
@@ -437,13 +459,15 @@ static void ReportVramBlocks(int pci_ok) {
         continue;
       }
       card_reads++;
+      if(GuVramBlockAccessible(raw)) card_observed++; else card_refused++;
       words[4U*j]=(UINT8)(raw & 0xffU);
       words[4U*j+1U]=(UINT8)((raw>>8) & 0xffU);
       words[4U*j+2U]=(UINT8)((raw>>16) & 0xffU);
       words[4U*j+3U]=(UINT8)((raw>>24) & 0xffU);
-      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x ACCESS=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
           ada?"4090":"3080",expected_bus,
-          VramWriteSet[j].name,(unsigned)VramWriteSet[j].offset,(unsigned)raw);
+          VramWriteSet[j].name,(unsigned)VramWriteSet[j].offset,(unsigned)raw,
+          GuVramBlockAccessible(raw)?"STATE":"NOT_ACCESSIBLE");
     }
     for(j=0;j<GU_VRAM_BLOCK_CONTEXT_COUNT;j++) {
       UINT32 raw=0U;
@@ -458,10 +482,11 @@ static void ReportVramBlocks(int pci_ok) {
         continue;
       }
       card_reads++;
-      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=READ_CONTEXT STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+      if(GuVramBlockAccessible(raw)) card_observed++; else card_refused++;
+      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=READ_CONTEXT STATUS=OBSERVED RAW=%#010x ACCESS=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
           ada?"4090":"3080",expected_bus,
           VramReadContext[j].name,(unsigned)VramReadContext[j].offset,
-          (unsigned)raw);
+          (unsigned)raw,GuVramBlockAccessible(raw)?"STATE":"NOT_ACCESSIBLE");
     }
     /* One digest over the forty-two write-set words in table order, so a second
      * run of this same image after actuation shows which block moved. It is a
@@ -475,20 +500,32 @@ static void ReportVramBlocks(int pci_ok) {
       }
       hex[64]=0;
       digests++;
-      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED\r\n",
-          ada?"4090":"3080",card_reads,card_failed,hex);
+      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u OBSERVED=%u NOT_ACCESSIBLE=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",card_reads,card_failed,card_observed,card_refused,hex);
     } else {
-      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=UNAVAILABLE INCOMPLETE_READ_SET=1\r\n",
-          ada?"4090":"3080",card_reads,card_failed);
+      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u OBSERVED=%u NOT_ACCESSIBLE=%u WRITE_SET_SHA256=UNAVAILABLE INCOMPLETE_READ_SET=1\r\n",
+          ada?"4090":"3080",card_reads,card_failed,card_observed,card_refused);
     }
+    /* A word can be addressable and still refused by the engine: the PCI I/O
+     * read succeeds and returns the transaction's own inaccessible() shape.
+     * Say so once per card rather than leaving the reader to spot a constant
+     * in eighty-four RAW fields. The cause is not inferred here. */
+    if(card_refused)
+      Say("VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE MEANING=THE_TRANSACTION_TREATS_THIS_AS_INACCESSIBLE CAUSE=UNKNOWN READ_ONLY=1\r\n",
+          ada?"4090":"3080",card_refused,card_reads);
     reads+=card_reads;
     failed+=card_failed;
+    observed+=card_observed;
+    refused+=card_refused;
   }
-  Say("VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED\r\n",
+  /* OBSERVED and NOT_ACCESSIBLE are appended after the verdict fields on
+   * purpose: a log captured before these counters existed still satisfies the
+   * gate's closing token, and the counters are still what the operator reads. */
+  Say("VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=%u NOT_ACCESSIBLE=%u\r\n",
       cards,(unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
       (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT,
       cards*((unsigned)GU_VRAM_BLOCK_WRITE_COUNT+(unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT),
-      reads,failed,digests);
+      reads,failed,digests,observed,refused);
 }
 #endif
 

@@ -58,7 +58,7 @@ card.
 
 The sections after this one describe the gates. This one is the sequence that produces a log to score, for every image in the catalogue that writes nothing to the GPU, and names the fact in each log that a hardware-dependent item is waiting for.
 
-Nothing below has been executed against this tree. No log described here exists, every tool in the chain prints `HARDWARE_VERIFIED=0`, and no step changes a row in `docs/readiness_status.json`: a captured log is something a reviewer reads, not a flag this repository flips.
+Every read-only and preparation run stored under `captured_runs` below was executed on this bench; **no actuating image has ever run**. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips.
 
 **The name.** There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with two switches: `-Only <id>` chooses the image from `docs/image_variants.json`, and `-StageDrive <letter>` copies the signed `EFI\BOOT\BOOTX64.EFI` onto the stick after a verified backup of whatever was there. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.
 
@@ -371,9 +371,9 @@ Forty-two BAR0 reads per verified card, at the addresses the waived transaction 
 *Score:* `python3 tools/verify_run_log.py <log> --stage readonly`
 
 * `C5` — `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1` (`src/gpu_topology_efi.c`): the probe declares what it is before it reads anything: a read-only boundary and the size of its own address list, so a run that reads fewer blocks than the table has is visible in the first line rather than by counting the middle.
-* `C5` — `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): one line per word the actuating sequence writes: block name, the absolute BAR0 address, and the value there before any write exists. Forty-two of them (twenty per engine plus both selectors) is the evidence that this image addresses the same blocks as the transaction. It does not move C5: a readable address identifies the target, and there is no post-state yet to verify.
-* `C3` — `VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): the per-card digest is labelled a change detector in the line itself, and the line carries the failed-read count beside it: a digest over a partial read set would otherwise look complete. A digest over register values is not firmware acceptance, so C3 stays where it is.
-* `C5` — `VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): the totals: cards probed, expected reads, reads that landed and reads that did not. A block that does not read back is a number here instead of a silent gap, which is the whole point of probing before the first write.
+* `C5` — `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x ACCESS=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): one line per word the actuating sequence writes: block name, the absolute BAR0 address, and the value there before any write exists. Forty-two of them (twenty per engine plus both selectors) is the evidence that this image addresses the same blocks as the transaction. It does not move C5: a readable address identifies the target, and there is no post-state yet to verify.
+* `C3` — `VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u OBSERVED=%u NOT_ACCESSIBLE=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): the per-card digest is labelled a change detector in the line itself, and the line carries the failed-read count beside it: a digest over a partial read set would otherwise look complete. A digest over register values is not firmware acceptance, so C3 stays where it is.
+* `C5` — `VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=%u NOT_ACCESSIBLE=%u` (`src/gpu_topology_efi.c`): the totals: cards probed, expected reads, reads that landed and reads that did not. A block that does not read back is a number here instead of a silent gap, which is the whole point of probing before the first write.
 
 *Does not prove:* that these are the right addresses for the transaction - only that this image and `src/vendor/unlock_610.c` name the same ones, checked by `tests/test_vram_block_probe.py`, not by the log. A successful read proves the word is reachable through PCI I/O; it does not prove an engine mask, a signature selector or a speed-selector write is permitted on this board, and it cannot say what any value means. The post-actuation half of the comparison has never run, because the actuation has never run.
 
@@ -506,6 +506,8 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-readonly-0005` | `diag-msi-sec2` | `readonly` | 155 | `eef276f7db4bf8c0a8a288f8cc256f47c5f8912886155bb32634392394e02a1f` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 | `physical-prepare-0001` | `prep-selected -SelectionBdf '0000:01:00.0'` | `prepare` | 12 | `341c91aeec538bcf8e43f8194c164fadc041ed76a3255cfd3b7c38cef59f1e00` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-prepare-0002` | `prep-selected -SelectionBdf '0000:04:00.0'` | `prepare` | 12 | `f8f7208516cdd76b68ffb7153267874cd30df3368111ab527d925d2fe27cad15` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-readonly-0006` | `diag-vram-blocks` | `readonly` | 243 | `b101089391a189fc5882fcb79549950b14b9b111f5b9cacbeb14d6335667d50e` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0` |
+| `physical-prepare-0003` | `prep-selected, both BDFs in one boot` | `prepare` | 14 | `cfe29f56032fdd826acba3cd38cb8bd16211f65f57ba72a943d8666f2584eed3` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -747,6 +749,57 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 
 *What it does not show:* that the 3080's preparation conclusions hold for the 4090 or vice versa: each log speaks only for its own target, and neither says anything about actuation.
 
+### `physical-readonly-0006`
+
+*File:* `tests/data/hardware_session/physical-readonly-0006.txt` — 27929 bytes stored, 28172 as captured, 243 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-18. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card; the NVIDIA UEFI driver bound both cards (BY_DRIVER=1) in this boot; Windows started after the image returned.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0006.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=42 CONTEXT=2 MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1` — the first image in this tree that reads the transaction's own address list, and it says how many words that is before it reads any
+* `VRAM_BLOCK_PROBE_END CARDS=2 BLOCKS=42 CONTEXT=2 EXPECTED_READS=88 READS_SUCCEEDED=88 READS_FAILED=0 DIGESTS=2 NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` — 88 of 88 reads landed on two cards: the whole write set is addressable through PCI I/O on this machine
+* `VRAM_BLOCK_PROBE GPU=3080 BDF=0000:04:00.0 BLOCK=GSP.UCODE_ID BAR0_OFFSET=0x111198 ROLE=WRITE STATUS=OBSERVED RAW=0x00000009` — GSP ucode ID 9 on the 3080, the value Linux nova-core GA102+ uses to select BAR0+0x8241e0: this is a real engine register, not a decode artifact
+* `VRAM_BLOCK_PROBE GPU=4090 BDF=0000:01:00.0 BLOCK=SEC2.CPUCTL BAR0_OFFSET=0x840100 ROLE=WRITE STATUS=OBSERVED RAW=0xbadf5620` — the other half of the same run: a word in the write set that reads as the transaction's own inaccessible() shape, which is why section 11.33 exists
+
+*History:* First run of the block probe, and the first read-only image here that reads the transaction's own address list. It answers the question it was built for: 88 of 88 reads landed on both cards, so the forty-two words `src/vendor/unlock_610.c` writes are all addressable through PCI I/O on this machine. It also found something the plan did not have. On both cards the five falcon-bridge words read as state, while the rest of the SEC2 window - and, on the 4090, nearly all of the GSP window as well - returns `0xbadf5620`, which is the shape `inaccessible()` treats as a refused read: 45 of the 84 write-set words across the two cards. The probe as built printed those as `STATUS=OBSERVED`, so section 11.33 teaches it to classify them, adds the two `HwCfg` words `falcon_reset()` polls before its first write, and records the finding here.
+
+*What it does not show:* that the actuating image will see the same values. It reads through the same `Mem.Read` call with the same width and bar index (`src/port.c`'s `GuRead32For`), so the values should reproduce, but that image has never run. It does not say why the engine refuses those words, or how a run would lift the refusal; and `0x8400f4`, the word `falcon_reset()` polls first, was not in the probed set, so whether the transaction stops at that poll or gets as far as its first write is still open.
+
+### `physical-prepare-0003`
+
+*File:* `tests/data/hardware_session/physical-prepare-0003.txt` — 1047 bytes stored, 1047 as captured, 14 lines. LF as captured; stored unchanged.
+
+*Captured:* 2026-11-18. *Bench:* same boot and same two cards as physical-readonly-0006; built with -SelectionBdfs '0000:01:00.0,0000:04:00.0'.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-prepare-0003.txt --stage prepare
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=2 READ_ONLY=1` — the inventory saw both cards and the build asked for both: the first time that number is 2 rather than 1
+* `ACTIVE_PREPARE=COMPLETE SELECTED=2 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0` — preparation completed for two targets and states that no mutation was authorised
+* `ACTIVE_CONTEXT[1]=PREPARED CPU_ONLY=1 MUTATION_AUTHORIZED=0` — a second per-card platform context existed at the same time as the first - what PreparePlatformContexts' alias refusal makes meaningful
+* `ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=2 TRACKED=2 NEXT=0 MUTATION_AUTHORIZED=0` — the ordered two-target sequence was built and left unstarted: the list the waiver would later execute
+* `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0` — execution refused at the shared discovery boundary, before GuInit, with detach/unlock/FLR all zero
+
+*History:* The two-card preparation section 11.31 listed as next and unmeasured: one boot, `-SelectionBdfs '0000:01:00.0,0000:04:00.0'`, built without the waiver. It prepares both cards in the order the selection names them, holds two per-card contexts at the same time, and refuses execution before `GuInit`.
+
+*What it does not show:* that the ordered list may execute - execution needs `-AcceptUnverifiedActuation`, which this build does not have - or anything about a second card while the first is being written. No write, Stop, detach, reset or FLR was called, and `MUTATION_AUTHORIZED=0` is printed on every line that could be mistaken for one.
+
 ## Advancing between stages: `donor_gate.py`
 
 One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.
@@ -916,6 +969,7 @@ Printed as `NOTE` lines. An absent advisory is a finding to explain, not a failu
 * `WATCHDOG_REPORTED` — `WATCHDOG BOUND=%u SECONDS ACTIVE=1` (or `WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD`) (src/app.c): the application prints whether the firmware timer is armed or deliberately off. The DXE entrypoint does not print this, so it is a note rather than a gate
 * `LAUNCH_SOURCE_LOGGED` — `LAUNCH_SOURCE DECISION=%s REASON=%s` (src/boot_io.c): every boot now records where it started from and, when it refuses, which gate failed
 * `ASSET_INSTALL_REPORTED` — `ASSET_INSTALL PRESENT=1 FILES=%u` (or `ASSET_INSTALL PRESENT=0`) (src/boot_io.c): says whether a bundle was ever staged on the stick, before discovery assumes anything about assets
+* `WRITE_SET_NOT_READABLE` — `VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE` (src/gpu_topology_efi.c): the probe met words inside the actuating write set that the engine returns its own inaccessible() shape for: the read succeeded at the PCI I/O level and the value is not device state. Printed once per card that has any, so a run cannot look fully observed while part of the write set was refused
 * `SUPPLEMENTARY_PCI_OBSERVATION` — `PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0` (src/gpu_topology_efi.c): printed by `ReportPciEvidence`, which runs only when the strict collector failed (`if(!pci_ok)` in `GuTopoDiagnosticMain`). A healthy run does not print it, so its presence in a log is a finding to explain - and gate R2 required it until the first physical run showed that no healthy machine can satisfy that
 
 ## Never established by a log

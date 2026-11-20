@@ -98,5 +98,16 @@
 #define GU_VRAM_BLOCK_CONTEXT_FEAT_PLM 0x00823804u
 /* read_bar(work, GU_FEAT_READOUT_1_OFFSET, ...) */
 #define GU_VRAM_BLOCK_CONTEXT_FEAT_READOUT1 0x00823818u
+/* The first register falcon_reset() touches: poll_us(work, eng->base + 0xf4,
+ * ...) and two later poll_us/read_bar calls on the same word. poll_us refuses
+ * with -EIO the moment this word reads as inaccessible, so it decides whether
+ * an actuating run gets as far as its first write. */
+/* poll_us(work, eng->base + 0xf4, ...) with eng == &gu_sec2 */
+#define GU_VRAM_BLOCK_CONTEXT_SEC2_HWCFG 0x008400f4u
+/* poll_us(work, eng->base + 0xf4, ...) with eng == &gu_gsp */
+#define GU_VRAM_BLOCK_CONTEXT_GSP_HWCFG 0x001100f4u
+/* read_bar(work, 0, &chip), re-read later as SEC2_BASE + 0x94 / base + 0x94:
+ * the chip word the transaction copies into eng->base + 0x84. */
+#define GU_VRAM_BLOCK_CONTEXT_CHIP 0x00000000u
 
 #endif

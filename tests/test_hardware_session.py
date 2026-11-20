@@ -297,7 +297,10 @@ class TheReadOnlyGuideIsGrounded(unittest.TestCase):
             self.assertTrue(item["why_not"], item["goal"])
 
     def test_the_guide_never_claims_a_run_happened(self):
-        self.assertIn("Nothing below has been executed against this tree", DOC)
+        # The guide now states the two facts separately, because they differ:
+        # read-only and preparation have run on the bench, actuation has not.
+        self.assertIn("was executed on this bench", DOC)
+        self.assertIn("**no actuating image has ever run**", DOC)
         self.assertNotIn("HARDWARE_VERIFIED=1", DOC)
         for item in self.status["items"]:
             self.assertFalse(item["hardware_verified"],

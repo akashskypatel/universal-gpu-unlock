@@ -24,6 +24,7 @@ SPDX-License-Identifier: GPL-2.0-only
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 import subprocess
 import sys
@@ -114,6 +115,67 @@ def structural_writes() -> set[int]:
     return offsets
 
 
+def structural_reads() -> set[int]:
+    """Absolute offsets of every statically resolvable read in the writer."""
+    text = _read(WRITER)
+    engines = engine_offsets()
+    gfw = _read(GFW)
+    resolved: set[int] = set()
+    for expr in set(re.findall(r"(?:read_bar|poll_us)\(work,\s*([^,]+),", text)):
+        expr = expr.strip()
+        if expr in {"offset", "addr2", "ad102_permissions[i].offset"} or expr.startswith("addr2"):
+            continue  # runtime base or per-chip table: not a static address
+        delta_match = re.search(r"\+\s*(0x[0-9a-fA-F]+)u?", expr)
+        delta = int(delta_match.group(1), 16) if delta_match else 0
+        if re.fullmatch(r"0x[0-9a-fA-F]+", expr):
+            resolved.add(int(expr, 16))
+            continue
+        if expr.isdigit():
+            resolved.add(0)
+            continue
+        if expr.startswith("SEC2_BASE"):
+            resolved.add(_define(text, "SEC2_BASE") + delta)
+            continue
+        if expr.startswith("eng->"):
+            field = re.match(r"eng->([a-z0-9]+)", expr).group(1)
+            for engine in engines.values():
+                resolved.add(engine[field] + delta)
+            continue
+        if expr.startswith("base"):
+            for engine in engines.values():
+                resolved.add(engine["base"] + delta)
+            continue
+        if re.fullmatch(r"[A-Z0-9_]+", expr):
+            try:
+                resolved.add(_define(gfw, expr))
+            except AssertionError:
+                try:
+                    resolved.add(_define(text, expr))
+                except AssertionError:
+                    continue
+            continue
+        # `0x00001400 + 0x0e * 4` and fuse tables: a computed address, skip.
+        if "+" in expr and "*" in expr:
+            continue
+        raise AssertionError(f"unresolved read target: {expr!r}")
+    return resolved
+
+
+def function_body(path: Path, signature: str) -> str:
+    """The text of one function, brace-matched, so a test can compile it."""
+    text = _read(path)
+    start = text.index(signature)
+    depth, i = 0, start
+    while True:
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+        i += 1
+
+
 def probe_blocks() -> tuple[set[int], set[int]]:
     """Probe table offsets: (write set, read-only context)."""
     text = _read(BLOCKS)
@@ -187,10 +249,75 @@ class WriteSetTest(unittest.TestCase):
             "the probe reads offsets the actuating sequence never writes",
         )
 
-    def test_context_words_are_not_part_of_the_write_set(self):
+    def test_context_words_are_the_writers_own_reads(self):
         _, context = probe_blocks()
-        self.assertEqual(context, {0x00823804, 0x00823818})
+        # The two selector words the writer reads to decide, the two HwCfg words
+        # falcon_reset polls before it writes anything, and BAR0+0.
+        self.assertEqual(
+            context,
+            {0x00823804, 0x00823818, 0x008400F4, 0x001100F4, 0x00000000},
+        )
         self.assertEqual(context & structural_writes(), set())
+        reads = structural_reads()
+        self.assertEqual(
+            sorted(hex(v) for v in context - reads),
+            [],
+            "the probe reports a context word the writer never reads",
+        )
+        self.assertIn(0x008400F4, reads, "falcon_reset() must poll HwCfg")
+
+    def test_the_probe_classifies_with_the_writers_own_predicate(self):
+        # Both functions are compiled here and driven over the same matrix: the
+        # probe must call a word inaccessible exactly when the transaction does.
+        harness = (
+            "#include <stdio.h>\n"
+            "#include <stdint.h>\n"
+            "typedef int bool;\n"
+            "typedef uint32_t u32;\n"
+            "typedef uint32_t UINT32;\n"
+            "#define true 1\n"
+            "#define false 0\n"
+            + function_body(WRITER, "static bool inaccessible(u32 value)")
+            + "\n"
+            + function_body(PROBE, "static UINT32 GuVramBlockAccessible(UINT32 value)")
+            + "\n"
+            "int main(void) {\n"
+            "  unsigned i;\n"
+            "  static const unsigned v[] = {0x0u,0x1u,0x10u,0x110u,0x3c0u,0x5a4u,\n"
+            "    0x00000400u,0x71306153u,0xffffff8fu,0x00410080u,\n"
+            "    0xbadf0000u,0xbadf5620u,0xbadfffffu,0xffffffffu,\n"
+            "    0xffff0000u,0xbadf0001u,0x12345678u};\n"
+            "  for (i = 0; i < sizeof(v)/sizeof(v[0]); i++) {\n"
+            "    if (GuVramBlockAccessible(v[i]) == (unsigned)!!inaccessible(v[i])) {\n"
+            "      printf(\"DISAGREE %#x\\n\", v[i]);\n"
+            "      return 1;\n"
+            "    }\n"
+            "  }\n"
+            "  printf(\"AGREE %zu\\n\", sizeof(v)/sizeof(v[0]));\n"
+            "  return 0;\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "classify.c"
+            source.write_text(harness, encoding="utf-8")
+            binary = Path(directory) / "classify"
+            build = subprocess.run(
+                ["gcc", "-std=c11", "-O1", "-Wall", "-Wextra", "-Werror",
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            run = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertIn("AGREE 17", run.stdout)
+
+    def test_the_probe_calls_the_poison_value_not_accessable(self):
+        # The first physical run returned 0xbadf5620 on 45 of 84 words; the
+        # probe must name that class instead of reporting it as entry state.
+        function = strip_comments(probe_function())
+        self.assertIn("GuVramBlockAccessible(", function)
+        self.assertIn('"NOT_ACCESSIBLE"', function)
+        self.assertIn('"STATE"', function)
+        self.assertIn("NOT_ACCESSIBLE=%u", function)
 
     def test_every_probe_row_is_reached_by_name(self):
         text = _read(BLOCKS)
@@ -201,7 +328,7 @@ class WriteSetTest(unittest.TestCase):
                 re.MULTILINE,
             )
         )
-        self.assertEqual(len(names), 44)
+        self.assertEqual(len(names), 47)
         function = probe_function()
         missing = sorted(n for n in names if n not in function)
         self.assertEqual(missing, [], "probe table does not reference these blocks")
@@ -278,6 +405,10 @@ class LogContractTest(unittest.TestCase):
             "VRAM_BLOCK_PROBE GPU=",
             "ROLE=WRITE",
             "ROLE=READ_CONTEXT",
+            "ACCESS=%s",
+            '"STATE"',
+            '"NOT_ACCESSIBLE"',
+            "OBSERVED=%u NOT_ACCESSIBLE=%u",
             "STATUS=OBSERVED",
             "STATUS=UNAVAILABLE",
             "NO_GPU_WRITES=1",
@@ -316,9 +447,31 @@ class LogContractTest(unittest.TestCase):
     def test_the_documented_evidence_lines_are_whole_emitted_lines(self):
         # Every quoted token in the session guide must be a complete line this
         # file prints, not a fragment: a verifier scores the line it is given.
-        manifest = _read(ROOT / "docs" / "hardware_session.json")
-        for token in re.findall(r'"token": "(VRAM_BLOCK_PROBE[^"]*)"', manifest):
-            self.assertIn(token, _read(PROBE), f"quoted line is not in the source: {token!r}")
+        # A captured run is the exception, and it is checked against the log it
+        # quotes instead: a log records what an older build printed, so evolving
+        # the source must not rewrite history.
+        manifest = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encoding="utf-8"))
+        source = _read(PROBE)
+        for gate in manifest["gates"]:
+            for token in re.findall(r"(VRAM_BLOCK_PROBE[^`\"]*)", gate.get("token", "")):
+                self.assertIn(token.strip(), source, f"gate token is not in the source: {token!r}")
+        for key in ("evidence", "advisories"):
+            for entry in manifest.get(key, []):
+                for token in re.findall(r"(VRAM_BLOCK_PROBE[^`\"]*)", json.dumps(entry)):
+                    self.assertIn(token.strip(), source, f"quoted line is not in the source: {token!r}")
+
+    def test_every_captured_run_quote_is_in_the_log_it_quotes(self):
+        manifest = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encoding="utf-8"))
+        checked = 0
+        for run in manifest["captured_runs"]["runs"]:
+            log = (ROOT / run["file"]).read_text(encoding="utf-8", errors="replace")
+            for observation in run.get("observations", []):
+                token = observation.get("token", "")
+                if not token.startswith("VRAM_BLOCK_PROBE"):
+                    continue
+                self.assertIn(token, log, f"{run['id']} does not contain {token!r}")
+                checked += 1
+        self.assertGreater(checked, 0, "no captured-run probe line is quoted anywhere")
 
     def test_no_signature_or_acceptance_inference(self):
         function = strip_comments(probe_function())
