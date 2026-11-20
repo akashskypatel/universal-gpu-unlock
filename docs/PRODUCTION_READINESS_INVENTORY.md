@@ -515,7 +515,7 @@ first actuation is still open, and both are cheap to settle:
 * if `0xf4` is refused, `poll_us` returns `-EIO` and the transaction stops
   before its first write, with `poll inaccessible: reg=0x8400f4` in the log;
 * if `0xf4` reads, the sequence proceeds to write `engine | 1` into `0x8403c0`
-  on an engine whose twenty neighbour words are refused.
+  on an engine whose fifteen neighbouring SEC2 words are refused.
 
 The probe now reports `0xf4` on both engines (`SEC2.HWCFG`, `GSP.HWCFG`) and
 `BAR0+0` (`BAR0.CHIP`), so the next read-only boot answers it directly. Neither
