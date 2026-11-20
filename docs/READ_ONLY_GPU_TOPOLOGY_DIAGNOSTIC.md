@@ -603,6 +603,16 @@ proof that `DisconnectController()` is safe.
 
 ## Current status
 
+- A signed `diag-topology-log` image of this tree has been executed on the MSI
+  B850 bench: one display on the AMD iGPU, no cable on either NVIDIA card,
+  Windows started afterwards with no error and no hang. The capture
+  (`GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT`, 151 lines, CRLF) reports
+  `TOPOLOGY_VERDICT=INCOMPLETE NVIDIA_CONOUT_BLOCKER=0`,
+  `ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED`, `GOP_COUNT=0` on both NVIDIA
+  cards, and `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0`. It is
+  stored and scored in
+  [the donor-hardware session](DONOR_HARDWARE_SESSION.md#physical-readonly-0000);
+  it is an observation, not a verification, and no eligibility flag moved.
 - Generic host checks and isolated MSVC EFI builds are verified; physical
   execution of the new generic **ordered two-target passive diagnostic** is
   now documented in both B850 `0007` (mixed-monitor console conflict) and

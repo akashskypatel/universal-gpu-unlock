@@ -122,6 +122,41 @@ class EveryPreconditionBlocksTheSession(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("BLOCKED IDENTITY_UNKNOWN", result.stdout)
 
+    def test_one_stage_naming_an_id_does_not_cover_for_another(self):
+        """Every stage has to identify the card it ran on, not just one of them.
+
+        The rule this tool prints says a stage that names no PCI id is refused
+        rather than assumed, and a prepare log from a different card in the same
+        slot would otherwise ride on the read-only log's identity.
+        """
+        text = (FIXTURES / "prepare.txt").read_text(encoding="utf-8")
+        stripped = text.replace("ID=10de:2684", "ID=unknown")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-anonymous.txt"
+            path.write_text(stripped, encoding="utf-8")
+            result = run("--readonly", fixture("readonly.txt"), "--prepare", str(path))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("BLOCKED IDENTITY_UNKNOWN STAGE=prepare", result.stdout)
+        self.assertIn("reason=this_stage_named_no_pci_id", result.stdout)
+
+    def test_an_actuation_stage_identifies_its_card_too(self):
+        """Every log in a stage counts: strip the identity from both boots."""
+        with tempfile.TemporaryDirectory() as directory:
+            anonymous = []
+            for name in ("actuate_boot1.txt", "actuate_boot2.txt"):
+                text = (FIXTURES / name).read_text(encoding="utf-8")
+                stripped = "\n".join(row for row in text.splitlines()
+                                     if not row.startswith("ACTIVE_GPU[")) + "\n"
+                self.assertNotIn("ID=10de:2684", stripped)
+                path = Path(directory) / ("anonymous-" + name)
+                path.write_text(stripped, encoding="utf-8")
+                anonymous.append(str(path))
+            result = run("--readonly", fixture("readonly.txt"),
+                         "--prepare", fixture("prepare.txt"),
+                         "--actuate", *anonymous)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("BLOCKED IDENTITY_UNKNOWN STAGE=actuate", result.stdout)
+
     def test_two_cards_in_one_stage_are_not_a_single_donor(self):
         text = (FIXTURES / "prepare.txt").read_text(encoding="utf-8")
         extra = text + "ACTIVE_GPU[1] BDF=0000:02:00.0 ID=10de:2684 SUB=10de:a140\n"

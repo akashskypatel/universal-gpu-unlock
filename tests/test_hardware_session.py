@@ -17,6 +17,7 @@ the second honest against the first:
      manifest so the plan and the check cannot drift.
 """
 from pathlib import Path
+import hashlib
 import json
 import re
 import subprocess
@@ -305,6 +306,88 @@ class TheReadOnlyGuideIsGrounded(unittest.TestCase):
         guide_at = DOC.index("## Read-only hardware execution guide, step by step")
         stages_at = DOC.index("## The stages")
         self.assertLess(guide_at, stages_at)
+
+
+class TheGatesAreSatisfiableByAHealthyRun(unittest.TestCase):
+    """A gate nobody can pass is worse than no gate.
+
+    The first physical read-only run failed `R2_ENUMERATION_COMPLETED` because R2
+    required `PCI_OBSERVATION_ONLY=1 ...`, a line the strict collector prints only
+    when it has already failed: the token existed in the source, so the grounding
+    test above passed, and only silicon could show it was unreachable on a
+    working machine. These tests score a captured run and check every gate
+    against it, so the same defect fails the suite instead of the operator.
+    """
+
+    def setUp(self):
+        self.runs = MANIFEST["captured_runs"]["runs"]
+
+    def stored(self, run):
+        path = ROOT / run["file"]
+        self.assertTrue(path.is_file(), run["file"])
+        return path.read_bytes().replace(b"\r\n", b"\n")
+
+    def test_every_captured_run_matches_its_recorded_digest_and_size(self):
+        for run in self.runs:
+            data = self.stored(run)
+            self.assertEqual(hashlib.sha256(data).hexdigest(), run["sha256"], run["id"])
+            self.assertEqual(len(data), run["bytes"], run["id"])
+            self.assertEqual(data.count(b"\n"), run["lines"], run["id"])
+
+    def test_a_captured_run_is_not_a_fixture(self):
+        for run in self.runs:
+            self.assertNotIn(verify_run_log.SYNTHETIC_MARKER, self.stored(run).decode("utf-8"), run["id"])
+
+    def test_a_captured_run_still_scores_the_way_its_entry_says(self):
+        for run in self.runs:
+            result = run_verifier(str(ROOT / run["file"]), "--stage", run["stage"])
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(run["verdict"], result.stdout.splitlines(), run["id"])
+            self.assertIn("SYNTHETIC=0", result.stdout, run["id"])
+            self.assertIn("HARDWARE_VERIFIED=0", result.stdout, run["id"])
+            self.assertNotIn("HARDWARE_VERIFIED=1", result.stdout + result.stderr, run["id"])
+
+    def test_every_gate_in_the_scored_stage_passes_on_a_healthy_run(self):
+        for run in self.runs:
+            text = self.stored(run).decode("utf-8")
+            for gate in MANIFEST["gates"]:
+                if gate["stage"] != run["stage"]:
+                    continue
+                for group in gate.get("requires", []):
+                    self.assertIsNotNone(
+                        verify_run_log.token_to_pattern(group["token"]).search(text),
+                        f"{run['id']}: {gate['id']} requires {group['token']!r}, which this healthy run does not print")
+                if gate.get("requires_any"):
+                    matched = [group for group in gate["requires_any"]
+                               if verify_run_log.token_to_pattern(group["token"]).search(text)]
+                    self.assertTrue(matched, f"{run['id']}: {gate['id']} matched none of its alternatives")
+                for group in gate.get("forbids", []):
+                    self.assertIsNone(
+                        verify_run_log.token_to_pattern(group["token"]).search(text),
+                        f"{run['id']}: {gate['id']} forbids {group['token']!r}, which this run contains")
+
+    def test_every_quoted_fact_is_in_the_log_and_the_source(self):
+        for run in self.runs:
+            text = self.stored(run).decode("utf-8")
+            self.assertTrue(run["observations"], run["id"])
+            for entry in run["observations"]:
+                self.assertIn(entry["token"], text, f"{run['id']}: {entry['token']!r} is not in the log")
+                self.assertTrue(entry["why"], f"{run['id']}: {entry['token']!r} says nothing")
+
+    def test_every_captured_run_is_in_the_document_with_its_verdict(self):
+        for run in self.runs:
+            self.assertIn(run["id"], DOC)
+            self.assertIn(run["verdict"], DOC)
+            self.assertIn(run["sha256"], DOC)
+            self.assertTrue(run["does_not_show"], run["id"])
+            self.assertIn(run["does_not_show"], DOC)
+
+    def test_a_captured_run_never_moves_a_readiness_row(self):
+        status = json.loads((ROOT / "docs" / "readiness_status.json").read_text(encoding="utf-8"))
+        for item in status["items"]:
+            self.assertFalse(item["hardware_verified"],
+                             f"{item['id']} was marked hardware verified by a captured log")
+        self.assertNotIn("HARDWARE_VERIFIED=1", DOC)
 
 
 class TheVerifierScoresRuns(unittest.TestCase):

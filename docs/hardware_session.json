@@ -113,7 +113,7 @@
         "title": "boot the stick once, from the firmware boot menu",
         "shell": "none",
         "command": "",
-        "expect": "choose the USB entry once and let the image run to its own end. Do not retry inside the same session: the file number is the boot order, and a second boot writes a second file. The read-only candidates print `GPU hardware untouched` and return, and the handoff candidates start Windows after the log is closed.",
+        "expect": "Choose the USB entry once and let the image run to its own end. Do not retry inside the same session: the image takes the first free number on the medium, starting at 0000, so a second boot writes a second file and the two are only distinguishable by their numbers and their contents. The read-only candidates print `GPU hardware untouched` and return, and the handoff candidates start Windows after the log is closed.",
         "expect_tokens": [
           {
             "token": "DIAGNOSTIC FINISHED; GPU hardware untouched.",
@@ -127,7 +127,7 @@
         "title": "capture the log, then empty the medium",
         "shell": "powershell",
         "command": "$evidence = Join-Path $env:USERPROFILE ('donor-evidence\\' + (Get-Date -Format 'yyyyMMdd-HHmmss'))\nNew-Item -ItemType Directory -Force -Path $evidence | Out-Null\n$log = Get-ChildItem G:\\ -Filter 'GPU-TOPOLOGY-DIAGNOSTIC-*.TXT' | Sort-Object Name | Select-Object -Last 1\nCopy-Item -LiteralPath $log.FullName -Destination $evidence\nGet-FileHash -Algorithm SHA256 (Join-Path $evidence $log.Name)\n(Get-Content -LiteralPath $log.FullName | Measure-Object -Line).Lines",
-        "expect": "the file named by the log's own `LOG_FILE=` line is the newest number on the stick; copy it off before wiping anything, and record its SHA-256, byte count and line count next to the candidate id. Wipe the stick afterwards so the next candidate starts from an empty medium.",
+        "expect": "The file named by the log's own `LOG_FILE=` line is the one to copy (the numbers start at 0000 and count up; on a clean medium the first run is `-0000.TXT`). Copy it off before wiping anything, and record its SHA-256, byte count and line count next to the candidate id. Wipe the stick afterwards so the next candidate starts from an empty medium.",
         "expect_tokens": [
           {
             "token": "LOG_FILE=\\\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT",
@@ -140,7 +140,7 @@
         "n": 6,
         "title": "score the log against the gates",
         "shell": "bash",
-        "command": "python3 tools/verify_run_log.py ~/donor-evidence/<stamp>/GPU-TOPOLOGY-DIAGNOSTIC-0011.TXT --stage readonly",
+        "command": "python3 tools/verify_run_log.py ~/donor-evidence/<stamp>/GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT --stage readonly",
         "expect": "one `GATE <id> STAGE=<stage> RESULT=PASS` line per gate in the stage, the `NOTE` advisories, the six `MANUAL` gates, the `NOT_PROVEN` list, and `RUN_LOG_VERDICT=PASS ... HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`. Exit code `0` means every gate in that stage passed; `1` names the first failure in `FIRST_FAILED=`.",
         "expect_tokens": [
           {
@@ -720,33 +720,38 @@
     {
       "id": "R2_ENUMERATION_COMPLETED",
       "stage": "readonly",
-      "title": "the inventory finished without a vendor callback",
+      "title": "the inventory finished, and the collector said so",
       "requires": [
         {
           "emitter": "src/gpu_topology_efi.c",
           "token": "PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES INCLUDED=%zu EXCLUDED=%zu",
-          "why": "printed once the display and bridge scan has counted its handles, with the count in the line"
+          "why": "the strict collector reports how many protocol handles it included and excluded, which is the shape of the enumeration it actually performed"
         },
         {
           "emitter": "src/gpu_topology_efi.c",
           "token": "NVIDIA_DRIVER_OWNER_INVENTORY=READ_ONLY IMAGE_PROVENANCE_UNVERIFIED=1",
-          "why": "the driver-owner inventory is the part that says which image owns the card, and it is explicitly not provenance"
+          "why": "the NVIDIA owner inventory ran, and it runs only on the strict collector's success branch (`if(pci_ok)`): the failure branch prints `NVIDIA_DRIVER_OWNER_INVENTORY=UNAVAILABLE PCI_CAPTURE_FAILED=1` instead. This line therefore proves the walk completed without a vendor callback, and that the driver images' provenance is unverified"
         },
         {
           "emitter": "src/gpu_topology_efi.c",
-          "token": "PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0",
-          "why": "the eligibility flags are printed as false, so the log itself states the session could not detach or unlock"
+          "token": "DIAGNOSTIC FINISHED; GPU hardware untouched.",
+          "why": "the report reached its own last line. A log that stops earlier - a hang, a reset, an aborted save - cannot satisfy R2, which is the case a truncated capture fails on"
         }
       ],
       "forbids": [
         {
           "emitter": "src/gpu_topology_efi.c",
-          "token": "PCI_ENUM_FAILURE STAGE=device-read INDEX=%zu",
-          "why": "a partial enumeration is not an inventory; the failure line means some handle could not be read"
+          "token": "PCI_ENUM_FAILURE STAGE=",
+          "why": "any enumeration failure, at any stage, invalidates the inventory even when later lines look complete"
+        },
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "NVIDIA_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1",
+          "why": "the GOP census is part of the inventory; a failed capture makes every per-GPU GOP count in the log meaningless"
         }
       ],
-      "proves": "the scan reached its end and reported counts, with eligibility explicitly false",
-      "does_not_prove": "that the card is in a state any later stage could use"
+      "proves": "the strict PCI walk completed and reported its scope, the NVIDIA owner inventory ran on its success branch, the GOP census did not fail, and the report reached its last line",
+      "does_not_prove": "that every PCI node was read correctly or that the topology is usable: a handle that was excluded is counted rather than described, and the supplementary observation that would cross-check it exists only on the failure path"
     },
     {
       "id": "R3_CARD_IDENTIFIED",
@@ -941,6 +946,12 @@
       "alternatives": [
         "ASSET_INSTALL PRESENT=0"
       ]
+    },
+    {
+      "id": "SUPPLEMENTARY_PCI_OBSERVATION",
+      "token": "PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0",
+      "emitter": "src/gpu_topology_efi.c",
+      "why": "printed by `ReportPciEvidence`, which runs only when the strict collector failed (`if(!pci_ok)` in `GuTopoDiagnosticMain`). A healthy run does not print it, so its presence in a log is a finding to explain - and gate R2 required it until the first physical run showed that no healthy machine can satisfy that"
     }
   ],
   "manual_gates": [
@@ -1028,7 +1039,7 @@
       "every manual gate must be acknowledged by its exact id; an unknown id is refused, so a typo cannot silently stand in for M6",
       "a log carrying the fixture marker is refused (exit 3) unless --self-test is given, and a GO from a self-test still prints SYNTHETIC=1"
     ],
-    "command": "python3 tools/donor_gate.py --readonly media/GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT --prepare media/AD102-UNLOCK/RUN0001.TXT --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,M3_LOG_MEDIUM_EMPTY,M4_ONE_CARD_ONLY,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN",
+    "command": "python3 tools/donor_gate.py --readonly media/GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT --prepare media/AD102-UNLOCK/RUN0001.TXT --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,M3_LOG_MEDIUM_EMPTY,M4_ONE_CARD_ONLY,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN",
     "verdict": "`DONOR_GATE VERDICT=GO NEXT=...` with every line carrying `HARDWARE_VERIFIED=0`; anything else prints `VERDICT=NO_GO` and one `BLOCKED` line per reason",
     "exit_codes": [
       "0 GO",
@@ -1037,5 +1048,69 @@
       "3 the log set is synthetic and --self-test was not given"
     ],
     "does_not_prove": "that any stage behaved as its gates say, or that the card is safe: a GO repeats evidence the operator supplied, it does not create any"
+  },
+  "captured_runs": {
+    "title": "Captured runs, scored",
+    "note": "Physical runs, stored as files and scored by the same tool an operator runs. Each entry pins the digest of the stored log, the facts quoted from it, and the verdict line the verifier prints for it, and `tests/test_hardware_session.py` re-scores the file on every run: the record cannot drift from the evidence, and a gate that no healthy machine can satisfy fails the suite instead of the operator.",
+    "runs": [
+      {
+        "id": "physical-readonly-0000",
+        "captured": "2026-11-20",
+        "image": "diag-topology-log",
+        "stage": "readonly",
+        "file": "tests/data/hardware_session/physical-readonly-0000.txt",
+        "sha256": "fff77af4aa87291be8e6e715b69c8a621648c4acd1e099e5a431bc0658a40a03",
+        "bytes": 13140,
+        "captured_bytes": 13291,
+        "lines": 151,
+        "line_endings": "CRLF as captured; stored with LF so a checkout cannot change the digest",
+        "bench": "one display on the AMD iGPU, no cable on either NVIDIA card; Windows started after the image returned, with no error and no hang",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls",
+            "why": "the image's own banner, so the file cannot be mistaken for an activating build's log"
+          },
+          {
+            "token": "STATUS=PARTIAL TOPOLOGY=1 DISCOVERED_NVIDIA_GPUS=2 HARDWARE_TESTED=0 PHYSICAL_DISPLAY_OWNER=UNKNOWN",
+            "why": "the report's own summary: two NVIDIA cards found, `HARDWARE_TESTED=0` because nothing mutated a GPU, and no claim about which connector a human was looking at"
+          },
+          {
+            "token": "TOPOLOGY_VERDICT=INCOMPLETE NVIDIA_CONOUT_BLOCKER=0",
+            "why": "B1/B2: the console is AMD-only and no NVIDIA path is configured, and the topology is still INCOMPLETE because neither NVIDIA card exposes a GOP - the exact configuration B2's policy has to decide about"
+          },
+          {
+            "token": "ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED",
+            "why": "B1: the error console resolves to the AMD GOP with nothing NVIDIA in it"
+          },
+          {
+            "token": "GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6",
+            "why": "E8/A5: the first card's BDF, device and subsystem id, as the image resolved them"
+          },
+          {
+            "token": "GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612",
+            "why": "E8/A5: the second card's identity, and that both cards were seen with `GOP_COUNT=0` on this cabling"
+          },
+          {
+            "token": "NVIDIA_DRIVER_OWNER[1] MAPPED_TEXT_SHA256=77632902f0ceb0ba2848200f396ab61eacd7910e9cce7c535f65d6cdbe2b6c32",
+            "why": "the 4090's loaded driver text digest, identical to the previously pinned capture - the same driver image, not merely the same filename"
+          },
+          {
+            "token": "NVIDIA_DRIVER_OWNER[5] MAPPED_TEXT_SHA256=615b37a708b1894e18d7fa60cfcdacaa4d8b598863a10b8103d231a595847b2b",
+            "why": "the 3080's loaded driver text digest, also identical to its pinned capture. `SIGNATURE_NOT_VERIFIED=1` rides on both lines: a digest agrees, it does not authenticate"
+          },
+          {
+            "token": "LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT",
+            "why": "B9: a USB-launched image wrote a numbered log at the root of an empty medium - the writable-medium half of B9, observed"
+          },
+          {
+            "token": "DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0",
+            "why": "the report finished with no withheld lines, so an absent line above is absent from the run, not from the buffer"
+          }
+        ],
+        "history": "First scored against gate R2 as it then stood: `FAIL FIRST_FAILED=R2_ENUMERATION_COMPLETED`, because R2 required `PCI_OBSERVATION_ONLY=1 ...`, a line the strict collector prints only after it has already failed. The gate was wrong, not the run (\u00a711.29). R2 now requires the strict walk's scope line, the owner-inventory line that only its success branch prints, and the report's final line; the suite re-scores this file on every run, so a gate that no healthy machine can satisfy fails the tests instead of the operator.",
+        "does_not_show": "that the card is safe, that anything was unlocked, or that Windows accepted the device: no Stop was called, every eligibility flag in the log is zero, both driver-image signatures are unverified, and `hardware_verified` stays false for every item in the inventory."
+      }
+    ]
   }
 }

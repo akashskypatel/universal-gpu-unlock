@@ -460,6 +460,64 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.29 D5 — the first physical run failed a gate that no healthy machine can print
+
+The first run of a signed `diag-topology-log` image on the donor bench produced
+`GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT` and the verifier scored it `FAIL
+FIRST_FAILED=R2_ENUMERATION_COMPLETED`: the log did not contain
+`PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0`.
+
+The run was fine. The gate was wrong. That line is printed by
+`ReportPciEvidence`, which `GuTopoDiagnosticMain` calls as
+`if(!pci_ok)ReportPciEvidence(bs);` - it is the **fallback** path, taken only
+when the strict collector has already failed. R2 therefore required evidence
+that exists only when enumeration is broken, which no working machine can
+produce; and a machine that did produce it would also print
+`PCI_ENUM_FAILURE`, which R2 forbids. The grounding test could not see this: the
+token is a real format string in the file it named. Only reachability was wrong,
+and only silicon reports that.
+
+R2 now requires three literal lines that a healthy run prints for different
+reasons: the strict walk's own scope line
+(`PCI_TOPOLOGY_SCOPE=...`), the NVIDIA owner inventory, which runs only on the
+strict collector's success branch, and the report's last line
+(`DIAGNOSTIC FINISHED; GPU hardware untouched.`), which a hang or an aborted save
+removes. It forbids any `PCI_ENUM_FAILURE STAGE=` and
+`NVIDIA_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1`. The fallback observation is
+now an advisory (`SUPPLEMENTARY_PCI_OBSERVATION`): a healthy log does not carry
+it, so its presence is a finding to explain rather than a pass to score.
+
+The log itself is kept as a fixture of the real thing:
+`tests/data/hardware_session/physical-readonly-0000.txt`, digest-pinned in
+`docs/hardware_session.json` and re-scored by `tests/test_hardware_session.py` on
+every run. The suite now checks every gate in the scored stage against that
+physical capture - `requires` must match, `requires_any` must match one,
+`forbids` must not - so a gate that no healthy run can satisfy fails the suite
+instead of the operator. Reinstating the old requirement fails four tests.
+
+The run also exposed a second, quieter gap in `tools/donor_gate.py`. Its own
+printed rule said a stage that names no PCI id is refused rather than assumed,
+but the check was session-wide: as long as one stage named a device id, another
+stage could name a BDF and no id and still reach `VERDICT=GO`. The fixtures were
+minimal enough to hide it, and the diagnostic's healthy log - which names both -
+made the difference visible. Every scored stage must now name its own device id;
+a stage that names a BDF but no id prints `BLOCKED IDENTITY_UNKNOWN STAGE=<stage>
+reason=this_stage_named_no_pci_id`, and the actuation fixtures carry the
+discovery line a real run prints.
+
+What the run put on paper, none of it a verification: two NVIDIA cards
+(`01:00.0` `10de:2684` `1043:88e6` and `04:00.0` `10de:220a` `19da:b612`), an
+AMD-only console (`TOPOLOGY_VERDICT=INCOMPLETE NVIDIA_CONOUT_BLOCKER=0`,
+`ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED`), `GOP_COUNT=0` on both cards with
+one independent iGPU GOP, both NVIDIA driver text digests identical to their
+previously pinned captures (`77632902...` and `615b37a7...`), and a complete
+151-line log with no dropped lines.
+
+What it does not do: no inventory row moves and `hardware_verified` stays `false`
+for all 43. Nothing was stopped, unlocked or flashed, no signature is
+authenticated, and the Windows 617.42 Booter provenance is as absent as it was
+before. The run is one observation of one image on one machine, recorded as such.
+
 ### 11.28 D5 — the read-only session now has a script to follow, and every line of it is checked
 
 `docs/DONOR_HARDWARE_SESSION.md` described the gates a log has to pass, but not

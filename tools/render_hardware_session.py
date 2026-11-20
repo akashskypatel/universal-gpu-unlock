@@ -37,7 +37,7 @@ so the plan and the verdict cannot disagree.
 
 ```bash
 # read-only contact: the diagnostic's own log
-python3 tools/verify_run_log.py /media/stick/GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT --stage readonly
+python3 tools/verify_run_log.py /media/stick/GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT --stage readonly
 
 # preparation only: the app's numbered log
 python3 tools/verify_run_log.py /media/stick/AD102-UNLOCK/RUN0001.TXT --stage prepare
@@ -170,6 +170,36 @@ def render_readonly_guide(spec: dict) -> str:
     return "".join(out)
 
 
+def render_captured_runs(spec: dict) -> str:
+    """Physical runs, as files, with the verdict the verifier prints for them.
+
+    The suite re-scores every file listed here, so this section cannot describe a
+    run the tools disagree with, and a gate that no healthy machine can satisfy
+    fails the test suite instead of the operator.
+    """
+    out = [f"## {spec['title']}\n\n", f"{spec['note']}\n\n"]
+    out.append("| Run | Image | Stage | Lines | SHA-256 of the stored log | Verdict |\n")
+    out.append("| --- | --- | --- | --- | --- | --- |\n")
+    for run in spec["runs"]:
+        out.append(f"| `{run['id']}` | `{run['image']}` | `{run['stage']}` | {run['lines']} | "
+                   f"`{run['sha256']}` | `{run['verdict']}` |\n")
+    out.append("\n")
+    for run in spec["runs"]:
+        out.append(f"### `{run['id']}`\n\n")
+        out.append(f"*File:* `{run['file']}` — {run['bytes']} bytes stored, {run['captured_bytes']} as captured, "
+                   f"{run['lines']} lines. {run['line_endings']}.\n\n")
+        out.append(f"*Captured:* {run['captured']}. *Bench:* {run['bench']}.\n\n")
+        out.append(f"*Score:*\n\n```bash\npython3 tools/verify_run_log.py {run['file']} --stage {run['stage']}\n```\n\n")
+        out.append(f"It prints `{run['verdict']}`.\n\n")
+        out.append("*What this log puts on paper:*\n\n")
+        for item in run["observations"]:
+            out.append(f"* `{item['token']}` — {item['why']}\n")
+        out.append("\n")
+        out.append(f"*History:* {run['history']}\n\n")
+        out.append(f"*What it does not show:* {run['does_not_show']}\n\n")
+    return "".join(out)
+
+
 def render_go_no_go(spec: dict) -> str:
     out = ["## Advancing between stages: `donor_gate.py`\n\n", f"{spec['summary']}\n\n"]
     out.append("```powershell\n" + spec["command"] + "\n```\n\n")
@@ -186,6 +216,8 @@ def render(manifest: dict) -> str:
     out = [HEADER]
     if "readonly_guide" in manifest:
         out.append(render_readonly_guide(manifest["readonly_guide"]))
+    if "captured_runs" in manifest:
+        out.append(render_captured_runs(manifest["captured_runs"]))
     if "go_no_go" in manifest:
         out.append(render_go_no_go(manifest["go_no_go"]))
     out.append("## The stages\n\n")

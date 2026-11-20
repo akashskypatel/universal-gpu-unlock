@@ -118,6 +118,16 @@ def decide(manifest: dict, stages: dict[str, list[tuple[str, str]]],
             lines.append("BLOCKED IDENTITY_NOT_SINGLE STAGE=%s bdf=%s"
                          % (stage, ",".join(sorted(bdfs[stage]))))
             blocked.append("IDENTITY_NOT_SINGLE")
+        elif not devices[stage]:
+            # A stage that names a BDF but no device id has not identified the
+            # card: after a slot swap the same BDF is different silicon, and the
+            # rules this tool prints say such a stage is refused rather than
+            # assumed. Before this check existed, one stage naming an id was
+            # enough for the whole session, which is how the prepare fixture in
+            # its stripped form could still reach GO.
+            lines.append("BLOCKED IDENTITY_UNKNOWN STAGE=%s reason=this_stage_named_no_pci_id"
+                         % stage)
+            blocked.append("IDENTITY_UNKNOWN")
 
     named = [(stage, bdfs[stage]) for stage in order if bdfs[stage]]
     if named:
