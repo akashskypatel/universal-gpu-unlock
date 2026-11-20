@@ -286,6 +286,46 @@
       "note": "as above, then hands off to Windows"
     },
     {
+      "id": "diag-vram-blocks",
+      "family": "diagnostic",
+      "title": "read-only VRAM block probe",
+      "switches": {
+        "SaveLog": true,
+        "VramBlockProbe": true
+      },
+      "binary": "VRAM-BLOCK-PROBE-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "VRAM_BLOCK_PROBE=1",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "reads the 42 BAR0 words the waived transaction writes, once per verified card, and writes nothing; the safety interlock before the first actuation"
+    },
+    {
+      "id": "diag-vram-blocks-handoff",
+      "family": "diagnostic",
+      "title": "read-only VRAM block probe with handoff",
+      "switches": {
+        "SaveLog": true,
+        "VramBlockProbe": true,
+        "WindowsEspGuid": "<esp>"
+      },
+      "binary": "VRAM-BLOCK-PROBE-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "VRAM_BLOCK_PROBE=1",
+        "WINDOWS_HANDOFF=1"
+      ],
+      "requires_esp_guid": true,
+      "note": "as above, then hands off to Windows; the probe's digest is in the log either way"
+    },
+    {
       "id": "prep-selected",
       "family": "prepare",
       "title": "preparation for explicit targets",

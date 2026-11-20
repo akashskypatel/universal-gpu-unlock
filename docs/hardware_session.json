@@ -51,7 +51,7 @@
         "title": "confirm the catalogue accepts the candidate",
         "shell": "powershell",
         "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -List",
-        "expect": "one `CATALOGUE ... variants=29 families=4` line, then a `VARIANT <id> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.",
+        "expect": "one `CATALOGUE ... variants=31 families=4` line, then a `VARIANT <id> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.",
         "expect_tokens": [
           {
             "token": "CATALOGUE {0} variants={1} families={2}",
@@ -430,6 +430,67 @@
         "does_not_prove": "anything the base SEC2 probe does not prove, plus the handoff's own limit: one pinned partition started Windows once."
       },
       {
+        "id": "diag-vram-blocks",
+        "title": "read-only probe of the actuating write set",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "Forty-two BAR0 reads per verified card, at the addresses the waived transaction writes, plus the two context words it reads to choose them. It is the interlock for the first actuation: run the same image before and after, and any block that moved shows up as a different digest. Nothing is written.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks -StageDrive G",
+        "evidence": [
+          {
+            "goal": "C5",
+            "token": "VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the probe declares what it is before it reads anything: a read-only boundary and the size of its own address list, so a run that reads fewer blocks than the table has is visible in the first line rather than by counting the middle."
+          },
+          {
+            "goal": "C5",
+            "token": "VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "one line per word the actuating sequence writes: block name, the absolute BAR0 address, and the value there before any write exists. Forty-two of them (twenty per engine plus both selectors) is the evidence that this image addresses the same blocks as the transaction. It does not move C5: a readable address identifies the target, and there is no post-state yet to verify."
+          },
+          {
+            "goal": "C3",
+            "token": "VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the per-card digest is labelled a change detector in the line itself, and the line carries the failed-read count beside it: a digest over a partial read set would otherwise look complete. A digest over register values is not firmware acceptance, so C3 stays where it is."
+          },
+          {
+            "goal": "C5",
+            "token": "VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the totals: cards probed, expected reads, reads that landed and reads that did not. A block that does not read back is a number here instead of a silent gap, which is the whole point of probing before the first write."
+          }
+        ],
+        "does_not_prove": "that these are the right addresses for the transaction - only that this image and `src/vendor/unlock_610.c` name the same ones, checked by `tests/test_vram_block_probe.py`, not by the log. A successful read proves the word is reachable through PCI I/O; it does not prove an engine mask, a signature selector or a speed-selector write is permitted on this board, and it cannot say what any value means. The post-actuation half of the comparison has never run, because the actuation has never run."
+      },
+      {
+        "id": "diag-vram-blocks-handoff",
+        "title": "read-only probe of the actuating write set, with handoff",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself",
+        "summary": "The block probe plus the pinned Windows handoff, for a bench where the read-only image has to return to Windows by itself. The end-of-session digest is in the log either way.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G",
+        "also_collects": "diag-vram-blocks",
+        "evidence": [
+          {
+            "goal": "A2",
+            "token": "WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the handoff is pinned to one ESP GUID and does not touch BootOrder"
+          },
+          {
+            "goal": "B9",
+            "token": "SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "the block lines and the digest are written before the handoff begins, so the evidence survives a handoff that does not"
+          }
+        ],
+        "does_not_prove": "anything the plain block probe does not prove, plus the handoff's own limit: one pinned partition started Windows once."
+      },
+      {
         "id": "prep-selected",
         "title": "preparation for explicit targets, one or both cards",
         "safety": "refuses-before-mutation",
@@ -801,6 +862,50 @@
       ],
       "proves": "the run is about a real card with an address and an identity, not an empty machine",
       "does_not_prove": "that the identity matches the donor card the operator recorded by hand"
+    },
+    {
+      "id": "R4_WRITE_SET_READ_BEFORE_ACTUATION",
+      "stage": "readonly",
+      "title": "the block probe read every word the transaction writes",
+      "only_if": {
+        "token": "VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET",
+        "why": "the gate scores one optional image: it applies only to a boot whose log carries the block probe's own opening line, and is NOT_APPLICABLE - never PASS - in any other boot",
+        "emitter": "src/gpu_topology_efi.c"
+      },
+      "requires": [
+        {
+          "token": "VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1",
+          "emitter": "src/gpu_topology_efi.c",
+          "max_per_log": 1,
+          "why": "the probe says what it is once per boot and states the size of its own address list: a second copy would mean two cards' worth of output in one bracket"
+        },
+        {
+          "token": "VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x",
+          "emitter": "src/gpu_topology_efi.c",
+          "min_total": 42,
+          "why": "at least forty-two observed write-set words: twenty per engine plus both selectors, which is the whole table. Fewer means a block did not read back and the interlock is incomplete"
+        },
+        {
+          "token": "VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED",
+          "emitter": "src/gpu_topology_efi.c",
+          "max_per_log": 1,
+          "why": "the closing line carries the arithmetic: cards, blocks, expected reads, reads that landed and reads that did not. `READS_FAILED=0` and `READS_SUCCEEDED=EXPECTED_READS` are what make the block list complete rather than partial"
+        }
+      ],
+      "forbids": [
+        {
+          "token": "VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE",
+          "emitter": "src/gpu_topology_efi.c",
+          "why": "a word the probe could not read is a hole in the interlock: the address was never confirmed on this silicon, so the stage does not pass"
+        },
+        {
+          "token": "INCOMPLETE_READ_SET=1",
+          "emitter": "src/gpu_topology_efi.c",
+          "why": "the probe withholds its digest when any read failed; a log that says so has no before-and-after comparison to offer"
+        }
+      ],
+      "proves": "that a read-only image reached every BAR0 word the actuating sequence writes, on each verified card, before anything wrote to them. That is the interlock: the address list is not a surprise at actuation time",
+      "does_not_prove": "that the values are right, that a selector write will be accepted, or that the transaction will unlock anything. Reading a register before writing it identifies the block and nothing more; the post-actuation half of the comparison needs an actuation, and none has run"
     },
     {
       "id": "P1_PREPARATION_REFUSED_BEFORE_MUTATION",

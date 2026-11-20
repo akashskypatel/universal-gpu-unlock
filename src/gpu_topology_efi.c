@@ -31,15 +31,23 @@ static const GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
 #endif
 #include "gpu_pci_observation.h"
-#if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1)
+#if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1) || defined(GU_VRAM_BLOCK_PROBE)
 #include "msi_b850_rom_diag.h"
 #if defined(GU_TOPO_SELECTION_ENABLED)
 #error MSI B850 source diagnostics cannot select GPUs
 #endif
 #endif
+#if defined(GU_VRAM_BLOCK_PROBE) && (defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1))
+#error The VRAM block probe must be built as its own image
+#endif
 #if (defined(GU_MSI_B850_ROM_VARIABLES) && (defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1))) || \
     (defined(GU_MSI_B850_FUSE_VERSION) && defined(GU_MSI_B850_SEC2_UCODE1))
 #error MSI B850 diagnostics must be built separately
+#endif
+#ifdef GU_VRAM_BLOCK_PROBE
+/* The address map of the waived transaction, named once. This header holds
+ * constants only; the probe below reads them and never writes. */
+#include "vram_blocks.h"
 #endif
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #include "gpu_windows_handoff.h"
@@ -299,6 +307,188 @@ static void ReportMsiB850Sec2Ucode1(int pci_ok) {
         (unsigned)(raw&0xffffU),GuMsiB850FuseVersion((uint16_t)raw));
   }
   Say("MSI_B850_SEC2_UCODE1_END READS_SUCCEEDED=%u EXPECTED=2 NO_GPU_WRITES=1 SECURE_ACCEPTANCE=UNVERIFIED\r\n",observed);
+}
+#endif
+
+#ifdef GU_VRAM_BLOCK_PROBE
+/* The waived transaction writes 42 distinct BAR0 words: twenty SEC2 register
+ * deltas, the same twenty deltas at the GSP engine, and the two speed
+ * selectors. Before the first actuation the operator needs evidence that a
+ * read-only image addresses those same words on this silicon, because an
+ * address that does not come back leaves the actuating run writing into a
+ * block nobody has looked at.
+ *
+ * This probe reads exactly the table in vram_blocks.h, once per
+ * identity-verified card, and writes nothing: no register write, no detach,
+ * no unlock, no NVIDIA Stop, no DMA, no reset, no FLR. A successful read
+ * proves the word is reachable through PCI I/O and reports its entry-state
+ * value. It proves nothing about what the value means: an engine mask, a
+ * signature slot or a selector value is not authenticated here, and a
+ * before/after comparison of two logs is an observation, not an acceptance.
+ * The probe does not read back a write it never issued.
+ *
+ * tests/test_vram_block_probe.py derives the write set from unlock_610.c and
+ * fails if this table and the writer disagree; that test, not this comment, is
+ * what keeps the two in step. */
+typedef struct {
+  const char *name;
+  UINT32 offset;
+} GU_VRAM_BLOCK_ROW;
+
+static const GU_VRAM_BLOCK_ROW VramWriteSet[] = {
+  {"SEC2.ENGINE_ID",GU_VRAM_BLOCK_SEC2_ENGINE_ID},
+  {"SEC2.CHIP",GU_VRAM_BLOCK_SEC2_CHIP},
+  {"SEC2.CPUCTL",GU_VRAM_BLOCK_SEC2_CPUCTL},
+  {"SEC2.CPUCTL_ALT",GU_VRAM_BLOCK_SEC2_CPUCTL_ALT},
+  {"SEC2.CODE_VA",GU_VRAM_BLOCK_SEC2_CODE_VA},
+  {"SEC2.MAILBOX0",GU_VRAM_BLOCK_SEC2_MAILBOX0},
+  {"SEC2.MAILBOX1",GU_VRAM_BLOCK_SEC2_MAILBOX1},
+  {"SEC2.DMA_CTRL",GU_VRAM_BLOCK_SEC2_DMA_CTRL},
+  {"SEC2.DMA_SRC_LO",GU_VRAM_BLOCK_SEC2_DMA_SRC_LO},
+  {"SEC2.DMA_SRC_HI",GU_VRAM_BLOCK_SEC2_DMA_SRC_HI},
+  {"SEC2.DMA_DEST",GU_VRAM_BLOCK_SEC2_DMA_DEST},
+  {"SEC2.DMA_MEM_OFF",GU_VRAM_BLOCK_SEC2_DMA_MEM_OFF},
+  {"SEC2.DMA_CMD",GU_VRAM_BLOCK_SEC2_DMA_CMD},
+  {"SEC2.BOOTVEC",GU_VRAM_BLOCK_SEC2_BOOTVEC},
+  {"SEC2.UCODE_ID",GU_VRAM_BLOCK_SEC2_UCODE_ID},
+  {"SEC2.ENGINE_MASK",GU_VRAM_BLOCK_SEC2_ENGINE_MASK},
+  {"SEC2.SIG_DMEM",GU_VRAM_BLOCK_SEC2_SIG_DMEM},
+  {"SEC2.BCR",GU_VRAM_BLOCK_SEC2_BCR},
+  {"SEC2.FBIF_TRANS",GU_VRAM_BLOCK_SEC2_FBIF_TRANS},
+  {"SEC2.FBIF_TRANS_24",GU_VRAM_BLOCK_SEC2_FBIF_TRANS_24},
+  {"GSP.ENGINE_ID",GU_VRAM_BLOCK_GSP_ENGINE_ID},
+  {"GSP.CHIP",GU_VRAM_BLOCK_GSP_CHIP},
+  {"GSP.CPUCTL",GU_VRAM_BLOCK_GSP_CPUCTL},
+  {"GSP.CPUCTL_ALT",GU_VRAM_BLOCK_GSP_CPUCTL_ALT},
+  {"GSP.CODE_VA",GU_VRAM_BLOCK_GSP_CODE_VA},
+  {"GSP.MAILBOX0",GU_VRAM_BLOCK_GSP_MAILBOX0},
+  {"GSP.MAILBOX1",GU_VRAM_BLOCK_GSP_MAILBOX1},
+  {"GSP.DMA_CTRL",GU_VRAM_BLOCK_GSP_DMA_CTRL},
+  {"GSP.DMA_SRC_LO",GU_VRAM_BLOCK_GSP_DMA_SRC_LO},
+  {"GSP.DMA_SRC_HI",GU_VRAM_BLOCK_GSP_DMA_SRC_HI},
+  {"GSP.DMA_DEST",GU_VRAM_BLOCK_GSP_DMA_DEST},
+  {"GSP.DMA_MEM_OFF",GU_VRAM_BLOCK_GSP_DMA_MEM_OFF},
+  {"GSP.DMA_CMD",GU_VRAM_BLOCK_GSP_DMA_CMD},
+  {"GSP.BOOTVEC",GU_VRAM_BLOCK_GSP_BOOTVEC},
+  {"GSP.UCODE_ID",GU_VRAM_BLOCK_GSP_UCODE_ID},
+  {"GSP.ENGINE_MASK",GU_VRAM_BLOCK_GSP_ENGINE_MASK},
+  {"GSP.SIG_DMEM",GU_VRAM_BLOCK_GSP_SIG_DMEM},
+  {"GSP.BCR",GU_VRAM_BLOCK_GSP_BCR},
+  {"GSP.FBIF_TRANS",GU_VRAM_BLOCK_GSP_FBIF_TRANS},
+  {"GSP.FBIF_TRANS_24",GU_VRAM_BLOCK_GSP_FBIF_TRANS_24},
+  {"FEAT.SS0",GU_VRAM_BLOCK_FEAT_SS0},
+  {"FEAT.SS1",GU_VRAM_BLOCK_FEAT_SS1}
+};
+#define GU_VRAM_BLOCK_WRITE_COUNT (sizeof(VramWriteSet)/sizeof(VramWriteSet[0]))
+
+/* The writer reads these to decide what to write; the probe reports them for
+ * context and keeps them out of the write-set digest. */
+static const GU_VRAM_BLOCK_ROW VramReadContext[] = {
+  {"FEAT.PLM",GU_VRAM_BLOCK_CONTEXT_FEAT_PLM},
+  {"FEAT.READOUT1",GU_VRAM_BLOCK_CONTEXT_FEAT_READOUT1}
+};
+#define GU_VRAM_BLOCK_CONTEXT_COUNT (sizeof(VramReadContext)/sizeof(VramReadContext[0]))
+
+static void ReportVramBlocks(int pci_ok) {
+  static const char digits[]="0123456789abcdef";
+  size_t i,j;
+  unsigned cards=0U,reads=0U,failed=0U,digests=0U;
+  Say("VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1\r\n",
+      (unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
+      (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT);
+  if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot)) {
+    Say("VRAM_BLOCK_PROBE STATUS=REFUSED REASON=PLATFORM_FINGERPRINT_NO_MATCH NO_GPU_READS=1 NO_GPU_WRITES=1\r\n");
+    return;
+  }
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *node=&Snapshot.pci[i];
+    const GU_GPU_RECORD *id=&node->identity;
+    EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)id->pci;
+    unsigned ada,expected_bus,card_reads=0U,card_failed=0U;
+    UINT8 words[GU_VRAM_BLOCK_WRITE_COUNT*4U];
+    UINT8 digest[32];
+    char hex[65];
+    int digest_complete=1;
+    if(!GuMsiB850IsOwnerNvidia(id))continue;
+    ada=(id->pci_id==0x268410deU);
+    expected_bus=ada?1U:4U;
+    if(id->segment!=0U || id->bus!=expected_bus ||
+       id->device!=0U || id->function!=0U ||
+       !node->openers_known || node->by_driver!=1U ||
+       !node->first_owner_agent || !pci || !pci->Mem.Read) {
+      Say("VRAM_BLOCK_PROBE GPU=%s STATUS=REFUSED REASON=PCI_OWNER_OR_BDF_MISMATCH NO_GPU_READS=1\r\n",
+          ada?"4090":"3080");
+      continue;
+    }
+    cards++;
+    for(j=0;j<GU_VRAM_BLOCK_WRITE_COUNT;j++) {
+      UINT32 raw=0U;
+      EFI_STATUS status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,
+                                      VramWriteSet[j].offset,1U,&raw);
+      if(EFI_ERROR(status)) {
+        card_failed++;
+        digest_complete=0;
+        words[4U*j]=0U;words[4U*j+1U]=0U;
+        words[4U*j+2U]=0U;words[4U*j+3U]=0U;
+        Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE EFI_STATUS=%#llx NO_FALLBACK=1 READ_ONLY=1\r\n",
+            ada?"4090":"3080",expected_bus,
+            VramWriteSet[j].name,(unsigned)VramWriteSet[j].offset,
+            (unsigned long long)status);
+        continue;
+      }
+      card_reads++;
+      words[4U*j]=(UINT8)(raw & 0xffU);
+      words[4U*j+1U]=(UINT8)((raw>>8) & 0xffU);
+      words[4U*j+2U]=(UINT8)((raw>>16) & 0xffU);
+      words[4U*j+3U]=(UINT8)((raw>>24) & 0xffU);
+      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",expected_bus,
+          VramWriteSet[j].name,(unsigned)VramWriteSet[j].offset,(unsigned)raw);
+    }
+    for(j=0;j<GU_VRAM_BLOCK_CONTEXT_COUNT;j++) {
+      UINT32 raw=0U;
+      EFI_STATUS status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,
+                                      VramReadContext[j].offset,1U,&raw);
+      if(EFI_ERROR(status)) {
+        card_failed++;
+        Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=READ_CONTEXT STATUS=UNAVAILABLE EFI_STATUS=%#llx NO_FALLBACK=1 READ_ONLY=1\r\n",
+            ada?"4090":"3080",expected_bus,
+            VramReadContext[j].name,(unsigned)VramReadContext[j].offset,
+            (unsigned long long)status);
+        continue;
+      }
+      card_reads++;
+      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=READ_CONTEXT STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",expected_bus,
+          VramReadContext[j].name,(unsigned)VramReadContext[j].offset,
+          (unsigned)raw);
+    }
+    /* One digest over the forty-two write-set words in table order, so a second
+     * run of this same image after actuation shows which block moved. It is a
+     * change detector, not a signature: nothing here is authenticated. */
+    if(digest_complete) {
+      size_t k;
+      GuSha256(words,(UINTN)sizeof(words),digest);
+      for(k=0;k<32;k++) {
+        hex[2*k]=digits[digest[k]>>4];
+        hex[2*k+1]=digits[digest[k]&15U];
+      }
+      hex[64]=0;
+      digests++;
+      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",card_reads,card_failed,hex);
+    } else {
+      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=UNAVAILABLE INCOMPLETE_READ_SET=1\r\n",
+          ada?"4090":"3080",card_reads,card_failed);
+    }
+    reads+=card_reads;
+    failed+=card_failed;
+  }
+  Say("VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED\r\n",
+      cards,(unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
+      (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT,
+      cards*((unsigned)GU_VRAM_BLOCK_WRITE_COUNT+(unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT),
+      reads,failed,digests);
 }
 #endif
 
@@ -2152,6 +2342,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #endif
 #ifdef GU_MSI_B850_SEC2_UCODE1
   ReportMsiB850Sec2Ucode1(pci_ok);
+#endif
+#ifdef GU_VRAM_BLOCK_PROBE
+  ReportVramBlocks(pci_ok);
 #endif
   gop_ok=CaptureGop(bs);
   console_ok=ReadConfiguredConsole(table,L"ConOut","CONOUT",

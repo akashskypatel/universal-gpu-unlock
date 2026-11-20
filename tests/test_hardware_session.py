@@ -42,6 +42,8 @@ STAGES = ("readonly", "prepare", "actuate")
 def groups():
     """Every token-bearing group in the manifest, with the gate it belongs to."""
     for gate in MANIFEST["gates"]:
+        if gate.get("only_if"):
+            yield gate["id"], gate["only_if"]
         for group in gate.get("requires", []):
             yield gate["id"], group
         for group in gate.get("requires_any", []):
@@ -352,6 +354,17 @@ class TheGatesAreSatisfiableByAHealthyRun(unittest.TestCase):
             text = self.stored(run).decode("utf-8")
             for gate in MANIFEST["gates"]:
                 if gate["stage"] != run["stage"]:
+                    continue
+                marker = gate.get("only_if")
+                if marker and not verify_run_log.token_to_pattern(
+                        marker["token"]).search(text):
+                    # The image this gate scores was not run in that boot: the
+                    # gate must say NOT_APPLICABLE and claim no pass.
+                    self.assertIn(f"GATE {gate['id']} STAGE={gate['stage']} "
+                                  f"RESULT=NOT_APPLICABLE",
+                                  run_verifier(str(ROOT / run["file"]),
+                                               "--stage", run["stage"]).stdout,
+                                  run["id"])
                     continue
                 for group in gate.get("requires", []):
                     self.assertIsNotNone(

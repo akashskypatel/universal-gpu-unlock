@@ -478,19 +478,20 @@ int main(int argc,char **argv) {
         source=(ROOT/"gpu_topology_efi.c").read_text(encoding="utf-8")
         handover=(ROOT/"gpu_windows_handoff.c").read_text(encoding="utf-8")
         self.assertIn("'-WindowsEspGuid requires -SaveLog",builder)
-        # All three opt-in MSI diagnostics must reject PCI selection.
+        # Every opt-in source diagnostic must reject PCI selection, including
+        # the read-only block probe.
         self.assertIn(
-            "($MsiB850RomVariables -or $MsiB850FuseVersion -or $MsiB850Sec2Ucode1) -and $selection.Count",
+            "($MsiB850RomVariables -or $MsiB850FuseVersion -or $MsiB850Sec2Ucode1 -or $VramBlockProbe) -and $selection.Count",
             builder)
         for option in ("$MsiB850RomVariables.IsPresent", "$MsiB850FuseVersion.IsPresent",
-                       "$MsiB850Sec2Ucode1.IsPresent"):
+                       "$MsiB850Sec2Ucode1.IsPresent", "$VramBlockProbe.IsPresent"):
             self.assertIn(option,builder)
         self.assertIn(".Where({ $_ }).Count -gt 1",builder)
         self.assertIn("MSI B850 diagnostics must be built separately.",builder)
         self.assertNotIn("($selection.Count -or $WindowsEspGuid)",builder)
         self.assertIn("if ($selection.Count -and $WindowsEspGuid)",builder)
         self.assertIn("if ($MsiB850Sec2Ucode1 -and -not $SaveLog)",builder)
-        self.assertIn("if (@($MsiB850RomVariables.IsPresent, $MsiB850FuseVersion.IsPresent, $MsiB850Sec2Ucode1.IsPresent).Where({ $_ }).Count -gt 1)",builder)
+        self.assertIn("if (@($MsiB850RomVariables.IsPresent, $MsiB850FuseVersion.IsPresent, $MsiB850Sec2Ucode1.IsPresent, $VramBlockProbe.IsPresent).Where({ $_ }).Count -gt 1)",builder)
         self.assertIn("$sources += 'gpu_windows_handoff.c'",builder)
         self.assertIn("if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }",builder)
         for name in ("GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",

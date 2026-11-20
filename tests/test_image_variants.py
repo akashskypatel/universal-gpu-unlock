@@ -87,6 +87,8 @@ def expected_binary(variant: dict) -> str:
             stem = "MSI-B850-FUSE-VERSION"
         elif switches.get("MsiB850Sec2Ucode1"):
             stem = "MSI-B850-SEC2-UCODE1"
+        elif switches.get("VramBlockProbe"):
+            stem = "VRAM-BLOCK-PROBE"
         else:
             stem = None
         if stem:

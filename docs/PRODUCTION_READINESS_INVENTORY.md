@@ -304,7 +304,7 @@ These are verified from source, not inferred.
 
 | # | Gap | Evidence | Pri |
 | --- | --- | --- | --- |
-| D1 | Artifacts are unsigned; Secure Boot must be off or a certificate enrolled by hand | **partial (§11.19)** — `src/Build-Sign-Deploy-UniversalGPU.ps1` signs every one of the 29 variants with a personal certificate inside WSL and refuses to sign unless the certificate is already in the BIOS `db`; that is one machine's trust, not a distributable chain (no CA, no timestamp, no release key, no reproducibility claim) | P0 |
+| D1 | Artifacts are unsigned; Secure Boot must be off or a certificate enrolled by hand | **partial (§11.19)** — `src/Build-Sign-Deploy-UniversalGPU.ps1` signs every one of the 31 variants with a personal certificate inside WSL and refuses to sign unless the certificate is already in the BIOS `db`; that is one machine's trust, not a distributable chain (no CA, no timestamp, no release key, no reproducibility claim) | P0 |
 | D2 | The only actuating build has no CI coverage | **Closed (§11.14):** the Windows job compiles the admitted image (app and DXE, one and two targets) with `-RuntimeEsp`, and the host job diffs it. The build is not uploaded. | P0 |
 | D3 | Payload provenance | every payload the firmware can load now has a record (role, 610.43.03 lineage, external reference, digest, length) checked against `src/profile.c` itself, and the tool refuses a missing, mismatched, orphaned or signature-claiming record (§11.27); authenticity is still unverified and says so | `docs/asset_provenance.json`, `tools/verify_provenance.py`, `tests/test_provenance_records.py` | P1 |
 | D4 | MSVC-only toolchain, no EDK II build, installer disabled | `Setup-AdaUnlock.ps1` refuses by design (`Setup.bat`, CI asserts `STATUS=REFUSED`) | P2 |
@@ -459,6 +459,83 @@ partial and `B10` untouched - the per-card memory footprint (~165 MB: DMA
 window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
+
+### 11.32 C5 — a read-only probe of the write set, before the first actuation
+
+Every image in this tree that can write to a GPU has been handed to an operator
+with the same implicit promise: the BAR0 offsets in it are the ones the
+transaction means to touch. Nothing checked that. A wrong offset would have been
+discovered by a write - on the card, once, on the day of the first actuation -
+which is the worst possible time to learn it.
+
+The write set is small and fixed. `src/vendor/unlock_610.c` reaches BAR0 through
+exactly one primitive, `GuWrite32` (via `GuCompatWrite32`, bounds-checked against
+`owner->bar_base`), and that primitive has one in-tree caller: `write_bar()`.
+Twenty-four `write_bar()` call sites resolve to **twenty engine deltas**, applied
+at both engine bases (`gu_sec2` at `0x00840000`, `gu_gsp` at `0x00110000`), plus
+the two speed selectors (`0x0082381c`, `0x00823820`) that
+`write_selector()` writes when the AD104 policy allows it. Forty-two words.
+
+There is now a read-only image that reads those forty-two words, and nothing
+else:
+
+* `src/vram_blocks.h` names each word once, with the writer's own expression in
+  the comment above it. It is a table of constants and cannot grow a write path.
+* `ReportVramBlocks` in `src/gpu_topology_efi.c` walks that table per
+  identity-verified card - the same `pci->Mem.Read` idiom, BDF check and driver
+  binding check as the MSI fuse probes - and prints one line per word:
+  `BLOCK=… BAR0_OFFSET=… ROLE=WRITE STATUS=OBSERVED RAW=…`, `ACCEPTANCE=UNVERIFIED`
+  on every one. Two more lines report the words the writer *reads* to choose its
+  writes (`GU_FEAT_PLM_OFFSET`, `GU_FEAT_READOUT_1_OFFSET`) as `ROLE=READ_CONTEXT`.
+* A per-card SHA-256 over the forty-two values in table order makes the
+  before/after comparison a one-line diff. The line says what it is:
+  `DIGEST_CV=CHANGE_DETECTOR_ONLY`. A failed read withholds the digest and prints
+  `INCOMPLETE_READ_SET=1` instead of hashing a hole.
+* Opt-in only: `-VramBlockProbe` in `src/Build-Gpu-Topology-Diagnostic.ps1`,
+  its own image `VRAM-BLOCK-PROBE-DIAGNOSTIC.EFI`, refused in the same build as
+  an MSI source diagnostic or a GPU selection (two `#error`s and a PowerShell
+  throw), and it requires `-SaveLog` so the evidence outlives the boot. Normal
+  topology and active builds never compile it.
+
+The coupling is the point, and it is machine-checked rather than reviewed.
+`tests/test_vram_block_probe.py` parses `unlock_610.c`: it resolves
+`eng->base`/`eng->falcon2`/`eng->fbif` against both engine initializers, the
+`base + …` DMA deltas against a `falcon_dma(work, eng->base, …)` call, the
+explicit `SEC2_BASE + 0x3c0` sites and every `write_selector(…)` call, then
+asserts set *equality* with the header. A new `write_bar()` without a probe row
+fails the suite; a probe row without a writer site fails it too. Three injected
+faults were checked by hand - a dropped probe row, an added writer site at an
+offset the probe does not read, and a `GuWrite32` call inside the probe body -
+and each one fails.
+
+Scoring is a gate, not a paragraph: `R4_WRITE_SET_READ_BEFORE_ACTUATION` requires
+the `BEGIN` line, at least forty-two observed write-set lines
+(`min_total 42`), and the `END` line's arithmetic; it forbids
+`STATUS=UNAVAILABLE` on any write-set word and `INCOMPLETE_READ_SET=1`. The gate
+is declared `only_if` the probe's own opening line, so a read-only boot that ran
+a different image reports `RESULT=NOT_APPLICABLE` - never `PASS`.
+`tests/fixtures/hardware_session/readonly_vram_blocks.txt` is a synthetic
+two-card probe log; it passes all four read-only gates under `--self-test`, and
+dropping a block line or marking one unreadable fails `R4` in the tests.
+
+What it is not. The probe authenticates nothing: it reports raw words, infers no
+signature slot, and prints `SECURITY_ACCEPTANCE=UNVERIFIED` on its closing line.
+It does not read back a write it never issued, so there is no read-modify-write
+verification loop to mistake for confirmation. It proves that a read-only image
+addresses the same words `unlock_610.c` writes - a statement about two lists
+agreeing, checked in the test suite, not about silicon.
+
+What has been measured, and what has not. Measured: nothing new on hardware. This
+section adds an instrument; it has not been run on the bench, and the post-state
+half of the comparison needs an actuation to have completed first. Not measured,
+and next: `-Only diag-vram-blocks -StageDrive G`, then the same image again after
+the first actuation, with the two `WRITE_SET_SHA256` lines compared by hand.
+
+What this does not do: no inventory row moves. `C5` stays `none`, because a
+readable address before the write says nothing about what the write achieves and
+the post-state half is still unmeasured; `C3` stays `none`, because a digest over
+register values is not firmware acceptance. `hardware_verified` stays `false` for
+all 43, and the readiness counts stay at 11 met / 15 partial / 17 not started.
 
 ### 11.31 C9/B10 — the session is an ordered list, and the workbench said "one card"
 
@@ -1585,7 +1662,7 @@ D1 listed "artifacts are unsigned; Secure Boot must be off or a certificate
 enrolled by hand". The second half is now a script instead of a manual step, and
 the first half is answered only for one machine.
 
-`docs/image_variants.json` is every image this repository can build - 29 variants
+`docs/image_variants.json` is every image this repository can build - 31 variants
 across the four builders (three runtime-selection preparation images are recorded
 as not buildable, with the source rule that refuses them) - as data. `src/Build-Sign-Deploy-UniversalGPU.ps1`
 executes that catalogue: build, prove the reported flags, sign inside WSL with a

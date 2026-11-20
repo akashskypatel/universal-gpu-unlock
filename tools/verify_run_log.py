@@ -102,6 +102,13 @@ def check_group(group: dict, logs: list[tuple[str, str]]) -> tuple[bool, str]:
         for name, count in counts:
             if count > limit:
                 return False, f"TOO_OFTEN token={token!r} in {name}: {count} > {limit}"
+    # A floor on the total across the set: one line proves the loop ran, a
+    # floor of forty-two proves it ran over the whole table.
+    floor = group.get("min_total")
+    if floor is not None:
+        total = sum(count for _name, count in counts)
+        if total < floor:
+            return False, f"TOO_FEW token={token!r}: {total} < {floor}"
     return True, "OK"
 
 
@@ -119,6 +126,16 @@ def evaluate(manifest: dict, gates: list[dict], logs: list[tuple[str, str]], sta
             # earlier gates cannot be satisfied by a later run's log.
             results.append({"id": gate["id"], "stage": gate["stage"], "result": "PRIOR_STAGE",
                             "detail": f"verify with --stage {gate['stage']}"})
+            continue
+        # A gate may describe one optional image rather than the stage: it
+        # applies only when that image printed its own marker line. Absence is
+        # reported as NOT_APPLICABLE, never as PASS, so a log set that never ran
+        # the image cannot look like it satisfied the gate.
+        marker = gate.get("only_if")
+        if marker and not any(occurrences(text, marker["token"]) for _name, text in logs):
+            results.append({"id": gate["id"], "stage": gate["stage"],
+                            "result": "NOT_APPLICABLE",
+                            "detail": f"image not run in this log set: {marker['token']!r}"})
             continue
         problems: list[str] = []
         if gate.get("min_logs", 1) > len(logs):

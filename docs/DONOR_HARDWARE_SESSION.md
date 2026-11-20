@@ -80,7 +80,7 @@ Nothing below has been executed against this tree. No log described here exists,
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -List
 ```
 
-*Expect:* one `CATALOGUE ... variants=29 families=4` line, then a `VARIANT <id> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.
+*Expect:* one `CATALOGUE ... variants=31 families=4` line, then a `VARIANT <id> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.
 
 *Look for:*
 
@@ -184,6 +184,8 @@ Every image in the catalogue whose safety class writes nothing to the GPU. One c
 | `diag-msi-fuse-handoff` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A2` `B9` |
 | `diag-msi-sec2` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `C4` |
 | `diag-msi-sec2-handoff` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A2` `B9` |
+| `diag-vram-blocks` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `C5` `C3` |
+| `diag-vram-blocks-handoff` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A2` `B9` |
 | `prep-selected` | refuses-before-mutation | `prepare` | \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten | `D5` `B9` `A7` `A4` `E8` `M4` `C9` `B10` |
 | `dxe-prep-selected` | refuses-before-mutation | `prepare` | \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten | `D5` |
 
@@ -355,6 +357,44 @@ The SEC2 read plus the pinned Windows handoff, for a bench where the read-only i
 * `B9` — `SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT` (`src/gpu_topology_efi.c`): the read is written before the handoff begins
 
 *Does not prove:* anything the base SEC2 probe does not prove, plus the handoff's own limit: one pinned partition started Windows once.
+
+#### `diag-vram-blocks` — read-only probe of the actuating write set
+
+Forty-two BAR0 reads per verified card, at the addresses the waived transaction writes, plus the two context words it reads to choose them. It is the interlock for the first actuation: run the same image before and after, and any block that moved shows up as a different digest. Nothing is written.
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks -StageDrive G
+```
+
+*Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
+
+*Score:* `python3 tools/verify_run_log.py <log> --stage readonly`
+
+* `C5` — `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1` (`src/gpu_topology_efi.c`): the probe declares what it is before it reads anything: a read-only boundary and the size of its own address list, so a run that reads fewer blocks than the table has is visible in the first line rather than by counting the middle.
+* `C5` — `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x READ_ONLY=1 ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): one line per word the actuating sequence writes: block name, the absolute BAR0 address, and the value there before any write exists. Forty-two of them (twenty per engine plus both selectors) is the evidence that this image addresses the same blocks as the transaction. It does not move C5: a readable address identifies the target, and there is no post-state yet to verify.
+* `C3` — `VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): the per-card digest is labelled a change detector in the line itself, and the line carries the failed-read count beside it: a digest over a partial read set would otherwise look complete. A digest over register values is not firmware acceptance, so C3 stays where it is.
+* `C5` — `VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` (`src/gpu_topology_efi.c`): the totals: cards probed, expected reads, reads that landed and reads that did not. A block that does not read back is a number here instead of a silent gap, which is the whole point of probing before the first write.
+
+*Does not prove:* that these are the right addresses for the transaction - only that this image and `src/vendor/unlock_610.c` name the same ones, checked by `tests/test_vram_block_probe.py`, not by the log. A successful read proves the word is reachable through PCI I/O; it does not prove an engine mask, a signature selector or a speed-selector write is permitted on this board, and it cannot say what any value means. The post-actuation half of the comparison has never run, because the actuation has never run.
+
+#### `diag-vram-blocks-handoff` — read-only probe of the actuating write set, with handoff
+
+The block probe plus the pinned Windows handoff, for a bench where the read-only image has to return to Windows by itself. The end-of-session digest is in the log either way.
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G
+```
+
+*Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
+
+*Score:* `python3 tools/verify_run_log.py <log> --stage readonly`
+
+*Also collects* everything `diag-vram-blocks` collects, plus:
+
+* `A2` — `WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write` (`src/gpu_topology_efi.c`): the handoff is pinned to one ESP GUID and does not touch BootOrder
+* `B9` — `SAVE_LOG_STATUS=%#llx ROTATING_FILE=GPU-TOPOLOGY-DIAGNOSTIC-NNNN.TXT` (`src/gpu_topology_efi.c`): the block lines and the digest are written before the handoff begins, so the evidence survives a handoff that does not
+
+*Does not prove:* anything the plain block probe does not prove, plus the handoff's own limit: one pinned partition started Windows once.
 
 #### `prep-selected` — preparation for explicit targets, one or both cards
 
@@ -749,6 +789,7 @@ Note: the read-only image always saves its numbered log; add -WindowsEspGuid '<r
 | `R1_IMAGE_RAN_READ_ONLY` | the read-only image ran | `GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls` | `ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu`<br>`STOP_CONTRACT device=%04x stage=%zu` |
 | `R2_ENUMERATION_COMPLETED` | the inventory finished, and the collector said so | `PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES INCLUDED=%zu EXCLUDED=%zu`<br>`NVIDIA_DRIVER_OWNER_INVENTORY=READ_ONLY IMAGE_PROVENANCE_UNVERIFIED=1`<br>`DIAGNOSTIC FINISHED; GPU hardware untouched.` | `PCI_ENUM_FAILURE STAGE=`<br>`NVIDIA_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1` |
 | `R3_CARD_IDENTIFIED` | at least one NVIDIA card is named | `NVIDIA_DRIVER_OWNER[%zu] BDF=%04x:%02x:%02x.%u BY_DRIVER=%u` *(one of)*<br>`ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x` *(one of)* | — |
+| `R4_WRITE_SET_READ_BEFORE_ACTUATION` | the block probe read every word the transaction writes | `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1`<br>`VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x`<br>`VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` | `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE`<br>`INCOMPLETE_READ_SET=1` |
 
 **`R1_IMAGE_RAN_READ_ONLY`** — proves: the read-only diagnostic started and wrote its own log. Does not prove: that the enumeration below finished, or anything about the card.
 
@@ -768,6 +809,14 @@ Note: the read-only image always saves its numbered log; add -WindowsEspGuid '<r
 
 * `NVIDIA_DRIVER_OWNER[%zu] BDF=%04x:%02x:%02x.%u BY_DRIVER=%u` (src/gpu_topology_efi.c) — the driver-owner line carries BDF, driver binding and opener state for one card.
 * `ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x` (src/gpu_discovery.c) — the active-app inventory line carries BDF and PCI identity for one card.
+
+**`R4_WRITE_SET_READ_BEFORE_ACTUATION`** — proves: that a read-only image reached every BAR0 word the actuating sequence writes, on each verified card, before anything wrote to them. That is the interlock: the address list is not a surprise at actuation time. Does not prove: that the values are right, that a selector write will be accepted, or that the transaction will unlock anything. Reading a register before writing it identifies the block and nothing more; the post-actuation half of the comparison needs an actuation, and none has run.
+
+* `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1` (src/gpu_topology_efi.c) — the probe says what it is once per boot and states the size of its own address list: a second copy would mean two cards' worth of output in one bracket. At most 1 per log.
+* `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x` (src/gpu_topology_efi.c) — at least forty-two observed write-set words: twenty per engine plus both selectors, which is the whole table. Fewer means a block did not read back and the interlock is incomplete.
+* `VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` (src/gpu_topology_efi.c) — the closing line carries the arithmetic: cards, blocks, expected reads, reads that landed and reads that did not. `READS_FAILED=0` and `READS_SUCCEEDED=EXPECTED_READS` are what make the block list complete rather than partial. At most 1 per log.
+* must not contain `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE` (src/gpu_topology_efi.c): a word the probe could not read is a hole in the interlock: the address was never confirmed on this silicon, so the stage does not pass
+* must not contain `INCOMPLETE_READ_SET=1` (src/gpu_topology_efi.c): the probe withholds its digest when any read failed; a log that says so has no before-and-after comparison to offer
 
 ### `prepare` — Preparation only
 
