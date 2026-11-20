@@ -104,7 +104,7 @@
       "priority": "P0",
       "source": "done",
       "section": "11.20",
-      "note": "MSI/MSI-X must be enabled-off and the function in D0 at admission; PMC version and PMCSR state are both checked (\u00a711.20).",
+      "note": "MSI/MSI-X must be enabled-off and the function in D0 at admission; PMC version and PMCSR state are both checked (§11.20).",
       "hardware_verified": false
     },
     {
@@ -113,7 +113,7 @@
       "priority": "P1",
       "source": "done",
       "section": "11.20",
-      "note": "Any PCI capability id outside PM/MSI/MSI-X/PCIe/vendor is refused, as is a vendor capability shorter than its header (\u00a711.20).",
+      "note": "Any PCI capability id outside PM/MSI/MSI-X/PCIe/vendor is refused, as is a vendor capability shorter than its header (§11.20).",
       "hardware_verified": false
     },
     {
@@ -122,7 +122,7 @@
       "priority": "P1",
       "source": "done",
       "section": "11.20",
-      "note": "PCIe endpoint v1/v2 only (device type <= 1), FLR capability advertised, and no already-initiated FLR in Device Control (\u00a711.20).",
+      "note": "PCIe endpoint v1/v2 only (device type <= 1), FLR capability advertised, and no already-initiated FLR in Device Control (§11.20).",
       "hardware_verified": false
     },
     {
@@ -149,7 +149,7 @@
       "priority": "P2",
       "source": "done",
       "section": "11.20",
-      "note": "Bus Master off at admission; the one exception is the single-target read-only inspection, which cannot survive into the transaction (\u00a711.20).",
+      "note": "Bus Master off at admission; the one exception is the single-target read-only inspection, which cannot survive into the transaction (§11.20).",
       "hardware_verified": false
     },
     {
@@ -248,7 +248,7 @@
       "priority": "P1",
       "source": "partial",
       "section": "11.22",
-      "note": "A two-card host model now executes selection and per-target admission from real code (\u00a711.22); nothing has run with two physical cards, and the per-card memory footprint (B10) is still unmeasured.",
+      "note": "A two-card host model now executes selection and per-target admission from real code (§11.22); nothing has run with two physical cards, and the per-card memory footprint (B10) is still unmeasured.",
       "hardware_verified": false
     },
     {
@@ -301,8 +301,8 @@
       "class": "D",
       "priority": "P0",
       "source": "partial",
-      "section": "11.28",
-      "note": "`tools/donor_gate.py` machine-checks whether the session may advance, and the read-only session now has a step-by-step guide (build-sign-stage, preflight, boot, capture, `verify_run_log.py`) whose commands and quoted log lines are pinned by `tests/test_hardware_session.py`; no machine runs a stage automatically.",
+      "section": "11.30",
+      "note": "`tools/donor_gate.py` machine-checks whether the session may advance, and the read-only session's step-by-step guide is grounded on real captures: eight physical logs are digest-pinned and re-scored by the suite on every run, and the read-only and preparation stages of the first two batches now compose into `VERDICT=GO` with `HARDWARE_VERIFIED=0`. No machine runs a stage automatically and the actuation stage has never run.",
       "hardware_verified": false
     },
     {

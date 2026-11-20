@@ -157,15 +157,59 @@ class EveryPreconditionBlocksTheSession(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("BLOCKED IDENTITY_UNKNOWN STAGE=actuate", result.stdout)
 
-    def test_two_cards_in_one_stage_are_not_a_single_donor(self):
+    def test_two_prepared_targets_are_not_a_single_donor(self):
+        # Two *targets* is what M4 forbids. Two inventory lines are not: the
+        # first physical session enumerated `01:00.0` and `04:00.0` in every
+        # stage and prepared one of them.
         text = (FIXTURES / "prepare.txt").read_text(encoding="utf-8")
-        extra = text + "ACTIVE_GPU[1] BDF=0000:02:00.0 ID=10de:2684 SUB=10de:a140\n"
+        extra = text + ("ACTIVE_PREPARED_STEP[1] BDF=0000:02:00.0 ID=10de:2684 "
+                        "SUB=10de:a140 STATUS=0 PREPARED=1\n")
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "prepare-two-cards.txt"
+            path = Path(directory) / "prepare-two-targets.txt"
             path.write_text(extra, encoding="utf-8")
             result = run("--readonly", fixture("readonly.txt"), "--prepare", str(path))
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("BLOCKED IDENTITY_NOT_SINGLE", result.stdout)
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("BLOCKED IDENTITY_NOT_SINGLE STAGE=prepare bdf=01:00.0,02:00.0",
+                      result.stdout)
+
+    def test_a_second_card_in_the_census_is_not_a_second_donor(self):
+        # The read-only diagnostic reports the whole machine; a prepared target
+        # that the census named is a session with a peer card, not a refusal.
+        text = (FIXTURES / "prepare.txt").read_text(encoding="utf-8")
+        census = text.replace(
+            "ACTIVE_GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=10de:a140\n",
+            "ACTIVE_GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=10de:a140\n"
+            "ACTIVE_GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612\n")
+        readonly = (FIXTURES / "readonly.txt").read_text(encoding="utf-8").replace(
+            "GPU[0] BDF=0000:01:00.0",
+            "NVIDIA_DRIVER_OWNER[1] BDF=0000:04:00.0 BY_DRIVER=1 OPENERS_KNOWN=1 "
+            "AGENT=0x5a5a0000\n"
+            "GPU[0] BDF=0000:01:00.0", 1).replace(
+            "TOPOLOGY_VERDICT=INCOMPLETE",
+            "GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 PCI_INDEX=2 PARENT=0 "
+            "ROOT_PORT=0 DEPTH=1 ANCESTRY=1 ROOT_VALID=1 GOP_COUNT=0\n"
+            "TOPOLOGY_VERDICT=INCOMPLETE", 1)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-with-peer.txt"
+            path.write_text(census, encoding="utf-8")
+            census_path = Path(directory) / "readonly-with-peer.txt"
+            census_path.write_text(readonly, encoding="utf-8")
+            result = run("--readonly", str(census_path), "--prepare", str(path))
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("DONOR_GATE VERDICT=GO", result.stdout)
+        self.assertIn("NOTE PEERS=1 OBSERVED=2 TARGET=01:00.0", result.stdout)
+
+    def test_a_target_the_read_only_stage_never_saw_blocks(self):
+        text = (FIXTURES / "prepare.txt").read_text(encoding="utf-8").replace(
+            "ACTIVE_PREPARED_STEP[0] BDF=0000:01:00.0",
+            "ACTIVE_PREPARED_STEP[0] BDF=0000:02:00.0")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-unseen.txt"
+            path.write_text(text, encoding="utf-8")
+            result = run("--readonly", fixture("readonly.txt"), "--prepare", str(path))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("BLOCKED IDENTITY_NOT_OBSERVED STAGE=prepare BDF=02:00.0 OBSERVED=01:00.0",
+                      result.stdout)
 
     def test_actuation_without_its_predecessors_blocks(self):
         result = run("--actuate", fixture("actuate_boot1.txt"))
@@ -193,6 +237,55 @@ class EveryPreconditionBlocksTheSession(unittest.TestCase):
     def test_no_stage_at_all_is_a_usage_error(self):
         result = run()
         self.assertEqual(result.returncode, 2)
+
+
+class TheFirstPhysicalSessionComposes(unittest.TestCase):
+    """The logs from the bench, not fixtures: these decide whether the tool
+    describes the machine the operator actually has.  A two-card census is the
+    ordinary bench here, so a rule that refuses it refuses every real session."""
+
+    DATA = ROOT / "tests" / "data" / "hardware_session"
+
+    def real(self, *args: str, ack: str = ACKS) -> subprocess.CompletedProcess:
+        command = [sys.executable, str(TOOL), *args]
+        if ack is not None:
+            command.extend(["--ack", ack])
+        return subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
+
+    def test_the_read_only_stage_and_either_preparation_reach_go(self):
+        for prepared, identity in (("physical-prepare-0001.txt", "BDF=01:00.0 DEVICE=2684"),
+                                   ("physical-prepare-0002.txt", "BDF=04:00.0 DEVICE=220a")):
+            result = self.real("--readonly", str(self.DATA / "physical-readonly-0001.txt"),
+                               "--prepare", str(self.DATA / prepared))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("DONOR_GATE VERDICT=GO", result.stdout, prepared)
+            self.assertIn("SYNTHETIC=0 HARDWARE_VERIFIED=0", result.stdout, prepared)
+            self.assertIn("DONOR_GATE identity " + identity, result.stdout, prepared)
+
+    def test_the_peer_card_is_reported_rather_than_refused(self):
+        result = self.real("--readonly", str(self.DATA / "physical-readonly-0001.txt"),
+                           "--prepare", str(self.DATA / "physical-prepare-0001.txt"))
+        self.assertIn("DONOR_GATE identity BDF=01:00.0 DEVICE=2684 STAGES=readonly,prepare OBSERVED=2 RESULT=PASS",
+                      result.stdout)
+        self.assertIn("NOTE PEERS=1 OBSERVED=2 TARGET=01:00.0", result.stdout)
+
+    def test_an_ordered_two_target_selection_is_a_census(self):
+        result = self.real("--readonly", str(self.DATA / "physical-readonly-0002.txt"),
+                           "--prepare", str(self.DATA / "physical-prepare-0002.txt"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("DONOR_GATE VERDICT=GO", result.stdout)
+        self.assertIn("DONOR_GATE identity BDF=04:00.0 DEVICE=220a", result.stdout)
+
+    def test_the_second_card_cannot_stand_in_for_the_first(self):
+        # The 4090 was prepared, so a preparation log for the 3080 is a
+        # different session: the identity line must name the card, not the run.
+        first = self.real("--readonly", str(self.DATA / "physical-readonly-0001.txt"),
+                          "--prepare", str(self.DATA / "physical-prepare-0001.txt"))
+        second = self.real("--readonly", str(self.DATA / "physical-readonly-0001.txt"),
+                           "--prepare", str(self.DATA / "physical-prepare-0002.txt"))
+        self.assertIn("TARGET=01:00.0", first.stdout)
+        self.assertIn("TARGET=04:00.0", second.stdout)
+        self.assertIn("DEVICE=220a", second.stdout)
 
 
 class RealLogsNeedNoSwitch(unittest.TestCase):

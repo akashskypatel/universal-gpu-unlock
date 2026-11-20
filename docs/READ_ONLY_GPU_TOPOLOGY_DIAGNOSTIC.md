@@ -22,11 +22,27 @@ exact success/error status and an explicit
 SEC2 signature, write a GPU register, reset a Falcon, or load firmware.
 No SEC2 read occurs in generic topology or ROM-variable builds.
 
-The earlier physical `0031` did **not** contain these new SEC2 records;
-a new run of the revised, signed MSI fuse image is necessary to observe
-that *different* register. This will not clear the original Windows
-signed Booter IMAGE/HEADER/SIG/PATCH producer, same-instance loader
-invocation, or safe GA102 release by itself.
+The earlier physical `0031` did **not** contain these new SEC2 records.
+That gap is now closed: the revised images ran on the donor bench, and
+`GPU-TOPOLOGY-DIAGNOSTIC-0004.TXT` / `-0005.TXT` carry the reads
+(`tests/data/hardware_session/physical-readonly-0004.txt`, `-0005.txt`,
+digest-pinned in `docs/hardware_session.json` and re-scored by the suite).
+What they say:
+
+* the SEC2 fuse at `0x00824148` reads `RAW=0x1` on the RTX 4090 and
+  `RAW=0x3` on the RTX 3080, agreeing per card with the FWSEC fuse at
+  `0x008241e0` in the same log;
+* the SEC2 version register at `0x00824140` reads `0x1` and `0x3`
+  respectively, so two different named registers agree about each card;
+* every SEC2 line still carries
+  `WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN` / `SECURE_ACCEPTANCE=UNVERIFIED`
+  and the FWSEC lines still carry `ACCEPTANCE=UNVERIFIED`: the reads
+  reproduce each other, they do not authenticate anything, and the
+  Windows 617.42 descriptor is still missing.
+
+This will not clear the original Windows signed Booter
+IMAGE/HEADER/SIG/PATCH producer, same-instance loader invocation, or safe
+GA102 release by itself.
 
 
 ## Original RTX 3080 isolated Stop experiment — not an unlock

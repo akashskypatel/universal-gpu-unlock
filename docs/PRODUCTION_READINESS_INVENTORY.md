@@ -460,6 +460,92 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.30 D5 — seven more physical runs, and the second gate no image can print
+
+The next batch of runs on the same bench produced seven real logs: five
+read-only (`diag-topology-log`, `diag-selection` with two BDFs, `diag-msi-rom`,
+`diag-msi-fuse`, `diag-msi-sec2`) and two preparation-only (`prep-selected` for
+`01:00.0` and for `04:00.0`). The read-only five scored `PASS` immediately. Both
+preparation runs scored `FAIL FIRST_FAILED=P1_PREPARATION_REFUSED_BEFORE_MUTATION`.
+
+P1 required `ACTIVE_APP=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1`.
+That literal is in `src/app.c`, and the grounding test could see it, so the
+suite was satisfied. It is printed *after* `GuDiscoverSingleGpu` returns
+success - and the preparation image is refused *by* that call
+(`REASON=SELECTION_PREPARATION_ONLY`, `src/gpu_discovery.c`), so the app takes
+`goto failed` and the banner never runs. `src/dxe_main.c` has the identical
+shape. No preparation image can print either banner. This is the third instance
+of one defect class: R2 required the strict collector's fallback (§11.29), the
+donor gate let one stage's device id vouch for another (§11.29), and P1 required
+an entrypoint banner that sits behind the refusal. In each case the token was a
+real format string in the file it named; only reachability was wrong.
+
+P1 now requires two lines the image does print: the refusal itself
+(`ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1`,
+printed before any GU init) and
+`ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0`.
+The `dxe-prep-selected` evidence entry in the guide quoted the app's banner and
+claimed the DXE entrypoint "reaches the same refusal line"; it does not, and it
+now quotes the shared discovery refusal instead.
+
+The durable defence is the same one §11.29 chose, extended: every physical log
+is kept. `tests/data/hardware_session/` now holds eight captures
+(`physical-readonly-0000..0005`, `physical-prepare-0001/0002`), digest-pinned in
+`docs/hardware_session.json` and re-scored by `tests/test_hardware_session.py` on
+every run, which also checks that every gate of the scored stage still matches
+the real log. A gate that no real image can print now fails the suite. That test
+is what caught P1 - not a reading of the source.
+
+`tools/donor_gate.py` needed the other half of the same lesson. It demanded "the
+same single BDF" in every stage, which a two-card bench can never satisfy: the
+read-only diagnostic reports the whole machine (`GPU[0]`, `GPU[1]`, both driver
+owners), and `-0001` duly named `01:00.0` and `04:00.0`, so the gate answered
+`BLOCKED=IDENTITY_NOT_SINGLE` for a session that had done nothing wrong. A
+census is not a choice. The gate now reads the lines where a stage says what it
+actually selected (`ACTIVE_PREPARED_STEP[n]`, `SELECTION_REQUEST[n]`,
+`SELECTION_STEP[n]=BEGIN`, `PASSIVE_SELECTION=`), requires a preparation or
+actuation stage to select exactly one target, requires that target to be one the
+read-only stage enumerated (`IDENTITY_NOT_OBSERVED` otherwise), and compares the
+PCI id printed beside *that* BDF rather than the ids of every card in the
+machine. An ordered multi-target read-only selection is a census; a peer card is
+reported as `NOTE PEERS=1 OBSERVED=2 TARGET=01:00.0`, not refused. With those
+rules the first two physical batches compose into
+`DONOR_GATE VERDICT=GO SYNTHETIC=0 HARDWARE_VERIFIED=0` - the first GO this tool
+has produced from real logs, and it took two wrong rules to get there.
+
+Four findings on the machine are worth keeping, none of them a verification:
+
+* the two boots `0000` and `0001` are identical line for line except firmware
+  pointer values and the relocated whole-image digests. `MAPPED_TEXT_SHA256` is
+  stable across boots (`77632902...`, `615b37a7...`); `MAPPED_IMAGE_SHA256` is
+  not (`a513a554...` then `42adb7a8...` for the same driver), which is exactly
+  what `RELOCATED_POSSIBLE=1` warns about. Nothing may pin a driver by the
+  whole-image digest;
+* `MSI_B850_VARIABLE NAME=ROM_CMN` is real (327 bytes, `ATTRS=0x7`), `CSM_CMN`
+  is five bytes - too small to hold the policy table the desk research assumed -
+  the BDS structure `LOCATE_STATUS=0 PRESENT=1` but `STATE=SKIPPED
+  ORIGINAL_BDS_MISMATCH=1 MATCHES=0`, and the private-interface probe found no
+  method to call (`CALLS=ZERO`, `NO_PRIVATE_METHOD=1`). The ROM dispatch path is
+  still `ORIGINAL_ROM_DISPATCH_UNVERIFIED=1`;
+* the two cards do not share a fuse state: the 4090 reads `RAW=0x1
+  FUSE_VERSION=1 CANDIDATE_SLOT=1`, the 3080 `RAW=0x3 FUSE_VERSION=2
+  CANDIDATE_SLOT=2`, and the SEC2 version register agrees with the SEC2 fuse per
+  card (`0x1` and `0x3`). A rule calibrated on one card cannot be asserted for
+  the other, and every line still carries `ACCEPTANCE=UNVERIFIED` because
+  `WINDOWS_61742_DESCRIPTOR` is unknown;
+* both NVIDIA drivers were loaded from one parent image
+  (`PARENT_TEXT_SHA256=02a92fd4...` on both cards).
+
+What the batch does not do: it does not mutate anything. The preparation logs end
+`ACTIVE_EXECUTION=REFUSED ... BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0
+CAN_FLR=0` and `STOP: stage=discover status=0x8000000000000003 mutated=0
+retained=0 fault=0`; the MSI probes end `NO_GPU_WRITES=1` and `CALLS=ZERO`. No
+signature is authenticated, no inventory row moves, and `hardware_verified` stays
+`false` for all 43. `M4_ONE_CARD_ONLY` is unchanged and now measurably relevant:
+the machine has two cards, so the session is about whichever one the operator
+records, and only one may be prepared - which is what the two preparation runs
+show the image enforcing by itself.
+
 ### 11.29 D5 — the first physical run failed a gate that no healthy machine can print
 
 The first run of a signed `diag-topology-log` image on the donor bench produced

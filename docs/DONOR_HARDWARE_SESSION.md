@@ -389,7 +389,7 @@ The same preparation as a boot-service driver, loaded from a `Driver####` entry 
 
 *Score:* `python3 tools/verify_run_log.py <log> --stage prepare`
 
-* `D5` — `ACTIVE_APP=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1` (`src/app.c`): the DXE entrypoint reaches the same refusal line as the application, which is what a resident-driver design has to be built on
+* `D5` — `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1` (`src/gpu_discovery.c`): both entrypoints call `GuDiscoverSingleGpu`, which refuses there; that shared boundary is what a resident-driver design has to be built on. Neither entrypoint's own banner can print in this build - `ACTIVE_APP=` in `src/app.c` and `ACTIVE_DXE=` in `src/dxe_main.c` both sit behind the `GuDiscoverSingleGpu` success check that refuses
 
 *Does not prove:* that the driver is safe to leave installed, or that `ReadyToBoot` timing is compatible with anything: the catalogue refuses to stage a DXE driver as `BOOTX64.EFI`, so the only path is a `Driver####` entry you add and remove by hand, and that is a firmware change, not a read-only act.
 
@@ -443,11 +443,18 @@ Every candidate above ends at `tools/verify_run_log.py`, and every verdict it pr
 
 ## Captured runs, scored
 
-Physical runs, stored as files and scored by the same tool an operator runs. Each entry pins the digest of the stored log, the facts quoted from it, and the verdict line the verifier prints for it, and `tests/test_hardware_session.py` re-scores the file on every run: the record cannot drift from the evidence, and a gate that no healthy machine can satisfy fails the suite instead of the operator.
+Physical runs, stored as files and scored by the same tool an operator runs. Each entry pins the digest of the stored log, the facts quoted from it, and the verdict line the verifier prints for it, and `tests/test_hardware_session.py` re-scores the file on every run: the record cannot drift from the evidence, and a gate that no healthy machine can satisfy fails the suite instead of the operator. The read-only runs and the preparation runs are scored per stage; `tools/donor_gate.py` is what composes them into a go/no-go answer.
 
 | Run | Image | Stage | Lines | SHA-256 of the stored log | Verdict |
 | --- | --- | --- | --- | --- | --- |
 | `physical-readonly-0000` | `diag-topology-log` | `readonly` | 151 | `fff77af4aa87291be8e6e715b69c8a621648c4acd1e099e5a431bc0658a40a03` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0001` | `diag-topology-log` | `readonly` | 151 | `522dacb7a2638f3a537f723c1678bb0bb11da870b13353e4f11f99a27788a017` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0002` | `diag-selection` | `readonly` | 161 | `e26a23c09dec972a30137e5195bace33d1c4f5221fc57778d0bafd7ef36ea3ed` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0003` | `diag-msi-rom` | `readonly` | 224 | `139756cfa4a8944a9496af7e8a48f3d53b646861def382e3c362f3b5fda317e0` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0004` | `diag-msi-fuse` | `readonly` | 159 | `a0611e2afbc9e42fe8798171d8a5454f10f9456b328b382b0fa35f3be9ad0c07` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0005` | `diag-msi-sec2` | `readonly` | 155 | `eef276f7db4bf8c0a8a288f8cc256f47c5f8912886155bb32634392394e02a1f` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-prepare-0001` | `prep-selected -SelectionBdf '0000:01:00.0'` | `prepare` | 12 | `341c91aeec538bcf8e43f8194c164fadc041ed76a3255cfd3b7c38cef59f1e00` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-prepare-0002` | `prep-selected -SelectionBdf '0000:04:00.0'` | `prepare` | 12 | `f8f7208516cdd76b68ffb7153267874cd30df3368111ab527d925d2fe27cad15` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -480,6 +487,215 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FA
 
 *What it does not show:* that the card is safe, that anything was unlocked, or that Windows accepted the device: no Stop was called, every eligibility flag in the log is zero, both driver-image signatures are unverified, and `hardware_verified` stays false for every item in the inventory.
 
+### `physical-readonly-0001`
+
+*File:* `tests/data/hardware_session/physical-readonly-0001.txt` — 13140 bytes stored, 13291 as captured, 151 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-20. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card, driven from a USB stick; Windows started after each image returned, with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0001.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6` — the same 4090, at the same address, in the same slot as `-0000`
+* `GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612` — the same 3080, at the same address: the topology did not change between the two boots
+* `NVIDIA_DRIVER_OWNER[1] MAPPED_TEXT_SHA256=77632902f0ceb0ba2848200f396ab61eacd7910e9cce7c535f65d6cdbe2b6c32` — the 4090's loaded driver text digest, unchanged from `-0000`: the same driver image was loaded, not merely the same file name
+* `NVIDIA_DRIVER_OWNER[1] MAPPED_IMAGE_SHA256=42adb7a86aa5241cdb418217b398e6de8f441347dba140ab32b08d56320d55e9 RELOCATED_POSSIBLE=1 SIGNATURE_NOT_VERIFIED=1` — the whole-image digest *did* change between the two boots (`a513a554...` in `-0000`), which is what `RELOCATED_POSSIBLE=1` warns about: the image is relocated at load, so only the text digest is a stable identity. Nothing in the repository may pin a driver by the whole-image digest
+* `ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED` — B1 reproduced on a second boot: the error console resolves to the AMD GOP with nothing NVIDIA in it
+* `NVIDIA_GPU_COUNT=2 INDEPENDENT_GOP_COUNT=1 INDEPENDENT_CONOUT_MATCH=1 NVIDIA_CONOUT_MATCH=0 GOP_UNMATCHED=0 INDEPENDENT_CONSOLE_ASSOCIATION=1 CONOUT_WITHOUT_GOP=0 CONOUT_UNMATCHED=0 CONOUT_AMBIGUOUS=0` — two NVIDIA cards, one independent (AMD) GOP that does match the console, and no NVIDIA console match - the same B2 configuration as `-0000`, with the independent path positively matched
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — the report finished with nothing withheld, so a line missing from this file is missing from the run
+* `LOG_FILE=\GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT` — the image numbered its own log `0001`: an existing log on the medium is never overwritten
+
+*History:* Run to test whether `-0000` was reproducible or lucky. It is reproducible: all 151 lines carry the same topology, the same console isolation and the same driver text digests; only firmware pointer values and the relocated whole-image digests differ. That is the strongest statement these two captures support - two boots, one configuration - not a claim that the machine is stable under load or across a power cycle.
+
+*What it does not show:* that two boots are a trend, that the configuration survives a firmware setting change, or that anything was unlocked: the driver images are still `SIGNATURE_NOT_VERIFIED=1` and every eligibility flag is zero.
+
+### `physical-readonly-0002`
+
+*File:* `tests/data/hardware_session/physical-readonly-0002.txt` — 13888 bytes stored, 14049 as captured, 161 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-20. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card, driven from a USB stick; Windows started after each image returned, with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0002.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `SELECTION_SEQUENCE=BEGIN REQUESTED=2 READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0` — the ordered path really was asked for two targets, and it declared itself read-only before touching either
+* `SELECTION_REQUEST[0] BDF=0000:01:00.0` — the 4090 was requested by the address the operator typed, not by index
+* `SELECTION_REQUEST[1] BDF=0000:04:00.0` — the 3080 likewise: this is the first capture where two cards were named in one session
+* `SELECTION_STEP[0]=PASSIVE_IDENTIFIED ID=10de:2684 SUB=1043:88e6 CLASS=0300 ROOT_INDEX=0 DEPTH=1 GOP_COUNT=0 BY_DRIVER=1 OPENERS_KNOWN=1` — the first target resolved passively to the expected device, behind a driver, with no GOP
+* `SELECTION_STEP[0]=END STATUS=OBSERVED READ_ONLY=1` — the first step ended observed and read-only; no transaction was opened for it
+* `SELECTION_STEP[1]=PASSIVE_IDENTIFIED ID=10de:220a SUB=19da:b612 CLASS=0300 ROOT_INDEX=2 DEPTH=3 GOP_COUNT=0 BY_DRIVER=1 OPENERS_KNOWN=1` — the second target resolved at a different root index and depth, so the two cards are not behind one bridge
+* `SELECTION_STEP[1]=END STATUS=OBSERVED READ_ONLY=1` — the second step ended the same way: the ordered sequence can identify several cards without acting on any
+* `SELECTION_SEQUENCE=PASSIVE_IDENTIFIED COMPLETED=2 NON_SELECTED_NVIDIA_COUNT=0 TOPOLOGY_VERDICT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0` — every requested step completed, no NVIDIA card on the machine escaped the request, and the sequence still claims no capability to detach, unlock or reset
+* `GRAPH_ONLY_TOPOLOGY_VERDICT=INCOMPLETE ERROUT_INCLUDED_IN_FINAL=1` — the graph-only verdict is still INCOMPLETE, and the error console is included in it rather than dropped: the selection did not improve the topology verdict
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — nothing was withheld, so `NON_SELECTED_NVIDIA_COUNT=0` is a count over a complete enumeration
+
+*History:* The first capture of the ordered two-target selection, and the input that showed `tools/donor_gate.py` had to tell a census from a choice: this log names two cards on purpose, and the gate's old "one BDF per stage" rule called that a second donor. The gate now reads the `SELECTION_REQUEST`/`SELECTION_STEP` lines as the selection and the census as what it is.
+
+*What it does not show:* that a selected card can be handed over or reset, or that the ordered sequence would behave the same with a card behind a different bridge: both targets here are root-complex children with `ROOTPORT=0`.
+
+### `physical-readonly-0003`
+
+*File:* `tests/data/hardware_session/physical-readonly-0003.txt` — 19754 bytes stored, 19978 as captured, 224 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-20. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card, driven from a USB stick; Windows started after each image returned, with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0003.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `MSI_B850_ROM_VARIABLES MODE=READ_ONLY PLATFORM=MS-7E56 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0` — the board is the one this probe was written for, and the probe declares no capability to detach, unlock or flash
+* `MSI_B850_ROM_VARIABLES PLATFORM_FINGERPRINT=MATCH SMBIOS_VERIFIED=0 BIOS_VERSION_VERIFIED=0 GPU_MUTATION=NONE` — the fingerprint matched while the SMBIOS and BIOS-version halves stayed unverified: a match on the product string is not a verified platform
+* `MSI_B850_VARIABLE NAME=ROM_CMN EFI_STATUS=0 BYTES=327 ATTRS=0x7 CAP=1024 RAW_ONLY=1 READ_ONLY=1` — the first vendor variable the desk research named was present, 327 bytes, and was read raw without being interpreted
+* `MSI_B850_VARIABLE NAME=CSM_CMN EFI_STATUS=0 BYTES=5 ATTRS=0x2 CAP=1024 RAW_ONLY=1 READ_ONLY=1` — the second named variable exists but is five bytes - too small to hold a policy table, which is a finding against the desk research rather than for it
+* `MSI_B850_PRIVATE_BEGIN SCOPE=EXACT_TWO_NVIDIA READ_ONLY=1 NO_VENDOR_CALLBACK=1` — the private-interface probe refused to run outside a two-NVIDIA machine and used no vendor callback
+* `MSI_B850_PRIVATE GPU=4090 BDF=0000:01:00.0 PRIVATE_STATUS=0 PRESENT=1 PCI_BY_DRIVER=1 OWNER_AGENT=0x76b74698 ROM_IMAGE_PRESENT=1 ROM_BYTES=150016 CALLS=ZERO` — the 4090's ROM image is present in memory at 150016 bytes, its PCI handle is held by a driver, and the probe made zero calls
+* `MSI_B850_PRIVATE_END NO_PRIVATE_METHOD=1 NO_ROM_DEREFERENCE=1 NO_RELEASE=1 POOL_UNCERTAIN=0` — the probe found no private method to call and did not dereference the ROM image or release anybody's handle
+* `MSI_B850_IMAGE_PARENT GPU=4090 PARENT_TEXT_SHA256=02a92fd4f6dcef415608649beb58a851a536cc1426e305d34a3361ee76a80ea5` — both NVIDIA drivers were loaded from the same parent image text; the 3080 line carries the identical digest
+* `MSI_B850_BDS_POLICY STATE=SKIPPED ORIGINAL_BDS_MISMATCH=1 MATCHES=0` — the BDS policy probe located the structure but refused to use it because it did not match the expected original: zero matches, so it skipped rather than guessed
+* `MSI_B850_ROM_VARIABLES STATUS=OBSERVED_OR_REFUSED ORIGINAL_ROM_DISPATCH_UNVERIFIED=1` — the report's own summary of the whole probe: observed where it could, refused where it could not, and the original ROM dispatch path remains unverified
+* `MSI_B850_POLICY_PTR STATE=SKIPPED PCIBUS_IMAGE_LAYOUT_UNVERIFIED=1` — the policy-pointer walk was skipped for the same reason: the image layout it would walk is unverified
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — nothing was withheld, so `MATCHES=0` and `STATE=SKIPPED` are the probe's findings and not a truncated log
+
+*History:* First physical run of the MSI ROM probe. The desk research that motivated it assumed a ROM_CMN policy table and a private interface worth calling; the machine says ROM_CMN is real (327 bytes), CSM_CMN is five bytes, the BDS policy structure does not match the expected original, and no private method was found. `tests/test_hardware_session.py` re-scores this file on every run.
+
+*What it does not show:* that the ROM variables can be written back, that any of them influences which GPU gets posted, or that the board lacks a vendor path this probe did not look for. It also cannot say the probe is harmless to run twice: it made no calls, but nothing here was measured twice.
+
+### `physical-readonly-0004`
+
+*File:* `tests/data/hardware_session/physical-readonly-0004.txt` — 14406 bytes stored, 14565 as captured, 159 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-20. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card, driven from a USB stick; Windows started after each image returned, with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0004.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `MSI_B850_FWSEC_FUSE_BEGIN SOURCE=NOVA_CORE_GA102_PLUS READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 NO_STOP=1 NO_DMA=1 NO_RESET=1` — the fuse probe declares four separate refusals - no Stop, no DMA, no reset - before the first read
+* `MSI_B850_FWSEC_FUSE GPU=4090 STATUS=OBSERVED BAR0_OFFSET=0x8241e0 RAW=0x1 LOW16=0x1 FUSE_VERSION=1 ARCHIVED_ROM_SIG_MASK=0x3 CANDIDATE_SLOT=1 ARCHIVED_SLOT_NONZERO=1 ACCEPTANCE=UNVERIFIED` — the 4090's fuse word decoded as version 1 with candidate slot 1 non-zero, and the probe marked its own reading unverified
+* `MSI_B850_FWSEC_FUSE GPU=3080 STATUS=OBSERVED BAR0_OFFSET=0x8241e0 RAW=0x3 LOW16=0x3 FUSE_VERSION=2 ARCHIVED_ROM_SIG_MASK=0x7 CANDIDATE_SLOT=2 ARCHIVED_SLOT_NONZERO=1 ACCEPTANCE=UNVERIFIED` — the 3080 differs: raw 0x3, version 2, slot 2. The two cards do not share a fuse state, so a rule calibrated on one cannot be asserted for the other
+* `MSI_B850_SEC2_FUSE GPU=4090 STATUS=OBSERVED BAR0_OFFSET=0x824148 RAW=0x1 LOW16=0x1 FUSE_VERSION=1 REFERENCE_ENGINE=SEC2 REFERENCE_UCODE_ID=3 WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN ACCEPTANCE=UNVERIFIED` — the SEC2 fuse reads the same version 1, and the Windows 61742 descriptor that would corroborate it is still UNKNOWN
+* `MSI_B850_FWSEC_FUSE_END READS_SUCCEEDED=2 SECURITY_ACCEPTANCE=UNVERIFIED NO_GPU_WRITES=1` — two reads succeeded, no write was issued, and the acceptance stays unverified
+* `MSI_B850_SEC2_FUSE_END READS_SUCCEEDED=2 WINDOWS_61742_DESCRIPTOR=UNKNOWN SECURITY_ACCEPTANCE=UNVERIFIED NO_GPU_WRITES=1` — the same statement for the SEC2 engine, with the missing reference named in the line itself
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — nothing was withheld, so both cards' fuse lines are the whole set the probe printed
+
+*History:* First physical run of the fuse probe. It establishes that the fuse words at these two BAR0 offsets are readable on a machine with the driver still resident, that the two cards disagree, and that no write was made. It does not establish what the values mean: every line carries `ACCEPTANCE=UNVERIFIED` because the archive the probe would compare against (`WINDOWS_61742_DESCRIPTOR`) is still unknown.
+
+*What it does not show:* that a fuse reading predicts whether a card can be unlocked - that mapping is exactly what is missing - nor that the read is side-effect free at the firmware level; it shows no write was *issued*, which is what the image controls.
+
+### `physical-readonly-0005`
+
+*File:* `tests/data/hardware_session/physical-readonly-0005.txt` — 13817 bytes stored, 13972 as captured, 155 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-20. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card, driven from a USB stick; Windows started after each image returned, with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0005.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `MSI_B850_SEC2_UCODE1_BEGIN SOURCE=WINDOWS_61742_SEC2_VERSION_REGISTER UCODE_ID=1 BAR0_OFFSET=0x824140 READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1` — the probe names the reference it came from, its single read offset, and five refusals before reading anything
+* `MSI_B850_SEC2_UCODE1 GPU=4090 STATUS=OBSERVED BDF=0000:01:00.0 BAR0_OFFSET=0x824140 RAW=0x1 LOW16=0x1 FUSE_VERSION=1 ENGINE_ID=1 UCODE_ID=1 SELECTED_SIGNATURE=UNVERIFIED SECURE_ACCEPTANCE=UNVERIFIED READ_ONLY=1` — the 4090's version register reads 1, and the line attributes the reading to the card by BDF rather than by index
+* `MSI_B850_SEC2_UCODE1 GPU=3080 STATUS=OBSERVED BDF=0000:04:00.0 BAR0_OFFSET=0x824140 RAW=0x3 LOW16=0x3 FUSE_VERSION=2 ENGINE_ID=1 UCODE_ID=1 SELECTED_SIGNATURE=UNVERIFIED SECURE_ACCEPTANCE=UNVERIFIED READ_ONLY=1` — the 3080 reads 3: the same disagreement `-0004` saw at the neighbouring offset, now reproduced at this one on the same boot order
+* `MSI_B850_SEC2_UCODE1_END READS_SUCCEEDED=2 EXPECTED=2 NO_GPU_WRITES=1 SECURE_ACCEPTANCE=UNVERIFIED` — both expected reads succeeded, no write was issued, and the security acceptance is still explicitly unverified
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — nothing was withheld, so `READS_SUCCEEDED=2 EXPECTED=2` is not an artefact of a full buffer
+
+*History:* First physical run of the SEC2 version-register probe. Its value is that it is the same reading as `-0004`'s SEC2 fuse taken through a different named register: the two agree per card (1 for the 4090, 3 for the 3080), which is the first cross-check of the fuse work that did not come from the same source document.
+
+*What it does not show:* which signature the engine would accept, or that the register's low bits mean what the desk research says. `SELECTED_SIGNATURE=UNVERIFIED` on both lines is the honest state of that question.
+
+### `physical-prepare-0001`
+
+*File:* `tests/data/hardware_session/physical-prepare-0001.txt` — 881 bytes stored, 881 as captured, 12 lines. LF as captured (written by the image, never re-encoded); the digest is the captured bytes.
+
+*Captured:* 2026-11-20. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card, driven from a USB stick; Windows started after each image returned, with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-prepare-0001.txt --stage prepare
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `ASSET_INSTALL PRESENT=0` — no bundle was ever staged on this stick, and the log says so before discovery assumes anything about assets
+* `BOOT_STATE PRESENT=0` — no earlier record was found: P2's honest first-boot state, not a missing feature
+* `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=1 READ_ONLY=1` — the preparation image saw both cards, was asked for one, and declared itself read-only before preparing anything
+* `ACTIVE_GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 CLASS=0300 LEGACY_UNLOCK_DEVICE_ID=1` — the 4090's identity as the preparation path resolved it, including that it is a device the legacy unlock table would have matched
+* `ACTIVE_GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 CLASS=0300 LEGACY_UNLOCK_DEVICE_ID=1` — the 3080 is named too: the image enumerated the whole machine, so the one-card boundary is a rule it applied, not a fact it assumed
+* `ACTIVE_PREPARED_STEP[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1` — exactly one step was prepared, for the card that was asked for, and the step itself is marked read-only
+* `ACTIVE_PREPARE=COMPLETE SELECTED=1 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0` — preparation reached its end with mutation explicitly unauthorized
+* `ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=1 TRACKED=2 NEXT=0 MUTATION_AUTHORIZED=0` — the sequence is prepared and not started, and the authorization flag is still zero at the last place it is checked
+* `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0` — the entrypoint refused execution before any GU init, naming the reason: this build exists to prepare and to stop
+* `STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0` — the app left through its failure path with `mutated=0 retained=0 fault=0` - the halt marker after a refusal, not a Stop contract
+
+*History:* The first physical preparation run, and the run that found the second unreachable-token gate: P1 required `ACTIVE_APP=PREPARATION_ONLY`, which `src/app.c` prints only after `GuDiscoverSingleGpu` returns success, the very call that refuses here. The gate was wrong, not the image (§11.30); P1 now requires the refusal line discovery prints. With the identity rule in `tools/donor_gate.py` reading the selected card rather than the census, `-0001` and this file compose into the first `DONOR_GATE VERDICT=GO` this workbench has produced from real logs.
+
+*What it does not show:* that the card can be actuated, or that preparation's conclusions are right: it shows the entrypoint refused, the preflight completed, and nothing was mutated. No Stop, no detach, no FLR, no firmware write appears in these 12 lines.
+
+### `physical-prepare-0002`
+
+*File:* `tests/data/hardware_session/physical-prepare-0002.txt` — 881 bytes stored, 881 as captured, 12 lines. LF as captured (written by the image, never re-encoded); the digest is the captured bytes.
+
+*Captured:* 2026-11-20. *Bench:* one display on the AMD iGPU, no cable on either NVIDIA card, driven from a USB stick; Windows started after each image returned, with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-prepare-0002.txt --stage prepare
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `ASSET_INSTALL PRESENT=0` — the same medium state as the previous boot: nothing staged, nothing assumed
+* `BOOT_STATE PRESENT=0` — still no record, which is consistent with a preparation image that writes none
+* `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=1 READ_ONLY=1` — the same inventory count and the same one-request read-only declaration as the 4090 run
+* `ACTIVE_GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 CLASS=0300 LEGACY_UNLOCK_DEVICE_ID=1` — the 4090 is still first in enumeration even though it is not the target this time
+* `ACTIVE_GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 CLASS=0300 LEGACY_UNLOCK_DEVICE_ID=1` — the 3080's identity, unchanged from the previous boot and from the read-only stage
+* `ACTIVE_PREPARED_STEP[0] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1` — the only line that differs from `physical-prepare-0001`: the prepared step is the 3080, so the target really is chosen by the operator's BDF and not by enumeration order
+* `ACTIVE_PREPARE=COMPLETE SELECTED=1 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0` — preparation completed for the second card with mutation unauthorized
+* `ACTIVE_SEQUENCE=PREPARED_NOT_STARTED SELECTED=1 TRACKED=2 NEXT=0 MUTATION_AUTHORIZED=0` — prepared, not started, nothing authorized
+* `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0` — the same refusal, on the other card: the boundary is a property of the image, not of the target
+* `STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0` — the same clean exit with nothing mutated
+
+*History:* Prepared the second card to test that the selection is honoured per target rather than by index. Diffing the two preparation logs shows exactly one changed line - the prepared step - which is what makes the pair useful: the preparation path behaves identically for a 4090 and a 3080 up to the refusal. This pair is also what showed that a gate keyed on a stage's *census* cannot describe a one-target session.
+
+*What it does not show:* that the 3080's preparation conclusions hold for the 4090 or vice versa: each log speaks only for its own target, and neither says anything about actuation.
+
 ## Advancing between stages: `donor_gate.py`
 
 One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.
@@ -491,7 +707,7 @@ python3 tools/donor_gate.py --readonly media/GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT --
 It refuses to advance unless:
 
 * the read-only stage must pass before preparation counts as done, and preparation must pass before actuation may be attempted at all
-* every stage must name the same single BDF, so a card swap or a second card cannot slip between stages; a stage that names no PCI id at all is refused rather than assumed
+* every stage must identify the same card: the card a stage *selected* (`ACTIVE_PREPARED_STEP[n]`, `SELECTION_REQUEST[n]`, `SELECTION_STEP[n]=BEGIN`, `PASSIVE_SELECTION=`) must be one the read-only stage enumerated, and every stage that names a PCI id must name the id printed beside that BDF. A card the read-only diagnostic never saw, a stage that prepared two targets, and a stage that names no id at all are all refused rather than assumed. A read-only census of several cards is not a reason to refuse: the first physical session reported `01:00.0` and `04:00.0` in every stage and prepared one
 * every manual gate must be acknowledged by its exact id; an unknown id is refused, so a typo cannot silently stand in for M6
 * a log carrying the fixture marker is refused (exit 3) unless --self-test is given, and a GO from a self-test still prints SYNTHETIC=1
 
@@ -558,12 +774,12 @@ Note: a selection without -EnableSingleTargetExecution and without the waiver co
 
 | Gate | What it checks | Requires | Must not contain |
 | --- | --- | --- | --- |
-| `P1_PREPARATION_REFUSED_BEFORE_MUTATION` | the app refused to actuate and said so first | `ACTIVE_APP=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1`<br>`ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0` | `SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu`<br>`STOP_CONTRACT device=%04x stage=%zu` |
+| `P1_PREPARATION_REFUSED_BEFORE_MUTATION` | the app refused to actuate and said so first | `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1`<br>`ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0` | `SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu`<br>`STOP_CONTRACT device=%04x stage=%zu` |
 | `P2_BOOT_RECORD_READ` | the persistent record was read before anything else | `BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x` *(one of)*<br>`BOOT_STATE PRESENT=0` *(one of)* | — |
 
-**`P1_PREPARATION_REFUSED_BEFORE_MUTATION`** — proves: the entrypoint refused actuation and the preflight completed. Does not prove: that the preflight's conclusions are right; the counts say what was selected, not what was safe.
+**`P1_PREPARATION_REFUSED_BEFORE_MUTATION`** — proves: the image refused to actuate at the discovery boundary, before any GU init, and the preflight ran to completion with mutation still unauthorized. Does not prove: that the refusal is the right one for this card: it says the entrypoint is a preparation entrypoint, not that the target was safe. The counts say what was selected, not what was safe.
 
-* `ACTIVE_APP=PREPARATION_ONLY ACTIVE_EXECUTION=REFUSED BEFORE_MUTATION=1` (src/app.c) — printed by the preparation-only entrypoint before any transaction, so the session is bounded by the entrypoint and not by luck.
+* `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1` (src/gpu_discovery.c) — the refusal is printed inside `GuDiscoverSingleGpu` before any GU init, and it is the line that bounds the session. The application's own `ACTIVE_APP=PREPARATION_ONLY` banner sits *after* that call returns success, and the preparation image is refused *by* that call, so the banner is unreachable in exactly the build it describes; P1 required it until the first two physical preparation runs showed no preparation image can print it. The same holds for the DXE entrypoint's `ACTIVE_DXE=PREPARATION_ONLY` banner.
 * `ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0` (src/gpu_discovery.c) — preparation reached its end with mutation explicitly unauthorized.
 * must not contain `SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu` (src/gpu_discovery.c): a step that may write must not appear in a preparation session
 * must not contain `STOP_CONTRACT device=%04x stage=%zu` (src/msi_release.c): no Stop may be attempted in a preparation session
