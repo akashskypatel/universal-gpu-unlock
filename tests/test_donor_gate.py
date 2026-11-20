@@ -23,7 +23,7 @@ ACKS = ",".join([
     "M1_RECOVERY_TOOLKIT_READY",
     "M2_DONOR_CARD_RECORDED",
     "M3_LOG_MEDIUM_EMPTY",
-    "M4_ONE_CARD_ONLY",
+    "M4_DONOR_CARDS_RECORDED",
     "M5_HALT_STOPS_THE_SESSION",
     "M6_STOCK_BOOT_AFTER_EVERY_RUN",
 ])
@@ -109,7 +109,9 @@ class EveryPreconditionBlocksTheSession(unittest.TestCase):
             path.write_text(moved, encoding="utf-8")
             result = run("--readonly", fixture("readonly.txt"), "--prepare", str(path))
         self.assertEqual(result.returncode, 1)
-        self.assertIn("BLOCKED IDENTITY_CHANGED", result.stdout)
+        # the prepared card is not one the read-only stage enumerated: that is
+        # the precise statement, and it covers a moved card and a swapped one
+        self.assertIn("BLOCKED IDENTITY_NOT_OBSERVED STAGE=prepare BDF=02:00.0", result.stdout)
         self.assertIn("RESULT=FAIL", result.stdout)
 
     def test_a_stage_that_names_no_pci_id_cannot_prove_identity(self):
@@ -157,20 +159,83 @@ class EveryPreconditionBlocksTheSession(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("BLOCKED IDENTITY_UNKNOWN STAGE=actuate", result.stdout)
 
-    def test_two_prepared_targets_are_not_a_single_donor(self):
-        # Two *targets* is what M4 forbids. Two inventory lines are not: the
-        # first physical session enumerated `01:00.0` and `04:00.0` in every
-        # stage and prepared one of them.
-        text = (FIXTURES / "prepare.txt").read_text(encoding="utf-8")
-        extra = text + ("ACTIVE_PREPARED_STEP[1] BDF=0000:02:00.0 ID=10de:2684 "
-                        "SUB=10de:a140 STATUS=0 PREPARED=1\n")
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "prepare-two-targets.txt"
-            path.write_text(extra, encoding="utf-8")
-            result = run("--readonly", fixture("readonly.txt"), "--prepare", str(path))
+    def test_a_target_the_read_only_stage_never_saw_is_not_a_second_donor(self):
+        # Two prepared targets on a machine whose census named one card: the
+        # second target was never enumerated, so this is a different session.
+        result = run("--readonly", fixture("readonly.txt"),
+                     "--prepare", fixture("prepare_two.txt"))
         self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("BLOCKED IDENTITY_NOT_SINGLE STAGE=prepare bdf=01:00.0,02:00.0",
-                      result.stdout)
+        self.assertIn("BLOCKED IDENTITY_NOT_OBSERVED", result.stdout)
+        self.assertIn("04:00.0", result.stdout)
+
+    def test_one_card_named_twice_is_not_a_two_card_session(self):
+        text = (FIXTURES / "prepare_two.txt").read_text(encoding="utf-8").replace(
+            "ACTIVE_PREPARED_STEP[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 "
+            "LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1",
+            "ACTIVE_PREPARED_STEP[1] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 "
+            "LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-duplicate.txt"
+            path.write_text(text, encoding="utf-8")
+            result = run("--readonly", fixture("readonly_two.txt"), "--prepare", str(path))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("BLOCKED IDENTITY_DUPLICATE_TARGET STAGE=prepare bdf=01:00.0", result.stdout)
+
+    def test_two_cards_prepared_in_one_session_reach_go(self):
+        result = run("--readonly", fixture("readonly_two.txt"),
+                     "--prepare", fixture("prepare_two.txt"))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("DONOR_GATE VERDICT=GO", result.stdout)
+        self.assertIn("DONOR_GATE identity BDF=01:00.0,04:00.0 DEVICE=220a,2684", result.stdout)
+        self.assertIn("TARGETS=2", result.stdout)
+        self.assertIn("DONOR_GATE sequence TARGETS=2 ORDER=01:00.0,04:00.0 "
+                      "MODEL=ONE_CARD_ACTIVE_AT_A_TIME_STEP_GATED_BY_PREDECESSOR", result.stdout)
+        self.assertNotIn("NOTE PEERS=", result.stdout)
+
+    def test_the_waiver_must_admit_the_list_that_was_prepared(self):
+        # A two-card preparation composed with an actuation log whose waiver
+        # admitted one target is a different session, not a partial success.
+        result = run("--readonly", fixture("readonly_two.txt"),
+                     "--prepare", fixture("prepare_two.txt"),
+                     "--actuate", fixture("actuate_boot1.txt"), fixture("actuate_boot2.txt"))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("BLOCKED ACTUATION_SELECTION_CHANGED SESSION=2 WAIVED_SELECTED=1", result.stdout)
+
+    def test_a_reordered_list_between_stages_blocks(self):
+        text = (FIXTURES / "prepare_two.txt").read_text(encoding="utf-8")
+        first = ("ACTIVE_PREPARED_STEP[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 "
+                 "LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1")
+        second = ("ACTIVE_PREPARED_STEP[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 "
+                  "LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1")
+        swapped = text.replace(first, "STEP0_PLACEHOLDER").replace(second, first).replace(
+            "STEP0_PLACEHOLDER", second)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-reordered.txt"
+            path.write_text(swapped, encoding="utf-8")
+            result = run("--readonly", fixture("readonly_two.txt"),
+                         "--prepare", fixture("prepare_two.txt"), str(path))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("BLOCKED IDENTITY_TARGET_ORDER_CHANGED STAGE=prepare", result.stdout)
+        self.assertIn("01:00.0,04:00.0 | 04:00.0,01:00.0", result.stdout)
+
+    def test_two_cards_and_no_named_target_is_refused_rather_than_guessed(self):
+        result = run("--readonly", fixture("readonly_two.txt"),
+                     "--prepare", fixture("prepare.txt"))
+        # the prepare fixture names one card, so this composes; the refusal is
+        # about a read-only stage that named two and a prepare stage that named
+        # none at all.
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("TARGETS=1", result.stdout)
+        text = (FIXTURES / "prepare.txt").read_text(encoding="utf-8")
+        stripped = "\n".join(line for line in text.splitlines()
+                             if not line.startswith("ACTIVE_PREPARED_STEP")) + "\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "prepare-unnamed.txt"
+            path.write_text(stripped, encoding="utf-8")
+            unnamed = run("--readonly", fixture("readonly_two.txt"), "--prepare", str(path))
+        self.assertEqual(unnamed.returncode, 1, unnamed.stdout)
+        self.assertIn("BLOCKED IDENTITY_TARGET_UNNAMED", unnamed.stdout)
+        self.assertIn("reason=no_stage_named_a_target", unnamed.stdout)
 
     def test_a_second_card_in_the_census_is_not_a_second_donor(self):
         # The read-only diagnostic reports the whole machine; a prepared target
@@ -265,16 +330,21 @@ class TheFirstPhysicalSessionComposes(unittest.TestCase):
     def test_the_peer_card_is_reported_rather_than_refused(self):
         result = self.real("--readonly", str(self.DATA / "physical-readonly-0001.txt"),
                            "--prepare", str(self.DATA / "physical-prepare-0001.txt"))
-        self.assertIn("DONOR_GATE identity BDF=01:00.0 DEVICE=2684 STAGES=readonly,prepare OBSERVED=2 RESULT=PASS",
+        self.assertIn("DONOR_GATE identity BDF=01:00.0 DEVICE=2684 STAGES=readonly,prepare OBSERVED=2 TARGETS=1 RESULT=PASS",
                       result.stdout)
         self.assertIn("NOTE PEERS=1 OBSERVED=2 TARGET=01:00.0", result.stdout)
 
-    def test_an_ordered_two_target_selection_is_a_census(self):
+    def test_a_two_target_read_only_selection_is_an_observation_set(self):
+        # `-0002` observed both cards on purpose. That is not a promise to touch
+        # both: the list that has to stay consistent is the one the preparation
+        # stage names, and this one named a single card.
         result = self.real("--readonly", str(self.DATA / "physical-readonly-0002.txt"),
                            "--prepare", str(self.DATA / "physical-prepare-0002.txt"))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("DONOR_GATE VERDICT=GO", result.stdout)
         self.assertIn("DONOR_GATE identity BDF=04:00.0 DEVICE=220a", result.stdout)
+        self.assertIn("TARGETS=1", result.stdout)
+        self.assertIn("NOTE PEERS=1 OBSERVED=2 TARGET=04:00.0", result.stdout)
 
     def test_the_second_card_cannot_stand_in_for_the_first(self):
         # The 4090 was prepared, so a preparation log for the 3080 is a

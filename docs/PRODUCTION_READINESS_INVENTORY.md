@@ -460,6 +460,69 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.31 C9/B10 — the session is an ordered list, and the workbench said "one card"
+
+This fork is the multi-GPU architecture; single-GPU unlock already works in the
+parent repository. The donor bench therefore has two cards on purpose - an RTX
+4090 at `01:00.0` and an RTX 3080 at `04:00.0` - and the second card stays for
+every run. The workbench did not model that. `M4_ONE_CARD_ONLY` was inherited
+from the parent's single-card protocol, and `tools/donor_gate.py` refused any
+stage that named more than one target, so the tool answered
+`IDENTITY_NOT_SINGLE` to the machine it was built for.
+
+What the source actually implements, in its own words (`src/port.h`): the
+ordered selected-target mode means "one card is active at a time, and the
+ordered list may name several targets that are executed sequentially", with each
+step gated on its predecessor's completion record. Two admission switches exist
+and are easy to confuse:
+
+* **preparing** an ordered list needs no waiver. `GuDiscoverSingleGpu` returns
+  before the `MULTI_TARGET_WITHOUT_WAIVER` check in a
+  `GU_ACTIVE_SEQUENCE_PREPARE_ONLY` build, so `-SelectionBdfs 'a,b'` prepares two
+  cards' contexts in one boot and still refuses execution;
+* **executing** more than one target requires `GU_ACTUATION_ADMITTED`, which is
+  the `-AcceptUnverifiedActuation` waiver (or the hosted simulator). Without it
+  the image prints `REASON=MULTI_TARGET_WITHOUT_WAIVER` and stops.
+
+The workbench now says that instead of contradicting it:
+
+* `M4_ONE_CARD_ONLY` is `M4_DONOR_CARDS_RECORDED`: record every card by serial
+  and slot, and write down the ordered BDF list before building the image. The
+  card *count* is not the risk this fork carries; an unrecorded list is.
+* `tools/donor_gate.py` treats identity as an **ordered list** decided by the
+  preparation stage (the stage whose list the waiver will execute), not as "one
+  BDF per stage". A read-only selection is an observation set - it may name more
+  cards than the session will touch, and that is reported as `NOTE PEERS=` rather
+  than refused. New refusals: `IDENTITY_TARGET_ORDER_CHANGED` (two boots that
+  name different lists, or a reordered list), `IDENTITY_DUPLICATE_TARGET` (one
+  boot naming the same card twice - the builder refuses it too, in
+  `Gpu-Selection-Build.ps1`), `IDENTITY_TARGET_UNNAMED` (a multi-card machine
+  where no stage named a target, so the tool would have to guess), and
+  `ACTUATION_SELECTION_CHANGED` (a waiver that admits fewer targets than were
+  prepared). A two-target session now composes: `DONOR_GATE VERDICT=GO
+  ... TARGETS=2` on the fixtures, pinned by
+  `tests/test_donor_gate.py::test_two_cards_prepared_in_one_session_reach_go`.
+
+What has been measured, and what has not. Measured: the read-only stage observes
+both cards and can be asked to walk both in order (`-0002`); the preparation
+stage prepares one card per boot and refuses, twice, once per card
+(`physical-prepare-0001/0002`). Not measured, and next on the list: **one boot
+that prepares both cards** - `prep-selected -SelectionBdfs
+'0000:01:00.0,0000:04:00.0'`, which should log two `ACTIVE_PREPARED_STEP[n]`
+lines, two `ACTIVE_CONTEXT[n]=PREPARED` lines and `SELECTED=2`,
+`MUTATION_AUTHORIZED=0`. `PreparePlatformContexts` allocates one platform context
+per selected card and refuses an alias to the active context or a duplicate
+pointer, so that log would be the first evidence that two distinct per-card
+contexts coexisted in a read-only build. Never measured: any multi-target
+*write*. The waived sequence image (`actuate-sequence`) exists as a variant and
+has never run; a peer card's behaviour during a mutation of the other card is
+therefore an untested property of this design, not a verified one.
+
+What this does not do: no inventory row moves. `C9` (multi-GPU) and `B10`
+(two-card footprint) stay where they were, `hardware_verified` stays `false` for
+all 43, and the ordered-list reasoning above is code reading plus two single-card
+preparation logs - not a two-card preparation, and not an actuation.
+
 ### 11.30 D5 — seven more physical runs, and the second gate no image can print
 
 The next batch of runs on the same bench produced seven real logs: five
@@ -541,10 +604,9 @@ What the batch does not do: it does not mutate anything. The preparation logs en
 CAN_FLR=0` and `STOP: stage=discover status=0x8000000000000003 mutated=0
 retained=0 fault=0`; the MSI probes end `NO_GPU_WRITES=1` and `CALLS=ZERO`. No
 signature is authenticated, no inventory row moves, and `hardware_verified` stays
-`false` for all 43. `M4_ONE_CARD_ONLY` is unchanged and now measurably relevant:
-the machine has two cards, so the session is about whichever one the operator
-records, and only one may be prepared - which is what the two preparation runs
-show the image enforcing by itself.
+`false` for all 43. `M4_ONE_CARD_ONLY` was still in force when this batch ran; §11.31 replaces it
+with `M4_DONOR_CARDS_RECORDED`, because the session this fork is for is an
+ordered list over both cards rather than one card alone.
 
 ### 11.29 D5 — the first physical run failed a gate that no healthy machine can print
 

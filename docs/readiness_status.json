@@ -301,8 +301,8 @@
       "class": "D",
       "priority": "P0",
       "source": "partial",
-      "section": "11.30",
-      "note": "`tools/donor_gate.py` machine-checks whether the session may advance, and the read-only session's step-by-step guide is grounded on real captures: eight physical logs are digest-pinned and re-scored by the suite on every run, and the read-only and preparation stages of the first two batches now compose into `VERDICT=GO` with `HARDWARE_VERIFIED=0`. No machine runs a stage automatically and the actuation stage has never run.",
+      "section": "11.31",
+      "note": "`tools/donor_gate.py` machine-checks whether the session may advance, and the read-only session's step-by-step guide is grounded on real captures: eight physical logs are digest-pinned and re-scored by the suite on every run. Identity is now an ordered target list (this fork executes one card at a time in order, not one card only), so the read-only and preparation stages of the first two batches compose into `VERDICT=GO` with `HARDWARE_VERIFIED=0`. No machine runs a stage automatically and the actuation stage has never run.",
       "hardware_verified": false
     },
     {

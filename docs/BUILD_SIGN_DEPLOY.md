@@ -277,12 +277,14 @@ python3 tools/session_preflight.py --stick /media/stick --image out/<signed>.efi
 python3 tools/donor_gate.py --readonly /media/stick/GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT \
     --prepare /media/stick/AD102-UNLOCK/RUN0001.TXT \
     --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,M3_LOG_MEDIUM_EMPTY,\
-M4_ONE_CARD_ONLY,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN
+M4_DONOR_CARDS_RECORDED,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN
 ```
 
 The last one is the go/no-go gate: a stage passing its own gates is not permission
 to run the next stage. It refuses unless both earlier stages passed, every log
-names the same single card, and every manual gate is acknowledged by id.
+names the same ordered target list on cards the read-only stage enumerated, and
+every manual gate is acknowledged by id. Two cards in the machine is the ordinary
+case for this fork; two *different* lists between stages is not.
 
 ## 8. What this document does not claim
 

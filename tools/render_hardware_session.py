@@ -143,7 +143,15 @@ def render_readonly_guide(spec: dict) -> str:
     for candidate in spec["candidates"]:
         out.append(f"#### `{candidate['id']}` — {candidate['title']}\n\n")
         out.append(f"{candidate['summary']}\n\n")
-        out.append(f"```powershell\n{candidate['command']}\n```\n\n")
+        if candidate.get("commands"):
+            # A stage may be reached by more than one build, and the difference
+            # is the session (one card, or an ordered list): render each rather
+            # than choosing one and hiding the other.
+            for variant in candidate["commands"]:
+                out.append(f"*{variant['label']}* — `{variant['binary']}`\n\n")
+                out.append(f"```powershell\n{variant['command']}\n```\n\n")
+        else:
+            out.append(f"```powershell\n{candidate['command']}\n```\n\n")
         out.append(f"*Log:* {candidate['log']}\n\n")
         out.append(f"*Score:* `python3 tools/verify_run_log.py <log> --stage {candidate['stage']}`\n\n")
         if candidate.get("also_collects"):

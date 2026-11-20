@@ -29,7 +29,7 @@ Usage:
         --readonly media/GPU-TOPOLOGY-DIAGNOSTIC-0001.TXT \\
         --prepare  media/GPU-ACTIVE-PREPARE-0001.TXT \\
         --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,\\
-M3_LOG_MEDIUM_EMPTY,M4_ONE_CARD_ONLY,M5_HALT_STOPS_THE_SESSION,\\
+M3_LOG_MEDIUM_EMPTY,M4_DONOR_CARDS_RECORDED,M5_HALT_STOPS_THE_SESSION,\\
 M6_STOCK_BOOT_AFTER_EVERY_RUN
 
 Add `--actuate LOG...` once the waived image has run; then the same command
@@ -60,36 +60,52 @@ DEVICE_PATTERN = re.compile(r"(?i)(?<!sub=)\b10de:([0-9a-f]{4})\b")
 # `01:00.0` and `04:00.0` in every stage and the old "one BDF per stage" rule
 # blocked a session that had done nothing wrong.  What identifies the session is
 # the card a stage *selected*, and those lines say so explicitly.
-TARGET_PATTERNS = (
-    re.compile(r"(?i)\bACTIVE_PREPARED_STEP\[\d+\] BDF=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b"),
-    re.compile(r"(?i)\bSELECTION_REQUEST\[\d+\] BDF=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b"),
-    re.compile(r"(?i)\bSELECTION_STEP\[\d+\]=BEGIN BDF=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b"),
-    re.compile(r"(?i)\bPASSIVE_SELECTION=GPU_IDENTIFIED TARGET=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b"),
+# One boot writes its target list in exactly one of these forms, and a log that
+# writes two of them (a selection request and the walk that follows it) is not
+# naming a card twice - it is saying the same thing twice. The first family a
+# stage actually printed is the one that describes its list.
+TARGET_FAMILIES = (
+    ("prepared",
+     re.compile(r"(?i)\bACTIVE_PREPARED_STEP\[\d+\] BDF=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b")),
+    ("request",
+     re.compile(r"(?i)\bSELECTION_REQUEST\[\d+\] BDF=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b")),
+    ("walk",
+     re.compile(r"(?i)\bSELECTION_STEP\[\d+\]=BEGIN BDF=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b")),
+    ("identified",
+     re.compile(r"(?i)\bPASSIVE_SELECTION=GPU_IDENTIFIED TARGET=([0-9a-f]{4}):([0-9a-f]{2}):([0-9a-f]{2})\.([0-7])\b")),
 )
 STAGE_FLAGS = ("readonly", "prepare", "actuate")
 
 
-def identity_in(logs: list[tuple[str, str]]) -> tuple[set[str], set[str], set[str], dict]:
-    """Return (cards observed, cards selected, PCI device ids, bdf -> ids).
+def identity_in(logs: list[tuple[str, str]]) -> tuple[set[str], list[str], list[str], set[str], dict]:
+    """Return (cards observed, targets in order, target occurrences, ids, bdf -> ids).
 
-    Observed is the census: every card the stage named.  Selected is what the
-    stage says it chose; an empty set means the stage made no choice, and for
-    the read-only stage that is normal - it reports the machine it was given.
-    The last value pairs a device id with the BDF printed on the same line, so
-    the comparison can be made about the target card rather than about every
-    card that happened to be in the machine.
+    Observed is the census: every card the stage named.  Targets are the cards
+    the stage says it chose, in the order it named them - this fork executes an
+    ordered list, so order is part of the identity, not an accident of printing.
+    Occurrences keep repeats, because a list that names one card twice is not a
+    two-card session.  The last value pairs a device id with the BDF printed on
+    the same line, so the comparison is about the target card rather than about
+    every card that happened to be in the machine.
     """
     observed: set[str] = set()
-    selected: set[str] = set()
+    targets: list[str] = []
+    occurrences: list[str] = []
     devices: set[str] = set()
     pairs: dict[str, set[str]] = {}
     for _name, text in logs:
         observed.update("%s:%s.%s" % (m.group(2), m.group(3), m.group(4))
                         for m in BDF_PATTERN.finditer(text))
         devices.update(m.group(1).lower() for m in DEVICE_PATTERN.finditer(text))
-        for pattern in TARGET_PATTERNS:
-            selected.update("%s:%s.%s" % (m.group(2), m.group(3), m.group(4))
-                            for m in pattern.finditer(text))
+        for _family, pattern in TARGET_FAMILIES:
+            named = ["%s:%s.%s" % (m.group(2), m.group(3), m.group(4))
+                     for m in pattern.finditer(text)]
+            if named:
+                occurrences.extend(named)
+                for bdf in named:
+                    if bdf not in targets:
+                        targets.append(bdf)
+                break
         for line in text.splitlines():
             ids = {m.group(1).lower() for m in DEVICE_PATTERN.finditer(line)}
             if not ids:
@@ -97,7 +113,7 @@ def identity_in(logs: list[tuple[str, str]]) -> tuple[set[str], set[str], set[st
             for m in BDF_PATTERN.finditer(line):
                 pairs.setdefault("%s:%s.%s" % (m.group(2), m.group(3), m.group(4)),
                                  set()).update(ids)
-    return observed, selected, devices, pairs
+    return observed, targets, occurrences, devices, pairs
 
 
 def score_stage(manifest: dict, stage: str, logs: list[tuple[str, str]]) -> list[dict]:
@@ -113,7 +129,9 @@ def decide(manifest: dict, stages: dict[str, list[tuple[str, str]]],
                    "hardware_verified": False}
     bdfs: dict[str, set[str]] = {}
     observed: dict[str, set[str]] = {}
-    selected: dict[str, set[str]] = {}
+    targets: dict[str, list[str]] = {}
+    occurrences: dict[str, list[str]] = {}
+    conflicting_lists: dict[str, list[list[str]]] = {}
     devices: dict[str, set[str]] = {}
     pairs: dict[str, dict[str, set[str]]] = {}
 
@@ -148,21 +166,32 @@ def decide(manifest: dict, stages: dict[str, list[tuple[str, str]]],
         if failed:
             blocked.append("GATE_" + stage.upper())
 
-        observed[stage], selected[stage], devices[stage], pairs[stage] = \
+        observed[stage], targets[stage], occurrences[stage], devices[stage], pairs[stage] = \
             identity_in(stages[stage])
-        # A stage that selects cards identifies the session with those; a stage
-        # that selects nothing (the plain read-only contact) identifies it with
-        # the machine it was given.
-        bdfs[stage] = selected[stage] or observed[stage]
+        # A stage may be scored from several boots, and each log speaks for one
+        # boot. Two boots that name different lists are not one ordered list, and
+        # a single boot that names one card twice is not a two-card session, so
+        # both are judged per log before the stage is merged.
+        per_log = [identity_in([log]) for log in stages[stage]]
+        named_lists = [entry[1] for entry in per_log if entry[1]]
+        conflicting_lists[stage] = named_lists if len({tuple(e) for e in named_lists}) > 1 else []
+        repeated = sorted({bdf for entry in per_log for bdf in set(entry[2])
+                           if entry[2].count(bdf) > 1})
+        # A stage that names targets identifies the session with those, in the
+        # order it named them; a stage that names none (the plain read-only
+        # census, an actuation log that reports indexes) is compared to them.
+        bdfs[stage] = set(targets[stage]) or observed[stage]
         if not observed[stage]:
             lines.append("BLOCKED IDENTITY_NOT_NAMED STAGE=%s" % stage)
             blocked.append("IDENTITY_NOT_NAMED")
-        elif stage != "readonly" and len(bdfs[stage]) != 1:
-            # The waived stages admit one target (M4); a stage that names two
-            # prepared steps, or two cards and no selection, has not chosen.
-            lines.append("BLOCKED IDENTITY_NOT_SINGLE STAGE=%s bdf=%s"
-                         % (stage, ",".join(sorted(bdfs[stage]))))
-            blocked.append("IDENTITY_NOT_SINGLE")
+        elif repeated:
+            lines.append("BLOCKED IDENTITY_DUPLICATE_TARGET STAGE=%s bdf=%s reason=one_boot_named_the_same_card_twice"
+                         % (stage, ",".join(repeated)))
+            blocked.append("IDENTITY_DUPLICATE_TARGET")
+        elif conflicting_lists[stage]:
+            lines.append("BLOCKED IDENTITY_TARGET_ORDER_CHANGED STAGE=%s LISTS=%s"
+                         % (stage, " | ".join(",".join(entry) for entry in conflicting_lists[stage])))
+            blocked.append("IDENTITY_TARGET_ORDER_CHANGED")
         elif not devices[stage]:
             # A stage that names a BDF but no device id has not identified the
             # card: after a slot swap the same BDF is different silicon, and the
@@ -174,49 +203,69 @@ def decide(manifest: dict, stages: dict[str, list[tuple[str, str]]],
                          % stage)
             blocked.append("IDENTITY_UNKNOWN")
 
-    # A stage that named exactly one card has identified the session with it.
-    # An ordered two-target read-only selection names several on purpose and is
-    # a census for this comparison, not a choice between them.
-    single = [(stage, next(iter(bdfs[stage]))) for stage in order
-              if len(bdfs[stage]) == 1]
-    named = [(stage, bdfs[stage]) for stage in order if bdfs[stage]]
-    if single:
-        first_stage, first = single[0]
-        facts["bdf"] = first
-        for stage, value in single[1:]:
-            if value != first:
-                lines.append("BLOCKED IDENTITY_CHANGED %s=%s %s=%s"
-                             % (first_stage, first, stage, value))
-                blocked.append("IDENTITY_CHANGED")
-    elif named:
-        facts["bdf"] = ",".join(sorted(named[0][1]))
-
-    # Whatever a later stage chose must be a card the read-only stage actually
-    # saw on this machine: a prepare log from a card the diagnostic never
-    # enumerated is a different session wearing the same paperwork.
+    # The session is an ordered list, and the list that has to stay consistent
+    # is the one the waived stages will execute - this fork's model is one card
+    # active at a time, in order, each step gated on its predecessor's
+    # completion record (`GU_ACTIVE_SINGLE_TARGET`).
+    # execute, so it is the preparation stage that defines it. The read-only
+    # stage's selection is an observation set: it may name cards the session
+    # will leave alone, and naming them is not a promise to touch them.
+    session: list[str] = []
+    session_stage = None
+    for stage in ("prepare", "actuate"):
+        if stage in order and targets[stage]:
+            session, session_stage = list(targets[stage]), stage
+            break
     census = observed.get("readonly", set())
-    if census:
+    if not session:
+        # No stage named a target. One card in the machine is unambiguous; two
+        # are not, and picking one here would be this tool choosing a donor.
+        seen = set()
         for stage in order:
-            if stage == "readonly":
+            seen |= bdfs[stage]
+        if len(seen) == 1:
+            session = [next(iter(seen))]
+            session_stage = "census"
+        else:
+            lines.append("BLOCKED IDENTITY_TARGET_UNNAMED STAGE=%s OBSERVED=%s reason=no_stage_named_a_target"
+                         % (session_stage or order[0], ",".join(sorted(seen))))
+
+    if session:
+        facts["bdf"] = ",".join(session)
+        facts["targets"] = len(session)
+        if len(session) > 1:
+            lines.append("DONOR_GATE sequence TARGETS=%d ORDER=%s MODEL=ONE_CARD_ACTIVE_AT_A_TIME_STEP_GATED_BY_PREDECESSOR"
+                         % (len(session), ",".join(session)))
+        for stage in order:
+            # The read-only stage's list is an observation set, and its intent is
+            # "look at these", not "execute these": it may be longer than the
+            # session and that is reported as peers below, not refused here.
+            if stage in (session_stage, "readonly") or not targets[stage]:
                 continue
-            for bdf in sorted(bdfs[stage]):
+            if targets[stage] != session:
+                lines.append("BLOCKED IDENTITY_TARGET_ORDER_CHANGED SESSION=%s %s=%s"
+                             % (",".join(session), stage, ",".join(targets[stage])))
+                blocked.append("IDENTITY_TARGET_ORDER_CHANGED")
+        # Whatever a later stage named must be a card the read-only stage
+        # actually saw: a preparation log for a card the diagnostic never
+        # enumerated is a different session wearing the same paperwork.
+        if census:
+            for bdf in session:
                 if bdf not in census:
                     lines.append("BLOCKED IDENTITY_NOT_OBSERVED STAGE=%s BDF=%s OBSERVED=%s"
-                                 % (stage, bdf, ",".join(sorted(census))))
+                                 % (session_stage, bdf, ",".join(sorted(census))))
                     blocked.append("IDENTITY_NOT_OBSERVED")
 
-    # Identity is a property of the target card: compare the ids printed next to
-    # the session's BDF, and fall back to everything the stage named only when
-    # no line tied an id to an address. Comparing whole censuses would block a
-    # two-card bench over a peer card whose id one stage happened to omit.
-    target = facts.get("bdf") or ""
-    target_bdfs = [target] if target and "," not in target else []
+    # Identity is a property of the named cards: compare the ids printed beside
+    # each BDF in the session, and fall back to everything the stage named only
+    # when no line tied an id to an address. Comparing whole censuses would
+    # block a two-card bench over a peer card whose id one stage omitted.
     device_sets = []
     for stage in order:
         if not devices[stage]:
             continue
         scoped: set[str] = set()
-        for bdf in (target_bdfs or sorted(bdfs[stage])):
+        for bdf in (session or sorted(bdfs[stage])):
             scoped |= pairs[stage].get(bdf, set())
         device_sets.append((stage, scoped or devices[stage]))
     if not device_sets:
@@ -231,20 +280,32 @@ def decide(manifest: dict, stages: dict[str, list[tuple[str, str]]],
                              % (first_stage, ",".join(sorted(first_devices)), stage,
                                 ",".join(sorted(value))))
                 blocked.append("PCI_ID_CHANGED")
+    # The waiver line states how many targets it admitted. A session whose
+    # actuation admits fewer than its prepared list is a different session.
+    if session and "actuate" in stages:
+        for _name, text in stages["actuate"]:
+            for match in re.finditer(r"(?i)\bACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=(\d+)", text):
+                if int(match.group(1)) != len(session):
+                    lines.append("BLOCKED ACTUATION_SELECTION_CHANGED SESSION=%d WAIVED_SELECTED=%s ORDER=%s"
+                                 % (len(session), match.group(1), ",".join(session)))
+                    blocked.append("ACTUATION_SELECTION_CHANGED")
 
-    identity_ok = not ({"IDENTITY_NOT_NAMED", "IDENTITY_NOT_SINGLE", "IDENTITY_CHANGED",
-                        "IDENTITY_UNKNOWN", "IDENTITY_NOT_OBSERVED", "PCI_ID_CHANGED"} & set(blocked))
+    identity_ok = not ({"IDENTITY_NOT_NAMED", "IDENTITY_DUPLICATE_TARGET",
+                        "IDENTITY_TARGET_ORDER_CHANGED", "IDENTITY_TARGET_UNNAMED",
+                        "IDENTITY_UNKNOWN", "IDENTITY_NOT_OBSERVED", "PCI_ID_CHANGED",
+                        "ACTUATION_SELECTION_CHANGED"} & set(blocked))
     facts["observed"] = {stage: sorted(observed[stage]) for stage in order}
-    facts["selected"] = {stage: sorted(selected[stage]) for stage in order}
-    lines.append("DONOR_GATE identity BDF=%s DEVICE=%s STAGES=%s OBSERVED=%d RESULT=%s"
+    facts["selected"] = {stage: list(targets[stage]) for stage in order}
+    lines.append("DONOR_GATE identity BDF=%s DEVICE=%s STAGES=%s OBSERVED=%d TARGETS=%d RESULT=%s"
                  % (facts.get("bdf", "-"), facts.get("device", "-"),
-                    ",".join(stage for stage, _ in named) or "-",
-                    len(census) if census else len(named[0][1]) if named else 0,
-                    "PASS" if identity_ok else "FAIL"))
-    if len(census) > 1:
-        lines.append("NOTE PEERS=%d OBSERVED=%d TARGET=%s (the read-only stage reported every "
-                     "card on the machine; M4 records which one the session is about)"
-                     % (len(census) - 1, len(census), facts.get("bdf", "-")))
+                    ",".join(stage for stage in order if bdfs[stage]) or "-",
+                    len(census) if census else len(session),
+                    len(session), "PASS" if identity_ok else "FAIL"))
+    if len(census) > len(session):
+        lines.append("NOTE PEERS=%d OBSERVED=%d TARGET=%s (the read-only stage reported every card "
+                     "on the machine; the session's ordered list names the cards under test, and "
+                     "M4 records the rest by serial)"
+                     % (len(census) - len(session), len(census), facts.get("bdf", "-")))
 
     lines.append("DONOR_GATE manual ACKED=%d REQUIRED=%d RESULT=%s"
                  % (len([a for a in acks if a in manual_ids]), len(manual_ids),

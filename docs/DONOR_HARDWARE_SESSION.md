@@ -67,7 +67,7 @@ Nothing below has been executed against this tree. No log described here exists,
 * `M1_RECOVERY_TOOLKIT_READY` — the programmer, the known-good firmware image and the SPI part number are on the bench before the first boot; none of the images below writes the GPU, but the bench rule does not depend on that
 * `M2_DONOR_CARD_RECORDED` — serial, slot, board model and the vendor tool's VBIOS version, so the BDF and device ID in the log can be tied to a piece of silicon afterwards
 * `M3_LOG_MEDIUM_EMPTY` — no `GPU-TOPOLOGY-DIAGNOSTIC-*.TXT` and no `AD102-UNLOCK\RUN*.TXT` on the stick; a stale file is indistinguishable from a live one and `session_preflight.py` refuses a medium that carries one
-* `M4_ONE_CARD_ONLY` — recorded for the waived stages; a read-only candidate may run with one card or two, and the log must be read against the cabling you actually had connected
+* `M4_DONOR_CARDS_RECORDED` — for every stage: the serial and slot of every card in the machine, plus the ordered BDF list the image is built with. This fork runs an ordered list with one card active at a time, so a two-card machine is the ordinary case and the list, not the card count, is what has to be written down
 * `M6_STOCK_BOOT_AFTER_EVERY_RUN` — after each candidate, boot Windows once and record the build, driver version and device status: the read-only images promise the card is untouched, and this is the observation that would notice if it were not
 * `SIGNING_KEY` — the signing certificate lives in WSL (`$HOME/secureboot-signing/uefi-db.key` and `.crt`) and the same certificate must be enrolled in the BIOS `db`; the script refuses to sign when it is not, unless you pass `-SkipDbCheck` and accept a receipt that reads `DB_ENROLLED=UNKNOWN`
 * `REPOSITORY_ROOT` — every command is written from the repository root, with the signed outputs landing in `artifacts\signed`
@@ -184,7 +184,7 @@ Every image in the catalogue whose safety class writes nothing to the GPU. One c
 | `diag-msi-fuse-handoff` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A2` `B9` |
 | `diag-msi-sec2` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `C4` |
 | `diag-msi-sec2-handoff` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A2` `B9` |
-| `prep-selected` | refuses-before-mutation | `prepare` | \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten | `D5` `B9` `A7` `A4` `E8` `M4` |
+| `prep-selected` | refuses-before-mutation | `prepare` | \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten | `D5` `B9` `A7` `A4` `E8` `M4` `C9` `B10` |
 | `dxe-prep-selected` | refuses-before-mutation | `prepare` | \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten | `D5` |
 
 #### `diag-topology-log` — topology with a numbered USB log
@@ -356,12 +356,20 @@ The SEC2 read plus the pinned Windows handoff, for a bench where the read-only i
 
 *Does not prove:* anything the base SEC2 probe does not prove, plus the handoff's own limit: one pinned partition started Windows once.
 
-#### `prep-selected` — preparation for explicit targets
+#### `prep-selected` — preparation for explicit targets, one or both cards
 
-The active application, built without the waiver: it runs the real inventory and selection, prepares its state, and refuses before `GuInit`. This is the only image here that executes the app's own entrypoint on hardware, which is why it is the one the P gates score.
+The active application, built without the waiver: it runs the real inventory and selection, prepares its state, and refuses before `GuInit`. This is the only image here that executes the app's own entrypoint on hardware, which is why it is the one the P gates score. Given both BDFs it does the same thing for two cards in one boot: `GU_ACTIVE_SEQUENCE_PREPARE_ONLY` returns before the `MULTI_TARGET_WITHOUT_WAIVER` check, so preparing an ordered list needs no waiver - executing one does.
+
+*one card* — `GPU-ACTIVE-PREP-0000-01-00-0.EFI`
 
 ```powershell
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected -SelectionBdf '0000:01:00.0' -StageDrive G
+```
+
+*both cards, in this order* — `GPU-ACTIVE-PREP-0000-01-00-0--0000-04-00-0.EFI`
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected -SelectionBdfs '0000:01:00.0,0000:04:00.0' -StageDrive G
 ```
 
 *Log:* \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten
@@ -373,9 +381,12 @@ The active application, built without the waiver: it runs the real inventory and
 * `A7` — `BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x` (`src/boot_io.c`): the persistent record is read at boot on real firmware, so a later boot's `PRESENT=1` is a record this tree wrote, not a fixture
 * `A4` — `ACTIVE_PREPARE=SELECTED_UNSUPPORTED_CARD BDF=%04x:%02x:%02x.%u ID=%04x:%04x` (`src/gpu_discovery.c`): building for one BDF and booting with a different card produces this refusal: the negative case of the image-refuses-a-card-it-was-not-built-for rule
 * `E8` — `ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x CLASS=%04x LEGACY_UNLOCK_DEVICE_ID=%u` (`src/gpu_discovery.c`): the identity the app itself resolved, with the device id it would act on: the first row of a per-SKU entry
-* `M4` — `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1` (`src/gpu_discovery.c`): how many NVIDIA cards the app saw, which is the number M4's one-card rule has to be recorded against
+* `M4` — `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1` (`src/gpu_discovery.c`): how many NVIDIA cards the app saw, and how many of them the build asked for: the two numbers M4's record has to agree with before the ordered list is trusted
+* `C9` — `ACTIVE_PREPARED_STEP[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x SUB=%04x:%04x LEGACY_UNLOCK_DEVICE_ID=%u READ_ONLY=1` (`src/gpu_discovery.c`): one line per selected card, in the order the selection names them: two of them is what a two-card session looks like, and their IDs are what ties each step to silicon
+* `C9` — `ACTIVE_CONTEXT[%zu]=PREPARED CPU_ONLY=1 MUTATION_AUTHORIZED=0` (`src/gpu_discovery.c`): `PreparePlatformContexts` allocates one platform context per selected card and refuses an alias to the active context or a duplicate pointer, so two of these lines are evidence that two distinct per-card contexts existed at the same time in a read-only build
+* `B10` — `ACTIVE_REFRESH=PASSIVE_REVALIDATED TARGETS=%zu MUTATION_AUTHORIZED=0` (`src/gpu_discovery.c`): the cards were re-read after preparation and the revalidation passed: the log shows the second observation, not only the first
 
-*Does not prove:* that any admission gate passed on the card: the preparation image stops before `GuCheckConfig` and before the link check, so a preparation log cannot speak to B3-B8 or C8 at all. It proves the entrypoint ran and refused, nothing about the card's state.
+*Does not prove:* that the ordered list may execute. Preparation and execution are different admissions: executing more than one target requires `-AcceptUnverifiedActuation` (`MULTI_TARGET_WITHOUT_WAIVER` otherwise), and nothing in a preparation log exercises a write, a Stop, a detach, a reset or a FLR. Two prepared contexts prove a list was built, not that a peer card is undisturbed during a mutation - there has never been a mutation.
 
 #### `dxe-prep-selected` — DXE preparation for explicit targets
 
@@ -701,13 +712,13 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.
 
 ```powershell
-python3 tools/donor_gate.py --readonly media/GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT --prepare media/AD102-UNLOCK/RUN0001.TXT --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,M3_LOG_MEDIUM_EMPTY,M4_ONE_CARD_ONLY,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN
+python3 tools/donor_gate.py --readonly media/GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT --prepare media/AD102-UNLOCK/RUN0001.TXT --ack M1_RECOVERY_TOOLKIT_READY,M2_DONOR_CARD_RECORDED,M3_LOG_MEDIUM_EMPTY,M4_DONOR_CARDS_RECORDED,M5_HALT_STOPS_THE_SESSION,M6_STOCK_BOOT_AFTER_EVERY_RUN
 ```
 
 It refuses to advance unless:
 
 * the read-only stage must pass before preparation counts as done, and preparation must pass before actuation may be attempted at all
-* every stage must identify the same card: the card a stage *selected* (`ACTIVE_PREPARED_STEP[n]`, `SELECTION_REQUEST[n]`, `SELECTION_STEP[n]=BEGIN`, `PASSIVE_SELECTION=`) must be one the read-only stage enumerated, and every stage that names a PCI id must name the id printed beside that BDF. A card the read-only diagnostic never saw, a stage that prepared two targets, and a stage that names no id at all are all refused rather than assumed. A read-only census of several cards is not a reason to refuse: the first physical session reported `01:00.0` and `04:00.0` in every stage and prepared one
+* every stage must identify the same ordered target list: the list the first stage names (`SELECTION_REQUEST[n]`, `ACTIVE_PREPARED_STEP[n]`, `PASSIVE_SELECTION=`) must be the list every later stage names, in the same order, every card in it must appear in the read-only census, no card may appear twice, and the PCI id printed beside each BDF must agree across stages. A session where no stage names a target and the machine has more than one card is refused rather than guessed at: an ordered list of two cards is a normal session in this fork, an unnamed one is not
 * every manual gate must be acknowledged by its exact id; an unknown id is refused, so a typo cannot silently stand in for M6
 * a log carrying the fixture marker is refused (exit 3) unless --self-test is given, and a GO from a self-test still prints SYNTHETIC=1
 
@@ -777,7 +788,7 @@ Note: a selection without -EnableSingleTargetExecution and without the waiver co
 | `P1_PREPARATION_REFUSED_BEFORE_MUTATION` | the app refused to actuate and said so first | `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1`<br>`ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0` | `SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu`<br>`STOP_CONTRACT device=%04x stage=%zu` |
 | `P2_BOOT_RECORD_READ` | the persistent record was read before anything else | `BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x` *(one of)*<br>`BOOT_STATE PRESENT=0` *(one of)* | — |
 
-**`P1_PREPARATION_REFUSED_BEFORE_MUTATION`** — proves: the image refused to actuate at the discovery boundary, before any GU init, and the preflight ran to completion with mutation still unauthorized. Does not prove: that the refusal is the right one for this card: it says the entrypoint is a preparation entrypoint, not that the target was safe. The counts say what was selected, not what was safe.
+**`P1_PREPARATION_REFUSED_BEFORE_MUTATION`** — proves: the image refused to actuate at the discovery boundary, before any GU init, and the preflight ran to completion with mutation still unauthorized. Does not prove: that the refusal is the right one for these cards, or that preparing a list means the list may execute: it says the entrypoint is a preparation entrypoint. The counts say what was selected, not what was safe.
 
 * `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1` (src/gpu_discovery.c) — the refusal is printed inside `GuDiscoverSingleGpu` before any GU init, and it is the line that bounds the session. The application's own `ACTIVE_APP=PREPARATION_ONLY` banner sits *after* that call returns success, and the preparation image is refused *by* that call, so the banner is unreachable in exactly the build it describes; P1 required it until the first two physical preparation runs showed no preparation image can print it. The same holds for the DXE entrypoint's `ACTIVE_DXE=PREPARATION_ONLY` banner.
 * `ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0` (src/gpu_discovery.c) — preparation reached its end with mutation explicitly unauthorized.
@@ -797,9 +808,9 @@ Note: a selection without -EnableSingleTargetExecution and without the waiver co
 .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation
 ```
 
-Note: the only waiver switch; it also needs a reviewed local/boot_profile.h or -RuntimeEsp, and the matched assets on the ESP.
+Note: the only waiver switch; it also needs a reviewed local/boot_profile.h or -RuntimeEsp, and the matched assets on the ESP. `-SelectionBdfs 'a,b'` builds the ordered two-card list, and the step lines then carry `ORDER=`/`TARGET=` indexes into it.
 
-*Costs:* the one admission that may write: a single card, ordered, no retry, with the firmware timer bounded or explicitly off
+*Costs:* the one admission that may write: an ordered list executed one card at a time, no retry, with the firmware timer bounded or explicitly off; more than one target is admitted by the same waiver (`MULTI_TARGET_WITHOUT_WAIVER` otherwise)
 
 *Exit criteria:* the waiver is recorded once, the pre-Stop contract is captured, the step reaches a terminal record, and the next boot reads the record it left
 
@@ -845,7 +856,7 @@ These cannot be checked from a log, so the verifier prints them as `MANUAL` on e
 | `M1_RECOVERY_TOOLKIT_READY` | the physical recovery path is on the bench before the first run | an external programmer and a known-good firmware image are the only way back from a card that no longer answers; they cannot be fetched afterwards | the programmer model, the image digest, and the SPI flash part number, noted in the session log |
 | `M2_DONOR_CARD_RECORDED` | the donor card's identity is written down before the run | the log will name a BDF and a device ID; without the card's serial and the slot it was in, those cannot be tied to a piece of silicon afterwards | serial number, slot, board model, the VBIOS version the vendor tool reports |
 | `M3_LOG_MEDIUM_EMPTY` | the log medium starts empty | RUN0001.TXT must be this boot, or a stale file is indistinguishable from a live one and the gate verdicts describe the wrong run | a directory listing of the stick before the boot, photographed or copied |
-| `M4_ONE_CARD_ONLY` | exactly one NVIDIA card, no peers | the waived path admits ordered single steps; a second card changes which gates apply and has never been exercised | the R2 inventory line, which must show one NVIDIA driver owner |
+| `M4_DONOR_CARDS_RECORDED` | every card in the machine is recorded, and the ordered target list is written down before the image is built | this fork executes an ordered list rather than a single card: one card is active at a time, each step is gated on its predecessor's completion record, and the cards that are not the current target are tracked for drift rather than ignored. A log names BDFs and device IDs; only the operator can tie those to serials and slots, and only the operator can say which card the session is meant to reach and in what order | for every NVIDIA card in the machine: serial, slot, board model and the VBIOS version the vendor tool reports; then the ordered BDF list the image was built with, in the order the session intends to execute |
 | `M5_HALT_STOPS_THE_SESSION` | a HALTED step ends the day, not the loop | no retry is a property of the image; re-running after a halt is the operator reintroducing the risk the image refused | the halt line, and the decision to stop, in the session log |
 | `M6_STOCK_BOOT_AFTER_EVERY_RUN` | Windows is started normally with the card enumerated after every run | the log cannot see Windows; device start, driver binding and a display output have to be observed by a person | the Windows build, the driver version, and the device status in Device Manager |
 
