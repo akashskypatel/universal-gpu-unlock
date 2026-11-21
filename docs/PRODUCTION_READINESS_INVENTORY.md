@@ -483,6 +483,12 @@ synthetic one is a `#error`, so no build can admit both a captured card and the
 simulator's model. `-CapturedPromReference` on `Build-Experimental-MSVC.ps1`
 adds the define; nothing else does, and the table never grows at runtime.
 
+**Provenance, checked twice.** The operator supplied the two 1 MiB images off
+the machine, and both hash to the digests above — `422ea53f…70ad` and
+`742549cf…9165` — so the rows pin bytes that now agree in two independent
+places: the boot that read them and the file that left the bench. The images
+themselves are not stored here; NVIDIA firmware does not belong in a repository.
+
 **Why it is worth having before the first write.** The transaction's preparation
 calls `GuAd104PromMatches(&Gu, prom, 1048576, TRUE)` — `RequireReference=TRUE` —
 and with an empty table that call can only answer `UNKNOWN_CARD`, which
