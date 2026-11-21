@@ -460,6 +460,34 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.48 — the board's one ASPM knob is `Auto`, and `Auto` is not `Disabled`
+
+The bench was read back and photographed: `Advanced \ PCIe Subsystem Settings` has
+exactly one ASPM entry, `ASPM Control for CPU PCIe`, with options `Disabled`,
+`L0s Entry`, `L1 Entry`, `L0s And L1 Entry` and `Auto`. It was set to `Auto`, which
+is how both cards can show a Link Control L1 request. `Auto` leaves the choice to
+firmware and the operating system; `Disabled` is the value that stops the request
+being programmed.
+
+Two consequences, both recorded in `docs/BENCH_NOTES.md` rather than guessed at
+here:
+
+1. **The knob is scoped to CPU-attached PCIe.** The 4090 (`0000:01:00.0`) is on the
+   CPU's x16 lanes and the 3080 (`0000:04:00.0`) is on a chipset bus number, so this
+   setting may not reach the second card at all. If the 3080 still reads `ASPM=2`
+   with the setting `Disabled`, the request has another source on this platform.
+2. **The four conditions have four different fixes**, and the image can only tell
+   which one is still wrong: a Fundamental Reset for the sticky bits (the image
+   makes no config writes and will not clear them), the BIOS knob or the OS power
+   plan for ASPM, seating for training, and nothing at all for `UP` if ASPM is the
+   cause of it. `docs/BENCH_NOTES.md` tabulates each condition against its `OK_`
+   flag in the log.
+
+Nothing in this section changes the policy. If `Disabled` plus full AC removal
+still yields `ERRORS=9` on both cards, the gate as written cannot be satisfied on
+this machine, and that is a documented decision to take - not a setting to keep
+nudging.
+
 ### 11.47 — the read-only image reproduces the refusal, and both cards say the same thing
 
 §11.46 added the link observation to the preparation path so a bench could be read

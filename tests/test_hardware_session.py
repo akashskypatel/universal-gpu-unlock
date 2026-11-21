@@ -225,6 +225,38 @@ class TheReadOnlyPathReportsTheSameLinkPolicy(unittest.TestCase):
         self.assertNotIn("GuLinkAccepted(verdict)) {", block)
 
 
+class TheBenchNotesNameWhereEachConditionIsSet(unittest.TestCase):
+    """A link state is a property of what the machine did, not of the card.
+
+    RUN0006 and RUN0007 both refuse on three of four conditions, so the operator
+    needs one page that says which setting or reset each condition answers to,
+    including the fact that the board's only ASPM entry was found set to Auto.
+    """
+
+    def setUp(self):
+        self.notes = (ROOT / "docs" / "BENCH_NOTES.md").read_text(encoding="utf-8")
+
+    def test_the_page_exists_and_is_linked(self):
+        self.assertIn("BENCH_NOTES.md", (ROOT / "docs" / "PRODUCTION_READINESS_INVENTORY.md")
+                      .read_text(encoding="utf-8"))
+
+    def test_it_names_the_board_path_and_the_value_that_matters(self):
+        for token in ("Advanced \\ PCIe Subsystem Settings", "ASPM Control for CPU PCIe",
+                      "Disabled", "L0s And L1 Entry", "Auto"):
+            self.assertIn(token, self.notes, token)
+
+    def test_it_names_all_four_conditions_and_their_flags(self):
+        for token in ("OK_ERRORS", "OK_ASPM", "OK_TRAINED", "OK_UP",
+                      "Fundamental Reset", "AC removal", "Link Status bit 13"):
+            self.assertIn(token, self.notes, token)
+
+    def test_it_says_auto_is_not_disabled(self):
+        self.assertIn("`Auto` is not `Disabled`", self.notes.replace("**", ""))
+
+    def test_it_does_not_promise_that_one_setting_is_enough(self):
+        self.assertIn("if this board has only the one", self.notes.lower())
+
+
 class ThePatternsMatchRealLines(unittest.TestCase):
     def test_format_conversions_become_the_shape_they_print(self):
         cases = {
