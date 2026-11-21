@@ -962,6 +962,43 @@
       "does_not_prove": "that the file holds any particular descriptor, that the ROM is authentic, or that the FWSEC-FRTS descriptor the transaction looks for is present and acceptable. Nothing in the image parses a descriptor; the file is the input to that question, not an answer to it"
     },
     {
+      "id": "R7_FUSE_VERSION_READ",
+      "stage": "readonly",
+      "title": "the fuse word that selects a packed signature was read",
+      "proves": "that a read-only image read the sixteen-word fuse window at BAR0 + 0x8241c0 and, for each card it verified, printed the word ucode id 9 addresses together with the version gpu_unlock_fuse_version() computes from it - the number unlock_transaction_fwsec() turns into a packed-signature slot before pci_set_master() and before its first write",
+      "does_not_prove": "that the word will read the same at transaction time, that the version selects a packed signature that is present in the ROM, or that the selected signature authenticates. A fuse word is a value read once through PCI I/O; nothing here verifies a signature, and the slot question stays open until the version is compared with each ROM's sig_versions mask - 0x3 for the 4090 and 0x7 for the 3080 in the captured set, both of which include version zero",
+      "requires": [
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "VRAM_BLOCK_PROBE_FUSE_END GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u READ=%u FAILED=%u UCODE9_OFFSET=%#x UCODE9_RAW=%#010x UCODE9_VERSION=%u UCODE9_ACCESS=%s UCODE9_UNREAD=0 READ_ONLY=1 NO_GPU_WRITES=1",
+          "min_total": 2,
+          "why": "one closing line per verified card, each naming the word ucode id 9 addresses, its value, and the version that value implies: two cards are the bench, so two lines, and a card whose word is missing says UCODE9_UNREAD=1 instead of being absent"
+        }
+      ],
+      "forbids": [
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "VRAM_BLOCK_PROBE_FUSE_WINDOW_UNREADABLE GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u FAILED=%u READ_ONLY=1",
+          "why": "the window was addressed and not one of its words came back: the read that would have answered the slot question did not happen, so the stage cannot claim it did"
+        },
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "STATUS=UNAVAILABLE EFI_STATUS=%#llx NO_FALLBACK=1",
+          "why": "a word inside the window refused the PCI read - and that word may be the one the transaction's ucode id addresses. A partial window is a partial answer"
+        },
+        {
+          "emitter": "src/gpu_topology_efi.c",
+          "token": "UCODE9_UNREAD=1 READ_ONLY=1 NO_GPU_WRITES=1",
+          "why": "the closing line reports that the word this run was after did not come back, so the version printed beside it is a placeholder and not what the transaction would compute"
+        }
+      ],
+      "only_if": {
+        "emitter": "src/gpu_topology_efi.c",
+        "token": "VRAM_BLOCK_PROBE_FUSE GPU=%s BDF=0000:%02x:00.0 OFFSET=%#x UCODE_ID=%u",
+        "why": "a log with no per-word fuse line - in either its value form or its refused form - was written by an image that does not read the window. That boot is NOT_APPLICABLE rather than silently passing, so a run of the earlier image cannot look like one of the reading build. The marker is the address and the ucode id, which both forms print, so a window that refused every word still counts as an attempt and is scored by the forbids below"
+      }
+    },
+    {
       "id": "P1_PREPARATION_REFUSED_BEFORE_MUTATION",
       "stage": "prepare",
       "title": "the app refused to actuate and said so first",

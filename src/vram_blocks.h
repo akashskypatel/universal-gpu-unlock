@@ -172,4 +172,39 @@
  * place the reserved window. */
 #define GU_VRAM_BLOCK_CONTEXT_VGA_CONFIG 0x00625f04u
 
+/* The FWSEC fuse window, and why it is not a row in the list above.
+ *
+ * unlock_transaction_fwsec() reads one word from this window and uses it to
+ * choose which packed signature it copies into the image:
+ *
+ *   read_bar(work, 0x008241c0 + (fw.ucode_id - 1) * 4, &fuse_raw);
+ *   version = gpu_unlock_fuse_version(fuse_raw);
+ *   gpu_unlock_fwsec_sig_offset(fw.sig_versions, version, 384, &sig_at);
+ *
+ * The index is (ucode_id - 1), so the address is computed from a value the
+ * transaction read out of the board ROM. That is why the derived list above
+ * cannot name it: naming it would mean assuming the id first. The probe reads
+ * the whole window instead, so its answer does not depend on that assumption.
+ *
+ * The base and the stride are the booter's own table shape, one table over:
+ * GU_FUSE_SEC2_UCODE1 (0x00824140, src/vendor/prep_610.h) is read by
+ * patch_booter() the same way, and its sixteen words end at 0x0082417c. This
+ * window starts 0x44 past that, at 0x008241c0, and sixteen words end at
+ * 0x008241fc; the two do not overlap.
+ *
+ * Two shapes matter. A word the mapping returns as inaccessible (~0, or
+ * 0xbadf.... in the high half) is not a failed read: read_bar() returns the
+ * value, and gpu_unlock_fuse_version() maps that shape to version zero, so the
+ * transaction then selects the first packed signature. A word whose low half
+ * has its highest set bit at 2 or above selects a later one. Both are facts the
+ * operator has to see; neither may be smoothed into "unreadable".
+ */
+#define GU_FUSE_FWSEC_UCODE1 0x008241c0u
+/* Sixteen words: one per possible ucode id, the width of the booter's table. */
+#define GU_FUSE_FWSEC_WORDS  0x10u
+#define GU_FUSE_FWSEC_STRIDE 0x4u
+/* ucode id 9 - the id both captured cards' ROMs report - addresses this word. */
+#define GU_FUSE_FWSEC_UCODE9 \
+  (GU_FUSE_FWSEC_UCODE1 + (0x9u - 0x1u) * GU_FUSE_FWSEC_STRIDE)
+
 #endif

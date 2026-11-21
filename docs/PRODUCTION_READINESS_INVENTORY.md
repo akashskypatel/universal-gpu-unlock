@@ -460,6 +460,99 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.40 C5 — the fuse window is a read now, and a gate scores it
+
+§11.39 ended with one unread word in front of the first write. This change makes
+it a line in a log.
+
+**The window, named.** `src/vram_blocks.h` gains `GU_FUSE_FWSEC_UCODE1`
+(`0x008241c0`), `GU_FUSE_FWSEC_WORDS` (16), `GU_FUSE_FWSEC_STRIDE` (4) and
+`GU_FUSE_FWSEC_UCODE9` (`0x008241e0`, derived, not written out). The derived
+context list is unchanged and so is the reason it excludes this address: the
+transaction indexes the window with `(fw.ucode_id - 1)`, so the address cannot be
+named without first knowing the id. What changed is that the id is no longer a
+question for the card. The captured ROMs reported ucode 9 on both boards, so the
+probe reads the *whole* window - one word per possible id - and the answer stops
+depending on an assumption this image would otherwise have to make.
+
+The base and stride are the booter table's own shape, one table over:
+`GU_FUSE_SEC2_UCODE1` (`0x00824140`, `src/vendor/prep_610.h`) is read by
+`patch_booter()` as `base + (id - 1) * 4` and its sixteen words end at
+`0x0082417c`. The FWSEC window starts `0x44` past that and ends at `0x008241fc`;
+a test holds the two apart, so a future edit cannot slide one onto the other.
+
+**The rule, copied and checked.** `GuVramFuseVersion()` in
+`src/gpu_topology_efi.c` is `gpu_unlock_fuse_version()` from
+`src/vendor/prep_610.c` in this image's types. It has to be, because the two
+disagree in an easy-to-miss place: for an inaccessible word (`~0` or
+`0xbadf....`) the transaction returns version **zero** - it never looks at the
+low half - while a naive "highest set bit" reading of `0xbadf5620` returns 15.
+That difference is the difference between slot 0 and a slot no ROM has. Both
+implementations are compiled host-side and driven over the same 262,144 words
+(every low half under four high halves, which includes zero, the poison shapes
+and every single-bit word); a mismatch fails the build rather than the boot.
+
+**The report.** Sixteen lines per card, then one closing line:
+
+```
+VRAM_BLOCK_PROBE_FUSE GPU=4090 BDF=0000:01:00.0 OFFSET=0x8241e0 UCODE_ID=9 RAW=0x… VERSION=… ACCESS=STATE READ_ONLY=1
+VRAM_BLOCK_PROBE_FUSE_END GPU=4090 BDF=0000:01:00.0 BASE=0x8241c0 WORDS=16 READ=16 FAILED=0 UCODE9_OFFSET=0x8241e0 UCODE9_RAW=0x… UCODE9_VERSION=… UCODE9_ACCESS=… UCODE9_UNREAD=0 READ_ONLY=1 NO_GPU_WRITES=1
+```
+
+A word the PCI read refuses prints `STATUS=UNAVAILABLE … NO_FALLBACK=1` instead of
+a value; a window that returns nothing at all prints
+`VRAM_BLOCK_PROBE_FUSE_WINDOW_UNREADABLE` and no closing line with a version. The
+three shapes are kept apart because the transaction keeps them apart: a value it
+can use, a value that means version zero, and a read that did not happen.
+
+**The gate.** `R7_FUSE_VERSION_READ` (stage `readonly`, fourteenth gate) requires
+one closing line per card, forbids an unreadable window, a refused word inside the
+window, and `UCODE9_UNREAD=1`, and is gated on the per-word line so the twelve
+recorded runs - which predate this window - score `NOT_APPLICABLE` instead of
+being retro-scored as failures. That is why `-0009` still re-scores as
+`GATES=6 GATES_FAILED=0`.
+
+**What a `-0010` boot decides.** The fuse word is read before `pci_set_master()`
+and before any write, so every outcome is free:
+
+| `UCODE9_VERSION` | 4090 (`sig_versions=0x3`) | 3080 (`sig_versions=0x7`) |
+| --- | --- | --- |
+| 0 | slot 0, selectable | slot 0, selectable |
+| 1 | slot 1, selectable | slot 1, selectable |
+| 2 | `-ERANGE`, before the first write | slot 2, selectable |
+| 3+ | `-ERANGE`, before the first write | `-ERANGE`, before the first write |
+
+Nothing in that table writes to a card. The version selects *which* packed
+signature gets copied; whether the copy authenticates is a separate question that
+no read on this bench answers.
+
+**Tests.** `tests/test_vram_block_probe.py` gains sixteen: nine over the window
+(the address is the writer's arithmetic, the two fuse tables stay apart, the
+ucode-9 word is where the captured ROM points, the window is in no write set and
+no context row, the reader never writes, every word is reported, the version rule
+matches the transaction over 262,144 words, the nine shapes are stated, the masks
+each card can select) and seven over the gate (passes on two cards, fails on one,
+fails on an unreadable window, fails on one refused word, fails on a missing
+ucode-9 word, and says `NOT_APPLICABLE` for both the synthetic fixture and the
+recorded `-0009` log). Suite: 635 tests.
+
+**What this does not prove.** That the word reads the same at transaction time -
+the fuse is not latched here, and `-0010` is a second reading, not a confirmation
+of a first. That the selected signature authenticates (`SIGNATURE_AUTHENTICATED=0`
+is unchanged). That the staged asset hashes match. And no write path was touched:
+the probe's `NO_GPU_WRITES=1`, the 132 words and both per-card digests are
+untouched by this change.
+
+**Next, in order.** (1) Run `-0010` with the `-VramBlockProbe` build and read
+`R7`'s twelve new lines. (2) If both versions are selectable, the slot question
+is answered and what remains before the first write is the reference and asset
+question in §11.39. (3) If either reads 2 or 3, re-read that card's ROM for a
+ucode entry whose mask covers the fuse version - still a read, still no write.
+
+Counts stay 11 met / 15 partial / 17 not started, `C5` stays `none`,
+`hardware_verified` stays false for all 43 rows: a fuse word is one more value
+read off a register, not a firmware image that has been accepted.
+
 ### 11.39 C5 — the descriptor is there on both cards, and the fuse word is now the only unread one
 
 `GPU-TOPOLOGY-DIAGNOSTIC-0009.TXT` is the boot §11.38 asked for: the fixed image,
@@ -545,7 +638,7 @@ back with the same per-card digests as `-0008`, so nothing moved between boots.
 **Next, in order.** (1) Read the fuse window `0x8241c0`-`0x8241fc` on both cards -
 sixteen words each, read-only, printed with `gpu_unlock_fuse_version()` and
 compared against the slot mask the captured ROM reports, which answers the last
-unread word before the first write. (2) Confirm the staged asset bundle matches
+unread word before the first write. **Done in §11.40.** (2) Confirm the staged asset bundle matches
 the manifest. (3) Only then does an actuating boot reach its first write with
 every gate in front of it already answered by a read.
 

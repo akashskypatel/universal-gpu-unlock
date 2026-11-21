@@ -565,6 +565,18 @@ static UINT32 GuVramBlockAccessible(UINT32 value) {
   return (value == 0xffffffffU || (value & 0xffff0000U) == 0xbadf0000U) ? 0U : 1U;
 }
 
+/* gpu_unlock_fuse_version() of src/vendor/prep_610.c, in this image's types: an
+ * inaccessible shape and a zero low half both mean version zero, and otherwise
+ * the version is the rank of the highest set bit of the low sixteen bits. This
+ * is the value the transaction uses to index the ROM's packed signatures, so a
+ * probe that reported the low half's rank for an inaccessible word would report
+ * 15 where the transaction computes 0 - a different slot, not a different word.
+ * A host test drives this and the original over the same inputs. */
+static UINT32 GuVramFuseVersion(UINT32 raw) {
+  if(raw == 0xffffffffU || (raw & 0xffff0000U) == 0xbadf0000U) return 0U;
+  return (UINT32)GuMsiB850FuseVersion((uint16_t)(raw & 0xffffU));
+}
+
 static const GU_VRAM_BLOCK_ROW VramWriteSet[] = {
   {"SEC2.ENGINE_ID",GU_VRAM_BLOCK_SEC2_ENGINE_ID},
   {"SEC2.CHIP",GU_VRAM_BLOCK_SEC2_CHIP},
@@ -768,6 +780,67 @@ static UINT32 ReportVramRom(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,
   return 1U;
 }
 
+/* The window the transaction reads to choose a packed signature: sixteen words,
+ * one per possible ucode id, at GU_FUSE_FWSEC_UCODE1. Read once per card,
+ * read-only, and reported word by word so an inaccessible word is a line rather
+ * than an absence - the transaction treats that shape as version zero, so
+ * "unreadable" and "version zero" are the same outcome there and must not look
+ * the same here.
+ *
+ * These reads are deliberately not added to the write-set counters: the ending
+ * line counts the transaction's write set and its read context, and this window
+ * is neither. It has its own summary per card. */
+static void ReportVramFuse(EFI_PCI_IO_PROTOCOL *pci,const char *gpu,UINT32 bus) {
+  UINT32 raw=0U,ucode_raw=0U,ucode_access=0U;
+  UINT32 read=0U,failed=0U,ucode_seen=0U;
+  unsigned i;
+  if(!pci || !pci->Mem.Read)return;
+  for(i=0U;i<GU_FUSE_FWSEC_WORDS;i++) {
+    UINT32 offset=GU_FUSE_FWSEC_UCODE1+(UINT32)i*GU_FUSE_FWSEC_STRIDE;
+    EFI_STATUS status;
+    raw=0U;
+    status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,offset,1U,&raw);
+    if(EFI_ERROR(status)) {
+      failed++;
+      Say("VRAM_BLOCK_PROBE_FUSE GPU=%s BDF=0000:%02x:00.0 OFFSET=%#x UCODE_ID=%u STATUS=UNAVAILABLE EFI_STATUS=%#llx NO_FALLBACK=1 READ_ONLY=1\r\n",
+          gpu,(unsigned)bus,(unsigned)offset,(unsigned)(i+1U),
+          (unsigned long long)status);
+      continue;
+    }
+    read++;
+    Say("VRAM_BLOCK_PROBE_FUSE GPU=%s BDF=0000:%02x:00.0 OFFSET=%#x UCODE_ID=%u RAW=%#010x VERSION=%u ACCESS=%s READ_ONLY=1\r\n",
+        gpu,(unsigned)bus,(unsigned)offset,(unsigned)(i+1U),(unsigned)raw,
+        (unsigned)GuVramFuseVersion(raw),
+        GuVramBlockAccessible(raw)?"STATE":"NOT_ACCESSIBLE");
+    if(offset==GU_FUSE_FWSEC_UCODE9) {
+      ucode_raw=raw;
+      ucode_access=GuVramBlockAccessible(raw);
+      ucode_seen=1U;
+    }
+  }
+  if(!read) {
+    Say("VRAM_BLOCK_PROBE_FUSE_WINDOW_UNREADABLE GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u FAILED=%u READ_ONLY=1\r\n",
+        gpu,(unsigned)bus,(unsigned)GU_FUSE_FWSEC_UCODE1,
+        (unsigned)GU_FUSE_FWSEC_WORDS,failed);
+    return;
+  }
+  /* UCODE9_UNREAD: the one word this run was actually after did not come back.
+   * UCODE9_VERSION is what the transaction would compute from the word, which is
+   * 0 when the shape is inaccessible - the same value as a fuse that says 0. */
+  if(ucode_seen)
+    Say("VRAM_BLOCK_PROBE_FUSE_END GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u READ=%u FAILED=%u UCODE9_OFFSET=%#x UCODE9_RAW=%#010x UCODE9_VERSION=%u UCODE9_ACCESS=%s UCODE9_UNREAD=0 READ_ONLY=1 NO_GPU_WRITES=1\r\n",
+        gpu,(unsigned)bus,(unsigned)GU_FUSE_FWSEC_UCODE1,
+        (unsigned)GU_FUSE_FWSEC_WORDS,read,failed,
+        (unsigned)GU_FUSE_FWSEC_UCODE9,(unsigned)ucode_raw,
+        (unsigned)GuVramFuseVersion(ucode_raw),
+        ucode_access?"STATE":"NOT_ACCESSIBLE");
+  else
+    Say("VRAM_BLOCK_PROBE_FUSE_END GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u READ=%u FAILED=%u UCODE9_OFFSET=%#x UCODE9_RAW=0x00000000 UCODE9_VERSION=0 UCODE9_ACCESS=UNKNOWN UCODE9_UNREAD=1 READ_ONLY=1 NO_GPU_WRITES=1\r\n",
+        gpu,(unsigned)bus,(unsigned)GU_FUSE_FWSEC_UCODE1,
+        (unsigned)GU_FUSE_FWSEC_WORDS,read,failed,
+        (unsigned)GU_FUSE_FWSEC_UCODE9);
+}
+
 static void ReportVramBlocks(int pci_ok) {
   static const char digits[]="0123456789abcdef";
   size_t i,j;
@@ -884,6 +957,9 @@ static void ReportVramBlocks(int pci_ok) {
      * only as good as the field it is handed. */
     roms+=ReportVramRom(System?System->BootServices:NULL,pci,
                         ada?"4090":"3080",id,(UINT32)(id->pci_id>>16U));
+    /* The last word the transaction reads before its first write: which packed
+     * signature this board's fuse selects. Read-only, one window per card. */
+    ReportVramFuse(pci,ada?"4090":"3080",expected_bus);
     reads+=card_reads;
     failed+=card_failed;
     observed+=card_observed;

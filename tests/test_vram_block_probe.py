@@ -193,6 +193,22 @@ def probe_blocks() -> tuple[set[int], set[int]]:
     return writes, context
 
 
+def compile_and_run(test: unittest.TestCase, harness: str) -> str:
+    """Build one host-side harness with gcc and return its stdout."""
+    with tempfile.TemporaryDirectory() as directory:
+        source = Path(directory) / "harness.c"
+        source.write_text(harness, encoding="utf-8")
+        binary = Path(directory) / "harness"
+        build = subprocess.run(
+            ["gcc", "-std=c11", "-O1", "-Wall", "-Wextra", "-Werror",
+             str(source), "-o", str(binary)],
+            capture_output=True, text=True)
+        test.assertEqual(build.returncode, 0, build.stderr)
+        run = subprocess.run([str(binary)], capture_output=True, text=True)
+        test.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        return run.stdout
+
+
 def strip_comments(source: str) -> str:
     """Remove C comments so prose cannot satisfy or trip a code check."""
     source = re.sub(r"/\*.*?\*/", " ", source, flags=re.DOTALL)
@@ -490,12 +506,12 @@ class ReadOnlyTest(unittest.TestCase):
     def test_probe_reads_through_pci_io_only(self):
         function = strip_comments(probe_function())
         reads = re.findall(r"pci->Mem\.Read\(", function)
-        # Three call sites: the write-set loop, the read-context loop, and the ROM
-        # window's header dword plus its chunked copy.
-        self.assertEqual(len(reads), 4, "expected the word loops and the ROM window")
+        # Four call sites: the write-set loop, the read-context loop, the fuse
+        # window, and the ROM window's header dword plus its chunked copy.
+        self.assertEqual(len(reads), 5, "expected the word loops and the ROM window")
         self.assertIn("EfiPciIoWidthUint32", function)
         # One 32-bit read per row, no width or bar-index variation there.
-        self.assertEqual(function.count("EfiPciIoWidthUint32"), 3)
+        self.assertEqual(function.count("EfiPciIoWidthUint32"), 4)
         self.assertIn("EfiPciIoWidthUint8", function, "the ROM copy is byte-wide")
 
     def test_probe_is_fingerprint_gated_and_refuses(self):
@@ -845,6 +861,238 @@ class TheCapturedWindowsWereParsed(unittest.TestCase):
         self.assertTrue(self.record["note"], "the record says why the images are absent")
 
 
+class TheFuseWindowIsAnsweredByARead(unittest.TestCase):
+    """The signature slot is chosen by one fuse word, so the probe reads it.
+
+    ``unlock_transaction_fwsec()`` reads ``0x008241c0 + (fw.ucode_id - 1) * 4``
+    before ``pci_set_master()`` and before any write, and a version the ROM's
+    ``sig_versions`` mask cannot select stops the transaction with ``-ERANGE``.
+    That refusal costs a boot; reading the window first turns it into a line.
+    """
+
+    def test_the_window_is_the_writers_own_arithmetic(self):
+        # The header must not carry a second copy of the address: it is the
+        # writer's expression, and the ninth word is the one ucode id 9 reads.
+        text = _read(BLOCKS)
+        self.assertEqual(
+            _read(WRITER).count("0x008241c0 + (fw.ucode_id - 1) * 4"),
+            1,
+            "the fuse read is not the expression this window was built from",
+        )
+        base = _define(text, "GU_FUSE_FWSEC_UCODE1")
+        words = _define(text, "GU_FUSE_FWSEC_WORDS")
+        stride = _define(text, "GU_FUSE_FWSEC_STRIDE")
+        self.assertEqual((base, words, stride), (0x008241C0, 16, 4))
+        ucode9 = re.search(
+            r"^#define\s+GU_FUSE_FWSEC_UCODE9\s*\\\n\s*(.+?)\s*$", text, re.MULTILINE
+        )
+        self.assertTrue(ucode9, "the ucode-9 word is not named, or not on a wrapped line")
+        expression = ucode9.group(1)
+        self.assertIn("GU_FUSE_FWSEC_UCODE1", expression, "the word must come from the base")
+        self.assertIn("GU_FUSE_FWSEC_STRIDE", expression, "the word must use the stride")
+        self.assertNotIn("0x8241e0", text.lower(), "the ninth word is spelled out by hand")
+        self.assertEqual(base + (9 - 1) * stride, 0x008241E0)
+        # Sixteen words: every ucode id a 610-series ROM can report, not only
+        # the one both captured cards happen to report.
+        self.assertEqual(
+            {base + (n - 1) * stride for n in range(1, words + 1)},
+            {base + i * stride for i in range(words)},
+        )
+        self.assertLessEqual(base + words * stride, 0x01000000, "outside BAR0's aperture")
+
+    def test_the_two_fuse_tables_are_separate(self):
+        # The booter reads 0x00824140 + (id - 1) * 4 and the FWSEC step reads
+        # 0x008241c0 + (id - 1) * 4. One table per step, sixteen words each;
+        # the probe reads the second and must not have drifted onto the first.
+        sec2 = _define(_read(ROOT / "src" / "vendor" / "prep_610.h"), "GU_FUSE_SEC2_UCODE1")
+        base = _define(_read(BLOCKS), "GU_FUSE_FWSEC_UCODE1")
+        words = _define(_read(BLOCKS), "GU_FUSE_FWSEC_WORDS")
+        stride = _define(_read(BLOCKS), "GU_FUSE_FWSEC_STRIDE")
+        self.assertEqual(sec2, 0x00824140)
+        booter = {sec2 + i * stride for i in range(words)}
+        fwsec = {base + i * stride for i in range(words)}
+        self.assertEqual(booter & fwsec, set(), "the two fuse tables overlap")
+        self.assertGreater(base, max(booter))
+        self.assertEqual(len(fwsec), 16)
+
+    def test_the_ucode9_word_is_where_the_captured_rom_points(self):
+        store = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encoding="utf-8"))
+        captures = store["prom_captures"]["captures"]
+        self.assertEqual(len(captures), 2)
+        text = _read(BLOCKS)
+        base = _define(text, "GU_FUSE_FWSEC_UCODE1")
+        words = _define(text, "GU_FUSE_FWSEC_WORDS")
+        stride = _define(text, "GU_FUSE_FWSEC_STRIDE")
+        ucode9 = None
+        for capture in captures:
+            ucode = capture["ucode_id"]
+            self.assertGreaterEqual(ucode, 1)
+            self.assertLessEqual(ucode, words, "the window does not cover this ucode id")
+            offset = base + (ucode - 1) * stride
+            self.assertTrue(base <= offset < base + words * stride)
+            if ucode == 9:
+                ucode9 = offset
+        self.assertEqual(
+            {capture["ucode_id"] for capture in captures},
+            {9},
+            "the recorded cards no longer agree on the id the window was sized for",
+        )
+        self.assertEqual(ucode9, 0x008241E0)
+
+    def test_the_window_is_neither_a_write_nor_a_context_word(self):
+        # The write set is the actuating sequence's, the context list is its
+        # read-only reads. The fuse word is read too, but its address is computed
+        # from a ROM field, which is why it is its own window and not a row.
+        text = _read(BLOCKS)
+        base = _define(text, "GU_FUSE_FWSEC_UCODE1")
+        words = _define(text, "GU_FUSE_FWSEC_WORDS")
+        stride = _define(text, "GU_FUSE_FWSEC_STRIDE")
+        window = {base + i * stride for i in range(words)}
+        self.assertEqual(window & structural_writes(), set(), "the probe must not read-write it")
+        self.assertEqual(window & structural_reads(), set(), "the fuse read must stay computed")
+        _, context = probe_blocks()
+        self.assertEqual(window & context, set())
+        computed = {
+            expr.strip()
+            for expr in re.findall(r"(?:read_bar|poll_us)\(work,\s*([^,]+),", _read(WRITER))
+            if "+" in expr and "*" in expr
+        }
+        self.assertIn("0x008241c0 + (fw.ucode_id - 1) * 4", computed)
+
+    def test_the_window_is_read_and_never_written(self):
+        body = strip_comments(function_body(PROBE, "static void ReportVramFuse("))
+        self.assertIn("pci->Mem.Read", body)
+        for forbidden in (
+            "Mem.Write",
+            "ReadModifyWrite",
+            "EfiPciIoWidthFill",
+            "Dma",
+            "Detach",
+            "Reset",
+            "Attributes(",
+        ):
+            self.assertNotIn(forbidden, body, f"ReportVramFuse must not use {forbidden}")
+        self.assertIn("NO_GPU_WRITES=1", body)
+        # The whole function must also stay inside the probe's read-only guard,
+        # so the existing FORBIDDEN sweep over probe_function() covers it.
+        self.assertIn(body, strip_comments(probe_function()))
+        probe = strip_comments(_read(PROBE))
+        self.assertEqual(probe.count("\n    ReportVramFuse(pci"), 1,
+                         "the window must be read once per card")
+
+    def test_every_word_is_reported_and_the_missing_one_is_named(self):
+        body = strip_comments(function_body(PROBE, "static void ReportVramFuse("))
+        self.assertIn("GU_FUSE_FWSEC_WORDS", body, "the loop must use the header's count")
+        self.assertIn("GU_FUSE_FWSEC_STRIDE", body)
+        self.assertIn("STATUS=UNAVAILABLE", body, "a word the PCI read refused must say so")
+        self.assertIn("FUSE_WINDOW_UNREADABLE", body, "a window that read nothing must say so")
+        self.assertIn("UCODE9_UNREAD=", body, "the word actually wanted must be named")
+        # An inaccessible word is not a missing line: the transaction maps that
+        # shape to version zero, so the probe prints the word and its version.
+        self.assertIn("NOT_ACCESSIBLE", body)
+        self.assertIn("GuVramBlockAccessible(raw)", body)
+        self.assertIn("GuVramFuseVersion(raw)", body)
+
+    def _msi_helper(self) -> str:
+        header = _read(ROOT / "src" / "msi_b850_rom_diag.h")
+        helper = re.search(
+            r"static inline unsigned GuMsiB850FuseVersion\(uint16_t fuse_bits\) \{.*?\n\}",
+            header,
+            re.DOTALL,
+        )
+        self.assertTrue(helper, "the MSI fuse-version rule is not in the header")
+        return helper.group(0)
+
+    def test_the_version_rule_is_the_transactions_rule(self):
+        # Both implementations compiled side by side and driven over the same
+        # words: every low half under four high halves, which covers zero, the
+        # inaccessible shapes, and every single-bit word. This is the function
+        # that decides which packed signature the transaction copies.
+        harness = (
+            "#include <stdio.h>\n"
+            "typedef unsigned int u32;\n"
+            "typedef unsigned short uint16_t;\n"
+            "typedef unsigned int UINT32;\n"
+            + self._msi_helper()
+            + "\n"
+            + function_body(ROOT / "src" / "vendor" / "prep_610.c",
+                            "u32 gpu_unlock_fuse_version(u32 raw)")
+            + "\n"
+            + function_body(PROBE, "static UINT32 GuVramFuseVersion(UINT32 raw)")
+            + "\n"
+            "int main(void){\n"
+            "  unsigned fail=0,checked=0; u32 raw,i,low;\n"
+            "  const u32 highs[4]={0x00000000u,0xbadf0000u,0xffff0000u,0x12340000u};\n"
+            "  for(i=0;i<4u;i++){\n"
+            "    for(low=0;low<0x10000u;low++){\n"
+            "      raw=highs[i]|low; checked++;\n"
+            "      if(gpu_unlock_fuse_version(raw)!=GuVramFuseVersion(raw)){\n"
+            "        printf(\"MISMATCH %#010x transaction=%u probe=%u\\n\",raw,\n"
+            "               gpu_unlock_fuse_version(raw),GuVramFuseVersion(raw));\n"
+            "        if(++fail>8u)return 1;\n"
+            "      }\n"
+            "    }\n"
+            "  }\n"
+            "  printf(\"FUSE_VERSION_RULE=%u CHECKED=%u\\n\",fail?0u:1u,checked);\n"
+            "  return fail?1:0;\n"
+            "}\n"
+        )
+        out = compile_and_run(self, harness)
+        self.assertIn("FUSE_VERSION_RULE=1", out)
+        self.assertIn("CHECKED=262144", out)
+
+    def test_the_versions_that_select_a_slot(self):
+        # The words the derivation can land on, stated in the open: the
+        # inaccessible shapes and a zero low half are version zero, and the
+        # version is the rank of the highest set bit of the low half.
+        words = [0x00000000, 0x00000001, 0x00000002, 0x00000004, 0x00000003,
+                 0x00000007, 0xFFFFFFFF, 0xBADF0000, 0xBADF0003]
+        harness = (
+            "#include <stdio.h>\n"
+            "typedef unsigned int u32;\n"
+            "typedef unsigned short uint16_t;\n"
+            "typedef unsigned int UINT32;\n"
+            + self._msi_helper()
+            + "\n"
+            + function_body(PROBE, "static UINT32 GuVramFuseVersion(UINT32 raw)")
+            + "\n"
+            "int main(void){\n"
+            "  const u32 raw[%d]={%s};\n"
+            "  unsigned i; for(i=0;i<%d;i++)\n"
+            "    printf(\"%%#010x->%%u\\n\",raw[i],GuVramFuseVersion(raw[i]));\n"
+            "  return 0;\n"
+            "}\n"
+            % (len(words), ",".join(f"{w:#010x}u" for w in words), len(words))
+        )
+        out = compile_and_run(self, harness)
+        # %#010x prints a zero word without its 0x prefix, so key on the value.
+        produced = {
+            int(key, 16): value
+            for key, value in (line.split("->") for line in out.split() if "->" in line)
+        }
+        for raw, version in (
+            (0x00000000, "0"), (0x00000001, "1"), (0x00000002, "2"),
+            (0x00000004, "3"), (0x00000003, "2"), (0x00000007, "3"),
+            (0xFFFFFFFF, "0"), (0xBADF0000, "0"), (0xBADF0003, "0"),
+        ):
+            self.assertEqual(produced.get(raw), version, f"version of {raw:#010x} changed")
+
+    def test_the_slot_each_captured_card_can_select(self):
+        # A version is only useful if the ROM's sig_versions mask has that bit.
+        # Both captured masks are legal and both include version zero; a mask
+        # outside {0x3, 0x7} is the boot that stops with -ERANGE.
+        store = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encoding="utf-8"))
+        for capture in store["prom_captures"]["captures"]:
+            mask = capture["sig_versions"]
+            self.assertIn(mask, (0x3, 0x7), f"{capture['card']}: mask the selector refuses")
+            self.assertEqual(capture["sig_count"], bin(mask).count("1"))
+            self.assertEqual(capture["sig_bytes"], 384 * capture["sig_count"])
+            self.assertTrue(mask & 0x1, "version zero must be selectable")
+            for version in range(mask.bit_length()):
+                if mask & (1 << version):
+                    self.assertLessEqual(version, 2, "a slot past the packed records")
+
+
 class TheCapturedWindowIsGated(unittest.TestCase):
     """R6 asks for the file, not the digest. A build that only hashes the window
     cannot pass it by omission, and a run that read both cards must have written
@@ -909,6 +1157,128 @@ class TheCapturedWindowIsGated(unittest.TestCase):
         self.assertIn(gate["requires"][0]["token"], source)
         self.assertIn(gate["forbids"][0]["token"], source)
         self.assertIn(gate["only_if"]["token"], source)
+
+
+class TheFuseWindowIsAGated(unittest.TestCase):
+    """R7 asks for the word, not for a window that was addressed.
+
+    The fuse word is the last value the transaction reads before its first
+    write, and a version the ROM cannot select is a refusal. A gate that scores
+    the read has to fail on an unread window and on a single refused word, and
+    it has to say NOT_APPLICABLE for the boots that predate the read.
+    """
+
+    GATE = "GATE R7_FUSE_VERSION_READ STAGE=readonly"
+    END = ("VRAM_BLOCK_PROBE_FUSE_END GPU={card} BDF=0000:{bus}:00.0 BASE=0x8241c0 "
+           "WORDS=16 READ=16 FAILED=0 UCODE9_OFFSET=0x8241e0 UCODE9_RAW={raw} "
+           "UCODE9_VERSION={version} UCODE9_ACCESS={access} UCODE9_UNREAD=0 "
+           "READ_ONLY=1 NO_GPU_WRITES=1")
+
+    def verify(self, paths: list[Path]) -> str:
+        result = subprocess.run(
+            [sys.executable, str(VERIFIER), *[str(p) for p in paths], "--self-test"],
+            capture_output=True, text=True, cwd=ROOT)
+        return result.stdout
+
+    def temporary(self, text: str) -> Path:
+        handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        handle.write(text)
+        handle.close()
+        self.addCleanup(Path(handle.name).unlink)
+        return Path(handle.name)
+
+    def fixture(self) -> str:
+        return (FIXTURES / "readonly_vram_blocks.txt").read_text(encoding="utf-8")
+
+    def with_window(self, lines: list[str]) -> str:
+        """The fixture's log, with the fuse lines where the image prints them."""
+        text = self.fixture()
+        anchor = "VRAM_BLOCK_PROBE_END "
+        at = text.index(anchor)
+        return text[:at] + "\n".join(lines) + "\n" + text[at:]
+
+    def word(self, card: str, bus: str, raw: str, version: str, access: str) -> str:
+        """One of the sixteen per-word lines a card prints; one stands for them."""
+        return (f"VRAM_BLOCK_PROBE_FUSE GPU={card} BDF=0000:{bus}:00.0 OFFSET=0x8241e0 "
+                f"UCODE_ID=9 RAW={raw} VERSION={version} ACCESS={access} READ_ONLY=1")
+
+    def both_windows(self) -> list[str]:
+        # Values chosen, not measured: one card whose fuse carries a selectable
+        # version and one whose word is the inaccessible shape, which is the
+        # case where the transaction would silently pick slot zero. A real log
+        # prints sixteen word lines per card; one is enough for the marker.
+        return [
+            self.word("4090", "01", "0x00000002", "2", "STATE"),
+            self.END.format(card="4090", bus="01", raw="0x00000002", version="2", access="STATE"),
+            self.word("3080", "04", "0xbadf5620", "0", "NOT_ACCESSIBLE"),
+            self.END.format(card="3080", bus="04", raw="0xbadf5620", version="0",
+                            access="NOT_ACCESSIBLE"),
+        ]
+
+    def test_the_gate_reads_the_image_own_lines(self):
+        source = _read(PROBE)
+        manifest = json.loads((ROOT / "docs" / "hardware_session.json")
+                              .read_text(encoding="utf-8"))
+        gate = next(g for g in manifest["gates"] if g["id"] == "R7_FUSE_VERSION_READ")
+        self.assertEqual(gate["stage"], "readonly")
+        for group in gate["requires"] + gate["forbids"]:
+            self.assertIn(group["token"], source, group["token"][:60])
+        self.assertIn(gate["only_if"]["token"], source)
+        self.assertEqual(gate["requires"][0]["min_total"], 2,
+                         "the bench is two cards, so the gate wants two lines")
+
+    def test_a_run_that_read_both_windows_passes(self):
+        out = self.verify([self.temporary(self.with_window(self.both_windows()))])
+        self.assertIn(f"{self.GATE} RESULT=PASS", out)
+        # R7 is a reading, not a verdict on the signature.
+        self.assertIn("HARDWARE_VERIFIED=0", out)
+
+    def test_one_window_is_not_both(self):
+        out = self.verify([self.temporary(self.with_window(self.both_windows()[:1]))])
+        self.assertIn(f"{self.GATE} RESULT=FAIL", out)
+
+    def test_a_window_that_read_nothing_fails(self):
+        # Sixteen refused words and no value between them: the window was
+        # addressed and nothing came back.
+        text = self.fixture().replace(
+            "VRAM_BLOCK_PROBE_END CARDS=2",
+            "VRAM_BLOCK_PROBE_FUSE GPU=4090 BDF=0000:01:00.0 OFFSET=0x8241c0 UCODE_ID=1 "
+            "STATUS=UNAVAILABLE EFI_STATUS=0x8000000000000007 NO_FALLBACK=1 READ_ONLY=1\n"
+            "VRAM_BLOCK_PROBE_FUSE_WINDOW_UNREADABLE GPU=4090 BDF=0000:01:00.0 BASE=0x8241c0 "
+            "WORDS=16 FAILED=16 READ_ONLY=1\nVRAM_BLOCK_PROBE_END CARDS=2", 1)
+        out = self.verify([self.temporary(text)])
+        self.assertIn(f"{self.GATE} RESULT=FAIL", out)
+        self.assertIn("FORBIDDEN", out)
+
+    def test_one_refused_word_inside_the_window_fails(self):
+        text = self.fixture().replace(
+            "VRAM_BLOCK_PROBE_END CARDS=2",
+            "VRAM_BLOCK_PROBE_FUSE GPU=3080 BDF=0000:04:00.0 OFFSET=0x8241e0 UCODE_ID=9 "
+            "STATUS=UNAVAILABLE EFI_STATUS=0x8000000000000007 NO_FALLBACK=1 READ_ONLY=1\n"
+            "VRAM_BLOCK_PROBE_END CARDS=2", 1)
+        out = self.verify([self.temporary(text)])
+        self.assertIn(f"{self.GATE} RESULT=FAIL", out)
+
+    def test_the_word_actually_wanted_missing_fails(self):
+        lines = [
+            self.word("4090", "01", "0x00000002", "2", "STATE"),
+            self.END.format(card="4090", bus="01", raw="0x00000002", version="2", access="STATE"),
+            self.END.format(card="3080", bus="04", raw="0x00000000", version="0", access="UNKNOWN")
+            .replace("UCODE9_UNREAD=0", "UCODE9_UNREAD=1"),
+        ]
+        out = self.verify([self.temporary(self.with_window(lines))])
+        self.assertIn(f"{self.GATE} RESULT=FAIL", out)
+
+    def test_a_boot_from_before_the_read_is_not_applicable(self):
+        # The recorded runs predate this window and must not be re-scored as
+        # failures: a build that never read the word did not answer it either way.
+        out = self.verify([FIXTURES / "readonly_vram_blocks.txt"])
+        self.assertIn(f"{self.GATE} RESULT=NOT_APPLICABLE", out)
+        self.assertNotIn(f"{self.GATE} RESULT=PASS", out)
+        recorded = ROOT / "tests" / "data" / "hardware_session" / "physical-readonly-0009.txt"
+        out = self.verify([recorded])
+        self.assertIn(f"{self.GATE} RESULT=NOT_APPLICABLE", out)
+        self.assertNotIn(f"{self.GATE} RESULT=PASS", out)
 
 
 PROLOGUE = r"""
