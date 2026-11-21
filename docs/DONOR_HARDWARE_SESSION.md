@@ -899,6 +899,7 @@ Note: the read-only image always saves its numbered log; add -WindowsEspGuid '<r
 | `R3_CARD_IDENTIFIED` | at least one NVIDIA card is named | `NVIDIA_DRIVER_OWNER[%zu] BDF=%04x:%02x:%02x.%u BY_DRIVER=%u` *(one of)*<br>`ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x` *(one of)* | — |
 | `R4_WRITE_SET_READ_BEFORE_ACTUATION` | the block probe read every word the transaction writes | `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1`<br>`VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x`<br>`VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` | `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE`<br>`INCOMPLETE_READ_SET=1` |
 | `R5_ROM_WINDOW_STRUCTURE` | the probe read the ROM window the transaction refuses a board on | `VRAM_BLOCK_PROBE_ROM GPU=%s BAR0_OFFSET=0x300000 BYTES=%u SIGNATURE=0x%04x PCIR_OFFSET=0x%04x PCIR_VENDOR=0x%04x PCIR_DEVICE=0x%04x LIVE_DEVICE=0x%04x MATCH=%u SHA256=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED` | `ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x` |
+| `R6_ROM_WINDOW_CAPTURED` | the ROM window the probe read is in a file a later build can parse | `VRAM_BLOCK_PROBE_ROM_FILE GPU=%s BYTES=%u FILE=%s SHA256=%s ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED` | `VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE GPU=%s BYTES=%u REASON=FILE_NOT_WRITTEN` |
 
 **`R1_IMAGE_RAN_READ_ONLY`** — proves: the read-only diagnostic started and wrote its own log. Does not prove: that the enumeration below finished, or anything about the card.
 
@@ -931,6 +932,11 @@ Note: the read-only image always saves its numbered log; add -WindowsEspGuid '<r
 
 * `VRAM_BLOCK_PROBE_ROM GPU=%s BAR0_OFFSET=0x300000 BYTES=%u SIGNATURE=0x%04x PCIR_OFFSET=0x%04x PCIR_VENDOR=0x%04x PCIR_DEVICE=0x%04x LIVE_DEVICE=0x%04x MATCH=%u SHA256=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED` (src/gpu_topology_efi.c) — one structural readout per verified card: the ROM's own signature, its PCIR offset and identity, the live device id and whether they name the same card. Two cards are the bench, so two lines.
 * must not contain `ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x` (src/gpu_topology_efi.c): a window the probe could not copy is the exact read the transaction makes before it writes, and it did not happen: the stage cannot claim the ROM is a candidate for this board
+
+**`R6_ROM_WINDOW_CAPTURED`** — proves: that a read-only image put the megabyte it copied from BAR0 + 0x300000 into a file on its own volume, named after the card it came from and the run that captured it, with the digest printed on the same line as the file name. Does not prove: that the file holds any particular descriptor, that the ROM is authentic, or that the FWSEC-FRTS descriptor the transaction looks for is present and acceptable. Nothing in the image parses a descriptor; the file is the input to that question, not an answer to it.
+
+* `VRAM_BLOCK_PROBE_ROM_FILE GPU=%s BYTES=%u FILE=%s SHA256=%s ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED` (src/gpu_topology_efi.c) — one file per verified card, each line carrying the digest of the megabyte that was copied, so the bytes that produced the digest left the machine and a parser can be run against them off the bench.
+* must not contain `VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE GPU=%s BYTES=%u REASON=FILE_NOT_WRITTEN` (src/gpu_topology_efi.c): the window was read and hashed but no file was written, and a digest on its own cannot answer the FWSEC question the transaction asks before its first write
 
 ### `prepare` — Preparation only
 

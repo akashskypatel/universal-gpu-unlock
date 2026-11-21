@@ -420,7 +420,19 @@ verbose Unicode text through `ConOut` and does not write a disk or NVRAM.
 **Optional** `-SaveLog` creates a new, numbered
 `GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT` (then `-0001.TXT`, etc.) on the
 application's EFI volume, refusing overwrites and file-operation failures.
-This log file is the only intended persistent mutation by the diagnostic.
+Those files are the only intended persistent mutations by the diagnostic.
+
+`-VramBlockProbe` (which the builder only accepts together with `-SaveLog`)
+additionally writes one `PROM-<segment>-<bus>-<device>-<function>-<run>.BIN`
+per card it read, holding exactly the 1 MiB it copied from
+`BAR0 + 0x300000`, under the digest the log prints for that reading. The bytes
+are written while the buffer that produced the digest is still live, so the
+window is read once. The file exists because the transaction refuses a board on
+the FWSEC-FRTS descriptor inside that window and nothing in the image parses
+one: the capture is the input to that question, and the answer is produced off
+the bench by the same parser the transaction uses. A failed capture is its own
+line - `VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE ... REASON=FILE_NOT_WRITTEN` -
+and never stops the log from being written.
 
 ## Build, inspect and run
 

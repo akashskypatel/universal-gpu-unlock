@@ -208,6 +208,10 @@ jobs:
             python3 -m unittest discover -s tests -p test_profile_asset_contract.py -v
             python3 -m unittest discover -s tests -p test_firmware_diagnostic_contract.py -v
             python3 -m unittest discover -s tests -p test_diagnostic_log_completeness.py -v
+            # The probe's write set, its read-only boundary, the ROM window it
+            # copies, the file that window is written to and the parser that
+            # reads that file back.
+            python3 -m unittest discover -s tests -p test_vram_block_probe.py -v
             python3 -m unittest discover -s tests -p test_stop_only_observation_contract.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v
             python3 -m unittest discover -s tests -p test_benchmark_attribution.py -v
@@ -218,6 +222,14 @@ jobs:
             done
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_ubsan"
             "$RUNNER_TEMP/test_prom_identity_ubsan"
+            # One name format for a captured window: the probe prints it into
+            # its log and the prepared capture would create the file under it.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_prom_filename.c -o "$RUNNER_TEMP/test_prom_filename_$compiler"
+              "$RUNNER_TEMP/test_prom_filename_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic tests/test_prom_filename.c -o "$RUNNER_TEMP/test_prom_filename_ubsan"
+            "$RUNNER_TEMP/test_prom_filename_ubsan"
             python3 -m unittest discover -s tests -p test_reference_asset_integrity.py -v
             python3 tools/verify_reference_assets.py --root .
             # D3: every payload the image can load has a provenance record that
@@ -232,16 +244,19 @@ jobs:
             # -fshort-wchar syntax check against the vendored EDK II headers
             # catches type/signature errors in the same sources the MSVC job
             # builds, including the durable-log variant of the diagnostic.
-            for variant in plain save_log; do
+            # vram_block is the build that reads the ROM window and writes it
+            # to a file: its capture path is compiled here, not only on Windows.
+            for variant in plain save_log vram_block; do
               define=""
               if [ "$variant" = save_log ]; then define="-DGU_TOPO_SAVE_LOG"; fi
+              if [ "$variant" = vram_block ]; then define="-DGU_TOPO_SAVE_LOG -DGU_VRAM_BLOCK_PROBE"; fi
               for src in src/gpu_topology_efi.c src/gpu_pci_observation.c; do
                 gcc -std=c11 -fshort-wchar -fsyntax-only -Wall -Wextra \
                   -DGU_GPU_DIAGNOSTIC_ONLY $define -Isrc \
                   -Isrc/vendor/edk2/Include -Isrc/vendor/edk2/Include/X64 "$src"
               done
             done
-            echo 'EFI_PASSIVE_SYNTAX=PASS VARIANTS=plain,save_log'
+            echo 'EFI_PASSIVE_SYNTAX=PASS VARIANTS=plain,save_log,vram_block'
             # The real discovery entrypoint must reject selected active EFI
             # builds before GuInit even on one or three GPUs.
             mkdir -p "$RUNNER_TEMP/active-selected"

@@ -16,7 +16,9 @@ EFI_STATUS GuPromCapturePrepared(EFI_SYSTEM_TABLE *table,
     UINT8 *output, UINTN output_size, UINT8 digest[32]);
 
 /* Persist the already complete capture to a target-specific name on a caller
- * provided, independently reviewed EFI volume. A pre-existence check is NOT
- * an atomic exclusive-create guarantee. No existing EFI entrypoint calls it. */
+ * provided, independently reviewed EFI volume. The name is the one
+ * src/prom_filename.h builds, with `run` keeping a second capture from
+ * colliding with a first. A pre-existence check is NOT an atomic
+ * exclusive-create guarantee. No existing EFI entrypoint calls it. */
 EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root, const GU_GPU_RECORD *target,
-    const UINT8 *output, UINTN output_size);
+    UINT32 run, const UINT8 *output, UINTN output_size);

@@ -3,6 +3,7 @@
  * in Windows-GPU-UNLOCK internal-boot/boot/probe.c. This is NOT a source
  * for the 2,048,000-byte IFR v3 ROM backups, and is not enabled on hardware. */
 #include "gpu_prom_capture_efi.h"
+#include "prom_filename.h"
 #include "sha256.h"
 #include <IndustryStandard/Acpi10.h>
 #include <string.h>
@@ -112,26 +113,28 @@ EFI_STATUS GuPromCapturePrepared(EFI_SYSTEM_TABLE *table,
  * an unconfirmed reference or release. */
 static int CaptureFileFault;
 
-EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root, const GU_GPU_RECORD *target,
+EFI_STATUS GuPromSaveNew(EFI_FILE_PROTOCOL *root,
+    const GU_GPU_RECORD *target, UINT32 run,
     const UINT8 *output, UINTN output_size) {
-  static const CHAR16 digits[]=L"0123456789ABCDEF";
-  CHAR16 name[]=L"\\PROM-0000-00-00-0.BIN";
+  /* The name comes from src/prom_filename.h, the same builder
+   * src/gpu_topology_efi.c prints into its log, so a log line names the file
+   * this call was asked to create. A target whose address cannot be encoded
+   * produces no name at all and is refused before any file operation. */
+  CHAR16 name[GU_PROM_FILE_CHARS];
   EFI_FILE_PROTOCOL *file=NULL,*prior=NULL;
   EFI_STATUS status,closed;
   UINTN written;
-  UINTN i;
   if(CaptureFileFault)return EFI_DEVICE_ERROR;
   if(!root || !root->Open || !target || !output ||
      output_size!=GU_PROM_CAPTURE_BYTES ||
-     target->segment>0xffffU || target->bus>255U ||
-     target->device>31U || target->function>7U)
+     run>9999U || !GuPromFileName((GU_PROM_CHAR *)(VOID *)name,
+                                  GU_PROM_FILE_CHARS,target->segment,
+                                  target->bus,target->device,target->function,
+                                  run))
     return EFI_INVALID_PARAMETER;
-  for(i=0;i<4;i++)name[6+i]=digits[(target->segment>>(12U-4U*(UINT32)i))&15U];
-  for(i=0;i<2;i++) {
-    name[11+i]=digits[(target->bus>>(4U-4U*(UINT32)i))&15U];
-    name[14+i]=digits[(target->device>>(4U-4U*(UINT32)i))&15U];
-  }
-  name[17]=(CHAR16)(L'0'+target->function);
+  /* The run index keeps a second capture from colliding with the first, and
+   * the prior-existence check stays: the caller cannot prove the name is
+   * unused, and REFUSING to overwrite is the policy, not the index. */
   status=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
   if(status==EFI_SUCCESS) {
     if(!prior)return EFI_COMPROMISED_DATA;

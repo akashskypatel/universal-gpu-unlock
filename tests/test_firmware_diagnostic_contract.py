@@ -273,7 +273,9 @@ int main(void) {
 
     def test_gop_capture_owns_runtime_storage(self):
         source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
-        capture="static int CaptureGopRecords("+source.split("static int CaptureGopRecords(",1)[1].split("\n#ifdef GU_TOPO_SAVE_LOG",1)[0]
+        # Ends where the final-disposal section begins; the log's file policy
+        # now lives above the probe, so it is no longer this boundary.
+        capture="static int CaptureGopRecords("+source.split("static int CaptureGopRecords(",1)[1].split("\n/* Final disposal is independent",1)[0]
         program = r"""
 #include "gpu_topology.h"
 #include <stdio.h>
@@ -806,6 +808,9 @@ int main(void){
     def test_isolated_capture_file_ownership(self):
         source=(P/"gpu_prom_capture_efi.c").read_text(encoding="utf-8")
         actual="static int CaptureFileFault;"+source.split("static int CaptureFileFault;",1)[1]
+        # The extracted body builds its file name with src/prom_filename.h, so
+        # the harness compiles the real header instead of a copy of it.
+        header=str(P/"prom_filename.h")
         program=r"""
 #include <stdio.h>
 #include <stddef.h>
@@ -892,7 +897,7 @@ int main(void){
  for(mode=0;mode<=17;mode++){
   opens=creates=writes=flushes=deletes=prior_closes=file_closes=invalid=0;
   CaptureFileFault=0;
-  EFI_STATUS s=GuPromSaveNew(&root,&target,data,sizeof(data));
+  EFI_STATUS s=GuPromSaveNew(&root,&target,0,data,sizeof(data));
   CHECK(mode==0?s==EFI_SUCCESS:EFI_ERROR(s));
   if(mode==1)CHECK(s==EFI_ALREADY_STARTED);
   CHECK(!invalid);
@@ -906,27 +911,34 @@ int main(void){
   CHECK(CaptureFileFault==uncertain);
   if(uncertain){
     int ops=opens+creates+writes+flushes+deletes+prior_closes+file_closes+invalid;
-    CHECK(GuPromSaveNew(&root,&target,data,sizeof(data))==EFI_DEVICE_ERROR);
+    CHECK(GuPromSaveNew(&root,&target,0,data,sizeof(data))==EFI_DEVICE_ERROR);
     CHECK(ops==opens+creates+writes+flushes+deletes+prior_closes+file_closes+invalid);
   }
  }
  return 0;
 }
 """
+        program=program.replace('#include <wchar.h>',
+                                '#include <wchar.h>\n#include "'+header+'"',1)
         with tempfile.TemporaryDirectory() as tmp:
             c=Path(tmp)/"capture_file.c"
             c.write_text(program,encoding="utf-8")
             for compiler in ("gcc","clang"):
                 with self.subTest(compiler=compiler):
                     binary=Path(tmp)/compiler
-                    build=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(c),"-o",str(binary)],capture_output=True,text=True)
+                    # -fshort-wchar is the EDK II CHAR16 width; the name the
+                    # extracted body builds is 16-bit units.
+                    build=subprocess.run([compiler,"-std=c11","-fshort-wchar","-O2","-Wall","-Wextra","-Werror","-pedantic",str(c),"-o",str(binary)],capture_output=True,text=True)
                     self.assertEqual(build.returncode,0,build.stderr)
                     run=subprocess.run([str(binary)],capture_output=True,text=True)
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
     def test_diagnostic_log_file_ownership(self):
         source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
-        actual=source.split("static int LogFileFault;",1)[1].split("\n#endif",1)[0]
+        # Ends at the probe section: the log's file policy and the capture's are
+        # separate, and each is held to its own harness.
+        actual=source.split("static int LogFileFault;",1)[1].split(
+            "\n#ifdef GU_VRAM_BLOCK_PROBE",1)[0]
         actual="static int LogFileFault;"+actual
         program=r"""
 #include <stdio.h>

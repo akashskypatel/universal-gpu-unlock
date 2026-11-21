@@ -771,5 +771,517 @@ class VerifierScoresTheProbe(unittest.TestCase):
         self.assertIn("RUN_LOG_VERDICT=PASS_SELF_TEST", out)
 
 
+
+class TheCapturedWindowIsGated(unittest.TestCase):
+    """R6 asks for the file, not the digest. A build that only hashes the window
+    cannot pass it by omission, and a run that read both cards must have written
+    both files or it fails.
+    """
+
+    GATE = "GATE R6_ROM_WINDOW_CAPTURED STAGE=readonly"
+
+    def verify(self, paths: list[Path]) -> str:
+        result = subprocess.run(
+            [sys.executable, str(VERIFIER), *[str(p) for p in paths], "--self-test"],
+            capture_output=True, text=True, cwd=ROOT)
+        return result.stdout
+
+    def temporary(self, text: str) -> Path:
+        handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        handle.write(text)
+        handle.close()
+        self.addCleanup(Path(handle.name).unlink)
+        return Path(handle.name)
+
+    def fixture(self) -> str:
+        return (FIXTURES / "readonly_vram_blocks.txt").read_text(encoding="utf-8")
+
+    def test_a_run_that_captured_both_windows_passes(self):
+        out = self.verify([FIXTURES / "readonly_vram_blocks.txt"])
+        self.assertIn(f"{self.GATE} RESULT=PASS", out)
+        self.assertIn("HARDWARE_VERIFIED=0", out)
+
+    def test_one_captured_window_is_not_both(self):
+        text = self.fixture()
+        lines = [line for line in text.splitlines()
+                 if not line.startswith("VRAM_BLOCK_PROBE_ROM_FILE GPU=3080")]
+        self.assertEqual(len(lines), len(text.splitlines()) - 1)
+        out = self.verify([self.temporary("\n".join(lines) + "\n")])
+        self.assertIn(f"{self.GATE} RESULT=FAIL", out)
+
+    def test_a_window_read_but_not_written_fails(self):
+        text = self.fixture().replace(
+            "VRAM_BLOCK_PROBE_ROM_FILE GPU=3080 BYTES=1048576 FILE=",
+            "VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE GPU=3080 BYTES=1048576 REASON=FILE_NOT_WRITTEN NO_COPY=1 READ_ONLY=1 IGNORED=",
+            1)
+        self.assertIn("REASON=FILE_NOT_WRITTEN", text)
+        out = self.verify([self.temporary(text)])
+        self.assertIn(f"{self.GATE} RESULT=FAIL", out)
+        self.assertIn("FORBIDDEN", out)
+
+    def test_a_build_that_only_hashed_the_window_is_not_applicable(self):
+        text = "\n".join(line for line in self.fixture().splitlines()
+                         if not line.startswith("VRAM_BLOCK_PROBE_ROM_FILE"))
+        out = self.verify([self.temporary(text + "\n")])
+        self.assertIn(f"{self.GATE} RESULT=NOT_APPLICABLE", out)
+        self.assertNotIn(f"{self.GATE} RESULT=PASS", out)
+
+    def test_the_capture_line_is_the_one_the_image_prints(self):
+        """The gate reads the image's own format string, so a reworded line
+        fails here rather than on the bench."""
+        source = _read(ROOT / "src" / "gpu_topology_efi.c")
+        manifest = json.loads((ROOT / "docs" / "hardware_session.json")
+                              .read_text(encoding="utf-8"))
+        gate = next(g for g in manifest["gates"] if g["id"] == "R6_ROM_WINDOW_CAPTURED")
+        self.assertIn(gate["requires"][0]["token"], source)
+        self.assertIn(gate["forbids"][0]["token"], source)
+        self.assertIn(gate["only_if"]["token"], source)
+
+
+PROLOGUE = r"""
+#include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+#include <wchar.h>
+#include "PROM_FILENAME_HEADER"
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef uint64_t EFI_STATUS;
+typedef size_t UINTN;
+typedef uint8_t UINT8;
+typedef uint32_t UINT32;
+typedef wchar_t CHAR16;
+typedef int EFI_GUID;
+#define EFI_SUCCESS 0ULL
+#define EFI_ERR(n) ((1ULL<<63)|(n))
+#define EFI_ERROR(x) (((x)>>63)!=0)
+#define EFI_INVALID_PARAMETER EFI_ERR(2)
+#define EFI_UNSUPPORTED EFI_ERR(3)
+#define EFI_DEVICE_ERROR EFI_ERR(7)
+#define EFI_VOLUME_FULL EFI_ERR(11)
+#define EFI_NOT_FOUND EFI_ERR(14)
+#define EFI_COMPROMISED_DATA EFI_ERR(33)
+#define EFI_FILE_MODE_READ 1ULL
+#define EFI_FILE_MODE_WRITE 2ULL
+#define EFI_FILE_MODE_CREATE 4ULL
+typedef struct {UINT32 segment,bus,device,function;} GU_GPU_RECORD;
+typedef struct file EFI_FILE_PROTOCOL;
+struct file {
+  EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,uint64_t,uint64_t);
+  EFI_STATUS (*Close)(EFI_FILE_PROTOCOL *);
+  EFI_STATUS (*Write)(EFI_FILE_PROTOCOL *,UINTN *,VOID *);
+  EFI_STATUS (*Flush)(EFI_FILE_PROTOCOL *);
+  EFI_STATUS (*Delete)(EFI_FILE_PROTOCOL *);
+};
+typedef struct fs EFI_SIMPLE_FILE_SYSTEM_PROTOCOL;
+struct fs {EFI_STATUS (*OpenVolume)(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *,EFI_FILE_PROTOCOL **);};
+typedef struct {EFI_HANDLE DeviceHandle;} EFI_LOADED_IMAGE_PROTOCOL;
+typedef struct {EFI_STATUS (*HandleProtocol)(EFI_HANDLE,EFI_GUID *,VOID **);} EFI_BOOT_SERVICES;
+typedef struct {EFI_BOOT_SERVICES *BootServices;} EFI_SYSTEM_TABLE;
+static EFI_GUID LoadedGuid,FsGuid;
+static void Say(const char *format,...) {(void)format;}
+static EFI_FILE_PROTOCOL root,file,prior,foreign;
+static unsigned mode,opens,creates,writes,flushes,deletes,root_closes,file_closes;
+static unsigned prior_closes,foreign_closes,protocols,volumes;
+static UINTN write_bytes;
+static char first_name[GU_PROM_FILE_CHARS];
+static void Remember(CHAR16 *name) {
+  size_t i;
+  for(i=0;i+1U<GU_PROM_FILE_CHARS && name[i];i++) first_name[i]=(char)name[i];
+  first_name[i]=0;
+}
+static EFI_STATUS Close(EFI_FILE_PROTOCOL *f) {
+  if(f==&root){root_closes++;return mode==7?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+  if(f==&file){file_closes++;return mode==6?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+  if(f==&prior){prior_closes++;return mode==8?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+  foreign_closes++;return EFI_DEVICE_ERROR;
+}
+static EFI_STATUS Open(EFI_FILE_PROTOCOL *f,EFI_FILE_PROTOCOL **out,CHAR16 *name,uint64_t flags,uint64_t attrs) {
+  (void)f;(void)attrs;
+  if(!first_name[0]) Remember(name);
+  opens++;
+  if(flags&EFI_FILE_MODE_CREATE) {
+    creates++;
+    if(mode==3){*out=&foreign;return EFI_DEVICE_ERROR;}
+    if(mode==10){*out=&root;return EFI_SUCCESS;}
+    *out=&file;return EFI_SUCCESS;
+  }
+  /* mode 1: the first name is taken and the next one is free.
+   * mode 8: the same prior name is found but cannot be closed. */
+  if((mode==1||mode==8) && opens==1){*out=&prior;return EFI_SUCCESS;}
+  if(mode==9){*out=&root;return EFI_SUCCESS;}
+  return EFI_NOT_FOUND;
+}
+static EFI_STATUS Write(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *data) {
+  (void)f;(void)data;
+  writes++;write_bytes=*n;
+  if(mode==4||mode==5)return EFI_DEVICE_ERROR;
+  if(mode==11){if(*n)*n=*n-1U;return EFI_SUCCESS;}
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Flush(EFI_FILE_PROTOCOL *f) {(void)f;flushes++;return EFI_SUCCESS;}
+static EFI_STATUS Delete(EFI_FILE_PROTOCOL *f) {
+  (void)f;deletes++;return mode==5?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static EFI_STATUS Volume(EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs,EFI_FILE_PROTOCOL **out) {
+  (void)fs;volumes++;
+  if(mode==2){*out=&foreign;return EFI_DEVICE_ERROR;}
+  *out=&root;return EFI_SUCCESS;
+}
+static EFI_SIMPLE_FILE_SYSTEM_PROTOCOL fs={Volume};
+static EFI_LOADED_IMAGE_PROTOCOL li={(EFI_HANDLE)1};
+static EFI_STATUS Protocol(EFI_HANDLE h,EFI_GUID *guid,VOID **out) {
+  (void)h;protocols++;
+  if(mode==12)return EFI_DEVICE_ERROR;
+  if(guid==&LoadedGuid)*out=&li;else *out=&fs;
+  return EFI_SUCCESS;
+}
+"""
+
+
+CAPTURE_MAIN = r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode %u: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void) {
+  EFI_BOOT_SERVICES bs={Protocol};
+  EFI_SYSTEM_TABLE table={&bs};
+  GU_GPU_RECORD target={0,1,0,0};
+  UINT8 rom[16];
+  char text[GU_PROM_FILE_CHARS];
+  unsigned run;
+  memset(rom,0x5a,sizeof(rom));
+  root=(EFI_FILE_PROTOCOL){Open,Close,NULL,NULL,Delete};
+  file=(EFI_FILE_PROTOCOL){NULL,Close,Write,Flush,Delete};
+  prior=(EFI_FILE_PROTOCOL){NULL,Close,NULL,NULL,NULL};
+  foreign=prior;
+  for(mode=0;mode<=12;mode++) {
+    opens=creates=writes=flushes=deletes=root_closes=file_closes=0;
+    prior_closes=foreign_closes=protocols=volumes=0;
+    write_bytes=0;first_name[0]=0;PromFileFault=0;
+    memset(text,0,sizeof(text));text[0]=(char)-1;
+    int ok=SavePromWindow((EFI_HANDLE)1,&table,&target,rom,sizeof(rom),text,sizeof(text));
+    CHECK(!foreign_closes);
+    switch(mode) {
+    case 0:
+      CHECK(ok==1);
+      CHECK(strcmp(text,"\\PROM-0000-01-00-0-0000.BIN")==0);
+      CHECK(strcmp(first_name,text)==0);
+      CHECK(writes==1 && write_bytes==sizeof(rom) && flushes==1);
+      CHECK(file_closes==1 && root_closes==1 && prior_closes==0 && deletes==0);
+      break;
+    case 1:
+      /* The first name is taken: the capture moves to the next run index
+       * instead of refusing to write at all. */
+      CHECK(ok==1);
+      CHECK(strcmp(text,"\\PROM-0000-01-00-0-0001.BIN")==0);
+      CHECK(strcmp(first_name,"\\PROM-0000-01-00-0-0000.BIN")==0);
+      CHECK(prior_closes==1 && creates==1 && writes==1);
+      break;
+    case 2:
+      /* The volume could not be opened: no file operations, the capture's own
+       * latch is set, and the caller is told by a zero return. */
+      CHECK(ok==0 && text[0]==0);
+      CHECK(volumes==1 && opens==0 && creates==0 && PromFileFault==1);
+      break;
+    case 3:
+      CHECK(ok==0 && text[0]==0);
+      CHECK(PromFileFault==1 && deletes==0 && file_closes==0);
+      break;
+    case 4:
+      /* A write that failed leaves no partial file behind. */
+      CHECK(ok==0 && text[0]==0);
+      CHECK(PromFileFault==0 && deletes==1 && root_closes==1);
+      break;
+    case 5:
+      CHECK(ok==0 && text[0]==0);
+      CHECK(PromFileFault==1 && deletes==1);
+      break;
+    case 6:
+      CHECK(ok==0 && text[0]==0);
+      CHECK(file_closes==1 && root_closes==1);
+      break;
+    case 7:
+      CHECK(ok==0 && text[0]==0);
+      CHECK(root_closes==1 && PromFileFault==1);
+      break;
+    case 8:
+      CHECK(ok==0 && text[0]==0);
+      CHECK(prior_closes==1 && PromFileFault==1 && writes==0);
+      break;
+    case 9:
+      CHECK(ok==0 && text[0]==0);
+      CHECK(PromFileFault==1 && prior_closes==0 && creates==0);
+      break;
+    case 10:
+      CHECK(ok==0 && text[0]==0);
+      CHECK(PromFileFault==1 && file_closes==0);
+      break;
+    case 11:
+      /* A short write is not a complete capture. */
+      CHECK(ok==0 && text[0]==0);
+      CHECK(writes==1 && deletes==1);
+      break;
+    case 12:
+      CHECK(ok==0 && text[0]==0 && volumes==0 && PromFileFault==0);
+      break;
+    }
+    if(PromFileFault) {
+      unsigned ops=protocols+volumes+opens+creates+writes+flushes+deletes+
+                   root_closes+file_closes+prior_closes;
+      CHECK(SavePromWindow((EFI_HANDLE)1,&table,&target,rom,sizeof(rom),text,sizeof(text))==0);
+      CHECK(ops==protocols+volumes+opens+creates+writes+flushes+deletes+
+               root_closes+file_closes+prior_closes);
+      CHECK(text[0]==0);
+    }
+  }
+  /* An address that cannot be encoded produces no file at all, and is refused
+   * before anything is created. */
+  mode=0;target.segment=0x10000U;
+  opens=creates=writes=volumes=0;PromFileFault=0;text[0]=(char)-1;
+  CHECK(SavePromWindow((EFI_HANDLE)1,&table,&target,rom,sizeof(rom),text,sizeof(text))==0);
+  CHECK(text[0]==0 && creates==0 && writes==0);
+  target.segment=0;
+  /* Arguments are refused before any service is called. */
+  protocols=0;
+  CHECK(SavePromWindow((EFI_HANDLE)1,&table,&target,NULL,sizeof(rom),text,sizeof(text))==0);
+  CHECK(SavePromWindow((EFI_HANDLE)1,&table,NULL,rom,sizeof(rom),text,sizeof(text))==0);
+  CHECK(SavePromWindow((EFI_HANDLE)1,&table,&target,rom,0,text,sizeof(text))==0);
+  CHECK(SavePromWindow((EFI_HANDLE)1,&table,&target,rom,sizeof(rom),NULL,sizeof(text))==0);
+  CHECK(SavePromWindow((EFI_HANDLE)1,&table,&target,rom,sizeof(rom),text,GU_PROM_FILE_CHARS-1U)==0);
+  CHECK(protocols==0);
+  /* The name the log prints is the name the file system was asked for, on both
+   * cards of the bench and for four runs of each. */
+  mode=0;
+  for(run=0;run<4;run++) {
+    target.bus=run?4U:1U;
+    first_name[0]=0;
+    memset(text,0,sizeof(text));text[0]=(char)-1;
+    CHECK(SavePromWindow((EFI_HANDLE)1,&table,&target,rom,sizeof(rom),text,sizeof(text))==1);
+    CHECK(strcmp(first_name,text)==0);
+  }
+  return 0;
+}
+"""
+
+
+class TheCapturedWindowLeavesTheBench(unittest.TestCase):
+    """The probe already copies and hashes a megabyte per card. What it lacked
+    was a way for those bytes to leave the machine, without which the FWSEC
+    question the transaction asks cannot be answered anywhere.
+
+    These tests run the real save path - the real name builder, the real
+    open/close helpers and the real capture function - against file mocks, so
+    the failure a bench would see is one of these first.
+    """
+
+    def program(self) -> str:
+        source = _read(ROOT / "src" / "gpu_topology_efi.c")
+        helpers = "static EFI_STATUS LogOpenResult(" + source.split(
+            "static EFI_STATUS LogOpenResult(", 1)[1].split(
+            "\nstatic EFI_STATUS SaveLog(", 1)[0]
+        capture = "static int PromFileFault;" + source.split(
+            "static int PromFileFault;", 1)[1].split("\n#endif\n#endif", 1)[0]
+        header = str(ROOT / "src" / "prom_filename.h")
+        body = PROLOGUE.replace("PROM_FILENAME_HEADER", header)
+        return body + helpers + "\n" + capture + CAPTURE_MAIN
+
+    def build(self, program: str) -> None:
+        handle = tempfile.TemporaryDirectory()
+        self.addCleanup(handle.cleanup)
+        source = Path(handle.name) / "prom_save.c"
+        source.write_text(program, encoding="utf-8")
+        for compiler in ("gcc", "clang"):
+            with self.subTest(compiler=compiler):
+                binary = Path(handle.name) / compiler
+                # -fshort-wchar is the EDK II ABI: CHAR16 is 16 bits, as it is
+                # in MSVC. Without it a name built in 16-bit units is packed
+                # two characters per wchar_t and the file system is handed
+                # garbage, which is why this harness would rather fail here.
+                build = subprocess.run(
+                    [compiler, "-std=c11", "-fshort-wchar",
+                     "-O2", "-Wall", "-Wextra", "-Werror",
+                     "-pedantic", str(source), "-o", str(binary)],
+                    capture_output=True, text=True)
+                self.assertEqual(build.returncode, 0, build.stderr)
+                run = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+    def test_the_capture_path_writes_and_names_the_window(self):
+        self.build(self.program())
+
+    def test_the_capture_keeps_a_latch_the_log_cannot_set(self):
+        """A commit that failed on the megabyte must not cost the report of what
+        was read, so the capture answers to its own latch."""
+        source = _read(ROOT / "src" / "gpu_topology_efi.c")
+        save_log = strip_comments(source.split("static EFI_STATUS SaveLog(", 1)[1]
+                                  .split("\n#ifdef GU_VRAM_BLOCK_PROBE", 1)[0])
+        capture = strip_comments(source.split("static int SavePromWindow(", 1)[1]
+                                 .split("\n#endif\n#endif", 1)[0])
+        self.assertIn("LogFileFault", save_log)
+        self.assertNotIn("PromFileFault", save_log)
+        self.assertIn("PromFileFault", capture)
+        self.assertNotIn("LogFileFault", capture)
+        # ... and the log is still written after a capture fault, because it is
+        # the last thing the image does.
+        self.assertLess(source.index("static int SavePromWindow("),
+                        source.index("EFI_STATUS written=SaveLog(image,table);"))
+
+    def test_the_capture_line_names_the_file_the_writer_created(self):
+        source = strip_comments(_read(ROOT / "src" / "gpu_topology_efi.c"))
+        self.assertIn(
+            '"VRAM_BLOCK_PROBE_ROM_FILE GPU=%s BYTES=%u FILE=%s SHA256=%s '
+            'ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED', source)
+        self.assertIn(
+            '"VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE GPU=%s BYTES=%u '
+            'REASON=FILE_NOT_WRITTEN NO_COPY=1 READ_ONLY=1', source)
+        # One save per card, in the function that already read the window, while
+        # the buffer the digest describes is still live.
+        body = strip_comments(probe_function())
+        self.assertEqual(body.count("SavePromWindow("), 1)
+        self.assertLess(body.index("GuSha256("), body.index("SavePromWindow("))
+        self.assertLess(body.index("SavePromWindow("), body.rindex("FreePool(rom)"))
+        # And the window is still read exactly once per card.
+        self.assertEqual(body.count("EfiPciIoWidthUint8"), 1)
+
+
+def synthetic_rom_window(descriptor_version: int = 3) -> bytes:
+    """A 1 MiB window shaped like a capture: an expansion ROM naming the 4090,
+    one BIT token pointing at a one-entry ucode table, and one V3 descriptor.
+
+    It is a fixture for the reader, not a VBIOS: nothing here is signed and no
+    byte of it came from a card.
+    """
+    import struct
+    rom = bytearray(1024 * 1024)
+
+    def w16(offset: int, value: int) -> None:
+        rom[offset:offset + 2] = struct.pack("<H", value)
+
+    def w32(offset: int, value: int) -> None:
+        rom[offset:offset + 4] = struct.pack("<I", value)
+
+    w16(0, 0xAA55)
+    rom[2] = 0x08
+    pcir = 0xE0
+    w16(0x18, pcir)
+    rom[pcir:pcir + 4] = b"PCIR"
+    w16(pcir + 4, 0x10DE)
+    w16(pcir + 6, 0x2684)
+    w16(pcir + 0x0A, 0)
+    w16(pcir + 0x10, 0x08)
+    rom[pcir + 0x14] = 0
+    rom[pcir + 0x15] = 0x80
+    bit, pointer, table, descriptor = 0x800, 0x900, 0xA00, 0x1000
+    rom[bit] = 0xFF
+    rom[bit + 1] = 0xB8
+    rom[bit + 2:bit + 6] = b"BIT\0"
+    rom[bit + 8] = 12
+    rom[bit + 9] = 8
+    rom[bit + 10] = 1
+    rom[bit + 11] = 0
+    rom[bit + 11] = (-(sum(rom[bit:bit + 12]) & 0xFF)) & 0xFF
+    token = bit + 12
+    rom[token] = 0x70
+    rom[token + 1] = 0x02
+    w16(token + 2, 8)
+    w32(token + 4, pointer)
+    w32(pointer, table)
+    rom[table] = 1
+    rom[table + 1] = 6
+    rom[table + 2] = 6
+    rom[table + 3] = 1
+    rom[table + 6] = 0x85
+    w32(table + 8, descriptor)
+    size = 44 + 384
+    w32(descriptor, (size << 16) | (descriptor_version << 8) | 1)
+    w32(descriptor + 4, 1024)
+    w32(descriptor + 8, 0)
+    w32(descriptor + 12, 8)
+    w32(descriptor + 16, 0)
+    w32(descriptor + 20, 384)
+    w32(descriptor + 24, 0)
+    w32(descriptor + 28, 0)
+    w32(descriptor + 32, 512)
+    w16(descriptor + 36, 0x400)
+    rom[descriptor + 38] = 1
+    rom[descriptor + 39] = 1
+    w16(descriptor + 40, 1)
+    return bytes(rom)
+
+
+class TheCapturedWindowCanBeParsed(unittest.TestCase):
+    """The file the probe writes is only useful if the parser the transaction
+    uses can read it. This runs that parser - tests/test_fwsec_v2.c includes
+    src/vendor/vbios_610.c itself - over a window shaped like a capture, so the
+    bench run's output can be read the moment it lands.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.binary = Path(self._tmp.name) / "fwsec"
+        build = subprocess.run(
+            ["gcc", "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-pedantic",
+             "-Isrc", "tests/test_fwsec_v2.c", "-o", str(self.binary)],
+            capture_output=True, text=True, cwd=ROOT)
+        self.assertEqual(build.returncode, 0, build.stderr)
+
+    def window(self, data: bytes) -> Path:
+        path = Path(self._tmp.name) / "PROM-0000-01-00-0-0000.BIN"
+        path.write_bytes(data)
+        return path
+
+    def parse(self, path: Path) -> subprocess.CompletedProcess:
+        return subprocess.run([str(self.binary), str(path)],
+                              capture_output=True, text=True, cwd=ROOT)
+
+    def test_a_window_with_a_usable_descriptor_is_accepted(self):
+        run = self.parse(self.window(synthetic_rom_window()))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("PROM_FILE FWSEC_FOUND=1", run.stdout)
+        self.assertIn("DESCRIPTOR_VERSION=3", run.stdout)
+        self.assertIn("ENGINE_MASK=0x400", run.stdout)
+        self.assertIn("ACCEPTED=1", run.stdout)
+        self.assertIn("SIGNATURE_AUTHENTICATED=0", run.stdout)
+
+    def test_a_window_without_a_descriptor_is_reported_not_guessed(self):
+        run = self.parse(self.window(bytes(1024 * 1024)))
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("PROM_FILE FWSEC_FOUND=0", run.stdout)
+        self.assertNotIn("ACCEPTED=1", run.stdout)
+
+    def test_a_v2_descriptor_is_not_an_admission(self):
+        """V2 carries no ucode id or signature count. The transaction refuses
+        it, so the report must not call it accepted."""
+        run = self.parse(self.window(synthetic_rom_window(descriptor_version=2)))
+        self.assertIn("FWSEC_FOUND=0", run.stdout + run.stderr)
+        self.assertNotIn("ACCEPTED=1", run.stdout)
+
+    def test_the_admission_bits_are_the_transactions_predicate(self):
+        """The four printed bits have to be the four conditions of
+        GuAd104FwsecMatches(), or the report answers a different question than
+        the firmware does."""
+        profile = _read(ROOT / "src" / "profile.c")
+        predicate = profile.split("BOOLEAN GuAd104FwsecMatches(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("descriptor_version == 3", predicate)
+        self.assertIn("ucode_id != 0", predicate)
+        self.assertIn("sig_count >= 1", predicate)
+        self.assertIn("sig_bytes == (UINT32)f->sig_count * 384", predicate)
+        harness = _read(ROOT / "tests" / "test_fwsec_v2.c")
+        self.assertIn("v3=fw.descriptor_version==3;", harness)
+        self.assertIn("ucode=fw.ucode_id!=0;", harness)
+        self.assertIn("count=fw.sig_count>=1;", harness)
+        self.assertIn("sigbytes=fw.sig_bytes==(u32)fw.sig_count*384;", harness)
+        self.assertIn("accepted=v3&&ucode&&count&&sigbytes;", harness)
+
+    def test_the_capture_the_probe_writes_is_the_one_this_reads(self):
+        """The file is 1 MiB and the parser refuses more, so the size the probe
+        writes and the size this reads cannot drift."""
+        probe = strip_comments(_read(ROOT / "src" / "gpu_topology_efi.c"))
+        self.assertIn("#define GU_VRAM_ROM_BYTES  1048576U", probe)
+        harness = _read(ROOT / "tests" / "test_fwsec_v2.c")
+        self.assertIn("size>1024*1024", harness)
+        self.assertEqual(len(synthetic_rom_window()), 1048576)
+
 if __name__ == "__main__":
     unittest.main()

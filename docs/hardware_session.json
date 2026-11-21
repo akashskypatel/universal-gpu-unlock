@@ -4,7 +4,7 @@
   "note": "The donor-hardware session, as gates a script can check. Nothing here claims a run works: it checks that a captured log proves what the plan says it proves, and it refuses to score a log as hardware evidence when it cannot tell.",
   "log_shape": {
     "active_app": "\\AD102-UNLOCK\\RUNnnnn.TXT on the USB stick, one file per boot, never overwritten",
-    "read_only_diagnostic": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the USB stick",
+    "read_only_diagnostic": "\\\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the USB stick; the VRAM-block probe build also writes one \\\\PROM-ssss-bb-dd-f-nnnn.BIN per card it read, named after that card and that run, never overwritten",
     "line_endings": "the diagnostic writes CRLF; the active app writes LF. Both are accepted",
     "order": "the file number is the boot order; pass the logs to the verifier in that order"
   },
@@ -933,6 +933,33 @@
       ],
       "proves": "that a read-only image copied the megabyte at BAR0 + 0x300000 the transaction copies before its first write, and that the image's own signature and PCIR identity name the card it was read from",
       "does_not_prove": "that the ROM is authentic, that it carries the FWSEC-FRTS descriptor the transaction looks for, or that preparation will accept it. A MATCH=1 says the structure names this device and nothing more; SIGNATURE_AUTHENTICATED is not printed because nothing here authenticates a signature"
+    },
+    {
+      "id": "R6_ROM_WINDOW_CAPTURED",
+      "stage": "readonly",
+      "title": "the ROM window the probe read is in a file a later build can parse",
+      "only_if": {
+        "token": "VRAM_BLOCK_PROBE_ROM_FILE GPU=%s BYTES=%u FILE=%s SHA256=%s ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED",
+        "why": "a log with no capture line came from an image that only hashed the window; that boot is NOT_APPLICABLE rather than silently passing, and a run of the capturing build cannot look like one of the hashing one",
+        "emitter": "src/gpu_topology_efi.c"
+      },
+      "requires": [
+        {
+          "token": "VRAM_BLOCK_PROBE_ROM_FILE GPU=%s BYTES=%u FILE=%s SHA256=%s ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED",
+          "emitter": "src/gpu_topology_efi.c",
+          "min_total": 2,
+          "why": "one file per verified card, each line carrying the digest of the megabyte that was copied, so the bytes that produced the digest left the machine and a parser can be run against them off the bench"
+        }
+      ],
+      "forbids": [
+        {
+          "token": "VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE GPU=%s BYTES=%u REASON=FILE_NOT_WRITTEN",
+          "emitter": "src/gpu_topology_efi.c",
+          "why": "the window was read and hashed but no file was written, and a digest on its own cannot answer the FWSEC question the transaction asks before its first write"
+        }
+      ],
+      "proves": "that a read-only image put the megabyte it copied from BAR0 + 0x300000 into a file on its own volume, named after the card it came from and the run that captured it, with the digest printed on the same line as the file name",
+      "does_not_prove": "that the file holds any particular descriptor, that the ROM is authentic, or that the FWSEC-FRTS descriptor the transaction looks for is present and acceptable. Nothing in the image parses a descriptor; the file is the input to that question, not an answer to it"
     },
     {
       "id": "P1_PREPARATION_REFUSED_BEFORE_MUTATION",

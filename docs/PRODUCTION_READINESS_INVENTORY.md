@@ -460,6 +460,90 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.38 C5 — the captured megabyte leaves the bench, and nothing had to be re-read
+
+§11.37 closed with the descriptor as the last content gate before the
+transaction's first write. The question that gate asks is asked of a megabyte at
+`BAR0 + 0x300000`, and this repository can read it but had never kept it: the
+digest in the log described bytes that existed only until the pool was freed.
+The plan was to write a capture path. That plan was wrong twice over, and the
+correction is the useful part of this section.
+
+**The capture code already existed, in two places, and neither was wired to the
+other.**
+
+| Piece | Where | State before this change |
+| --- | --- | --- |
+| 1 MiB read loop, portable, refuses a reader that aliases its output | `src/gpu_prom_capture.c` | host-tested (29 checks); **compiled into the diagnostic build and never linked** |
+| EFI adapter and `\PROM-…BIN` writer for a *prepared* capture | `src/gpu_prom_capture_efi.c` | compiled for ABI coverage, never linked: it needs `GuRefreshPreparedGpu()`, which is the prepare path a passive image must not carry |
+| A full 1 MiB read in the shipped probe, in the transaction's own 1 KiB chunks | `ReportVramRom()`, `src/gpu_topology_efi.c` | **in the image, run on both cards in `-0008`, hashed and discarded** |
+| Non-overwriting durable file write | `SaveLog()`, same file | in the image, on every `-SaveLog` boot |
+| ROM walk and FWSEC-FRTS descriptor parse | `src/vendor/vbios_610.c`, `gpu_unlock_vbios_fwsec()` | host harness existed: `tests/test_fwsec_v2.c` includes it directly |
+| The admission test preparation applies | `GuAd104FwsecMatches()`, `src/profile.c` | hosted by text extraction in `tests/test_turing_cold_state.py` |
+
+So the megabyte was already being read on the bench - once, in the loop that
+mirrors `GuCopyFromIo()` - and a second reader in the same image would have been
+a third implementation of the same six lines. What was missing was the file, and
+the parser's ability to be pointed at one.
+
+**What the change is.** `ReportVramRom()` now writes the buffer it just hashed,
+while that buffer is live, through `SavePromWindow()`, which reuses the log's own
+volume-open, numbered-name, fault-latch and close helpers rather than growing a
+second file policy. The name comes from `src/prom_filename.h`, a shared builder
+that `GuPromSaveNew()` also uses, so the image prints the name it hands to
+`EFI_FILE_PROTOCOL::Open`. A new line follows each ROM readout:
+
+```
+VRAM_BLOCK_PROBE_ROM_FILE GPU=4090 BYTES=1048576 FILE=\PROM-0000-01-00-0-0000.BIN
+  SHA256=… ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED
+```
+
+and a failure is its own line (`…ROM_FILE=UNAVAILABLE … REASON=FILE_NOT_WRITTEN`)
+rather than an absence, because an absent line is what a build that never had the
+capability prints. The four-digit run index is what stops the second boot of the
+same bench from capturing nothing. Gate `R6_ROM_WINDOW_CAPTURED` requires one
+file line per card and forbids the unavailable one; a run of the hashing-only
+build is `NOT_APPLICABLE`, not a pass.
+
+**Two things this found before the bench did.**
+
+* *A failed capture would have cost the log.* `SaveLog()` refuses to write once
+  its fault latch is set, and the log is written last. Sharing that latch with
+  the capture would have meant that a stick that failed a 1 MiB write also lost
+  the 132 word reads the boot existed to collect. The capture has its own latch;
+  each file answers only for itself.
+* *`CHAR16` width.* The builder writes 16-bit units because `CHAR16` is `UINT16`
+  in EDK II and in MSVC. The first version of the host harness compiled with a
+  4-byte `wchar_t`, where the same bytes become two characters per element: the
+  name handed to the file system was packed garbage that the mocked `Open`
+  ignored. The harness now compiles with `-fshort-wchar`, so the width the
+  firmware has is the width the test has.
+
+**The other half: the parser can now be pointed at a capture.**
+`tests/test_fwsec_v2.c` takes an optional path, runs `gpu_unlock_vbios_fwsec()`
+over that file and prints the descriptor with the four admission bits of
+`GuAd104FwsecMatches()` and `SIGNATURE_AUTHENTICATED=0`. A test builds a 1 MiB
+window shaped like a capture - expansion ROM, one BIT token, one-entry ucode
+table, V3 descriptor - and requires it to be read as `ACCEPTED=1`; a V2
+descriptor and an all-zero window are required to be reported as not accepted.
+The four printed bits are pinned to the four conditions in `src/profile.c`, so
+the report cannot come to answer a different question than the firmware does.
+
+**What did not change.** The window is still read once per card, read-only, in
+the same chunks; no write, detach, DMA, reset, FLR or read-modify-write was
+added; the header stays an address map; `GuPromCapture()` and
+`GuPromCapturePrepared()` remain unlinked, and the unlinked adapter's policy that
+it refuses to overwrite a name is unchanged - it now takes the run index and
+builds the name from the shared header instead of a private format. Counts stay
+11 met / 15 partial / 17 not started, `C5` stays `none`, `hardware_verified`
+stays false for all 43 rows.
+
+**Next.** Boot `-Only diag-vram-blocks -StageDrive G` once with the fixed image.
+Two things come back in one run: `MATCH=1` on both cards (closing §11.37's
+question), and two `PROM-…BIN` files whose digests match their lines. Parsing
+those files with the harness above is then a bench-side operation with the
+transaction's own parser, and its output is the answer to the descriptor gate.
+
 ### 11.37 C5 — the ROM reads, and the probe compared the wrong half
 
 `GPU-TOPOLOGY-DIAGNOSTIC-0008.TXT` is the first boot of the ROM-window build. It
@@ -521,7 +605,9 @@ the post-state half of the comparison still needs an actuation.
 
 **The next boot.** The fixed image, once booted, should read `MATCH=1` on both
 cards. If it does, the ROM gate is closed as a question and the descriptor is the
-only content gate left before the transaction's first write.
+only content gate left before the transaction's first write. §11.38 makes that
+same boot carry the megabyte off the bench, so the descriptor question can be
+answered with the transaction's own parser instead of another read-only run.
 
 ### 11.36 C5 — the probe reads the ROM window, and the decision it carries
 

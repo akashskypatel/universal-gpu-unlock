@@ -18,6 +18,7 @@
 #endif
 #include "gpu_topology.h"
 #include "sha256.h"
+#include "prom_filename.h"
 #include "gpu_loaded_pe_text.h"
 #ifdef GU_TOPO_SELECTION_ENABLED
 #ifdef GU_TOPO_WINDOWS_HANDOFF
@@ -83,6 +84,9 @@ static int SelectionRead(void *opaque, size_t index, GU_GPU_RECORD *out) {
 /* Independent, read-only *evidence*, never used as a topology pass. */
 static GU_PCI_OBS_CAPTURE Supplemental;
 static EFI_SYSTEM_TABLE *System;
+/* The loaded image, kept so a stage that captured bytes can reach the same
+ * EFI volume this application was started from. */
+static EFI_HANDLE SelfImage;
 #ifdef GU_TOPO_SAVE_LOG
 static char LogBytes[131072];
 static size_t LogUsed;
@@ -310,6 +314,218 @@ static void ReportMsiB850Sec2Ucode1(int pci_ok) {
 }
 #endif
 
+#ifdef GU_TOPO_SAVE_LOG
+/* Opt-in diagnostic files on the app's own EFI volume: this text log, and the
+ * ROM window the block probe read (SavePromWindow below). Never overwrite an
+ * earlier capture of either. These are the ONLY intended persistent
+ * mutations. */
+/* A failed file ownership operation must not allow another log attempt
+ * in this diagnostic image. Independently confirmed references still close. */
+static int LogFileFault;
+
+static EFI_STATUS LogOpenResult(EFI_STATUS status,int *fault,
+                                EFI_FILE_PROTOCOL **out,const char *stage) {
+  if(status==EFI_SUCCESS)return *out?EFI_SUCCESS:EFI_DEVICE_ERROR;
+  if(*out) {
+    if(fault)*fault=1;
+    Say("LOG_OPEN_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,(VOID *)*out,(unsigned long long)status);
+    *out=NULL;
+    return EFI_DEVICE_ERROR;
+  }
+  return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
+}
+
+static EFI_STATUS CloseLogFile(int *fault,EFI_FILE_PROTOCOL **out,
+                               const char *stage) {
+  EFI_FILE_PROTOCOL *file=*out;
+  EFI_STATUS status;
+  *out=NULL;
+  if(!file)return EFI_SUCCESS;
+  status=file->Close?file->Close(file):EFI_UNSUPPORTED;
+  if(status!=EFI_SUCCESS) {
+    if(fault)*fault=1;
+    Say("LOG_CLOSE_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,(VOID *)file,(unsigned long long)status);
+  }
+  return status;
+}
+
+static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
+  EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
+  EFI_FILE_PROTOCOL *root=NULL,*file=NULL,*prior=NULL;
+  EFI_STATUS s,closed;
+  UINTN bytes,attempt,chars=0;
+  CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
+  if(LogFileFault)return EFI_DEVICE_ERROR;
+  if(LogOverflow || !LogUsed)return EFI_BAD_BUFFER_SIZE;
+  s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
+  if(s!=EFI_SUCCESS||!li)return EFI_NOT_FOUND;
+  s=table->BootServices->HandleProtocol(li->DeviceHandle,&FsGuid,(VOID **)&fs);
+  if(s!=EFI_SUCCESS||!fs||!fs->OpenVolume)return EFI_UNSUPPORTED;
+  s=fs->OpenVolume(fs,&root);
+  s=LogOpenResult(s,&LogFileFault,&root,"volume");
+  if(s!=EFI_SUCCESS)return s;
+  if(!root->Open||!root->Close){s=EFI_UNSUPPORTED;goto finish;}
+  /* Preserve the existing non-overwriting numbered capture policy. */
+  while(name[chars])chars++;
+  for(attempt=0;attempt<10000;attempt++) {
+    name[chars-8]=(CHAR16)('0'+attempt/1000);
+    name[chars-7]=(CHAR16)('0'+(attempt/100)%10);
+    name[chars-6]=(CHAR16)('0'+(attempt/10)%10);
+    name[chars-5]=(CHAR16)('0'+attempt%10);
+    s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
+    s=LogOpenResult(s,&LogFileFault,&prior,"prior");
+    if(s==EFI_SUCCESS) {
+      if(prior==root){
+        LogFileFault=1;
+        Say("LOG_OPEN_ALIAS STAGE=prior ADDRESS=%p\r\n",(VOID *)prior);
+        prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+      }
+      s=CloseLogFile(&LogFileFault,&prior,"prior");
+      if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
+      continue;
+    }
+    if(s!=EFI_NOT_FOUND)goto finish;
+    s=root->Open(root,&file,name,
+                 EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    s=LogOpenResult(s,&LogFileFault,&file,"create");
+    if(s!=EFI_SUCCESS)goto finish;
+    if(file==root){
+      LogFileFault=1;
+      Say("LOG_OPEN_ALIAS STAGE=create ADDRESS=%p\r\n",(VOID *)file);
+      file=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+    }
+    if(!file->Write||!file->Close){s=EFI_UNSUPPORTED;goto finish;}
+    Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
+    break;
+  }
+  if(attempt==10000){s=EFI_VOLUME_FULL;goto finish;}
+  if(LogOverflow){s=EFI_BAD_BUFFER_SIZE;goto finish;}
+  bytes=(UINTN)LogUsed;
+  s=file->Write(file,&bytes,LogBytes);
+  if(s==EFI_SUCCESS && bytes!=(UINTN)LogUsed)s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS && (!file->Flush || file->Flush(file)!=EFI_SUCCESS))s=EFI_DEVICE_ERROR;
+finish:
+  closed=CloseLogFile(&LogFileFault,&file,"file");
+  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  closed=CloseLogFile(&LogFileFault,&root,"volume");
+  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  /* UEFI warnings are not confirmed completion of the durable log. */
+  return s==EFI_SUCCESS?EFI_SUCCESS:EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
+}
+
+#ifdef GU_VRAM_BLOCK_PROBE
+/* The megabyte the block probe just copied and hashed, written beside the log it
+ * belongs to. A digest alone cannot answer the question the transaction asks
+ * before its first write - whether the ROM carries a FWSEC-FRTS descriptor it
+ * will accept - and nothing in this image parses a descriptor, so the bytes
+ * have to leave the bench with the log. The window is written while the buffer
+ * that produced the digest is still live, so no pool lifetime changes and no
+ * second read of the card happens.
+ *
+ * The name is src/prom_filename.h's, the same builder the unlinked prepared
+ * capture uses, and the run index is chosen here by trying names in order: a
+ * fixed name would make the second boot of the same bench capture nothing.
+ * Returns 1 with `text` naming the file that was created and closed, or 0 with
+ * `text` empty and nothing left behind. */
+/* Separate from LogFileFault on purpose: the log is written last, and an
+ * uncertain file operation on the megabyte would otherwise suppress the whole
+ * report of what was read. Each file answers only for itself. */
+static int PromFileFault;
+
+static int SavePromWindow(EFI_HANDLE image,EFI_SYSTEM_TABLE *table,
+                          const GU_GPU_RECORD *target,const UINT8 *rom,
+                          UINTN rom_bytes,char *text,UINTN text_chars) {
+  EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
+  EFI_FILE_PROTOCOL *root=NULL,*file=NULL,*prior=NULL;
+  EFI_STATUS s=EFI_DEVICE_ERROR,closed;
+  CHAR16 name[GU_PROM_FILE_CHARS];
+  UINTN bytes;
+  unsigned run,chosen=0U;
+  int written=0;
+  if(text && text_chars)text[0]=0;
+  if(PromFileFault)return 0;
+  if(!image || !table || !table->BootServices || !target || !rom ||
+     !rom_bytes || !text || text_chars<GU_PROM_FILE_CHARS)return 0;
+  s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
+  if(s!=EFI_SUCCESS || !li)return 0;
+  s=table->BootServices->HandleProtocol(li->DeviceHandle,&FsGuid,(VOID **)&fs);
+  if(s!=EFI_SUCCESS || !fs || !fs->OpenVolume)return 0;
+  s=fs->OpenVolume(fs,&root);
+  s=LogOpenResult(s,&PromFileFault,&root,"prom-volume");
+  if(s!=EFI_SUCCESS)return 0;
+  if(!root->Open || !root->Close){s=EFI_UNSUPPORTED;goto finish;}
+  for(run=0U;run<10000U;run++) {
+    if(!GuPromFileName((GU_PROM_CHAR *)(VOID *)name,GU_PROM_FILE_CHARS,
+                       target->segment,target->bus,target->device,
+                       target->function,run)) {
+      Say("PROM_CAPTURE_NAME_REFUSED SEGMENT=%u BUS=%u DEVICE=%u FUNCTION=%u NO_FILE=1\r\n",
+          (unsigned)target->segment,(unsigned)target->bus,
+          (unsigned)target->device,(unsigned)target->function);
+      s=EFI_INVALID_PARAMETER;goto finish;
+    }
+    s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
+    s=LogOpenResult(s,&PromFileFault,&prior,"prom-prior");
+    if(s==EFI_SUCCESS) {
+      if(prior==root) {
+        PromFileFault=1;
+        Say("PROM_CAPTURE_OPEN_ALIAS STAGE=prior ADDRESS=%p\r\n",(VOID *)prior);
+        prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+      }
+      s=CloseLogFile(&PromFileFault,&prior,"prom-prior");
+      if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
+      continue;
+    }
+    if(s!=EFI_NOT_FOUND)goto finish;
+    s=root->Open(root,&file,name,
+                 EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    s=LogOpenResult(s,&PromFileFault,&file,"prom-create");
+    if(s!=EFI_SUCCESS)goto finish;
+    if(file==root) {
+      PromFileFault=1;
+      Say("PROM_CAPTURE_OPEN_ALIAS STAGE=create ADDRESS=%p\r\n",(VOID *)file);
+      file=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+    }
+    if(!file->Write || !file->Close){s=EFI_UNSUPPORTED;goto finish;}
+    chosen=run;
+    break;
+  }
+  if(run==10000U){s=EFI_VOLUME_FULL;goto finish;}
+  bytes=rom_bytes;
+  s=file->Write(file,&bytes,(VOID *)rom);
+  if(s==EFI_SUCCESS && bytes!=rom_bytes)s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS && (!file->Flush || file->Flush(file)!=EFI_SUCCESS))
+    s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS &&
+     GuPromFileText(text,text_chars,target->segment,target->bus,target->device,
+                    target->function,chosen))written=1;
+finish:
+  /* A file this call created and could not complete is removed while the
+   * handle is still ours. A removal that cannot be confirmed latches the
+   * capture's own fault, so no later capture is attempted - and the log, which
+   * is written after every stage, is still written. */
+  if(!written && file && file->Delete) {
+    closed=file->Delete(file);
+    file=NULL;
+    if(closed!=EFI_SUCCESS) {
+      PromFileFault=1;
+      Say("PROM_CAPTURE_DELETE_UNCERTAIN STATUS=%#llx\r\n",
+          (unsigned long long)closed);
+    }
+  }
+  closed=CloseLogFile(&PromFileFault,&file,"prom-file");
+  if(closed!=EFI_SUCCESS)written=0;
+  closed=CloseLogFile(&PromFileFault,&root,"prom-volume");
+  if(closed!=EFI_SUCCESS)written=0;
+  if(!written && text)text[0]=0;
+  return written;
+}
+#endif
+#endif
+
 #ifdef GU_VRAM_BLOCK_PROBE
 /* The waived transaction writes 42 distinct BAR0 words: twenty SEC2 register
  * deltas, the same twenty deltas at the GSP engine, and the two speed
@@ -471,9 +687,15 @@ static UINT32 GuVramRomMatches(const UINT8 *rom,UINTN bytes,UINT32 device) {
 
 /* One line per card, or one refusal line and no ROM line. The header word is
  * read first so an unmapped window costs one read instead of a megabyte of
- * silent zeros, and every failing path names why. */
+ * silent zeros, and every failing path names why.
+ *
+ * When this image also keeps a log, the same megabyte is written to a file
+ * beside it and the line that follows says which file and under which digest.
+ * The bytes are still read once: the save happens while the buffer that
+ * produced the digest is live. */
 static UINT32 ReportVramRom(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,
-                            const char *gpu,UINT32 device) {
+                            const char *gpu,const GU_GPU_RECORD *target,
+                            UINT32 device) {
   static const char digits[]="0123456789abcdef";
   UINT32 header=0U,signature;
   UINTN done=0U;
@@ -524,6 +746,24 @@ static UINT32 ReportVramRom(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,
       (unsigned)GuVramRomWord(rom,(UINTN)GuVramRomWord(rom,0x18U)+4U),
       (unsigned)GuVramRomWord(rom,(UINTN)GuVramRomWord(rom,0x18U)+6U),
       (unsigned)device,(unsigned)GuVramRomMatches(rom,GU_VRAM_ROM_BYTES,device),hex);
+#if defined(GU_TOPO_SAVE_LOG)
+  /* A separate line rather than a field on the line above: the structural
+   * readout has to stay readable by a verifier that knows nothing about
+   * files, and a capture that failed must not look like one that was never
+   * attempted. */
+  {
+    char file[GU_PROM_FILE_CHARS];
+    if(SavePromWindow(SelfImage,System,target,rom,(UINTN)GU_VRAM_ROM_BYTES,
+                      file,sizeof(file)))
+      Say("VRAM_BLOCK_PROBE_ROM_FILE GPU=%s BYTES=%u FILE=%s SHA256=%s ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+          gpu,(unsigned)GU_VRAM_ROM_BYTES,file,hex);
+    else
+      Say("VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE GPU=%s BYTES=%u REASON=FILE_NOT_WRITTEN NO_COPY=1 READ_ONLY=1\r\n",
+          gpu,(unsigned)GU_VRAM_ROM_BYTES);
+  }
+#else
+  (VOID)target;
+#endif
   (VOID)bs->FreePool(rom);
   return 1U;
 }
@@ -643,7 +883,7 @@ static void ReportVramBlocks(int pci_ok) {
      * MATCH=0 for two ROMs that name their cards exactly. The comparison is
      * only as good as the field it is handed. */
     roms+=ReportVramRom(System?System->BootServices:NULL,pci,
-                        ada?"4090":"3080",(UINT32)(id->pci_id>>16U));
+                        ada?"4090":"3080",id,(UINT32)(id->pci_id>>16U));
     reads+=card_reads;
     failed+=card_failed;
     observed+=card_observed;
@@ -2343,105 +2583,6 @@ static int RevalidateGop(EFI_BOOT_SERVICES *bs) {
   return okay;
 }
 
-#ifdef GU_TOPO_SAVE_LOG
-/* Opt-in diagnostic file on the app's own EFI volume. Never overwrite an
- * earlier capture. The ONLY intended persistent mutation is this new file. */
-/* A failed file ownership operation must not allow another log attempt
- * in this diagnostic image. Independently confirmed references still close. */
-static int LogFileFault;
-
-static EFI_STATUS LogOpenResult(EFI_STATUS status,EFI_FILE_PROTOCOL **out,
-                                const char *stage) {
-  if(status==EFI_SUCCESS)return *out?EFI_SUCCESS:EFI_DEVICE_ERROR;
-  if(*out) {
-    LogFileFault=1;
-    Say("LOG_OPEN_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
-        stage,(VOID *)*out,(unsigned long long)status);
-    *out=NULL;
-    return EFI_DEVICE_ERROR;
-  }
-  return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
-}
-
-static EFI_STATUS CloseLogFile(EFI_FILE_PROTOCOL **out,const char *stage) {
-  EFI_FILE_PROTOCOL *file=*out;
-  EFI_STATUS status;
-  *out=NULL;
-  if(!file)return EFI_SUCCESS;
-  status=file->Close?file->Close(file):EFI_UNSUPPORTED;
-  if(status!=EFI_SUCCESS) {
-    LogFileFault=1;
-    Say("LOG_CLOSE_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
-        stage,(VOID *)file,(unsigned long long)status);
-  }
-  return status;
-}
-
-static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
-  EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
-  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
-  EFI_FILE_PROTOCOL *root=NULL,*file=NULL,*prior=NULL;
-  EFI_STATUS s,closed;
-  UINTN bytes,attempt,chars=0;
-  CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
-  if(LogFileFault)return EFI_DEVICE_ERROR;
-  if(LogOverflow || !LogUsed)return EFI_BAD_BUFFER_SIZE;
-  s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
-  if(s!=EFI_SUCCESS||!li)return EFI_NOT_FOUND;
-  s=table->BootServices->HandleProtocol(li->DeviceHandle,&FsGuid,(VOID **)&fs);
-  if(s!=EFI_SUCCESS||!fs||!fs->OpenVolume)return EFI_UNSUPPORTED;
-  s=fs->OpenVolume(fs,&root);
-  s=LogOpenResult(s,&root,"volume");
-  if(s!=EFI_SUCCESS)return s;
-  if(!root->Open||!root->Close){s=EFI_UNSUPPORTED;goto finish;}
-  /* Preserve the existing non-overwriting numbered capture policy. */
-  while(name[chars])chars++;
-  for(attempt=0;attempt<10000;attempt++) {
-    name[chars-8]=(CHAR16)('0'+attempt/1000);
-    name[chars-7]=(CHAR16)('0'+(attempt/100)%10);
-    name[chars-6]=(CHAR16)('0'+(attempt/10)%10);
-    name[chars-5]=(CHAR16)('0'+attempt%10);
-    s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
-    s=LogOpenResult(s,&prior,"prior");
-    if(s==EFI_SUCCESS) {
-      if(prior==root){
-        LogFileFault=1;
-        Say("LOG_OPEN_ALIAS STAGE=prior ADDRESS=%p\r\n",(VOID *)prior);
-        prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;
-      }
-      s=CloseLogFile(&prior,"prior");
-      if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
-      continue;
-    }
-    if(s!=EFI_NOT_FOUND)goto finish;
-    s=root->Open(root,&file,name,
-                 EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
-    s=LogOpenResult(s,&file,"create");
-    if(s!=EFI_SUCCESS)goto finish;
-    if(file==root){
-      LogFileFault=1;
-      Say("LOG_OPEN_ALIAS STAGE=create ADDRESS=%p\r\n",(VOID *)file);
-      file=NULL;s=EFI_COMPROMISED_DATA;goto finish;
-    }
-    if(!file->Write||!file->Close){s=EFI_UNSUPPORTED;goto finish;}
-    Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
-    break;
-  }
-  if(attempt==10000){s=EFI_VOLUME_FULL;goto finish;}
-  if(LogOverflow){s=EFI_BAD_BUFFER_SIZE;goto finish;}
-  bytes=(UINTN)LogUsed;
-  s=file->Write(file,&bytes,LogBytes);
-  if(s==EFI_SUCCESS && bytes!=(UINTN)LogUsed)s=EFI_DEVICE_ERROR;
-  if(s==EFI_SUCCESS && (!file->Flush || file->Flush(file)!=EFI_SUCCESS))s=EFI_DEVICE_ERROR;
-finish:
-  closed=CloseLogFile(&file,"file");
-  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
-  closed=CloseLogFile(&root,"volume");
-  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
-  /* UEFI warnings are not confirmed completion of the durable log. */
-  return s==EFI_SUCCESS?EFI_SUCCESS:EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
-}
-#endif
 
 /* Final disposal is independent of the graph verdict. Consume confirmed
  * references before calling firmware, including when a release is uncertain. */
@@ -2497,7 +2638,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
      !table->BootServices->LocateHandleBuffer ||
      !table->BootServices->HandleProtocol ||
      !table->BootServices->FreePool)return EFI_INVALID_PARAMETER;
-  System=table;bs=table->BootServices;
+  System=table;bs=table->BootServices;SelfImage=image;
   Say("GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls\r\n");
   Say("READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n");
   pci_ok=CapturePci(bs);
