@@ -460,6 +460,80 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.36 C5 — the probe reads the ROM window, and the decision it carries
+
+§11.35 ended with the next gap named: the transaction reads a megabyte at
+`BAR0 + 0x300000` and refuses a board whose image is not a PCI ROM naming that
+device, and nothing here had ever read it. The probe now does, in the same image
+and the same boot.
+
+**Why that window is the last read that matters.** `GuPrepareBoundGpu()` runs at
+`src/app.c:204`, before the operator choice and before `GuExecuteUnlockCore()`;
+every branch out of it is `goto failed`. Inside it, in order: the pinned assets,
+`GuDiagnosticScan()` - config, selectors, the 1 MiB PROM copy, the FWSEC parse,
+selector stability, all reads - and `GuAd104Prepare()`, which refines the same
+window into a refusal (`GuPromImageMatchesDevice()`, then
+`gpu_unlock_vbios_fwsec()` and `GuAd104FwsecMatches()`). The transaction's first
+bus-master write and its first MMIO write to `0x1103c0` are reachable only after
+that returns `SUCCESS`. So whether a run starts at all, and on which card, is
+decided by this read - and on this bench it had never been made: neither `-0006`
+nor `-0007` contains a single `PROM` line, because before this the only caller
+lived in the active path.
+
+**What was added.** `ReportVramRom()` in `src/gpu_topology_efi.c`, once per
+verified card:
+
+* reads the header dword at `0x300000` first, so an unmapped window costs one
+  read rather than a megabyte of silent zeros;
+* refuses to copy, and says why, when that dword is not one of the three ROM
+  signatures (`0xaa55`, `0x4e56`, `0xbb77`), when the copy fails, or when the
+  allocation fails - `ROM_WINDOW_UNREADABLE ... REASON=NOT_A_ROM_HEADER |
+  PCI_IO_ERROR | ALLOC_FAILED NO_COPY=1`;
+* otherwise copies the megabyte in the same 1 KiB `Mem.Read` chunks
+  `GuCopyFromIo()` uses, hashes it, and prints
+  `VRAM_BLOCK_PROBE_ROM ... SIGNATURE=0x… PCIR_OFFSET=0x… PCIR_VENDOR=0x10de
+  PCIR_DEVICE=0x… LIVE_DEVICE=0x… MATCH=… SHA256=…`.
+
+`GuVramRomMatches()` is `GuPromImageMatchesDevice()` from
+`src/prom_identity.h` restated in this image's types - same signature set, same
+`ROM+0x18` PCIR offset, same four bytes, same `0x10de` vendor and device
+comparison, same `bytes-0x16` bound. A host test compiles both functions from
+their sources and drives them over eleven buffers (a valid image, both alternate
+signatures, a bad signature, an out-of-range PCIR offset, a wrong PCIR magic, a
+wrong vendor, a wrong device field, a device wider than 16 bits, a short buffer,
+a null buffer) and fails on any disagreement. A second test holds the probe's
+window to the transaction's: `0x300000` has to appear in `profile.c`'s
+`GuCopyFromIo` call and in `unlock_610.c`, and the size has to be `1048576`.
+
+**What it changed in scoring.** A fifth read-only gate,
+`R5_ROM_WINDOW_STRUCTURE`: one structural readout per verified card
+(`min_total 2`), and any `ROM_WINDOW_UNREADABLE` line fails it - a window the
+probe could not copy is the exact read the transaction makes before it writes.
+`ROM_WINDOW_UNREADABLE` is also an advisory, printed only when something went
+wrong, so its absence is the normal case rather than a gap. The gate declares
+`only_if` the closing line's new `ROMS=` counter, which is why the two stored
+runs still re-score as `GATES=4` with `R5 NOT_APPLICABLE`: evolving the image
+cannot retroactively fail a log that predates it. The synthetic fixture gained
+two ROM lines and `ROMS=2`, and the tests now mutate it three ways - ROM lines
+removed (`MISSING`), a window replaced by the refusal line (`FORBIDDEN`), and
+the counter removed (`NOT_APPLICABLE`).
+
+**What it does not do.** It does not authenticate anything, and it does not
+settle the FWSEC half. `MATCH=1` means the ROM's structure names the live
+device; `SIGNATURE_AUTHENTICATED` is not printed because nothing here
+authenticates a signature, and the parse of the FWSEC-FRTS descriptor - which
+preparation also requires - is still the transaction's own business. No tracker
+row moves: `C5` stays `none`, the counts stay at 11 met / 15 partial / 17 not
+started, and `hardware_verified` stays `false` for all 43.
+
+**The next boot.** `-Only diag-vram-blocks -StageDrive G`, one run, two cards.
+Its `VRAM_BLOCK_PROBE_ROM` lines answer the question that gates everything
+downstream: whether either board presents a ROM image this transaction would
+even look at, and what `MATCH=` says about the pairing of ROM identity and live
+device. If a card reads `MATCH=0` or `ROM_WINDOW_UNREADABLE`, preparation will
+refuse it there, before any write, and that is a finding worth having in the log
+rather than at the bench.
+
 ### 11.35 C5 — the second interlock run: the reads are readable, the first stop is a BCR
 
 `GPU-TOPOLOGY-DIAGNOSTIC-0007.TXT` is the first boot of the read-set build
@@ -548,10 +622,10 @@ actuation. `hardware_verified` stays `false` for all 43, the counts stay at 11
 met / 15 partial / 17 not started, and both refused words keep
 `CAUSE=UNKNOWN`.
 
-Next, if the probe grows again: the ROM window at `BAR0 + 0x300000` is the first
-read the transaction makes that nothing probes, and it is a content gate rather
-than an address gate. Two words per card would say whether the board presents a
-ROM image the transaction would even look at.
+Next, if the probe grows again: the ROM window at `BAR0 + 0x300000` was the first
+read the transaction makes that nothing probed, and §11.36 covers it. What is
+still outside the probe is the FWSEC descriptor's contents, which the transaction
+parses from that same megabyte.
 
 ### 11.34 C5 — the probe now covers the reads that stop the transaction
 

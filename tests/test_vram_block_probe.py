@@ -278,6 +278,101 @@ class WriteSetTest(unittest.TestCase):
         self.assertIn(0x008400F4, context, "falcon_reset() must poll HwCfg")
         self.assertIn(0x00841388, context, "the RISC-V halt word must be read")
 
+    def test_the_rom_predicate_is_the_transactions_predicate(self):
+        # src/prom_identity.h decides whether a board is a candidate at all, and
+        # the probe copies that decision. Both functions are compiled here and
+        # driven over the same buffers: agreement is the point, not a reread of
+        # the same prose in two places.
+        header = ROOT / "src" / "prom_identity.h"
+        probe = _read(PROBE)
+        defines = "\n".join(re.findall(
+            r"^#define\s+GU_VRAM_ROM_(?:OFFSET|BYTES|CHUNK)\s+\S+$", probe, re.MULTILINE))
+        self.assertTrue(defines, "the probe does not define its ROM window constants")
+        harness = (
+            "#include <stdio.h>\n"
+            "#include <stdlib.h>\n"
+            "#include <string.h>\n"
+            "typedef unsigned char UINT8;\n"
+            "typedef unsigned long UINTN;\n"
+            "typedef unsigned int UINT32;\n"
+            f'#include "{header.as_posix()}"\n'
+            + defines + "\n"
+            + function_body(PROBE, "static UINT32 GuVramRomWord(const UINT8 *rom,UINTN at)")
+            + "\n"
+            + function_body(PROBE, "static UINT32 GuVramRomMatches(const UINT8 *rom,UINTN bytes,UINT32 device)")
+            + "\n"
+            "static unsigned char *rom;\n"
+            "static size_t bytes = GU_VRAM_ROM_BYTES;\n"
+            "static unsigned dev = 0x2684u;\n"
+            "static int bad;\n"
+            "static void check(const char *label) {\n"
+            "  int a = GuPromImageMatchesDevice(rom, bytes, dev);\n"
+            "  UINT32 b = GuVramRomMatches(rom, (UINTN)bytes, (UINT32)dev);\n"
+            "  if ((a ? 1 : 0) != (int)b) { printf(\"DISAGREE %s a=%d b=%u\\n\", label, a, b); bad = 1; }\n"
+            "}\n"
+            "static void pcir(const char *magic, unsigned vendor, unsigned device) {\n"
+            "  memcpy(rom + 0xe0, magic, 4); rom[0xe4] = vendor & 0xff; rom[0xe5] = vendor >> 8;\n"
+            "  rom[0xe6] = device & 0xff; rom[0xe7] = device >> 8;\n"
+            "}\n"
+            "static void fresh(void) {\n"
+            "  memset(rom, 0, bytes); rom[0] = 0x55; rom[1] = 0xaa; rom[0x18] = 0xe0; rom[0x19] = 0x00;\n"
+            "  pcir(\"PCIR\", 0x10de, 0x2684);\n"
+            "}\n"
+            "int main(void) {\n"
+            "  rom = malloc(bytes);\n"
+            "  if (!rom) return 2;\n"
+            "  fresh(); check(\"valid\");\n"
+            "  fresh(); dev = 0x220a; check(\"wrong-live-device\"); dev = 0x2684;\n"
+            "  fresh(); rom[0] = 0x56; rom[1] = 0x4e; check(\"signature-4e56\");\n"
+            "  fresh(); rom[0] = 0x77; rom[1] = 0xbb; check(\"signature-bb77\");\n"
+            "  fresh(); rom[0] = 0x00; rom[1] = 0x00; check(\"signature-invalid\");\n"
+            "  fresh(); rom[0x18] = 0xff; rom[0x19] = 0xff; check(\"pcir-out-of-range\");\n"
+            "  fresh(); pcir(\"PCIx\", 0x10de, 0x2684); check(\"pcir-magic\");\n"
+            "  fresh(); pcir(\"PCIR\", 0x10df, 0x2684); check(\"vendor\");\n"
+            "  fresh(); pcir(\"PCIR\", 0x10de, 0x220a); check(\"device-field\");\n"
+            "  fresh(); dev = 0x10000u; check(\"device-too-wide\"); dev = 0x2684;\n"
+            "  fresh(); bytes = GU_VRAM_ROM_BYTES - 1; check(\"short-buffer\"); bytes = GU_VRAM_ROM_BYTES;\n"
+            "  { unsigned char *saved = rom; rom = NULL; check(\"null-buffer\"); rom = saved; }\n"
+            "  if (bad) return 1;\n"
+            "  printf(\"AGREE %d\\n\", 11);\n"
+            "  free(rom);\n"
+            "  return 0;\n"
+            "}\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "rom.c"
+            source.write_text(harness, encoding="utf-8")
+            binary = Path(directory) / "rom"
+            build = subprocess.run(
+                ["gcc", "-std=c11", "-O1", "-Wall", "-Wextra", "-Werror",
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True)
+            self.assertEqual(build.returncode, 0, build.stderr)
+            run = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertIn("AGREE 11", run.stdout)
+
+    def test_the_rom_window_is_the_window_the_transaction_reads(self):
+        probe = _read(PROBE)
+        offset = re.search(r"#define\s+GU_VRAM_ROM_OFFSET\s+(0x[0-9a-fA-F]+)[uU]?", probe)
+        size = re.search(r"#define\s+GU_VRAM_ROM_BYTES\s+(\d+)[uU]?", probe)
+        self.assertIsNotNone(offset, "the probe does not name its ROM window offset")
+        self.assertIsNotNone(size, "the probe does not name its ROM window size")
+        offset_value = int(offset.group(1), 16)
+        size_value = int(size.group(1))
+        # profile.c copies exactly this window with GuCopyFromIo, and fwsec reads
+        # the same one again, so the three literals have to agree.
+        profile = _read(ROOT / "src" / "profile.c")
+        writer = _read(WRITER)
+        literal = f"0x{offset_value:x}"
+        self.assertIn(f"Gu.bar_base+{literal}", profile,
+                      "preparation copies a different window than the probe reads")
+        self.assertIn(literal, writer,
+                      "the transaction reads a different window than the probe reads")
+        self.assertEqual(size_value, 1048576)
+        self.assertIn(str(size_value), profile)
+        self.assertIn("1024 * 1024", writer)
+
     def test_the_probe_classifies_with_the_writers_own_predicate(self):
         # Both functions are compiled here and driven over the same matrix: the
         # probe must call a word inaccessible exactly when the transaction does.
@@ -374,10 +469,13 @@ class ReadOnlyTest(unittest.TestCase):
     def test_probe_reads_through_pci_io_only(self):
         function = strip_comments(probe_function())
         reads = re.findall(r"pci->Mem\.Read\(", function)
-        self.assertEqual(len(reads), 2, "expected one read pair: table and context")
+        # Three call sites: the write-set loop, the read-context loop, and the ROM
+        # window's header dword plus its chunked copy.
+        self.assertEqual(len(reads), 4, "expected the word loops and the ROM window")
         self.assertIn("EfiPciIoWidthUint32", function)
-        # One 32-bit read per row, no width or bar-index variation.
-        self.assertEqual(function.count("EfiPciIoWidthUint32"), 2)
+        # One 32-bit read per row, no width or bar-index variation there.
+        self.assertEqual(function.count("EfiPciIoWidthUint32"), 3)
+        self.assertIn("EfiPciIoWidthUint8", function, "the ROM copy is byte-wide")
 
     def test_probe_is_fingerprint_gated_and_refuses(self):
         function = strip_comments(probe_function())
@@ -548,6 +646,56 @@ class VerifierScoresTheProbe(unittest.TestCase):
         out = self.verify([Path(handle.name)])
         self.assertIn(f"{self.GATE} RESULT=FAIL", out)
         self.assertIn("TOO_FEW", out)
+
+    def test_the_rom_gate_scores_a_structural_readout(self):
+        self.ROM_GATE = "GATE R5_ROM_WINDOW_STRUCTURE STAGE=readonly"
+        out = self.verify([FIXTURES / "readonly_vram_blocks.txt"])
+        self.assertIn(f"{self.ROM_GATE} RESULT=PASS", out)
+
+    def test_a_missing_rom_readout_fails_the_gate(self):
+        self.ROM_GATE = "GATE R5_ROM_WINDOW_STRUCTURE STAGE=readonly"
+        text = (FIXTURES / "readonly_vram_blocks.txt").read_text(encoding="utf-8")
+        kept = [line for line in text.splitlines()
+                if not line.startswith("VRAM_BLOCK_PROBE_ROM ")]
+        handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        handle.write("\n".join(kept) + "\n")
+        handle.close()
+        self.addCleanup(Path(handle.name).unlink)
+        out = self.verify([Path(handle.name)])
+        self.assertIn(f"{self.ROM_GATE} RESULT=FAIL", out)
+        self.assertIn("MISSING", out)
+
+    def test_an_unreadable_rom_window_is_a_note_and_a_failed_gate(self):
+        self.ROM_GATE = "GATE R5_ROM_WINDOW_STRUCTURE STAGE=readonly"
+        text = (FIXTURES / "readonly_vram_blocks.txt").read_text(encoding="utf-8")
+        lines = text.splitlines()
+        out_lines = []
+        for line in lines:
+            if line.startswith("VRAM_BLOCK_PROBE_ROM GPU=4090 "):
+                out_lines.append("ROM_WINDOW_UNREADABLE GPU=4090 BAR0_OFFSET=0x300000 "
+                                 "SIGNATURE=0x0000 REASON=NOT_A_ROM_HEADER NO_COPY=1 READ_ONLY=1")
+            else:
+                out_lines.append(line)
+        handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        handle.write("\n".join(out_lines) + "\n")
+        handle.close()
+        self.addCleanup(Path(handle.name).unlink)
+        out = self.verify([Path(handle.name)])
+        self.assertIn("NOTE ROM_WINDOW_UNREADABLE PRESENT", out)
+        self.assertIn(f"{self.ROM_GATE} RESULT=FAIL", out)
+        self.assertIn("FORBIDDEN", out)
+
+    def test_a_log_without_the_rom_counter_is_not_applicable(self):
+        self.ROM_GATE = "GATE R5_ROM_WINDOW_STRUCTURE STAGE=readonly"
+        text = (FIXTURES / "readonly_vram_blocks.txt").read_text(encoding="utf-8")
+        text = text.replace(" OBSERVED=72 NOT_ACCESSIBLE=60 ROMS=2",
+                            " OBSERVED=72 NOT_ACCESSIBLE=60")
+        handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        handle.write(text)
+        handle.close()
+        self.addCleanup(Path(handle.name).unlink)
+        out = self.verify([Path(handle.name)])
+        self.assertIn(f"{self.ROM_GATE} RESULT=NOT_APPLICABLE", out)
 
     def test_a_boot_without_the_probe_is_not_applicable_not_a_pass(self):
         out = self.verify([FIXTURES / "readonly_two.txt"])

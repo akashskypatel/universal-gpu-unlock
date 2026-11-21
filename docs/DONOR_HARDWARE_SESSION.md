@@ -360,7 +360,7 @@ The SEC2 read plus the pinned Windows handoff, for a bench where the read-only i
 
 #### `diag-vram-blocks` — read-only probe of the actuating write set
 
-Forty-two BAR0 reads per verified card, at the addresses the waived transaction writes, plus the twenty-four words it reads without writing - the two HwCfg words `falcon_reset()` polls, the RISC-V halt word, the GFW and WPR2 bookkeeping words, and the rest of the set whose refused read stops the transaction. It is the interlock for the first actuation: run the same image before and after, and any block that moved shows up as a different digest. Nothing is written.
+Forty-two BAR0 reads per verified card, at the addresses the waived transaction writes, plus the twenty-four words it reads without writing - the two HwCfg words `falcon_reset()` polls, the RISC-V halt word, the GFW and WPR2 bookkeeping words, and the rest of the set whose refused read stops the transaction. It is the interlock for the first actuation: run the same image before and after, and any block that moved shows up as a different digest. Nothing is written. It also copies the one-megabyte ROM window at BAR0 + 0x300000 and applies the same structural check the transaction applies before it refuses a board.
 
 ```powershell
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks -StageDrive G
@@ -873,6 +873,7 @@ Note: the read-only image always saves its numbered log; add -WindowsEspGuid '<r
 | `R2_ENUMERATION_COMPLETED` | the inventory finished, and the collector said so | `PCI_TOPOLOGY_SCOPE=DISPLAY_AND_PCI_BRIDGES INCLUDED=%zu EXCLUDED=%zu`<br>`NVIDIA_DRIVER_OWNER_INVENTORY=READ_ONLY IMAGE_PROVENANCE_UNVERIFIED=1`<br>`DIAGNOSTIC FINISHED; GPU hardware untouched.` | `PCI_ENUM_FAILURE STAGE=`<br>`NVIDIA_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1` |
 | `R3_CARD_IDENTIFIED` | at least one NVIDIA card is named | `NVIDIA_DRIVER_OWNER[%zu] BDF=%04x:%02x:%02x.%u BY_DRIVER=%u` *(one of)*<br>`ACTIVE_GPU[%zu] BDF=%04x:%02x:%02x.%u ID=%04x:%04x` *(one of)* | — |
 | `R4_WRITE_SET_READ_BEFORE_ACTUATION` | the block probe read every word the transaction writes | `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1`<br>`VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x`<br>`VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` | `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE`<br>`INCOMPLETE_READ_SET=1` |
+| `R5_ROM_WINDOW_STRUCTURE` | the probe read the ROM window the transaction refuses a board on | `VRAM_BLOCK_PROBE_ROM GPU=%s BAR0_OFFSET=0x300000 BYTES=%u SIGNATURE=0x%04x PCIR_OFFSET=0x%04x PCIR_VENDOR=0x%04x PCIR_DEVICE=0x%04x LIVE_DEVICE=0x%04x MATCH=%u SHA256=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED` | `ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x` |
 
 **`R1_IMAGE_RAN_READ_ONLY`** — proves: the read-only diagnostic started and wrote its own log. Does not prove: that the enumeration below finished, or anything about the card.
 
@@ -900,6 +901,11 @@ Note: the read-only image always saves its numbered log; add -WindowsEspGuid '<r
 * `VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED` (src/gpu_topology_efi.c) — the closing line carries the arithmetic: cards, blocks, expected reads, reads that landed and reads that did not. `READS_FAILED=0` and `READS_SUCCEEDED=EXPECTED_READS` are what make the block list complete rather than partial. At most 1 per log.
 * must not contain `VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE` (src/gpu_topology_efi.c): a word the probe could not read is a hole in the interlock: the address was never confirmed on this silicon, so the stage does not pass
 * must not contain `INCOMPLETE_READ_SET=1` (src/gpu_topology_efi.c): the probe withholds its digest when any read failed; a log that says so has no before-and-after comparison to offer
+
+**`R5_ROM_WINDOW_STRUCTURE`** — proves: that a read-only image copied the megabyte at BAR0 + 0x300000 the transaction copies before its first write, and that the image's own signature and PCIR identity name the card it was read from. Does not prove: that the ROM is authentic, that it carries the FWSEC-FRTS descriptor the transaction looks for, or that preparation will accept it. A MATCH=1 says the structure names this device and nothing more; SIGNATURE_AUTHENTICATED is not printed because nothing here authenticates a signature.
+
+* `VRAM_BLOCK_PROBE_ROM GPU=%s BAR0_OFFSET=0x300000 BYTES=%u SIGNATURE=0x%04x PCIR_OFFSET=0x%04x PCIR_VENDOR=0x%04x PCIR_DEVICE=0x%04x LIVE_DEVICE=0x%04x MATCH=%u SHA256=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED` (src/gpu_topology_efi.c) — one structural readout per verified card: the ROM's own signature, its PCIR offset and identity, the live device id and whether they name the same card. Two cards are the bench, so two lines.
+* must not contain `ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x` (src/gpu_topology_efi.c): a window the probe could not copy is the exact read the transaction makes before it writes, and it did not happen: the stage cannot claim the ROM is a candidate for this board
 
 ### `prepare` — Preparation only
 
@@ -1001,6 +1007,7 @@ Printed as `NOTE` lines. An absent advisory is a finding to explain, not a failu
 * `ASSET_INSTALL_REPORTED` — `ASSET_INSTALL PRESENT=1 FILES=%u` (or `ASSET_INSTALL PRESENT=0`) (src/boot_io.c): says whether a bundle was ever staged on the stick, before discovery assumes anything about assets
 * `WRITE_SET_NOT_READABLE` — `VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE` (src/gpu_topology_efi.c): the probe met words inside the actuating write set that the engine returns its own inaccessible() shape for: the read succeeded at the PCI I/O level and the value is not device state. Printed once per card that has any, so a run cannot look fully observed while part of the write set was refused
 * `SUPPLEMENTARY_PCI_OBSERVATION` — `PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0` (src/gpu_topology_efi.c): printed by `ReportPciEvidence`, which runs only when the strict collector failed (`if(!pci_ok)` in `GuTopoDiagnosticMain`). A healthy run does not print it, so its presence in a log is a finding to explain - and gate R2 required it until the first physical run showed that no healthy machine can satisfy that
+* `ROM_WINDOW_UNREADABLE` — `ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x` (src/gpu_topology_efi.c): the probe's ROM read did not produce a structural readout: the header word was not a ROM signature, or the megabyte copy failed. Printed with a REASON= field, once per card, so an unreadable window is a line in the log instead of a missing one
 
 ## Never established by a log
 

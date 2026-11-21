@@ -432,11 +432,107 @@ static const GU_VRAM_BLOCK_ROW VramReadContext[] = {
 };
 #define GU_VRAM_BLOCK_CONTEXT_COUNT (sizeof(VramReadContext)/sizeof(VramReadContext[0]))
 
+/* The ROM window. Before the transaction writes anything it copies 1 MiB from
+ * BAR0 + 0x300000 and refuses a board whose image is not a PCI ROM naming this
+ * device: GuDiagnosticScan() and GuAd104Prepare() both call it, and
+ * unlock_transaction_fwsec() re-reads the same window. That refusal is a read,
+ * so this probe can make it - the same window, the same 1 KiB Mem.Read chunks
+ * GuCopyFromIo() uses (src/compat.c), and the same predicate
+ * GuPromImageMatchesDevice() applies (src/prom_identity.h).
+ *
+ * A host test compiles that predicate and GuVramRomMatches() together and drives
+ * them over the same buffers, so the two cannot drift. Nothing here is
+ * authenticated: a structural match says the ROM names this device, and the log
+ * says SIGNATURE_AUTHENTICATED=0 by omission of any such claim. */
+#define GU_VRAM_ROM_OFFSET 0x00300000U
+#define GU_VRAM_ROM_BYTES  1048576U
+#define GU_VRAM_ROM_CHUNK  1024U
+
+static UINT32 GuVramRomWord(const UINT8 *rom,UINTN at) {
+  return (UINT32)((UINT32)rom[at] | ((UINT32)rom[at+1U] << 8));
+}
+
+/* GuPromImageMatchesDevice() of src/prom_identity.h, in this image's types:
+ * signature set, PCIR offset from ROM+0x18, the four PCIR bytes, NVIDIA's vendor
+ * id and the live device id. Same order of comparisons, same bounds check. */
+static UINT32 GuVramRomMatches(const UINT8 *rom,UINTN bytes,UINT32 device) {
+  UINTN pcir;
+  UINT32 vendor,reported,signature;
+  if(!rom || bytes!=GU_VRAM_ROM_BYTES || device>0xffffU)return 0U;
+  signature=GuVramRomWord(rom,0U);
+  if(signature!=0xaa55U && signature!=0x4e56U && signature!=0xbb77U)return 0U;
+  pcir=(UINTN)GuVramRomWord(rom,0x18U);
+  if(pcir>bytes-0x16U)return 0U;
+  if(rom[pcir]!='P' || rom[pcir+1U]!='C' || rom[pcir+2U]!='I' || rom[pcir+3U]!='R')return 0U;
+  vendor=GuVramRomWord(rom,pcir+4U);
+  reported=GuVramRomWord(rom,pcir+6U);
+  return (vendor==0x10deU && reported==device)?1U:0U;
+}
+
+/* One line per card, or one refusal line and no ROM line. The header word is
+ * read first so an unmapped window costs one read instead of a megabyte of
+ * silent zeros, and every failing path names why. */
+static UINT32 ReportVramRom(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,
+                            const char *gpu,UINT32 device) {
+  static const char digits[]="0123456789abcdef";
+  UINT32 header=0U,signature;
+  UINTN done=0U;
+  UINT8 *rom;
+  UINT8 digest[32];
+  char hex[65];
+  size_t k;
+  EFI_STATUS status;
+  if(!bs || !pci || !pci->Mem.Read)return 0U;
+  status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,GU_VRAM_ROM_OFFSET,1U,&header);
+  if(EFI_ERROR(status)) {
+    Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=PCI_IO_ERROR EFI_STATUS=%#llx NO_COPY=1 READ_ONLY=1\r\n",
+        gpu,(unsigned)(header & 0xffffU),(unsigned long long)status);
+    return 0U;
+  }
+  signature=header & 0xffffU;
+  if(signature!=0xaa55U && signature!=0x4e56U && signature!=0xbb77U) {
+    Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=NOT_A_ROM_HEADER NO_COPY=1 READ_ONLY=1\r\n",
+        gpu,(unsigned)signature);
+    return 0U;
+  }
+  status=bs->AllocatePool(EfiLoaderData,GU_VRAM_ROM_BYTES,(VOID **)&rom);
+  if(EFI_ERROR(status) || !rom) {
+    Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=ALLOC_FAILED EFI_STATUS=%#llx NO_COPY=1 READ_ONLY=1\r\n",
+        gpu,(unsigned)signature,(unsigned long long)status);
+    return 0U;
+  }
+  while(done<GU_VRAM_ROM_BYTES) {
+    UINTN chunk=GU_VRAM_ROM_BYTES-done<GU_VRAM_ROM_CHUNK?GU_VRAM_ROM_BYTES-done:GU_VRAM_ROM_CHUNK;
+    status=pci->Mem.Read(pci,EfiPciIoWidthUint8,0U,GU_VRAM_ROM_OFFSET+(UINT32)done,chunk,rom+done);
+    if(EFI_ERROR(status)) {
+      (VOID)bs->FreePool(rom);
+      Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=PCI_IO_ERROR EFI_STATUS=%#llx BYTES_READ=%u NO_COPY=1 READ_ONLY=1\r\n",
+          gpu,(unsigned)signature,(unsigned long long)status,(unsigned)done);
+      return 0U;
+    }
+    done+=chunk;
+  }
+  GuSha256(rom,(UINTN)GU_VRAM_ROM_BYTES,digest);
+  for(k=0;k<32;k++) {
+    hex[2*k]=digits[digest[k]>>4];
+    hex[2*k+1]=digits[digest[k]&15U];
+  }
+  hex[64]=0;
+  Say("VRAM_BLOCK_PROBE_ROM GPU=%s BAR0_OFFSET=0x300000 BYTES=%u SIGNATURE=0x%04x PCIR_OFFSET=0x%04x PCIR_VENDOR=0x%04x PCIR_DEVICE=0x%04x LIVE_DEVICE=0x%04x MATCH=%u SHA256=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+      gpu,(unsigned)GU_VRAM_ROM_BYTES,(unsigned)signature,
+      (unsigned)GuVramRomWord(rom,0x18U),
+      (unsigned)GuVramRomWord(rom,(UINTN)GuVramRomWord(rom,0x18U)+4U),
+      (unsigned)GuVramRomWord(rom,(UINTN)GuVramRomWord(rom,0x18U)+6U),
+      (unsigned)device,(unsigned)GuVramRomMatches(rom,GU_VRAM_ROM_BYTES,device),hex);
+  (VOID)bs->FreePool(rom);
+  return 1U;
+}
+
 static void ReportVramBlocks(int pci_ok) {
   static const char digits[]="0123456789abcdef";
   size_t i,j;
   unsigned cards=0U,reads=0U,failed=0U,digests=0U;
-  unsigned observed=0U,refused=0U;
+  unsigned observed=0U,refused=0U,roms=0U;
   Say("VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1\r\n",
       (unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
       (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT);
@@ -536,6 +632,11 @@ static void ReportVramBlocks(int pci_ok) {
     if(card_refused)
       Say("VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE MEANING=THE_TRANSACTION_TREATS_THIS_AS_INACCESSIBLE CAUSE=UNKNOWN READ_ONLY=1\r\n",
           ada?"4090":"3080",card_refused,card_reads);
+    /* The other thing the transaction reads before it writes: the ROM window,
+     * and the structure check that decides whether the board is even a
+     * candidate. Read-only, one megabyte, once per card. */
+    roms+=ReportVramRom(System?System->BootServices:NULL,pci,
+                        ada?"4090":"3080",(UINT32)(id->pci_id & 0xffffU));
     reads+=card_reads;
     failed+=card_failed;
     observed+=card_observed;
@@ -544,11 +645,11 @@ static void ReportVramBlocks(int pci_ok) {
   /* OBSERVED and NOT_ACCESSIBLE are appended after the verdict fields on
    * purpose: a log captured before these counters existed still satisfies the
    * gate's closing token, and the counters are still what the operator reads. */
-  Say("VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=%u NOT_ACCESSIBLE=%u\r\n",
+  Say("VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=%u NOT_ACCESSIBLE=%u ROMS=%u\r\n",
       cards,(unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
       (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT,
       cards*((unsigned)GU_VRAM_BLOCK_WRITE_COUNT+(unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT),
-      reads,failed,digests,observed,refused);
+      reads,failed,digests,observed,refused,roms);
 }
 #endif
 
