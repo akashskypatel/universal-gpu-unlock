@@ -434,6 +434,18 @@ the bench by the same parser the transaction uses. A failed capture is its own
 line - `VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE ... REASON=FILE_NOT_WRITTEN` -
 and never stops the log from being written.
 
+`-VramBlockProbe` also reads the fuse window the transaction uses to choose a
+packed signature - sixteen words at `BAR0 + 0x8241c0`, one per possible ucode id,
+printed per card as `VRAM_BLOCK_PROBE_FUSE ... UCODE_ID=<id> RAW=<word>
+VERSION=<version> ACCESS=<STATE|NOT_ACCESSIBLE>` with one
+`VRAM_BLOCK_PROBE_FUSE_END ... UCODE9_UNREAD=<0|1>` closing line. Nothing is
+written to the card to obtain this. The version is the number
+`unlock_transaction_fwsec()` computes, so an inaccessible word reports version
+zero here exactly as it would there; a version the captured ROM's signature mask
+cannot select is a refusal the next actuating boot would meet before its first
+write, and gate `R7_FUSE_VERSION_READ` fails a log whose window was not
+completely read.
+
 ## Build, inspect and run
 
 From a Windows Developer PowerShell with Visual Studio C++ Build Tools installed:
