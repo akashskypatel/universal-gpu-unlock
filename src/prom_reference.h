@@ -83,6 +83,18 @@ GU_REF_UINTN GuPromReferenceCount(void);
 const GU_PROM_REFERENCE *GuPromReferenceFind(GU_REF_UINT32 DeviceId,
                                              GU_REF_UINT32 SubsystemId);
 
+/* Which table this build compiled in, as one token for a log line: NONE,
+ * CAPTURED or SYNTHETIC. Never NULL.
+ *
+ * It exists because a run log could not otherwise say which build produced it:
+ * the prepare image refuses before it reads a PROM, so an image carrying the
+ * captured table and one carrying none printed exactly the same lines, and two
+ * boots of the two builds were byte-identical files. A log now names its own
+ * table, and `GuPromReferenceCount()` beside it says how many rows that table
+ * has, so a receipt and a boot can be matched to each other without trusting a
+ * filename. */
+const char *GuPromReferenceMode(void);
+
 /* The decision for one observed card. `Digest` is 64 lowercase hex digits.
  * On return, `Found` (optional) names the reference that matched the identity,
  * so a caller can distinguish "unknown card" from "known card, wrong ROM". */

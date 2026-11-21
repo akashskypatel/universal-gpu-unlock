@@ -7,6 +7,7 @@
 #include "gpu_discovery.h"
 
 #include "profile.h"
+#include "prom_reference.h"
 
 #include "msi_release.h"
 #include "unlock_execution.h"
@@ -148,6 +149,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
    * carries the boot counter forward. It never changes the path. */
   GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
   boot_state_present=(GuBootStateRead(t,&boot_state)==EFI_SUCCESS);
+
+  /* Name the reference table this image was built with before any stage can
+   * refuse. Nothing below this line is reached by a preparation-only build, so
+   * without this the log of an image carrying the captured table and the log of
+   * one carrying none are the same bytes. Authentication is still zero: the
+   * table holds digests of what was read, not signatures of what will run. */
+  GuLog("PROM_REFERENCE=%s ROWS=%u AUTHENTICATION=0\n",
+        GuPromReferenceMode(),(unsigned)GuPromReferenceCount());
 
   const char *stage="discover";CHAR16 choice=L'S';
 

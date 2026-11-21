@@ -142,6 +142,14 @@ prints `PROM_REFERENCE=CAPTURED ROWS=2 … AUTHENTICATION=0`, and the image stil
 logs `SIGNATURE_AUTHENTICATED=0` — a digest of what was read is not a signature of
 what will run.
 
+The image says the same thing about itself, because a receipt is not evidence
+about a boot. `src/app.c` prints `PROM_REFERENCE=<NONE|CAPTURED|SYNTHETIC>
+ROWS=<n> AUTHENTICATION=0` at open, before any stage can refuse, so a preparation
+run that never reaches a PROM read still names the table it was built with. Two
+boots of the two builds used to be byte-identical files; the line is what makes
+them distinguishable, and it is the first line to compare when a log and a
+receipt disagree.
+
 ## 3. Commands
 
 ```powershell

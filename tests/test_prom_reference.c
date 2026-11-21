@@ -207,6 +207,19 @@ int main(void) {
         GU_PROM_REF_UNKNOWN_CARD);
 #endif
 
+  /* The build names its own table, so a log can say which image produced it.
+   * The token is compile-time constant, never NULL, and capped so it cannot
+   * become a free-text field. */
+  CHECK(GuPromReferenceMode() != NULL);
+  CHECK(strlen(GuPromReferenceMode()) <= 16);
+#if defined(GU_PROM_REFERENCE_CAPTURED)
+  CHECK(strcmp(GuPromReferenceMode(), "CAPTURED") == 0);
+#elif defined(GU_PROM_REFERENCE_SYNTHETIC)
+  CHECK(strcmp(GuPromReferenceMode(), "SYNTHETIC") == 0);
+#else
+  CHECK(strcmp(GuPromReferenceMode(), "NONE") == 0);
+#endif
+
   if (failures) {
     printf("test_prom_reference: %d checks failed\n", failures);
     return 1;

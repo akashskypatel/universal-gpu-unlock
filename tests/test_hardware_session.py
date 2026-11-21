@@ -28,6 +28,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 import render_hardware_session as renderer  # noqa: E402
+import session_preflight as preflight  # noqa: E402
 import verify_run_log  # noqa: E402
 
 MANIFEST = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encoding="utf-8"))
@@ -636,3 +637,57 @@ class TheDocumentIsRendered(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheStickIsCheckedForThePinnedBundle(unittest.TestCase):
+    """`--assets` decides, from Windows, whether the image can load its bundle.
+
+    src/boot_io.c reads each asset from the launch stick first and hashes it
+    against the pin before keeping it, so the same files, names and digests are
+    checkable before the boot. The check is opt-in because a read-only stage
+    never loads them - and it names the shared GSP image, which an Ampere boot
+    reads out of the Ada directory.
+    """
+
+    def test_the_shared_gsp_path_is_what_the_source_names(self):
+        source = (ROOT / "src" / "profile.c").read_text(encoding="utf-8")
+        blocks = source.split("static const GU_ARCH_ASSETS ")[1:]
+        alternates = {}
+        for block in blocks:
+            name = block.split("={", 1)[0]
+            match = re.search(r'\},L"\\\\[^\\\\]+\\\\[^"]+"\}', block)
+            if not match or name not in ("AdaAssets", "AmpereAssets"):
+                continue
+            folder, file = re.findall(r"[A-Z0-9]+-ASSETS|[a-z0-9_.]+", match.group(0))[-2:]
+            alternates["AD102" if name == "AdaAssets" else "GA102"] = f"{folder}/{file}"
+        self.assertEqual(alternates, preflight.ALTERNATE_GSP,
+                         "the preflight's alternate GSP table is not the source's")
+
+    def test_a_stick_without_the_bundle_fails_and_names_the_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_preflight("--stick", directory, "--assets", "AD102,GA102",
+                                   "--skip-profile")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("ASSETS ARCH=AD102 PRESENT=0/5", result.stdout)
+        self.assertIn("REFUSED=", result.stdout)
+        self.assertIn("FAILED=ASSETS", result.stdout)
+
+    def test_the_check_can_be_limited_to_one_architecture(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_preflight("--stick", directory, "--assets", "GA102",
+                                   "--skip-profile")
+        self.assertIn("ASSETS ARCH=GA102", result.stdout)
+        self.assertNotIn("ASSETS ARCH=AD102", result.stdout)
+
+    def test_an_architecture_the_manifest_does_not_pin_is_named(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_preflight("--stick", directory, "--assets", "TU102",
+                                   "--skip-profile")
+        self.assertIn("PINS=0", result.stdout)
+        self.assertIn("AD102", result.stdout)
+
+    def test_a_read_only_run_does_not_pay_for_the_check(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = run_preflight("--stick", directory, "--skip-profile")
+        self.assertNotIn("ASSETS ARCH=", result.stdout)
+        self.assertEqual(result.returncode, 0)

@@ -460,6 +460,50 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.43 C5 — a log now says which build wrote it, and the bundle is checkable before the boot
+
+§11.42 shipped `-CapturedPromReference`. Two runs came back that could not be
+told apart, and two claims about the asset gate were wrong. Both are fixed here.
+
+**RUN0004 is RUN0003.** `RUN0004.TXT` is byte-identical to the stored
+`tests/data/hardware_session/physical-prepare-0003.txt` - the same SHA-256,
+`cfe29f56…` - so it carries no new observation. That is not a puzzle about the
+capture: the prepare image refuses before it reads a PROM, so an image carrying
+the captured table and an image carrying none print the same lines, and a second
+boot of the same image prints them again. Two byte-identical logs were the
+predictable outcome of an image that does not name its own build.
+
+**What changed.** `GuPromReferenceMode()` returns `NONE`, `CAPTURED` or
+`SYNTHETIC`, and `src/app.c` prints
+`PROM_REFERENCE=<mode> ROWS=<n> AUTHENTICATION=0` at open, before discovery, before
+the preparation refusal and before the asset-install exit. The receipt already
+carried `Switches.CapturedPromReference`; now the boot carries the same token, and
+the two can be compared without trusting a filename. `AUTHENTICATION=0` stays on
+the line, because a digest of what was read is still not a signature of what will
+run.
+
+**The asset gate, restated.** `GuBootLoadAssets()` (`src/boot_io.c:608`) reads each
+of the five pinned files from the **launch stick's root** first and only then from
+the configured ESP (`:645`), hashing every candidate against its pin before keeping
+it; `:663` turns a false `GuAd104AssetsValid()` into `EFI_CRC_ERROR`. The NVRAM
+record written by `GU_ASSET_INSTALL_ONLY` is the `ASSET_INSTALL PRESENT=` report,
+not the admission decision. So the missing step is not a new image: it is putting
+`AD102-ASSETS\` and `GA102-ASSETS\` on the stick, which is what the reference
+hashes in `tools/verify_reference_assets.py` already describe.
+
+One asymmetry is load-bearing and was invisible: the Ampere manifest's GSP entry is
+`\GA102-ASSETS\gsp_ga10x.bin`, which the repository does not carry; its alternate is
+`\AD102-ASSETS\gsp_ga10x.bin` (`src/profile.c:37`), which it does. A 3080 boot
+therefore reads a file out of the Ada directory and fails if only its own is
+present. `tools/session_preflight.py --assets AD102,GA102` now hashes the stick
+against the same pins before the boot and prints that dependency rather than
+leaving it to be discovered by a `Pinned asset unavailable` line.
+
+**Still not proven.** Whether a boot with the bundle present passes
+`GuAd104AssetsValid()` is an inference from the source, not an observation: no log
+in this session contains a successful load. `hardware_verified` stays false for all
+43 entries and the counts stay 11 met / 15 partial / 17 not started.
+
 ### 11.42 C5 — the two captured ROMs are a reference the image can hold
 
 §11.41 left two questions about trust rather than hardware. This is the first of

@@ -29,6 +29,15 @@ MANIFEST = ROOT / "docs" / "hardware_session.json"
 # The placeholder committed in src/boot_profile.h. A waived build that compiles
 # against this one is pinned to a partition that does not exist.
 SYNTHETIC_GUID = "0x11111111"
+# src/profile.c gives each manifest an alternate GSP path, because the 84 MB GSP
+# image is shared between the two families and is pinned once: the Ada manifest
+# carries it under AD102-ASSETS, and the Ampere manifest names that same file as
+# the alternate for its own entry (and the Ada one names GA102's, symmetrically).
+# So a GA102 boot still reads a file out of AD102-ASSETS, and a stick missing that
+# directory fails on the 3080 while the 3080's own four files look complete.
+# tests/test_hardware_session.py holds this table to the source.
+ALTERNATE_GSP = {"AD102": "GA102-ASSETS/gsp_ga10x.bin",
+                 "GA102": "AD102-ASSETS/gsp_ga10x.bin"}
 LOG_PATTERNS = (
     re.compile(r"^RUN\d{4}\.TXT$", re.IGNORECASE),
     re.compile(r"^GPU-TOPOLOGY-DIAGNOSTIC-\d{4}\.TXT$", re.IGNORECASE),
@@ -74,6 +83,62 @@ def check_stick(path: Path) -> tuple[bool, list[str]]:
     return True, notes
 
 
+def check_assets(stick: Path, arches: tuple[str, ...]) -> tuple[bool, list[str]]:
+    """The pinned firmware files, read off the medium the image will load them from.
+
+    `src/boot_io.c` reads each asset from the launch stick's root first and only
+    then from the pinned ESP, and every read is hashed against the pin before it
+    is kept. So whether `GuAd104AssetsValid()` can pass is decidable from
+    Windows, before the boot: these are the same files, the same names and the
+    same digests the image will look for. The check is off unless `--assets`
+    names the architectures, because a read-only stage never loads them.
+    """
+    import verify_reference_assets as reference
+
+    folders = {f"{arch}-ASSETS": arch for arch in arches}
+    wanted = {name: pin for name, pin in reference.PINS.items()
+              if name.split("/", 1)[0] in folders}
+    if not wanted:
+        return False, [f"ASSETS ARCHES={','.join(arches)} PINS=0 "
+                       "ACTION=name an architecture this manifest pins (AD102, GA102)"]
+    results = reference.verify(stick, wanted)
+    notes: list[str] = []
+    ok = True
+    for folder, arch in folders.items():
+        own = {name: status for name, status in
+               ((name, results.get(name)) for name in wanted
+                if name.startswith(folder + "/"))}
+        alternate = ALTERNATE_GSP.get(arch)
+        # The fallback is load-bearing only when this architecture has no pinned
+        # copy of the shared image of its own; then it is required, not reported.
+        shares_gsp = any(name.startswith(folder + "/") and name.endswith("gsp_ga10x.bin")
+                         for name in own)
+        if alternate and not shares_gsp:
+            own[alternate] = results.get(alternate)
+        matched = sorted(name for name, status in own.items() if status == "MATCHED")
+        refused = sorted(name for name, status in own.items() if status != "MATCHED")
+        suffix = ""
+        if alternate:
+            state = results.get(alternate, "NO_PIN")
+            suffix = (f" ALTERNATE_GSP={alternate} ALTERNATE_STATUS={state}"
+                      + ("" if not shares_gsp else " ALTERNATE_REQUIRED=0"))
+        if refused:
+            ok = False
+            notes.append(f"ASSETS ARCH={arch} PRESENT={len(matched)}/{len(own)} "
+                         f"REFUSED={','.join(Path(name).name for name in refused)}{suffix} "
+                         "ACTION=copy the pinned files from the repository to the stick "
+                         "root; the image hashes every one before it uses it")
+        else:
+            notes.append(f"ASSETS ARCH={arch} PRESENT={len(own)}/{len(own)} HASHES=MATCHED{suffix}")
+    for name in sorted(set(results) - set(wanted)):
+        if results[name] != "MATCHED":
+            notes.append(f"ASSETS path={name} STATUS={results[name]} "
+                         "ACTION=remove it: an unexpected file on the medium is a finding, "
+                         "not a spare")
+            ok = False
+    return ok, notes
+
+
 def check_image(path: Path) -> tuple[bool, list[str]]:
     if not path.is_file():
         return False, [f"IMAGE path={path} PRESENT=0"]
@@ -102,6 +167,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image", type=Path, help="the .EFI that will be booted")
     parser.add_argument("--skip-profile", action="store_true",
                         help="read-only stages do not need a reviewed profile")
+    parser.add_argument("--assets", metavar="ARCH[,ARCH]",
+                        help="also hold the stick to the pinned firmware bundle for these "
+                             "architectures, e.g. AD102,GA102")
     args = parser.parse_args(argv)
 
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -121,6 +189,16 @@ def main(argv: list[str] | None = None) -> int:
             failures.append("STICK")
             if not args.stick.is_dir():
                 missing.append(str(args.stick))
+    if args.assets:
+        arches = tuple(part.strip().upper() for part in args.assets.split(",") if part.strip())
+        if args.stick is None:
+            parser.error("--assets checks the medium, so it needs --stick")
+        ok, notes = check_assets(args.stick, arches)
+        checked += 1
+        for note in notes:
+            say("PREFLIGHT", note)
+        if not ok:
+            failures.append("ASSETS")
     if args.image is not None:
         ok, notes = check_image(args.image)
         checked += 1

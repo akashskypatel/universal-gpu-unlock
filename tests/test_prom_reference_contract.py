@@ -251,5 +251,68 @@ class BuildWiring(unittest.TestCase):
         self.assertIn('"prom-admitted"', runner)
 
 
+class TheImageNamesItsOwnTable(unittest.TestCase):
+    """A log has to say which build produced it.
+
+    RUN0003 and RUN0004 are the same bytes: the prepare image refuses before it
+    reads a PROM, so an image carrying the captured table and one carrying none
+    print identical lines. The announce line is printed at open, before any stage
+    can refuse, and repeats the count the receipt carries.
+    """
+
+    def test_the_image_announces_the_table_at_open(self):
+        app = (ROOT / "src" / "app.c").read_text(encoding="utf-8")
+        self.assertIn('#include "prom_reference.h"', app)
+        self.assertIn('GuLog("PROM_REFERENCE=%s ROWS=%u AUTHENTICATION=0\\n"', app)
+        self.assertIn("GuPromReferenceMode()", app)
+        self.assertIn("GuPromReferenceCount()", app)
+
+    def test_the_line_is_printed_before_any_stage_can_refuse(self):
+        app = (ROOT / "src" / "app.c").read_text(encoding="utf-8")
+        announce = app.index("PROM_REFERENCE=%s ROWS=%u")
+        for token in ('const char *stage="discover"',
+                      "GuDiscoverSingleGpu(image,t)",
+                      "ACTIVE_APP=PREPARATION_ONLY",
+                      "GuAssetInstallStage()"):
+            self.assertLess(announce, app.index(token),
+                            f"the announce line must precede {token}")
+
+    def test_each_table_has_one_token(self):
+        source = (ROOT / "src" / "prom_reference.c").read_text(encoding="utf-8")
+        block = source[source.index("const char *GuPromReferenceMode(void)"):]
+        block = block[:block.index("\n}\n") + 3]
+        self.assertIn('#if defined(GU_PROM_REFERENCE_CAPTURED)', block)
+        self.assertIn('return "CAPTURED";', block)
+        self.assertIn('#elif defined(GU_PROM_REFERENCE_SYNTHETIC)', block)
+        self.assertIn('return "SYNTHETIC";', block)
+        self.assertIn('return "NONE";', block)
+        self.assertEqual(block.count("return "), 3)
+
+    def test_the_mode_is_declared_where_the_count_is(self):
+        header = (ROOT / "src" / "prom_reference.h").read_text(encoding="utf-8")
+        self.assertIn("const char *GuPromReferenceMode(void);", header)
+        self.assertLess(header.index("GuPromReferenceMode(void);"),
+                        header.index("GuPromReferenceDecide("),
+                        "the mode sits with the table accessors, not after the decision")
+
+    def test_the_receipt_and_the_boot_use_the_same_words(self):
+        script = (ROOT / "src" / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
+        self.assertIn("PROM_REFERENCE=CAPTURED ROWS=", script)
+        rows = int(script.split("PROM_REFERENCE=CAPTURED ROWS=", 1)[1].split()[0])
+        source = (ROOT / "src" / "prom_reference.c").read_text(encoding="utf-8")
+        table = source[source.index("static const GU_PROM_REFERENCE References[] = {"):]
+        table = table[:table.index("\n};\n")]
+        captured = table.count("\n  { 0x")
+        self.assertEqual(rows, captured,
+                         "the receipt's ROWS and the table it describes have drifted")
+        self.assertIn("AUTHENTICATION=0", script.split("PROM_REFERENCE=CAPTURED ROWS=", 1)[1][:160])
+
+    def test_the_host_test_pins_each_mode(self):
+        test = (ROOT / "tests" / "test_prom_reference.c").read_text(encoding="utf-8")
+        self.assertIn("strcmp(GuPromReferenceMode(), \"CAPTURED\")", test)
+        self.assertIn("strcmp(GuPromReferenceMode(), \"SYNTHETIC\")", test)
+        self.assertIn("strcmp(GuPromReferenceMode(), \"NONE\")", test)
+
+
 if __name__ == "__main__":
     unittest.main()

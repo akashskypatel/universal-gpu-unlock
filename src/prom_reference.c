@@ -72,6 +72,16 @@ static const GU_PROM_REFERENCE References[] = {
 #define GU_PROM_REFERENCE_TABLE_COUNT 0U
 #endif
 
+const char *GuPromReferenceMode(void) {
+#if defined(GU_PROM_REFERENCE_CAPTURED)
+  return "CAPTURED";
+#elif defined(GU_PROM_REFERENCE_SYNTHETIC)
+  return "SYNTHETIC";
+#else
+  return "NONE";
+#endif
+}
+
 GU_REF_UINTN GuPromReferenceCount(void) {
   return (GU_REF_UINTN)GU_PROM_REFERENCE_TABLE_COUNT;
 }

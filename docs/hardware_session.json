@@ -95,7 +95,7 @@
         "title": "check the bench before the boot",
         "shell": "bash",
         "command": "python3 tools/session_preflight.py --stick /media/stick \\\n    --image /media/stick/EFI/BOOT/BOOTX64.EFI --skip-profile",
-        "expect": "`STICK FREE_OF_OLD_LOGS=1`, `IMAGE ... BYTES=... SHA256=...` for the file that will actually boot, the six `MANUAL` gates, and `PREFLIGHT_VERDICT=PASS ... CHECKS=2 HARDWARE_VERIFIED=0`. `--skip-profile` is right for every candidate here: the reviewed ESP profile belongs to the waived stages.",
+        "expect": "`STICK FREE_OF_OLD_LOGS=1`, `IMAGE ... BYTES=... SHA256=...` for the file that will actually boot, the six `MANUAL` gates, and `PREFLIGHT_VERDICT=PASS ... CHECKS=2 HARDWARE_VERIFIED=0`. `--skip-profile` is right for every candidate here: the reviewed ESP profile belongs to the waived stages. Add `--assets AD102,GA102` once the run is meant to get past `EFI_CRC_ERROR`: the image reads the five pinned files from the stick's root and hashes each before use, and a 3080 boot reads `\\AD102-ASSETS\\gsp_ga10x.bin` through its manifest's alternate path, so the check names that dependency instead of leaving it to a later `Pinned asset unavailable` line.",
         "expect_tokens": [
           {
             "token": "PREFLIGHT_VERDICT={verdict}{failed} CHECKS={checked} HARDWARE_VERIFIED=0",
