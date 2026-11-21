@@ -64,6 +64,15 @@ one image -Only selected, builds it, signs it and copies it to
 EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
 -AcceptActuatingDeploy, and a matrix run (-All) can never stage.
 
+.PARAMETER CapturedPromReference
+Carry the two captured per-card firmware references
+(src/prom_reference.c, GU_PROM_REFERENCE_CAPTURED) into the image that asks for
+them, so GuAd104PromMatches(...,TRUE) can answer ACCEPTED for these two cards and
+UNKNOWN_CARD for every other. Prepare family only: nothing else links a PROM read
+behind this table. The receipt records it under Switches, and the image still
+prints SIGNATURE_AUTHENTICATED=0 - a digest of what was read is not a signature of
+what will run.
+
 .PARAMETER SkipDbCheck
 Do not prove the certificate is in the BIOS db. Records db_enrolled=UNKNOWN in
 the receipt, so a later reader can tell the difference.
@@ -90,6 +99,11 @@ Print the catalogue and exit. Nothing is built, signed or staged.
 
 # Stage one image on G: -StageDrive is the staging switch, -Only names the image.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G
+
+.EXAMPLE
+# The dual preparation image, carrying the two captured references.
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected `
+    -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -SignOnly
 
 .EXAMPLE
 # The waived one-target image, staged deliberately, on a donor card.
@@ -121,6 +135,7 @@ param(
     [string]$Deploy,
     [switch]$SignOnly,
     [switch]$AcceptActuatingDeploy,
+    [switch]$CapturedPromReference,
     [switch]$SkipDbCheck,
     [switch]$List
 )
@@ -653,6 +668,17 @@ function Build-VariantArguments($Variant) {
         elseif ($SelectionBdfs) { $arguments['SelectionBdfs'] = $SelectionBdfs }
         else { throw 'SELECTION_REQUIRED' }
     }
+    if ($CapturedPromReference) {
+        # The two per-card firmware references this bench captured, compiled into
+        # the image that asks for them. Only the active preparation builder links
+        # src/prom_reference.c with a PROM read behind it; refusing here is
+        # cheaper than signing an image whose receipt would claim something its
+        # sources cannot do.
+        if ($Variant.family -ne 'prepare') {
+            throw ("-CapturedPromReference applies to the prepare family only, not {0}" -f $Variant.family)
+        }
+        $arguments['CapturedPromReference'] = $true
+    }
     if ($VcVars) { $arguments['VcVars'] = $VcVars }
     return $arguments
 }
@@ -679,6 +705,11 @@ if ($List) {
 try {
     $stageVariantId = $null
     if ($All -and $Only) { throw '-All and -Only are mutually exclusive.' }
+    if ($CapturedPromReference -and -not $Only) {
+        throw ('-CapturedPromReference applies to the prepare family only, so it needs ' +
+               '-Only naming the variant it is for (e.g. -Only prep-selected). A matrix run ' +
+               'would apply it to image kinds whose sources have no PROM read behind it.')
+    }
     if ($All -and $StageDrive) { throw '-All must not stage: a matrix run signs only. Name one image with -Only <id> -StageDrive <letter>.' }
     if ($SignOnly -and $StageDrive) { throw '-SignOnly and -StageDrive are mutually exclusive: -SignOnly never touches a stick. Drop -StageDrive, or drop -SignOnly to stage the selected image.' }
     if ($Deploy -and -not $StageDrive) { throw '-Deploy names the image to stage, so it needs -StageDrive <letter>. Add the drive, or drop -Deploy.' }
@@ -757,6 +788,9 @@ try {
         throw ('The certificate {0} is not present in the BIOS db. Enroll it first, or re-run with -SkipDbCheck to sign anyway and record db_enrolled=UNKNOWN.' -f $PublicCertificate)
     }
     Say ("SIGNING_CERTIFICATE path={0} SHA256={1} DB_ENROLLED={2}" -f $PublicCertificate, $certificateSha, $dbEnrolled)
+    if ($CapturedPromReference) {
+        Say 'PROM_REFERENCE=CAPTURED ROWS=2 SOURCE=src/prom_reference.c AUTHENTICATION=0'
+    }
     if ($dbEnrolled -eq 'UNKNOWN' -and -not $SkipDbCheck) {
         Say ('WARNING: the BIOS db could not be read (the Secure Boot cmdlets need an elevated ' +
              'console, and there is nothing to read when Secure Boot is off). Signing continues, ' +

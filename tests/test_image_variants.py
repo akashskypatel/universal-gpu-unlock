@@ -544,3 +544,51 @@ class TheDocumentIsRendered(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheCapturedReferenceIsAnExplicitBuildOption(unittest.TestCase):
+    """The two captured references ride a switch, not a variant.
+
+    A variant that differed only by a define would produce the same file name as
+    the variant it differs from, and two catalogue entries writing one path is a
+    run that signs an image it cannot name. So the reference is a switch on the
+    build, restricted to the family whose sources link the table.
+    """
+
+    BUILDER = "Build-Experimental-MSVC.ps1"
+
+    def test_the_switch_exists_on_both_scripts(self):
+        self.assertIn("[switch]$CapturedPromReference", SCRIPT)
+        builder = (ROOT / "src" / self.BUILDER).read_text(encoding="utf-8")
+        self.assertIn("[switch]$CapturedPromReference", builder)
+        self.assertIn("/DGU_PROM_REFERENCE_CAPTURED", builder)
+
+    def test_only_the_prepare_family_can_carry_it(self):
+        guard = SCRIPT[SCRIPT.index("if ($CapturedPromReference) {"):]
+        guard = guard[:guard.index("$arguments['CapturedPromReference'] = $true")]
+        self.assertIn("$Variant.family -ne 'prepare'", guard)
+        self.assertIn("throw", guard)
+        # And it lands in the arguments the receipt records under Switches.
+        self.assertIn("Switches = $buildArguments", SCRIPT)
+
+    def test_a_matrix_run_refuses_it(self):
+        # -All would pass the define to families whose sources never read a PROM.
+        guard = SCRIPT[SCRIPT.index("if ($CapturedPromReference -and -not $Only) {"):]
+        self.assertIn("throw", guard[:guard.index("\n    }")])
+
+    def test_no_variant_carries_it(self):
+        for variant in MANIFEST["variants"]:
+            self.assertNotIn("CapturedPromReference", variant["switches"], variant["id"])
+
+    def test_the_run_says_it_is_carrying_one(self):
+        self.assertIn("PROM_REFERENCE=CAPTURED", SCRIPT)
+        line = SCRIPT[SCRIPT.index("PROM_REFERENCE=CAPTURED"):]
+        line = line[:line.index("\n")]
+        self.assertIn("AUTHENTICATION=0", line,
+                      "the line must not let a reference read as authentication")
+
+    def test_the_documented_example_uses_a_real_variant(self):
+        self.assertIn("-CapturedPromReference", DOC)
+        example = DOC[DOC.index("-CapturedPromReference") - 400:]
+        self.assertIn("prep-selected", example[:600])
+        self.assertIn("prep-selected", [variant["id"] for variant in MANIFEST["variants"]])

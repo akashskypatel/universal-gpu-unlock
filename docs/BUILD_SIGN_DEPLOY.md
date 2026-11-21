@@ -120,6 +120,28 @@ probes that helper with your selection, so the expected filename and the built
 filename come from the same code - if they disagree the run fails instead of
 renaming an image.
 
+### Carrying the captured firmware references
+
+`src/prom_reference.c` holds an empty table by default: an image built without
+one can only answer `UNKNOWN_CARD` when the transaction asks
+`GuAd104PromMatches(…, TRUE)`, and with `GU_PROM_REFERENCE_REQUIRED` that is a
+refusal. Two cards have been captured on this bench, and `-CapturedPromReference`
+compiles their two rows into the image that asks for them:
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected `
+    -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -SignOnly
+```
+
+It is a switch rather than a catalogue variant on purpose. A variant that
+differed only by a define would write the same filename as the variant it
+differs from, and two entries writing one path is a run that signs an image it
+cannot name. It is also restricted to the `prepare` family: nothing else links a
+PROM read behind that table. The receipt records it under `Switches`, the run
+prints `PROM_REFERENCE=CAPTURED ROWS=2 … AUTHENTICATION=0`, and the image still
+logs `SIGNATURE_AUTHENTICATED=0` — a digest of what was read is not a signature of
+what will run.
+
 ## 3. Commands
 
 ```powershell
