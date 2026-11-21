@@ -1838,6 +1838,103 @@
         ],
         "history": "The first boot of the ROM-window build, and the run that caught this probe's own defect. Both cards returned a ROM header (0xaa55) and a PCIR structure at 0x0170 carrying NVIDIA's vendor id and a device id naming the card - 10de:2684 on the 4090, 10de:220a on the 3080, both matching the GPU lines in the same log - so the structural check the transaction applies is satisfied on this bench. The probe still reported MATCH=0 because it passed pci_id & 0xffff, the vendor, as the live device id. The ROM was never the problem; the comparison was handed the wrong half of the identity. Fixed to pci_id>>16, with a test that pins the split against the PCI printer's own %04x:%04x encoding.",
         "does_not_show": "that a fixed build reads MATCH=1 on these cards - that needs the re-run. Nor does it show that the ROM carries the FWSEC-FRTS descriptor preparation parses from the same megabyte, or that GuAd104Prepare accepts the board on its other terms: assets, selector stability, and the reference policy that is compiled out. MATCH says the structure names the device and nothing more; no signature is authenticated here."
+      },
+      {
+        "id": "physical-readonly-0009",
+        "captured": "2026-11-18",
+        "image": "diag-vram-blocks",
+        "stage": "readonly",
+        "file": "tests/data/hardware_session/physical-readonly-0009.txt",
+        "sha256": "cd7920fcacf517280379f7ded17c87200278e4bc2eb847626bf4d6b2a8a780c5",
+        "bytes": 38696,
+        "captured_bytes": 38989,
+        "lines": 293,
+        "line_endings": "CRLF as captured; stored with LF so a checkout cannot change the digest",
+        "bench": "same bench and cabling as -0006 to -0008; first boot of the capture build, which writes the megabyte it read instead of only hashing it",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=6 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "VRAM_BLOCK_PROBE_ROM GPU=4090 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x2684 LIVE_DEVICE=0x2684 MATCH=1",
+            "why": "the megabyte at BAR0 + 0x300000 on the 4090, compared against the device half of the identity. MATCH=1 is the fix §11.37 made, confirmed on the card it was written for: the earlier build printed the vendor half and read 0"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE_ROM GPU=3080 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x220a LIVE_DEVICE=0x220a MATCH=1",
+            "why": "the same on the 3080. Two structurally valid expansion ROMs, each naming the card the GPU line in this log reports"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE_ROM_FILE GPU=4090 BYTES=1048576 FILE=\\PROM-0000-01-00-0-0000.BIN SHA256=422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad",
+            "why": "the 4090's window left the machine. The digest is the one -0008 printed a boot earlier, before any capture existed, so the file is the same bytes that were already hashed rather than a second reading that might differ"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE_ROM_FILE GPU=3080 BYTES=1048576 FILE=\\PROM-0000-04-00-0-0000.BIN SHA256=742549cf1a4b2ce6e1e854af35655e90b89a9a205603f03be2c096077dac9165",
+            "why": "the 3080's window, under the digest -0008 printed for that card. Two files, each named after the card it came from"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE_END CARDS=2 BLOCKS=42 CONTEXT=24 EXPECTED_READS=132 READS_SUCCEEDED=132 READS_FAILED=0 DIGESTS=2 NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=84 NOT_ACCESSIBLE=48 ROMS=2",
+            "why": "every word read again, with the same totals as -0008; the run added a file write and no GPU write"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE_CARD GPU=4090 READ=66 FAILED=0 OBSERVED=34 NOT_ACCESSIBLE=32 WRITE_SET_SHA256=79c7e4b70f94dca1b3c4a0c7483ba7cd6c4a7b9e4cf9948e0768f4f3a95247db",
+            "why": "the 4090's write set is byte-for-byte the state -0008 saw, so nothing moved between the two boots"
+          },
+          {
+            "token": "VRAM_BLOCK_PROBE_CARD GPU=3080 READ=66 FAILED=0 OBSERVED=50 NOT_ACCESSIBLE=16 WRITE_SET_SHA256=c643a097fb677fce6c44bfceb3099bb022b0088f5d8b0ba85cb97c1bc064c5c4",
+            "why": "the same for the 3080. A read-only run that changed a digest would be a finding; this one did not"
+          }
+        ],
+        "history": "The defect §11.37 found is fixed here and the boot was repeated, so this run answers two questions at once: MATCH=1 on both cards, and the two PROM files whose digests match the lines that describe them. The images themselves were parsed off the bench by tests/test_fwsec_v2.c and the result is recorded in `prom_captures`: both carry a version-3 FWSEC-FRTS descriptor with a non-zero ucode id and 384 bytes per signature, which is what GuAd104FwsecMatches() requires.",
+        "does_not_show": "that the files are authentic firmware (SIGNATURE_AUTHENTICATED=0 on every line), or that the signature slot the fuse word selects exists for either card: the transaction reads BAR0 0x8241e0 for ucode 9 and that word has never been read on this bench. The 1 MiB images are NVIDIA firmware and are not stored here, only their digests and the fields the parser reported."
+      }
+    ]
+  },
+  "prom_captures": {
+    "note": "The files the -0009 boot wrote and what the transaction's own parser reported for each. The 1 MiB NVIDIA firmware images are NOT stored in this repository: the digest in the stored log and the digest here tie the record to the bytes, and tests/test_vram_block_probe.py holds the parsed fields to the conditions GuAd104FwsecMatches() applies.",
+    "parser": "tests/test_fwsec_v2.c in file mode: gpu_unlock_vbios_fwsec() from src/vendor/vbios_610.c walks the image, and the admission bits are the four conditions of GuAd104FwsecMatches() in src/profile.c",
+    "command": "gcc -std=c11 -O2 -Isrc tests/test_fwsec_v2.c -o fwsec && ./fwsec PROM-0000-01-00-0-0000.BIN",
+    "captures": [
+      {
+        "run": "physical-readonly-0009",
+        "card": "4090",
+        "file": "PROM-0000-01-00-0-0000.BIN",
+        "sha256": "422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad",
+        "bytes": 1048576,
+        "rom_images": 4,
+        "extension_adjust": 85504,
+        "descriptor_version": 3,
+        "image_off": 283784,
+        "image_size": 66304,
+        "imem_size": 62720,
+        "dmem_size": 3456,
+        "pkc_off": 2852,
+        "interface_off": 28,
+        "engine_mask": 1024,
+        "ucode_id": 9,
+        "sig_count": 2,
+        "sig_versions": 3,
+        "sig_bytes": 768,
+        "accepted": true
+      },
+      {
+        "run": "physical-readonly-0009",
+        "card": "3080",
+        "file": "PROM-0000-04-00-0-0000.BIN",
+        "sha256": "742549cf1a4b2ce6e1e854af35655e90b89a9a205603f03be2c096077dac9165",
+        "bytes": 1048576,
+        "rom_images": 4,
+        "extension_adjust": 83968,
+        "descriptor_version": 3,
+        "image_off": 268088,
+        "image_size": 59904,
+        "imem_size": 57856,
+        "dmem_size": 2048,
+        "pkc_off": 1444,
+        "interface_off": 28,
+        "engine_mask": 1024,
+        "ucode_id": 9,
+        "sig_count": 3,
+        "sig_versions": 7,
+        "sig_bytes": 1152,
+        "accepted": true
       }
     ]
   }

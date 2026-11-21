@@ -460,6 +460,99 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.39 C5 — the descriptor is there on both cards, and the fuse word is now the only unread one
+
+`GPU-TOPOLOGY-DIAGNOSTIC-0009.TXT` is the boot §11.38 asked for: the fixed image,
+one run, and the two files. It scores `GATES=6 GATES_FAILED=0` - `R6` passes on a
+real run for the first time - and both cards read `MATCH=1`. The megabyte was
+then parsed off the bench by `tests/test_fwsec_v2.c`, which runs
+`gpu_unlock_vbios_fwsec()` - the transaction's own walk - over the file.
+
+| | 4090 `01:00.0` | 3080 `04:00.0` |
+| --- | --- | --- |
+| captured file | `PROM-0000-01-00-0-0000.BIN` | `PROM-0000-04-00-0-0000.BIN` |
+| window digest | `422ea53f…70ad` | `742549cf…9165` |
+| same digest `-0008` printed | yes | yes |
+| images in the ROM | 4 | 4 |
+| extension adjust | `0x14e00` | `0x14800` |
+| descriptor version | 3 | 3 |
+| image offset / size | `0x45488` / `0x10300` | `0x41738` / `0xea00` |
+| imem / dmem bytes | `0xf500` / `0xd80` | `0xe200` / `0x800` |
+| pkc / interface offset | `0xb24` / `0x1c` | `0x5a4` / `0x1c` |
+| ucode id | 9 | 9 |
+| engine mask | `0x400` | `0x400` |
+| signatures | 2 (`0x3`) / 768 bytes | 3 (`0x7`) / 1152 bytes |
+| `GuAd104FwsecMatches()` | accepts | accepts |
+
+**Three things this settles.**
+
+*The §11.37 defect is fixed on the hardware it was found on.* Both lines now
+compare the ROM's own PCIR device against the device half of `pci_id` and read
+`MATCH=1`. The earlier build printed the vendor half and read 0.
+
+*The capture is the bytes that were already hashed, not a second reading.* The
+digest in each file is the digest `-0008` printed a boot earlier, before any
+capture path existed. Two independent paths - one that only hashed, one that
+hashed and wrote - produced the same value, which is the strongest evidence
+available here that the read loop, the digest and the file all describe the same
+megabyte.
+
+*The ROM is a real VBIOS structure, and it carries what preparation wants.* Four
+images with the NPDE extension and an expansion adjust of `0x14e00` / `0x14800`,
+BIT blocks with 19 and 18 tokens, sixteen ucode entries each - not a fixture.
+Both descriptors are version 3, both name ucode 9 and engine mask `0x400` (GSP),
+and both report exactly 384 bytes per signature. `unlock_610.c` refuses any other
+engine mask (`fw.engine_mask != 0x400 → -EOPNOTSUPP`), and geometry, PKC and
+interface offsets all pass the parser's own bound checks, so the descriptor gate
+that stands between preparation and its first write is satisfied on both boards.
+
+**The one word in the way.**
+
+After the descriptor, the transaction reads a fuse word and uses it to pick which
+signature slot to copy:
+
+```c
+read_bar(work, 0x008241c0 + (fw.ucode_id - 1) * 4, &fuse_raw);
+version = gpu_unlock_fuse_version(fuse_raw);      /* highest set bit of the low 16 */
+gpu_unlock_fwsec_sig_offset(fw.sig_versions, version, 384, &sig_at);
+```
+
+`gpu_unlock_fwsec_sig_offset()` refuses with `-ERANGE` unless
+`sig_versions & (1 << version)`, and it runs **before** `pci_set_master()` and
+before any write. With ucode id 9 that word is `BAR0 + 0x8241e0`, and the masks
+allow version 0 or 1 on the 4090 (two slots) and 0, 1 or 2 on the 3080 (three).
+
+`0x8241e0` has never been read on this bench. `src/vram_blocks.h` says why the
+probe does not cover it: "addresses the writer computes from a value it read (the
+fuse windows at `0x8241c0` …) are outside that set on purpose: a probe cannot name
+a word it would have to compute from a word it is trying to identify." That
+reasoning no longer binds. The index is not something the probe must discover on
+the card any more - it came out of the captured ROM, which reported ucode id 9 for
+both cards. The word is now nameable from evidence this repository already holds.
+
+If the 4090's fuse word resolves to version 2 or higher, the transaction stops
+with `-ERANGE` before its first write: nothing is mutated, and the card's ROM
+would have to be re-read for a ucode entry with a slot for that fuse version.
+That is a refusal worth meeting as a read rather than as a boot.
+
+**What this run does not prove.** Nothing authenticates a signature -
+`SIGNATURE_AUTHENTICATED=0` is on every line and `GuAd104PromMatches()` with
+`RequireReference` still has no captured reference for either card. The pinned
+asset hashes (`GuAd104AssetsValid`) are a staging question, not a read, and this
+boot did not exercise them. And no write path was touched: the 132 words read
+back with the same per-card digests as `-0008`, so nothing moved between boots.
+
+**Next, in order.** (1) Read the fuse window `0x8241c0`-`0x8241fc` on both cards -
+sixteen words each, read-only, printed with `gpu_unlock_fuse_version()` and
+compared against the slot mask the captured ROM reports, which answers the last
+unread word before the first write. (2) Confirm the staged asset bundle matches
+the manifest. (3) Only then does an actuating boot reach its first write with
+every gate in front of it already answered by a read.
+
+Counts stay 11 met / 15 partial / 17 not started, `C5` stays `none`,
+`hardware_verified` stays false for all 43 rows: a descriptor the parser accepts
+is a structural fact about bytes, not an authenticated firmware image.
+
 ### 11.38 C5 — the captured megabyte leaves the bench, and nothing had to be re-read
 
 §11.37 closed with the descriptor as the last content gate before the
@@ -543,6 +636,8 @@ Two things come back in one run: `MATCH=1` on both cards (closing §11.37's
 question), and two `PROM-…BIN` files whose digests match their lines. Parsing
 those files with the harness above is then a bench-side operation with the
 transaction's own parser, and its output is the answer to the descriptor gate.
+That boot is `-0009`, and §11.39 is what it returned: `MATCH=1` on both cards and
+an acceptable version-3 descriptor in each captured window.
 
 ### 11.37 C5 — the ROM reads, and the probe compared the wrong half
 

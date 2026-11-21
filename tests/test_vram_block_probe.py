@@ -772,6 +772,79 @@ class VerifierScoresTheProbe(unittest.TestCase):
 
 
 
+class TheCapturedWindowsWereParsed(unittest.TestCase):
+    """The capture is only evidence if the parse of it is recorded and stays tied
+    to the bytes. The images are not in this repository, so these tests hold the
+    record to the digest in the stored log and to the rule the firmware applies.
+    """
+
+    def setUp(self):
+        self.manifest = json.loads((ROOT / "docs" / "hardware_session.json")
+                                   .read_text(encoding="utf-8"))
+        self.record = self.manifest["prom_captures"]
+        self.captures = self.record["captures"]
+
+    def run_text(self, run_id: str) -> str:
+        for run in self.manifest["captured_runs"]["runs"]:
+            if run["id"] == run_id:
+                return (ROOT / run["file"]).read_text(encoding="utf-8")
+        self.fail(f"no captured run {run_id}")
+
+    def test_every_recorded_digest_is_the_digest_in_the_stored_log(self):
+        self.assertTrue(self.captures)
+        for capture in self.captures:
+            line = (f"VRAM_BLOCK_PROBE_ROM_FILE GPU={capture['card']} "
+                    f"BYTES={capture['bytes']} FILE=\\{capture['file']} "
+                    f"SHA256={capture['sha256']}")
+            self.assertIn(line, self.run_text(capture["run"]),
+                          f"{capture['card']}: the record and the log disagree")
+
+    def test_every_recorded_capture_passes_the_admission_test(self):
+        for capture in self.captures:
+            admitted = (capture["descriptor_version"] == 3
+                        and capture["ucode_id"] != 0
+                        and capture["sig_count"] >= 1
+                        and capture["sig_bytes"] == capture["sig_count"] * 384)
+            self.assertTrue(admitted, capture["card"])
+            self.assertTrue(capture["accepted"], capture["card"])
+
+    def test_the_signature_fields_match_the_parsers_own_rule(self):
+        for capture in self.captures:
+            self.assertEqual(capture["sig_bytes"], capture["sig_count"] * 384,
+                             capture["card"])
+            # The parser requires the version mask to name exactly the
+            # signatures it reports; a popcount mismatch is a malformed
+            # descriptor, not an admission.
+            self.assertEqual(bin(capture["sig_versions"]).count("1"),
+                             capture["sig_count"], capture["card"])
+            self.assertTrue(1 <= capture["ucode_id"] <= 16, capture["card"])
+            self.assertNotEqual(capture["engine_mask"], 0, capture["card"])
+
+    def test_the_engine_mask_is_the_one_the_transaction_requires(self):
+        """unlock_610.c refuses an engine mask other than GSP's 0x400 before it
+        copies anything, so an admission here that names another engine would
+        not be one."""
+        for capture in self.captures:
+            self.assertEqual(capture["engine_mask"], 0x400, capture["card"])
+
+    def test_each_record_names_a_card_the_run_itself_saw(self):
+        for capture in self.captures:
+            text = self.run_text(capture["run"])
+            self.assertIn(f"VRAM_BLOCK_PROBE_ROM GPU={capture['card']}", text)
+            self.assertIn(f"VRAM_BLOCK_PROBE_ROM_FILE GPU={capture['card']}", text)
+        self.assertEqual(len({capture["card"] for capture in self.captures}), 2)
+
+    def test_the_images_themselves_are_not_stored_here(self):
+        """Policy, not an accident: a capture is NVIDIA firmware. The digest ties
+        the record to the bytes, and the bench keeps the bytes."""
+        for capture in self.captures:
+            for name in (capture["file"], "PROM-0000-01-00-0-0000.BIN",
+                         "PROM-0000-04-00-0-0000.BIN"):
+                self.assertFalse(list(ROOT.glob(f"**/{name}")),
+                                 f"{name} must not be committed")
+        self.assertTrue(self.record["note"], "the record says why the images are absent")
+
+
 class TheCapturedWindowIsGated(unittest.TestCase):
     """R6 asks for the file, not the digest. A build that only hashes the window
     cannot pass it by omission, and a run that read both cards must have written
