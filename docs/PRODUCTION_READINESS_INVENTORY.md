@@ -460,6 +460,69 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.37 C5 — the ROM reads, and the probe compared the wrong half
+
+`GPU-TOPOLOGY-DIAGNOSTIC-0008.TXT` is the first boot of the ROM-window build. It
+is stored as `tests/data/hardware_session/physical-readonly-0008.txt` and
+re-scored on every suite run: `R1`-`R5` `PASS`, `SYNTHETIC=0`, `ROMS=2`, and the
+132 word reads unchanged from `-0007` to the value.
+
+**What the ROM read says.**
+
+| Card | Signature | PCIR offset | ROM identity | Live identity | Digest |
+| --- | --- | --- | --- | --- | --- |
+| 4090 `01:00.0` | `0xaa55` | `0x0170` | `10de:2684` | `10de:2684` | `422ea53f…70ad` |
+| 3080 `04:00.0` | `0xaa55` | `0x0170` | `10de:220a` | `10de:220a` | `742549cf…9165` |
+
+Both cards present a structurally valid expansion ROM whose PCI data structure
+names the card it was read from, and the live identity in the same log agrees
+(`GPU[0] ID=10de:2684`, `GPU[1] ID=10de:220a`). That is the check
+`GuPromImageMatchesDevice()` makes, and on this bench it is satisfied on both
+cards - the read that decides whether preparation is even reached would not
+refuse either board for being the wrong board.
+
+**What the log got wrong, and why it matters that it was caught here.** Both
+lines printed `LIVE_DEVICE=0x10de` and `MATCH=0`. `0x10de` is NVIDIA's vendor id,
+not a device id: the reader was passing `pci_id & 0xffff` - the vendor half -
+where a device id belongs. `pci_id` is vendor-low, device-high, the encoding this
+same file prints as `%04x:%04x` and tests with `pci_id == 0x268410deU`. The ROM
+was never the problem; the comparison was handed the wrong half of the identity.
+The run is honest about itself: the digest in the line is the digest of the
+megabyte the card returned, and the PCIR fields in the line are the ROM's own.
+
+Nothing in the gates could have caught it, and that is the useful part. `R5`
+asks that the readout exists, not that its arithmetic is right. Two checks now
+do the arithmetic:
+
+* a source test holds the argument to the device half (`id->pci_id>>16`) and
+  refuses the vendor half, anchored to the `%04x:%04x` split in the `PCI[]`
+  printer, so the encoding is pinned by a test rather than by a comment;
+* a stored-log test parses every captured run's `GPU[n] … ID=vvvv:dddd` lines and
+  every `VRAM_BLOCK_PROBE_ROM` line, and requires `LIVE_DEVICE` to equal the
+  device the ROM names and `MATCH` to follow the comparison. `-0008` carries a
+  `probe_defect` marker in `docs/hardware_session.json` so the test can hold
+  every later run to the fixed contract without special-casing one run by name -
+  and any run after the fix that repeats this is a failure, not a note.
+
+**What it changes for the plan.** Before this run, the ROM window was the last
+unmeasured read in front of the first write. It is now measured, and it does not
+block either card. What remains between here and a first write:
+
+* the FWSEC-FRTS descriptor, which preparation parses from the same megabyte and
+  requires to be version 3 with a non-zero ucode id (`GuAd104FwsecMatches`);
+* the pinned asset bundle hashes (`GuAd104AssetsValid`);
+* selector stability across the two register reads (`ss0 == after0`,
+  `ss1 == after1`), which `-0008` supports: both cards returned the same
+  selectors as `-0007`.
+
+No tracker row moves. `C5` stays `none`: a ROM that names its card is not an
+authenticated firmware image, `SIGNATURE_AUTHENTICATED` is still not printed, and
+the post-state half of the comparison still needs an actuation.
+
+**The next boot.** The fixed image, once booted, should read `MATCH=1` on both
+cards. If it does, the ROM gate is closed as a question and the descriptor is the
+only content gate left before the transaction's first write.
+
 ### 11.36 C5 — the probe reads the ROM window, and the decision it carries
 
 §11.35 ended with the next gap named: the transaction reads a megabyte at
@@ -529,10 +592,8 @@ started, and `hardware_verified` stays `false` for all 43.
 **The next boot.** `-Only diag-vram-blocks -StageDrive G`, one run, two cards.
 Its `VRAM_BLOCK_PROBE_ROM` lines answer the question that gates everything
 downstream: whether either board presents a ROM image this transaction would
-even look at, and what `MATCH=` says about the pairing of ROM identity and live
-device. If a card reads `MATCH=0` or `ROM_WINDOW_UNREADABLE`, preparation will
-refuse it there, before any write, and that is a finding worth having in the log
-rather than at the bench.
+even look at. That boot is `-0008`, and §11.37 is what it found - a readable ROM
+on both cards and a defect in the comparison.
 
 ### 11.35 C5 — the second interlock run: the reads are readable, the first stop is a BCR
 

@@ -509,6 +509,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-readonly-0006` | `diag-vram-blocks` | `readonly` | 243 | `b101089391a189fc5882fcb79549950b14b9b111f5b9cacbeb14d6335667d50e` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0` |
 | `physical-prepare-0003` | `prep-selected, both BDFs in one boot` | `prepare` | 14 | `cfe29f56032fdd826acba3cd38cb8bd16211f65f57ba72a943d8666f2584eed3` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-readonly-0007` | `diag-vram-blocks` | `readonly` | 289 | `0f3b6ac6fc5b948edbb4c4cc5f31177c375b8164ae0841a4c1d9d49ac3709251` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0` |
+| `physical-readonly-0008` | `diag-vram-blocks` | `readonly` | 291 | `7ecffa0eaec2cf5b68e19ff2217f30e3964167048bb57a7e636a7ec9d81e88b1` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -829,6 +830,30 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FA
 *History:* The read-set build of the probe. -0006 answered whether the words the transaction writes are addressable; this run answers whether the words it reads are readable, and with it the question -0006 left open: falcon_reset()'s first poll, 0x8400f4, reads 0x67b7 on the 4090 and 0x47f7 on the 3080, both as state. With bit 31 clear the pre-reset wait is the tolerated timeout the code's own comment describes, and with bit 12 clear the post-reset release wait is satisfied by the value that was already in the register, so it does not demonstrate that a reset happened. Two of the twenty-four new words are refused: SEC2.IRQSTAT on both cards, which only log_falcon_state() reads, and the 4090's GSP.RISCV halt word. Everything the layout and entry gates demand by exact value is present on both cards - PLM 0xffffff8f, GFW.PLM 0x8b8f, GFW.BOOT 0x3ff, GSP.CPUCTL 0x10, WPR2 high 0 - and the sixty-six write-set words are unchanged from -0006, digest included.
 
 *What it does not show:* that either card can be actuated. The probe reads and never resets, so the two refused words have no cause attached, and whether a refused word is refused again after an engine reset is exactly what only an actuating run can say. Nothing here touches the ROM window at BAR0+0x300000, which is the first content gate the transaction passes through, nor the profile and entry-selector bookkeeping the entry gate also requires. `ACCEPTANCE=UNVERIFIED` stands: a word that reads as state is not a signature check.
+
+### `physical-readonly-0008`
+
+*File:* `tests/data/hardware_session/physical-readonly-0008.txt` — 38282 bytes stored, 38573 as captured, 291 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-18. *Bench:* same bench and cabling as -0006 and -0007; first boot of the ROM-window build, so it is the only run that reads BAR0 + 0x300000.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0008.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `VRAM_BLOCK_PROBE_ROM GPU=4090 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x2684 LIVE_DEVICE=0x10de MATCH=0` — the megabyte at BAR0 + 0x300000 read on the 4090, and its own PCIR structure names 10de:2684 - the card the GPU line in the same log reports. MATCH=0 is the probe's error, not the ROM's: this build was handed the vendor half of pci_id, so LIVE_DEVICE printed 0x10de
+* `VRAM_BLOCK_PROBE_ROM GPU=3080 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x220a LIVE_DEVICE=0x10de MATCH=0` — the same read on the 3080, naming 10de:220a. Its SHA256 is the digest of that card's ROM window, which is the value a PROM reference would be captured from
+* `VRAM_BLOCK_PROBE_END CARDS=2 BLOCKS=42 CONTEXT=24 EXPECTED_READS=132 READS_SUCCEEDED=132 READS_FAILED=0 DIGESTS=2 NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=84 NOT_ACCESSIBLE=48 ROMS=2` — both ROM windows were copied, and the word tables are unchanged from -0007 to the value: the run added a reading, not a reinterpretation
+
+*History:* The first boot of the ROM-window build, and the run that caught this probe's own defect. Both cards returned a ROM header (0xaa55) and a PCIR structure at 0x0170 carrying NVIDIA's vendor id and a device id naming the card - 10de:2684 on the 4090, 10de:220a on the 3080, both matching the GPU lines in the same log - so the structural check the transaction applies is satisfied on this bench. The probe still reported MATCH=0 because it passed pci_id & 0xffff, the vendor, as the live device id. The ROM was never the problem; the comparison was handed the wrong half of the identity. Fixed to pci_id>>16, with a test that pins the split against the PCI printer's own %04x:%04x encoding.
+
+*What it does not show:* that a fixed build reads MATCH=1 on these cards - that needs the re-run. Nor does it show that the ROM carries the FWSEC-FRTS descriptor preparation parses from the same megabyte, or that GuAd104Prepare accepts the board on its other terms: assets, selector stability, and the reference policy that is compiled out. MATCH says the structure names the device and nothing more; no signature is authenticated here.
 
 ## Advancing between stages: `donor_gate.py`
 

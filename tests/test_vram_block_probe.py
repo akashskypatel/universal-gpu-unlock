@@ -352,6 +352,27 @@ class WriteSetTest(unittest.TestCase):
             self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
             self.assertIn("AGREE 11", run.stdout)
 
+    def test_the_rom_check_is_handed_the_device_half_of_the_identity(self):
+        # -0008 shipped with the vendor half in this argument and reported
+        # LIVE_DEVICE=0x10de / MATCH=0 for a ROM that names the card exactly. The
+        # encoding is pinned here against the same split the topology printer
+        # uses for the identical field, so a swap fails a test instead of a boot.
+        function = strip_comments(probe_function())
+        self.assertIn("ReportVramRom(", function)
+        call = re.search(r"ReportVramRom\([^;]*?\);", function, re.DOTALL)
+        self.assertIsNotNone(call)
+        self.assertIn("id->pci_id>>16", call.group(0),
+                      "the ROM check must be handed the device half")
+        self.assertNotIn("id->pci_id & 0xffff", call.group(0),
+                         "the vendor half is not a device id")
+        # The printer that renders the same field as %04x:%04x is the anchor, and
+        # it lives outside the probe block, so read the whole translation unit.
+        whole = strip_comments(_read(PROBE))
+        printer = re.search(
+            r"PCI\[%zu\][\s\S]{0,400}?pci_id&65535U\)[\s\S]{0,200}?pci_id>>16\)", whole)
+        self.assertIsNotNone(
+            printer, "the PCI line no longer splits pci_id into vendor then device")
+
     def test_the_rom_window_is_the_window_the_transaction_reads(self):
         probe = _read(PROBE)
         offset = re.search(r"#define\s+GU_VRAM_ROM_OFFSET\s+(0x[0-9a-fA-F]+)[uU]?", probe)
@@ -589,6 +610,52 @@ class LogContractTest(unittest.TestCase):
         # claim an authentication result.
         for token in ("SIGNATURE_SLOT=", "SECURE_ACCEPTANCE=PASS", "ACCEPTANCE=VERIFIED"):
             self.assertNotIn(token, function)
+
+
+class TheRomReadoutNamesTheCardInTheLog(unittest.TestCase):
+    """A stored ROM line must agree with the log's own GPU lines.
+
+    -0008 reported LIVE_DEVICE=0x10de - the vendor - for a ROM naming 10de:2684,
+    because the reader was handed the wrong half of pci_id. That is a defect a
+    reader can see in one line but no gate could: the gate asks only that the
+    readout exist. This test asks the arithmetic question instead, for every
+    stored run, using the identity the same log prints.
+    """
+
+    def test_every_rom_readout_agrees_with_the_identity_in_its_own_log(self):
+        manifest = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encoding="utf-8"))
+        checked = 0
+        for run in manifest["captured_runs"]["runs"]:
+            path = ROOT / run["file"]
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8", errors="replace")
+            live_devices = {
+                match.group(1): int(match.group(3), 16)
+                for match in re.finditer(
+                    r"GPU\[\d+\] BDF=(\d{4}:[0-9a-f]{2}:[0-9a-f]{2}\.\d) "
+                    r"ID=([0-9a-f]{4}):([0-9a-f]{4})", text)
+            }
+            for match in re.finditer(
+                    r"VRAM_BLOCK_PROBE_ROM GPU=(\S+) BAR0_OFFSET=0x300000 BYTES=\d+ "
+                    r"SIGNATURE=0x([0-9a-f]{4}) PCIR_OFFSET=0x([0-9a-f]{4}) "
+                    r"PCIR_VENDOR=0x([0-9a-f]{4}) PCIR_DEVICE=0x([0-9a-f]{4}) "
+                    r"LIVE_DEVICE=0x([0-9a-f]{4}) MATCH=(\d)", text):
+                gpu, signature, _pcir, vendor, device, live, match_flag = match.groups()
+                vendor = int(vendor, 16); device = int(device, 16)
+                live = int(live, 16); match_flag = int(match_flag)
+                checked += 1
+                self.assertIn(device, live_devices.values(),
+                              f"{run['id']}: the ROM names device {device:#06x} and "
+                              f"no GPU line in the log does")
+                if "probe_defect" not in run:
+                    self.assertEqual(live, device,
+                                     f"{run['id']}: LIVE_DEVICE must be the device the "
+                                     f"ROM names, not {live:#06x}")
+                    self.assertEqual(match_flag, 1 if vendor == 0x10de else 0,
+                                     f"{run['id']}: MATCH must follow the comparison")
+                self.assertIn(int(signature, 16), (0xAA55, 0x4E56, 0xBB77), run["id"])
+        self.assertGreater(checked, 0, "no stored run carries a ROM readout")
 
 
 class VerifierScoresTheProbe(unittest.TestCase):

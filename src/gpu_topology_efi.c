@@ -634,9 +634,16 @@ static void ReportVramBlocks(int pci_ok) {
           ada?"4090":"3080",card_refused,card_reads);
     /* The other thing the transaction reads before it writes: the ROM window,
      * and the structure check that decides whether the board is even a
-     * candidate. Read-only, one megabyte, once per card. */
+     * candidate. Read-only, one megabyte, once per card.
+     *
+     * pci_id is vendor in the low half and device in the high half - the same
+     * encoding the PCI[] line prints as %04x:%04x and this file tests with
+     * `pci_id==0x268410deU`. The first build of this reader passed the vendor
+     * half (`pci_id & 0xffff`), so -0008 reported LIVE_DEVICE=0x10de and
+     * MATCH=0 for two ROMs that name their cards exactly. The comparison is
+     * only as good as the field it is handed. */
     roms+=ReportVramRom(System?System->BootServices:NULL,pci,
-                        ada?"4090":"3080",(UINT32)(id->pci_id & 0xffffU));
+                        ada?"4090":"3080",(UINT32)(id->pci_id>>16U));
     reads+=card_reads;
     failed+=card_failed;
     observed+=card_observed;
