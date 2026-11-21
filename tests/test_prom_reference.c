@@ -5,7 +5,9 @@
  *   - with the synthetic reference, so the accepted path and every refusal
  *     reason can be exercised against it;
  *   - without it, to prove the shipped table (zero references) admits nothing
- *     and that no card can match the placeholder row by accident.
+ *     and that no card can match the placeholder row by accident;
+ *   - with the two captured references this bench recorded, to prove that each
+ *     card is admitted only by its own digest, subsystem and loader version.
  *
  * Build (see .github/workflows/gpu-topology-diagnostic.yml):
  *   cc -std=c11 -O1 -fsanitize=undefined -Wall -Wextra -Werror -pedantic \
@@ -42,7 +44,72 @@ int main(void) {
   }
   CHECK(strcmp(GuPromReferenceReason((GU_PROM_REF_DECISION)99), "INVALID_DECISION") == 0);
 
-#ifdef GU_PROM_REFERENCE_SYNTHETIC
+#if defined(GU_PROM_REFERENCE_CAPTURED)
+  /* Two captured cards, both read on this bench. The rows are observations: the
+   * PCI identity each boot printed, and the digest three boots agreed on. */
+  const GU_PROM_REFERENCE *found = (const GU_PROM_REFERENCE *)1;
+  CHECK(GuPromReferenceCount() == 2);
+
+  CHECK(GuPromReferenceFind(0x2684U, 0x88e61043U) != NULL);
+  CHECK(GuPromReferenceFind(0x220aU, 0xb21219daU) == NULL); /* subsystem typo misses */
+  CHECK(GuPromReferenceFind(0x220aU, 0xb61219daU) != NULL);
+  CHECK(GuPromReferenceFind(0x2684U, 0xb61219daU) == NULL); /* identity is a pair */
+  CHECK(GuPromReferenceFind(0x2685U, 0x88e61043U) == NULL);
+  CHECK(GuPromReferenceFind(0, 0) == NULL);
+
+  /* Each row says where it came from and what it admits. */
+  found = GuPromReferenceFind(0x2684U, 0x88e61043U);
+  CHECK(found && found->Origin && strstr(found->Origin, "captured"));
+  CHECK(found && found->LoaderVersion && strcmp(found->LoaderVersion, MODEL_LOADER) == 0);
+  CHECK(found && found->RomSha256 &&
+        strcmp(found->RomSha256,
+               "422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad") == 0);
+  found = GuPromReferenceFind(0x220aU, 0xb61219daU);
+  CHECK(found && found->RomSha256 &&
+        strcmp(found->RomSha256,
+               "742549cf1a4b2ce6e1e854af35655e90b89a9a205603f03be2c096077dac9165") == 0);
+
+  /* Accepted: both captured digests, either lookup form. */
+  CHECK(GuPromReferenceDecide(
+            0x2684U, 0x88e61043U,
+            "422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad",
+            MODEL_LOADER, NULL) == GU_PROM_REF_ACCEPTED);
+  CHECK(GuPromReferenceDecide(
+            0x220aU, 0xb61219daU,
+            "742549cf1a4b2ce6e1e854af35655e90b89a9a205603f03be2c096077dac9165",
+            MODEL_LOADER, &found) == GU_PROM_REF_ACCEPTED);
+  CHECK(found != NULL);
+
+  /* The digests are not interchangeable between the two cards. */
+  CHECK(GuPromReferenceDecide(
+            0x2684U, 0x88e61043U,
+            "742549cf1a4b2ce6e1e854af35655e90b89a9a205603f03be2c096077dac9165",
+            MODEL_LOADER, NULL) == GU_PROM_REF_DIGEST_MISMATCH);
+  CHECK(GuPromReferenceDecide(
+            0x220aU, 0xb61219daU,
+            "422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad",
+            MODEL_LOADER, NULL) == GU_PROM_REF_DIGEST_MISMATCH);
+  /* One nibble off, on a captured row, is still a refusal. */
+  {
+    char edited[65];
+    memcpy(edited,
+           "422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad",
+           sizeof(edited));
+    edited[0] = (edited[0] == '4') ? '5' : '4';
+    CHECK(GuPromReferenceDecide(0x2684U, 0x88e61043U, edited, MODEL_LOADER,
+                                NULL) == GU_PROM_REF_DIGEST_MISMATCH);
+  }
+  /* A different pinned bundle no longer describes the capture. */
+  CHECK(GuPromReferenceDecide(
+            0x2684U, 0x88e61043U,
+            "422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad",
+            "617.42", NULL) == GU_PROM_REF_LOADER_MISMATCH);
+
+  /* A card that is not one of the two is unknown, not a fault. */
+  CHECK(GuPromReferenceDecide(0x2204U, 0x88e61043U,
+                              "422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad",
+                              MODEL_LOADER, NULL) == GU_PROM_REF_UNKNOWN_CARD);
+#elif defined(GU_PROM_REFERENCE_SYNTHETIC)
   const GU_PROM_REFERENCE *found = (const GU_PROM_REFERENCE *)1;
   CHECK(GuPromReferenceCount() == 1);
 
@@ -145,7 +212,9 @@ int main(void) {
     return 1;
   }
   printf("test_prom_reference: OK (%s)\n",
-#ifdef GU_PROM_REFERENCE_SYNTHETIC
+#if defined(GU_PROM_REFERENCE_CAPTURED)
+         "two captured references"
+#elif defined(GU_PROM_REFERENCE_SYNTHETIC)
          "synthetic reference"
 #else
          "no captured reference"

@@ -460,6 +460,71 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.42 C5 — the two captured ROMs are a reference the image can hold
+
+§11.41 left two questions about trust rather than hardware. This is the first of
+them, answered with data this bench already has.
+
+**What changed.** `src/prom_reference.c` gains a third table, selected by
+`GU_PROM_REFERENCE_CAPTURED`: two rows, one per captured card, each carrying the
+device id, the subsystem id, the 1 MiB readout digest and the pinned loader
+version.
+
+| | 4090 | 3080 |
+| --- | --- | --- |
+| device / subsystem | `0x2684` / `0x88e61043` | `0x220a` / `0xb61219da` |
+| ROM digest | `422ea53f…70ad` | `742549cf…9165` |
+| loader version | `610.43.03` | `610.43.03` |
+| origin string | `captured: donor 01:00.0, … -0008 digest = -0009 file = -0010 repeat` | the same for `04:00.0` |
+
+The default build is unchanged: `GuPromReferenceCount()` is still 0 and an image
+that carries no reference admits nothing. Defining both this switch and the
+synthetic one is a `#error`, so no build can admit both a captured card and the
+simulator's model. `-CapturedPromReference` on `Build-Experimental-MSVC.ps1`
+adds the define; nothing else does, and the table never grows at runtime.
+
+**Why it is worth having before the first write.** The transaction's preparation
+calls `GuAd104PromMatches(&Gu, prom, 1048576, TRUE)` — `RequireReference=TRUE` —
+and with an empty table that call can only answer `UNKNOWN_CARD`, which
+`#if defined(GU_PROM_REFERENCE_REQUIRED)` turns into `PromReferenceMismatch` and a
+refusal. With the two rows, the same call answers `ACCEPTED` for exactly these
+two cards and refuses every other card, which is the shape the operator wants: a
+named pair rather than "any structurally valid VBIOS". `SIGNATURE_AUTHENTICATED=0`
+is still on the VERIFIED line, because a digest of what was read is not a
+signature of what will run.
+
+**What the tests hold.** `tests/test_prom_reference.c` is now compiled three ways
+in CI — synthetic, captured, empty — and the captured build drives
+`GuPromReferenceDecide()` over both recorded digests (accepted), the digests
+swapped between the cards (mismatch), one nibble changed (mismatch), a different
+loader version (mismatch), a card that is neither (unknown) and the placeholder
+row (unreachable). `tests/test_prom_reference_contract.py` reads the two rows out
+of the source and holds every field to `docs/hardware_session.json`'s
+`prom_captures`, so the table cannot drift from the capture it describes.
+
+**What this does not prove.** That the card in front of you will present that
+digest again on the next boot — the reference is a record of three readings, not
+a guarantee. That the bytes are authentic. And it does not touch the second open
+question: `GuAd104AssetsValid()` hashes the five pinned firmware blobs per arch,
+the repository's `AD102-ASSETS`/`GA102-ASSETS` directories satisfy every pin
+locally (`verify_reference_assets.py` → `STATUS=REFERENCE_HASHES_MATCH`), but no
+boot has ever seen them staged — `physical-prepare-0003` still reports
+`ASSET_INSTALL PRESENT=0`. That check runs **before** the PROM read in both
+`GuDiagnosticScan()` and `GuAd104Prepare()`, so an unstaged bundle refuses with
+`EFI_CRC_ERROR` ahead of anything this table can answer.
+
+**Next, in order.** (1) Stage the asset bundle onto the configured Windows ESP —
+five files per arch, `gsp_ga10x.bin` shared — and re-run
+`verify_reference_assets.py --root <ESP mount>` to hold the staged copy to the
+same pins. (2) Rebuild the dual preparation image and confirm the boot still
+refuses before `GuInit` with `ASSET_INSTALL PRESENT=1`. (3) Then the waiver image
+is a decision about a transaction whose ROM, descriptor, fuse version and
+reference all have answers, and whose only remaining unknown is what the write
+itself does.
+
+Counts stay 11 met / 15 partial / 17 not started, `C5` stays `none`,
+`hardware_verified` stays false for all 43 rows.
+
 ### 11.41 C5 — the fuse says 1 and 2, so both cards can select a signature
 
 `GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` is the boot §11.40 asked for. It scores
@@ -522,7 +587,7 @@ hardware:
 behind their own switch — device, subsystem, digest, loader version, origin — so
 the image can say `REFS=2` and `PROM_IDENTITY=VERIFIED` for these two cards
 instead of `UNVERIFIED`, with the table checked against this document's digests
-by a test. (2) Stage an asset bundle so `ASSET_INSTALL PRESENT=1` and
+by a test. **Done in §11.42.** (2) Stage an asset bundle so `ASSET_INSTALL PRESENT=1` and
 `GuAd104AssetsValid()` has something to validate. (3) Only then is the waiver a
 decision about a transaction whose every input has been read, measured and named.
 

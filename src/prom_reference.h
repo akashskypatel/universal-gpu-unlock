@@ -17,14 +17,21 @@
  * no family match and no wildcard: a miss is a refusal, and the refusal says
  * which field missed.
  *
- * There are **no captured references in this tree** (`GuPromReferenceCount()`
- * is 0 unless a test-only build defines the synthetic entry below). That is the
- * fail-closed default working as intended: with `GU_PROM_REFERENCE_REQUIRED` an
- * image admits no card at all, which is the correct answer when nobody has
- * captured a reference yet. Capturing one is what the read-only diagnostic is
- * for - it prints the digest, the device and the subsystem of the card in front
- * of you, and stays usable precisely because the requirement is checked at
- * preparation, never in the diagnostic.
+ * The **default build carries no reference** (`GuPromReferenceCount()` is 0).
+ * That is the fail-closed default working as intended: with
+ * `GU_PROM_REFERENCE_REQUIRED` such an image admits no card at all, which is the
+ * correct answer until somebody has captured one. Capturing them is what the
+ * read-only diagnostic is for - it prints the digest, the device and the
+ * subsystem of the card in front of you, and stays usable precisely because the
+ * requirement is checked at preparation, never in the diagnostic.
+ *
+ * Two cards have now been captured. `GU_PROM_REFERENCE_CAPTURED` selects a table
+ * of those two rows, and nothing else adds a row: the table is compiled in, so a
+ * reference can only arrive by rebuilding the image and editing this file, and
+ * the rows are held to the recorded digests by
+ * `tests/test_prom_reference_contract.py`. Defining it together with the
+ * synthetic entry is a compile error, so one image cannot admit both a captured
+ * card and the simulator's model.
  *
  * The synthetic entry exists for one reason: the simulator's model ROM is not a
  * captured card, so admitting it must be a deliberate, test-only build. It is

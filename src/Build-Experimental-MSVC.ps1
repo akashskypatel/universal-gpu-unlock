@@ -7,7 +7,8 @@ param(
     [switch]$AcceptUnverifiedActuation,
     [switch]$RuntimeSelection,
     [switch]$RuntimeEsp,
-    [switch]$EspResident
+    [switch]$EspResident,
+    [switch]$CapturedPromReference
 )
 $ErrorActionPreference = 'Stop'
 # The experimental original NVIDIA Stop and stock recovery baseline passed.
@@ -156,6 +157,15 @@ try {
         # Targets come from the "GuTargets" UEFI variable at boot, so the count
         # is unknown at build time. The runtime admission gates are unchanged.
         $clFlags += ' /DGU_RUNTIME_SELECTION'
+    }
+
+    if ($CapturedPromReference) {
+        # Carry the two per-card firmware references this bench captured. Without
+        # it the image ships an empty allowlist and GuAd104PromMatches(...,TRUE)
+        # can only ever answer UNVERIFIED - which is the fail-closed default, not
+        # a defect. The rows are digests of what was read, so the image still
+        # logs SIGNATURE_AUTHENTICATED=0 on both paths.
+        $clFlags += ' /DGU_PROM_REFERENCE_CAPTURED'
     }
 
     foreach ($src in $sources) {

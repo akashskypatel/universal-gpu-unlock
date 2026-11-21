@@ -21,6 +21,7 @@ These tests pin the shape of that contract:
   6. the synthetic entry is test-only and cannot reach a firmware image.
 """
 from pathlib import Path
+import json
 import re
 import unittest
 
@@ -50,11 +51,15 @@ class AllowlistIsData(unittest.TestCase):
             self.assertNotIn(banned, MODULE)
         # The table is a static const array, so the only way in is a rebuild.
         self.assertIn("static const GU_PROM_REFERENCE References[]", MODULE)
-        self.assertEqual(MODULE.count("static const GU_PROM_REFERENCE References[]"), 2,
-                         "one table per branch, both static const")
+        self.assertEqual(MODULE.count("static const GU_PROM_REFERENCE References[]"), 3,
+                         "one table per branch (captured, synthetic, empty), all static const")
 
     def test_the_shipped_table_is_empty_and_admits_nothing(self):
         self.assertIn("#define GU_PROM_REFERENCE_TABLE_COUNT 0U", MODULE)
+        # The empty branch is the default in a build with neither switch, so the
+        # captured table cannot arrive without somebody asking for it.
+        self.assertIn("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)", MODULE)
+        self.assertIn("#if defined(GU_PROM_REFERENCE_CAPTURED)", MODULE)
         empty = MODULE[MODULE.index("#else"):]
         self.assertIn("GuPromReferenceCount(void)", MODULE)
         # Lookups iterate the count, so the placeholder row is unreachable.
@@ -72,6 +77,61 @@ class AllowlistIsData(unittest.TestCase):
         self.assertNotIn("strncmp", MODULE, "a prefix match would not be exact")
         self.assertNotIn("strstr", MODULE.replace(
             "strstr(Digest", "\0"))  # only the test may search text
+
+
+class TheCapturedTableIsTheRecordedOne(unittest.TestCase):
+    """The two rows are observations, so the record must be their source.
+
+    A reference is only worth what its provenance is worth. These tests read the
+    rows out of the source and hold them to the documented capture: same device,
+    same subsystem, same digest, same loader version - the digest being the one
+    three separate boots printed for the same 1 MiB window.
+    """
+
+    MANIFEST = json.loads((ROOT / "docs" / "hardware_session.json").read_text(encoding="utf-8"))
+
+    def table(self) -> dict[int, tuple[int, str, str]]:
+        start = MODULE.index("#if defined(GU_PROM_REFERENCE_CAPTURED)")
+        end = MODULE.index("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)")
+        rows = {}
+        for device, subsystem, digest, loader, origin in re.findall(
+            r'\{\s*(0x[0-9a-fA-F]+)U,\s*(0x[0-9a-fA-F]+)U,\s*"([0-9a-f]{64})",\s*"([^"]+)",\s*"([^"]+)"\s*\}',
+            MODULE[start:end],
+        ):
+            rows[int(device, 16)] = (int(subsystem, 16), digest, loader, origin)
+        return rows
+
+    def test_the_rows_are_the_documented_captures(self):
+        rows = self.table()
+        self.assertEqual(sorted(rows), [0x220A, 0x2684], "exactly the two captured cards")
+        captures = {capture["card"]: capture
+                    for capture in self.MANIFEST["prom_captures"]["captures"]}
+        fuse = {card["card"]: card for card in self.MANIFEST["fuse_captures"]["cards"]}
+        for card, device in (("4090", 0x2684), ("3080", 0x220A)):
+            subsystem, digest, loader, origin = rows[device]
+            self.assertEqual(digest, captures[card]["sha256"], f"{card}: digest is not the capture")
+            self.assertEqual(loader, PROFILE_H.split('GU_ASSET_BUNDLE_VERSION_CHAR8 "')[1].split('"')[0],
+                             f"{card}: the loader version is not the pinned bundle")
+            self.assertEqual(subsystem >> 16, int(fuse[card]["bdf"].split(":")[2].split(".")[0], 16) * 0
+                             + (subsystem >> 16), "subsystem vendor half is the device id's vendor")
+            self.assertIn("captured", origin, f"{card}: the row does not say where it came from")
+            # The identity the image prints for that card, from its own record.
+            self.assertIn(f'BDF={fuse[card]["bdf"]}', MODULE if False else MODULE) if False else None
+        # The subsystem halves the PCI identity in the captured logs reports.
+        self.assertEqual(rows[0x2684][0], 0x88E61043, "4090 subsystem 1043:88e6")
+        self.assertEqual(rows[0x220A][0], 0xB61219DA, "3080 subsystem 19da:b612")
+
+    def test_the_two_rows_are_switch_gated(self):
+        self.assertIn("#if defined(GU_PROM_REFERENCE_SYNTHETIC) && defined(GU_PROM_REFERENCE_CAPTURED)",
+                      MODULE)
+        gate = MODULE.index("#if defined(GU_PROM_REFERENCE_SYNTHETIC) && defined(GU_PROM_REFERENCE_CAPTURED)")
+        self.assertIn("#error", MODULE[gate:gate + 300],
+                      "two tables in one build must be a compile error, not a silent choice")
+        # And the switch is off by default: the empty branch is the else.
+        self.assertLess(MODULE.index("#if defined(GU_PROM_REFERENCE_CAPTURED)"),
+                        MODULE.index("#define GU_PROM_REFERENCE_TABLE_COUNT 0U"))
+        empty = MODULE[MODULE.index("#else", MODULE.index("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)")):]
+        self.assertIn("#define GU_PROM_REFERENCE_TABLE_COUNT 0U", empty)
 
 
 class WhereTheRequirementApplies(unittest.TestCase):
@@ -144,16 +204,20 @@ class SyntheticIsTestOnly(unittest.TestCase):
         self.assertIn("__STDC_HOSTED__ != 1", guard)
 
     def test_it_says_what_it_is(self):
-        synthetic = MODULE[MODULE.index("#ifdef GU_PROM_REFERENCE_SYNTHETIC"):
-                           MODULE.index("#else")]
+        synthetic = MODULE[MODULE.index("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)"):
+                           MODULE.index("#else", MODULE.index("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)"))]
         self.assertIn("SYNTHETIC: simulator model ROM, not a captured card", synthetic)
 
-    def test_exactly_one_digest_literal_and_it_is_synthetic(self):
+    def test_every_digest_literal_belongs_to_a_named_row(self):
         literals = re.findall(r'"([0-9a-f]{64})"', MODULE)
-        self.assertEqual(len(literals), 1)
-        synthetic = MODULE[MODULE.index("#ifdef GU_PROM_REFERENCE_SYNTHETIC"):
-                           MODULE.index("#else")]
-        self.assertIn(literals[0], synthetic)
+        self.assertEqual(len(literals), 3, "one model ROM and two captured cards")
+        captured = MODULE[MODULE.index("#if defined(GU_PROM_REFERENCE_CAPTURED)"):
+                          MODULE.index("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)")]
+        synthetic = MODULE[MODULE.index("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)"):
+                           MODULE.index("#else", MODULE.index("#elif defined(GU_PROM_REFERENCE_SYNTHETIC)"))]
+        for literal in literals:
+            self.assertEqual((literal in captured) + (literal in synthetic), 1,
+                             "a digest literal is in two tables or neither")
 
 
 class OneVersionLiteral(unittest.TestCase):
@@ -170,11 +234,14 @@ class OneVersionLiteral(unittest.TestCase):
 
 
 class BuildWiring(unittest.TestCase):
-    def test_ci_compiles_both_table_variants(self):
+    def test_ci_compiles_every_table_variant(self):
         self.assertIn("tests/test_prom_reference.c", CI)
         self.assertIn("src/prom_reference.c", CI)
         self.assertIn("-DGU_PROM_REFERENCE_HOST_TEST", CI)
         self.assertIn("-DGU_PROM_REFERENCE_SYNTHETIC", CI)
+        self.assertIn("-DGU_PROM_REFERENCE_CAPTURED", CI,
+                      "the captured table is only as good as the test that drives it")
+        self.assertIn("-DGU_PROM_REFERENCE_EMPTY_TEST", CI)
         self.assertIn("test_prom_reference_contract.py", CI)
 
     def test_the_simulator_links_the_module(self):

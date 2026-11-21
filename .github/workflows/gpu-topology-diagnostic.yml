@@ -124,6 +124,8 @@ jobs:
               "$RUNNER_TEMP/test_prom_reference_ref_$compiler"
               "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_PROM_REFERENCE_HOST_TEST -DGU_PROM_REFERENCE_EMPTY_TEST -Isrc tests/test_prom_reference.c src/prom_reference.c -o "$RUNNER_TEMP/test_prom_reference_empty_$compiler"
               "$RUNNER_TEMP/test_prom_reference_empty_$compiler"
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_PROM_REFERENCE_HOST_TEST -DGU_PROM_REFERENCE_CAPTURED -Isrc tests/test_prom_reference.c src/prom_reference.c -o "$RUNNER_TEMP/test_prom_reference_captured_$compiler"
+              "$RUNNER_TEMP/test_prom_reference_captured_$compiler"
             done
             python3 -m unittest discover -s tests -p test_prom_reference_contract.py -v
             # S1/D2: build the admitted (waiver) image and diff it against the
