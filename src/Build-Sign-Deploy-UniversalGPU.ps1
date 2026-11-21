@@ -927,9 +927,18 @@ try {
                 $mismatch = ("Builder produced '{0}' but the catalogue expects '{1}'." -f $builtImage, $binaryName)
                 throw ($mismatch + ' Fix docs/image_variants.json; this script never renames an image.')
             }
-            foreach ($attestation in $variant.attestations) {
+            foreach ($declared in $variant.attestations) {
+                # A count is not a constant: `SELECTED_COUNT=<selection-count>` is
+                # resolved from the operator's own selection, so the receipt has to
+                # name the number this build compiled rather than the number the
+                # catalogue guessed. Anything else in angle brackets is a mistake
+                # and is refused instead of being matched literally.
+                $attestation = $declared.Replace('<selection-count>', [string](Get-SelectionCount))
+                if ($attestation -match '<[^>]+>') {
+                    throw "Unknown attestation placeholder for $($variantId): $declared"
+                }
                 if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape($attestation) + '(?:\s|$)')) {
-                    throw "Build attestation missing or wrong for $($variantId): $attestation"
+                    throw "Build attestation missing or wrong for $($variantId): $declared"
                 }
             }
             Assert-EfiImage $builtImage ([int]$familySpec.subsystem)

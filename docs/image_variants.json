@@ -391,6 +391,8 @@
       "safety": "actuates",
       "attestations": [
         "SINGLE_TARGET_ACTIVE=1",
+        "ORDERED_SEQUENCE=0",
+        "SELECTED_COUNT=1",
         "MULTI_GPU_MUTATION_ALLOWED=1",
         "UNVERIFIED_ACTUATION=1",
         "SYNTHETIC_PROFILE=0",
@@ -415,7 +417,9 @@
       "binary": "GPU-SEQUENCE-UNVERIFIED-ACTUATION-<label>.EFI",
       "safety": "actuates",
       "attestations": [
-        "SINGLE_TARGET_ACTIVE=1",
+        "SINGLE_TARGET_ACTIVE=0",
+        "ORDERED_SEQUENCE=1",
+        "SELECTED_COUNT=<selection-count>",
         "MULTI_GPU_MUTATION_ALLOWED=1",
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0"
@@ -438,6 +442,8 @@
       "safety": "actuates",
       "attestations": [
         "SINGLE_TARGET_ACTIVE=1",
+        "ORDERED_SEQUENCE=0",
+        "SELECTED_COUNT=1",
         "RUNTIME_ESP=1",
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0"
@@ -547,6 +553,8 @@
       "safety": "actuates",
       "attestations": [
         "SINGLE_TARGET_ACTIVE=1",
+        "ORDERED_SEQUENCE=0",
+        "SELECTED_COUNT=1",
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0"
       ],
@@ -565,7 +573,9 @@
       "binary": "GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-<label>.efi",
       "safety": "actuates",
       "attestations": [
-        "SINGLE_TARGET_ACTIVE=1",
+        "SINGLE_TARGET_ACTIVE=0",
+        "ORDERED_SEQUENCE=1",
+        "SELECTED_COUNT=<selection-count>",
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0"
       ],

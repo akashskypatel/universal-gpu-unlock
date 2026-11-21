@@ -460,6 +460,47 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.45 — the sequence image does not claim a single target
+
+The first `-Only actuate-sequence` build with two BDFs compiled, printed its
+`STATUS=COMPLETE` line, and was then refused by the script:
+
+```
+STATUS=COMPLETE PATH=...GPU-SEQUENCE-UNVERIFIED-ACTUATION-0000-01-00-0--0000-04-00-0.EFI ...
+  SINGLE_TARGET_ACTIVE=0 ... MULTI_GPU_MUTATION_ALLOWED=1 UNVERIFIED_ACTUATION=1 ...
+VARIANT_FAILED id=actuate-sequence DETAIL=Build attestation missing or wrong: SINGLE_TARGET_ACTIVE=1
+```
+
+**The catalogue was wrong, not the build.** The builders compute the token as
+`(SyntheticCompileProfile or AcceptUnverifiedActuation) and (RuntimeSelection or
+selection.Count -eq 1)` - "the ordered execution mode is compiled in *and* exactly
+one target was compiled". A two-target sequence build prints `0` by that
+definition, and `actuate-sequence` declared `1`. `dxe-actuate-sequence` carried the
+same mistake.
+
+**What changed.** Both builders now also print `ORDERED_SEQUENCE=` (waiver on and
+more than one compiled target), and the receipt check resolves
+`SELECTED_COUNT=<selection-count>` from the operator's own selection instead of
+matching a literal, refusing any other angle-bracketed placeholder. The catalogue
+now pins the two shapes in opposite directions:
+
+| variant | `SINGLE_TARGET_ACTIVE` | `ORDERED_SEQUENCE` | `SELECTED_COUNT` |
+| --- | --- | --- | --- |
+| `actuate-one-target`, `-resident`, `dxe-` | `1` | `0` | `1` |
+| `actuate-sequence`, `dxe-actuate-sequence` | `0` | `1` | `<selection-count>` |
+
+**Why CI could not catch it.** The existing test compared only *field names* - it
+asked whether the builder prints `SINGLE_TARGET_ACTIVE=`, not what it prints - and
+the waived images are the ones CI cannot build, because they need the reviewed
+profile and a real two-card selection. A Python model of the prepare family's
+`STATUS` arithmetic now checks every declared value against the switches and the
+selection shape, so a catalogue entry that describes an image the builder would not
+produce fails in a second rather than after a compile. `SINGLE_TARGET_ACTIVE` is
+left meaning what it says; the image's arity is the count, not that flag.
+
+**Nothing was staged.** The refusal happens before the image is signed, so no
+actuating binary reached the medium and no card was touched.
+
 ### 11.44 — RUN0005 names its table, and the one skip that is a setup step
 
 **RUN0005 is the first preparation log that identifies its own build.** Line 3 is

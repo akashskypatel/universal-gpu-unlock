@@ -207,6 +207,101 @@ class TheCatalogueMatchesTheBuilders(unittest.TestCase):
                               f"{FAMILY[variant['family']]['builder']}")
 
 
+class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
+    """The declared value, not just the field name.
+
+    A catalogue entry says what an image is; the builder prints what it built, and
+    the script compares the two literally. Nothing compared the *values* until
+    `actuate-sequence` declared `SINGLE_TARGET_ACTIVE=1` and the builder printed
+    `0` for its two compiled targets - visible only in a real `-Only` build with
+    two BDFs, because CI never builds an image that may write.
+    """
+
+    def model(self, variant):
+        switches = variant.get("switches", {})
+        synthetic = 1 if switches.get("SyntheticCompileProfile") else 0
+        accept = 1 if switches.get("AcceptUnverifiedActuation") else 0
+        runtime = 1 if switches.get("RuntimeSelection") else 0
+        runtime_esp = 1 if switches.get("RuntimeEsp") else 0
+        count = {"single": 1, "sequence": 2, "any": 1}.get(variant.get("requires_selection") or "", 0)
+        return count, {
+            "SELECTED_COUNT": count,
+            "RUNTIME_SELECTION": runtime,
+            "RUNTIME_ESP": runtime_esp,
+            "PREPARATION_ONLY": int(count > 0 and not synthetic and not accept),
+            "SINGLE_TARGET_ACTIVE": int((synthetic or accept) and (runtime or count == 1)),
+            "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
+            "ORDERED_SEQUENCE": int(accept and count > 1),
+            "MULTI_GPU_MUTATION_ALLOWED": accept,
+            "SYNTHETIC_PROFILE": synthetic,
+            "UNVERIFIED_ACTUATION": accept,
+            "ACTUATION_VERIFIED": 0,
+            "CAN_DETACH": 0,
+            "CAN_UNLOCK": 0,
+            "CAN_FLASH": 0,
+            "RECOVERY_VERIFIED": 0,
+            "NOT_FOR_DEPLOYMENT": int(synthetic or accept),
+        }
+
+    MODELLED_FAMILIES = ("prepare", "prepare-dxe")
+
+    def test_every_declared_value_is_the_one_the_builder_prints(self):
+        # The arithmetic below is the prepare family's STATUS line. The other
+        # families print their own tokens (WINDOWS_HANDOFF, NO_KEY_INPUT, ...);
+        # their field names are covered above, their values are their builders'
+        # own business.
+        checked = 0
+        for variant in MANIFEST["variants"]:
+            if variant["family"] not in self.MODELLED_FAMILIES:
+                continue
+            count, model = self.model(variant)
+            text = builder_text(variant["family"])
+            for token in variant["attestations"]:
+                key, _, value = token.partition("=")
+                with self.subTest(variant=variant["id"], token=token):
+                    if key == "WAIVER":
+                        self.assertIn(token, text)
+                        continue
+                    self.assertIn(key, model,
+                                  f"{variant['id']}: {key} is not modelled, so nothing "
+                                  "checks its value")
+                    if value == "<selection-count>":
+                        self.assertGreaterEqual(count, 1,
+                                                f"{variant['id']}: a count token needs a selection")
+                        checked += 1
+                        continue
+                    self.assertEqual(str(model[key]), value,
+                                     f"{variant['id']}: the catalogue says {token} and "
+                                     f"{FAMILY[variant['family']]['builder']} prints "
+                                     f"{key}={model[key]}")
+                    checked += 1
+        self.assertGreater(checked, 20)
+
+    def test_a_count_token_is_the_only_placeholder(self):
+        for variant in MANIFEST["variants"]:
+            for token in variant["attestations"]:
+                for placeholder in re.findall(r"<[^>]+>", token):
+                    self.assertEqual(placeholder, "<selection-count>", variant["id"])
+
+    def test_the_script_resolves_the_count_and_refuses_other_brackets(self):
+        self.assertIn(".Replace('<selection-count>', [string](Get-SelectionCount))", SCRIPT)
+        self.assertIn("Unknown attestation placeholder for", SCRIPT)
+
+    def test_the_sequence_images_do_not_claim_a_single_target(self):
+        for vid in ("actuate-sequence", "dxe-actuate-sequence"):
+            variant = [v for v in MANIFEST["variants"] if v["id"] == vid][0]
+            self.assertIn("SINGLE_TARGET_ACTIVE=0", variant["attestations"], vid)
+            self.assertIn("ORDERED_SEQUENCE=1", variant["attestations"], vid)
+            self.assertIn("SELECTED_COUNT=<selection-count>", variant["attestations"], vid)
+
+    def test_the_one_target_images_pin_the_other_way(self):
+        for vid in ("actuate-one-target", "actuate-one-target-resident", "dxe-actuate-one-target"):
+            variant = [v for v in MANIFEST["variants"] if v["id"] == vid][0]
+            self.assertIn("SINGLE_TARGET_ACTIVE=1", variant["attestations"], vid)
+            self.assertIn("ORDERED_SEQUENCE=0", variant["attestations"], vid)
+            self.assertIn("SELECTED_COUNT=1", variant["attestations"], vid)
+
+
 class TheSafetyClassesAreConsistent(unittest.TestCase):
     def test_read_only_images_never_pass_a_waiver_or_a_synthetic_profile(self):
         for variant in MANIFEST["variants"]:
