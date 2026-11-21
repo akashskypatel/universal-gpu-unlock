@@ -508,6 +508,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-prepare-0002` | `prep-selected -SelectionBdf '0000:04:00.0'` | `prepare` | 12 | `f8f7208516cdd76b68ffb7153267874cd30df3368111ab527d925d2fe27cad15` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-readonly-0006` | `diag-vram-blocks` | `readonly` | 243 | `b101089391a189fc5882fcb79549950b14b9b111f5b9cacbeb14d6335667d50e` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0` |
 | `physical-prepare-0003` | `prep-selected, both BDFs in one boot` | `prepare` | 14 | `cfe29f56032fdd826acba3cd38cb8bd16211f65f57ba72a943d8666f2584eed3` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-readonly-0007` | `diag-vram-blocks` | `readonly` | 289 | `0f3b6ac6fc5b948edbb4c4cc5f31177c375b8164ae0841a4c1d9d49ac3709251` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -799,6 +800,35 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 *History:* The two-card preparation section 11.31 listed as next and unmeasured: one boot, `-SelectionBdfs '0000:01:00.0,0000:04:00.0'`, built without the waiver. It prepares both cards in the order the selection names them, holds two per-card contexts at the same time, and refuses execution before `GuInit`.
 
 *What it does not show:* that the ordered list may execute - execution needs `-AcceptUnverifiedActuation`, which this build does not have - or anything about a second card while the first is being written. No write, Stop, detach, reset or FLR was called, and `MUTATION_AUTHORIZED=0` is printed on every line that could be mistaken for one.
+
+### `physical-readonly-0007`
+
+*File:* `tests/data/hardware_session/physical-readonly-0007.txt` — 37731 bytes stored, 38020 as captured, 289 lines. CRLF as captured; stored with LF so a checkout cannot change the digest.
+
+*Captured:* 2026-11-18. *Bench:* same bench and cabling as -0006; this boot ran the read-set build (CONTEXT=24), so it is the first run that reads every word the transaction reads as well as every word it writes.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0007.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=42 CONTEXT=24 MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1` — the read-set build ran: the probe states its own list size (42 written, 24 read) before it reads any of them
+* `VRAM_BLOCK_PROBE_END CARDS=2 BLOCKS=42 CONTEXT=24 EXPECTED_READS=132 READS_SUCCEEDED=132 READS_FAILED=0 DIGESTS=2 NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=84 NOT_ACCESSIBLE=48` — 132 of 132 reads landed on two cards, 48 of them returning the refused shape: no address in either list is unreachable, so every remaining question is about values
+* `VRAM_BLOCK_PROBE GPU=4090 BDF=0000:01:00.0 BLOCK=SEC2.HWCFG BAR0_OFFSET=0x8400f4 ROLE=READ_CONTEXT STATUS=OBSERVED RAW=0x000067b7 ACCESS=STATE` — the word falcon_reset() polls before its first write reads as state on the 4090, which is the question section 11.33 left open: bit 31 clear (the pre-reset wait is a tolerated timeout) and bit 12 clear (the post-reset release wait is satisfied by the value that was already there)
+* `VRAM_BLOCK_PROBE GPU=3080 BDF=0000:04:00.0 BLOCK=GSP.HWCFG BAR0_OFFSET=0x1100f4 ROLE=READ_CONTEXT STATUS=OBSERVED RAW=0x000047f7 ACCESS=STATE` — the same word on the other card, also state: the two GPUs differ in one bit here, so the first poll is not what separates them
+* `VRAM_BLOCK_PROBE GPU=4090 BDF=0000:01:00.0 BLOCK=GSP.BCR BAR0_OFFSET=0x111668 ROLE=WRITE STATUS=OBSERVED RAW=0xbadf5620 ACCESS=NOT_ACCESSIBLE` — falcon_reset() reads this word whenever HwCfg bit 10 is set, which it is on both cards: on the 4090 the GSP engine's BCR is refused, so the first falcon reset in the sequence stops here after two writes
+* `VRAM_BLOCK_PROBE GPU=3080 BDF=0000:04:00.0 BLOCK=SEC2.FBIF_TRANS_24 BAR0_OFFSET=0x840624 ROLE=WRITE STATUS=OBSERVED RAW=0xbadf5620 ACCESS=NOT_ACCESSIBLE` — falcon_hs() reads this word before it programs any transfer, and the 3080's SEC2 window refuses it: the card whose GSP block is fully readable is the one that would get furthest before stopping
+* `VRAM_BLOCK_PROBE GPU=4090 BDF=0000:01:00.0 BLOCK=GSP.RISCV BAR0_OFFSET=0x111388 ROLE=READ_CONTEXT STATUS=OBSERVED RAW=0xbadf5620 ACCESS=NOT_ACCESSIBLE` — the RISC-V halt word is refused on the 4090's GSP block; the transaction does not consult it for the GSP engine, so this is an observation about the block rather than a stop
+* `VRAM_BLOCK_PROBE GPU=3080 BDF=0000:04:00.0 BLOCK=FB.WPR2_HI BAR0_OFFSET=0x1fa828 ROLE=READ_CONTEXT STATUS=OBSERVED RAW=0000000000 ACCESS=STATE` — WPR2 high reads zero on both cards, which is the value the transaction's entry gate requires: a non-zero HI.VAL means a driver already used the card this power cycle
+
+*History:* The read-set build of the probe. -0006 answered whether the words the transaction writes are addressable; this run answers whether the words it reads are readable, and with it the question -0006 left open: falcon_reset()'s first poll, 0x8400f4, reads 0x67b7 on the 4090 and 0x47f7 on the 3080, both as state. With bit 31 clear the pre-reset wait is the tolerated timeout the code's own comment describes, and with bit 12 clear the post-reset release wait is satisfied by the value that was already in the register, so it does not demonstrate that a reset happened. Two of the twenty-four new words are refused: SEC2.IRQSTAT on both cards, which only log_falcon_state() reads, and the 4090's GSP.RISCV halt word. Everything the layout and entry gates demand by exact value is present on both cards - PLM 0xffffff8f, GFW.PLM 0x8b8f, GFW.BOOT 0x3ff, GSP.CPUCTL 0x10, WPR2 high 0 - and the sixty-six write-set words are unchanged from -0006, digest included.
+
+*What it does not show:* that either card can be actuated. The probe reads and never resets, so the two refused words have no cause attached, and whether a refused word is refused again after an engine reset is exactly what only an actuating run can say. Nothing here touches the ROM window at BAR0+0x300000, which is the first content gate the transaction passes through, nor the profile and entry-selector bookkeeping the entry gate also requires. `ACCEPTANCE=UNVERIFIED` stands: a word that reads as state is not a signature check.
 
 ## Advancing between stages: `donor_gate.py`
 

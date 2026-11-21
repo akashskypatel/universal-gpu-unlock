@@ -460,6 +460,99 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.35 C5 — the second interlock run: the reads are readable, the first stop is a BCR
+
+`GPU-TOPOLOGY-DIAGNOSTIC-0007.TXT` is the first boot of the read-set build
+(`CONTEXT=24`). It is stored as
+`tests/data/hardware_session/physical-readonly-0007.txt` and re-scored on every
+suite run: `R1`-`R4` `PASS`, `SYNTHETIC=0`, 132 of 132 reads landed,
+`NOT_ACCESSIBLE=48` across the two cards.
+
+**The §11.33 question, answered.** `falcon_reset()`'s first poll is
+`poll_us(eng->base + 0xf4, 1<<31, 1<<31, 1000, false)`. That word reads
+
+| Card | `0x8400f4` `SEC2.HWCFG` | `0x1100f4` `GSP.HWCFG` |
+| --- | --- | --- |
+| 4090 | `0x000067b7` `ACCESS=STATE` | `0x000047b7` `ACCESS=STATE` |
+| 3080 | `0x000067f7` `ACCESS=STATE` | `0x000047f7` `ACCESS=STATE` |
+
+It is readable on both cards, so the pre-reset poll cannot refuse the run. Two
+bits then carry the real news. Bit 31 is clear in all four values, so the 1 ms
+wait for it to become set is the tolerated timeout the source comment already
+describes (`-ETIMEDOUT` for HW bug 3419321), not a silent pass. Bit 12 is also
+clear, and that is the post-reset wait: `poll_us(eng->base + 0xf4, 1<<12, 0,
+1000000, true)` returns on its first read because the register already holds the
+value the wait is waiting for. On this bench the release wait is therefore
+satisfied before the engine reset has any effect, and it demonstrates nothing -
+a property of the upstream sequence, measured here for the first time, not
+something this fork introduced. The write-back check after the reset is the same
+story: ten reads whose results are discarded.
+
+**What is refused, and whether it matters.** Two of the twenty-four read words:
+
+* `SEC2.IRQSTAT` (`0x840008`) refused on both cards. Only `log_falcon_state()`
+  reads it, and only while logging a failure, so it costs a diagnostic line and
+  no decision.
+* `GSP.RISCV` (`0x111388`) refused on the 4090. The halt checks compute
+  `riscv_halt = !is_gsp && ...`, so the GSP engine never consults this word;
+  the SEC2 RISC-V halt word reads `0x10` on both cards, which is the halt state
+  the waits look for.
+
+**What the exact-value gates already require, and the bench already has.** The
+entry gate compares against constants, not against readability:
+
+| Word | Required | 4090 | 3080 |
+| --- | --- | --- | --- |
+| `FEAT.PLM` `0x823804` | `0xffffff8f` | `0xffffff8f` | `0xffffff8f` |
+| `GFW.PLM` `0x118128` | `0x8b8f` | `0x00008b8f` | `0x00008b8f` |
+| `GFW.BOOT` `0x118234` | `0x3ff` | `0x000003ff` | `0x000003ff` |
+| `GSP.CPUCTL` `0x110100` | halted, `0x10` | `0x10` | `0x10` |
+| `FB.WPR2_HI` `0x1fa828` | `0`, i.e. WPR2 down | `0` | `0` |
+
+So `gpu_unlock_gfw_assess()` returns complete, and the strict equality check
+that follows would pass on values. What that gate also wants - a verified
+profile and matching entry selectors - is host-side bookkeeping the probe cannot
+see.
+
+**Where each card would actually stop.** Following the sequence in
+`src/vendor/unlock_610.c` against these values, the first refused read each card
+meets is:
+
+* **4090** - `falcon_reset(&gu_gsp)` reads `0x1100f4` (fine), reads `0x1103c0`
+  (`0x0`, fine), writes the reset pair, then reads `eng->falcon2 + 0x668`
+  because HwCfg bit 10 is set. `0x111668` is refused, so it returns `-ENODEV`.
+  Two MMIO writes, both to the GSP engine-id word, and no firmware, no DMA, no
+  selector change.
+* **3080** - the GSP block is readable end to end, its FBIF words read
+  `0x110`/`0x190`, and its DMA command, engine-mask, ucode-id and signature-DMEM
+  words all read as state. It would get through FWSEC and stop later, in
+  `falcon_hs(&gu_sec2)`, on `0x840624`, which its SEC2 window refuses.
+
+Which is the opposite of what "most readable card" suggests: the 4090 is the
+card that fails earliest and leaves the least behind, because the block that
+would carry it further is the one that refuses. That is a prediction from the
+probe plus the source, not a measurement, and it holds only if the ROM and
+FWSEC content checks before it pass - the transaction reads a megabyte at
+`BAR0 + 0x300000` and refuses a board whose ROM does not match its bundle, and
+nothing in the probe touches that window.
+
+**Stability.** The eighty-eight words this run shares with `-0006` returned
+identical values, and both `WRITE_SET_SHA256` digests are unchanged
+(`79c7e4b7…` on the 4090, `c643a097…` on the 3080). A boot apart, nothing moved:
+the classification and the read-set additions changed what the log says, not
+what the silicon answers.
+
+What this does not do: no inventory row moves. `C5` stays `none` - the read set
+is now measured before the fact, and the post-state half still needs an
+actuation. `hardware_verified` stays `false` for all 43, the counts stay at 11
+met / 15 partial / 17 not started, and both refused words keep
+`CAUSE=UNKNOWN`.
+
+Next, if the probe grows again: the ROM window at `BAR0 + 0x300000` is the first
+read the transaction makes that nothing probes, and it is a content gate rather
+than an address gate. Two words per card would say whether the board presents a
+ROM image the transaction would even look at.
+
 ### 11.34 C5 — the probe now covers the reads that stop the transaction
 
 §11.33 left one question open: `falcon_reset()` polls `0x8400f4` before its first
@@ -577,8 +670,9 @@ first actuation is still open, and both are cheap to settle:
   on an engine whose fifteen neighbouring SEC2 words are refused.
 
 The probe now reports `0xf4` on both engines (`SEC2.HWCFG`, `GSP.HWCFG`), and
-§11.34 extends it to the transaction's whole read set, so the next read-only boot
-answers it directly and says which other words would have stopped the run. Neither
+§11.34 extends it to the transaction's whole read set, and §11.35 is the boot
+that answers it: the word reads `0x67b7` on the 4090 and `0x47f7` on the 3080,
+both as state. Neither
 outcome damages a card - one refuses, the other makes a single documented halt
 write - but the plan is not allowed to assume the first, and until this run
 nobody knew which it would be.
