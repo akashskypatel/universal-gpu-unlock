@@ -460,6 +460,56 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.47 — the read-only image reproduces the refusal, and both cards say the same thing
+
+§11.46 added the link observation to the preparation path so a bench could be read
+without an image that may write. RUN0007 is that boot, and it reproduces RUN0006
+line for line:
+
+```
+ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16
+  SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_UR=1 ADMISSION=REFUSE
+ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=4 MAX_WIDTH=16
+  SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_UR=1 ADMISSION=REFUSE
+```
+
+**The finding is the agreement, not the refusal.** Two different cards, in two
+different slots, present the *same* sticky bits (correctable error and unsupported
+request), the *same* ASPM L1 request and the *same* inactive data-link bit. A
+per-card fault does not look like that; a platform state does. The two conditions
+are also probably one fact observed twice: with ASPM L1 enabled the link idles in
+L1, and Link Status reports the data-link layer inactive there. A bench fix that
+only clears the error bits would still meet `ASPM_ENABLED`, and one that only
+disables ASPM may still meet `PCIE_ERROR_LOGGED`.
+
+**A second, unrelated observation.** The 3080 negotiates `WIDTH=4` of `MAX_WIDTH=16`
+while the 4090 negotiates x16. No earlier log recorded link width at all, so this
+is new: slot 2 is x4-wired (a chipset lane group) or the card is seated on a
+x4 link. It does not refuse anything - the policy refuses degraded width only at
+zero - but it is now on paper, and it matters for the DMA and memory arithmetic a
+dual transaction depends on.
+
+**What changed.** Both link lines now weigh the four conditions separately, so a
+refusal says how many things are wrong instead of only the first:
+`OK_ERRORS=0 OK_ASPM=0 OK_TRAINED=1 OK_UP=0` in this log - three of four fail, and
+a fixer can see all three at once. The order in `GuCheckLinkState` is unchanged and
+a test pins it, because that order is what the single `PCI_LINK=` verdict reports.
+A new advisory, `LINK_ADMISSION_PREVIEW`, makes the point that `ADMISSION=REFUSE`
+in a preparation log means the waived image would refuse identically, so a waived
+boot need not be spent to learn it.
+
+**The question this does not settle.** Whether those bits are set on *every* boot
+by firmware enumeration or were left by something earlier in this session. The log
+is one snapshot; the answer needs two preparation boots on a bench that has had
+full AC removal, one of them with PCIe ASPM disabled in firmware. If both cards
+still read `ERRORS=9` after that, then the gate as written cannot be satisfied on
+this platform, and that is a design decision - documented, deliberate, and not a
+silent relaxation - rather than a bench problem. Nothing in this section waives it.
+
+**Unchanged.** `hardware_verified` stays false for all 43 entries, the counts stay
+11 met / 15 partial / 17 not started, `C5` stays `none`. RUN0007 is recorded as
+`physical-prepare-0005` and re-scored by the suite.
+
 ### 11.46 — the first boot of an image that may write, and the link gate that stopped it
 
 `actuate-sequence` built, was signed, was staged, and booted. It refused at

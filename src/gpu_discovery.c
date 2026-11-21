@@ -1123,7 +1123,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
                                                  link_caps.pcie,&link);
         GuLog("ACTIVE_LINK[%zu] BDF=%04x:%02x:%02x.%x PCI_LINK=%s WIDTH=%u MAX_WIDTH=%u "
               "SPEED=%u MAX_SPEED=%u ASPM=%u TRAINED=%u UP=%u ERRORS=%u ERROR_CE=%u "
-              "ERROR_NONFATAL=%u ERROR_FATAL=%u ERROR_UR=%u ADMISSION=%s\n",
+              "ERROR_NONFATAL=%u ERROR_FATAL=%u ERROR_UR=%u "
+              "OK_ERRORS=%u OK_ASPM=%u OK_TRAINED=%u OK_UP=%u ADMISSION=%s\n",
               observed,(unsigned)record->segment,(unsigned)record->bus,
               (unsigned)record->device,(unsigned)record->function,
               GuLinkReason(verdict),(unsigned)link.width,(unsigned)link.max_width,
@@ -1131,6 +1132,10 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
               (unsigned)link.trained,(unsigned)link.up,(unsigned)link.errors,
               (unsigned)(link.errors&1U),(unsigned)((link.errors>>1U)&1U),
               (unsigned)((link.errors>>2U)&1U),(unsigned)((link.errors>>3U)&1U),
+              /* One per condition the verdict weighs, so a refusal says how many
+               * things are wrong instead of only the first. */
+              (unsigned)(link.errors==0),(unsigned)(link.aspm==0),
+              (unsigned)(link.trained!=0),(unsigned)(link.up!=0),
               GuLinkAccepted(verdict)?"ALLOW":"REFUSE");
         observed++;
       }
@@ -1193,13 +1198,16 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     GU_LINK_VERDICT verdict=GuCheckLinkState(config,caps.pcie,&link);
     GuLog("PCI_LINK=%s WIDTH=%u MAX_WIDTH=%u SPEED=%u MAX_SPEED=%u ASPM=%u "
           "TRAINED=%u UP=%u ERRORS=%u ERROR_CE=%u ERROR_NONFATAL=%u ERROR_FATAL=%u "
-          "ERROR_UR=%u HOTPLUG=%u SURPRISE=%u AER=UNOBSERVED "
+          "ERROR_UR=%u OK_ERRORS=%u OK_ASPM=%u OK_TRAINED=%u OK_UP=%u "
+          "HOTPLUG=%u SURPRISE=%u AER=UNOBSERVED "
           "UNHANDLED=HOTPLUG,AER BDF=%04x:%02x:%02x.%x\n",
           GuLinkReason(verdict),(unsigned)link.width,(unsigned)link.max_width,
           (unsigned)link.speed,(unsigned)link.max_speed,(unsigned)link.aspm,
           (unsigned)link.trained,(unsigned)link.up,(unsigned)link.errors,
           (unsigned)(link.errors&1U),(unsigned)((link.errors>>1U)&1U),
           (unsigned)((link.errors>>2U)&1U),(unsigned)((link.errors>>3U)&1U),
+          (unsigned)(link.errors==0),(unsigned)(link.aspm==0),
+          (unsigned)(link.trained!=0),(unsigned)(link.up!=0),
           (unsigned)link.hotplug,(unsigned)link.surprise,
           (unsigned)selected.segment,(unsigned)selected.bus,
           (unsigned)selected.device,(unsigned)selected.function);

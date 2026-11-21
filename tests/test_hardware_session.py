@@ -196,9 +196,26 @@ class TheReadOnlyPathReportsTheSameLinkPolicy(unittest.TestCase):
 
     def test_both_lines_name_the_four_sticky_bits_and_the_card(self):
         for token in ("ERROR_CE=%u ERROR_NONFATAL=%u ERROR_FATAL=%u",
-                      "ERROR_UR=%u HOTPLUG=%u SURPRISE=%u",
+                      "ERROR_UR=%u", "HOTPLUG=%u SURPRISE=%u",
                       "BDF=%04x:%02x:%02x.%x"):
             self.assertIn(token, self.source, token)
+
+    def test_each_condition_is_reported_separately(self):
+        """A verdict names the first failure; the operator needs all four."""
+        for token in ("OK_ERRORS=%u OK_ASPM=%u OK_TRAINED=%u OK_UP=%u",):
+            self.assertEqual(self.source.count(token), 2,
+                             "both link lines must weigh the same four conditions")
+        for expr in ("(unsigned)(link.errors==0)", "(unsigned)(link.aspm==0)",
+                     "(unsigned)(link.trained!=0)", "(unsigned)(link.up!=0)"):
+            self.assertEqual(self.source.count(expr), 2, expr)
+
+    def test_the_four_conditions_are_the_ones_the_verdict_uses(self):
+        checks = (ROOT / "src" / "checks.c").read_text(encoding="utf-8")
+        body = checks[checks.index("GU_LINK_VERDICT GuCheckLinkState("):]
+        body = body[:body.index("BOOLEAN GuLinkAccepted")]
+        order = [body.index(marker) for marker in
+                 ("Link.errors != 0", "Link.aspm != 0", "!Link.trained", "!Link.up")]
+        self.assertEqual(order, sorted(order), "the policy order is what the log explains")
 
     def test_the_observation_does_not_refuse_anything(self):
         link = self.source.index("ACTIVE_LINK[%zu]")
