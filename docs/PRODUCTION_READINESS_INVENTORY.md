@@ -460,6 +460,43 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.44 — RUN0005 names its table, and the one skip that is a setup step
+
+**RUN0005 is the first preparation log that identifies its own build.** Line 3 is
+`PROM_REFERENCE=CAPTURED ROWS=2 AUTHENTICATION=0`, above `ACTIVE_PREPARE=INVENTORIED`
+and above the refusal, so `RUN0003`, `RUN0004` (byte-identical to `RUN0003`) and
+`RUN0005` are now distinguishable. The rest of the log is the refusal this bench
+has seen every time - `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY
+BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0`,
+`STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0`,
+`GATES=2 GATES_FAILED=0` - which is the point: a build switch changed the words the
+image says about itself and nothing about what it is allowed to do. It is stored
+as `tests/data/hardware_session/physical-prepare-0004.txt` and re-scored by the
+suite.
+
+`ASSET_INSTALL PRESENT=0` is still on the line above it, and it still means the
+NVRAM record does not exist. It is not the asset gate (§11.43): the loader hashes
+the five pinned files off the medium and never consults that record to decide.
+
+**The skip with no remedy.** Building `actuate-sequence` on a checkout without
+`src/local/boot_profile.h` printed `VARIANT_SKIPPED ... REASON=NEEDS_LOCAL_BOOT_PROFILE`
+and, under `-Only`, a `VARIANT_FAILED` that repeated the reason twice and said
+nothing about what to do. That is correct behaviour - a waived image compiles the
+reviewed profile and `-WindowsEspGuid` cannot stand in for it, because that switch
+belongs to the diagnostic handoff builders and `src/Build-Experimental-MSVC.ps1`
+has no such parameter - but it was an unactionable message. The failure now carries
+`REMEDY=` with the file to create, the fact that `src/local/` is gitignored and per
+machine, and the preflight command that confirms the result, and
+`docs/BUILD_SIGN_DEPLOY.md` has the section that goes with it: how to read the ESP's
+unique partition GUID (`GptType` is the type, `Guid` is the partition), how to turn
+it into `GU_WINDOWS_PARTITION_INITIALIZER`, and why a GUID from an earlier session
+is not evidence about this one.
+
+**Unchanged.** Nothing here is hardware evidence. The transaction is still refused
+before `GuInit`, no log in this session contains a successful asset load, the counts
+stay 11 met / 15 partial / 17 not started, `C5` stays `none`, and `hardware_verified`
+is false for all 43 entries.
+
 ### 11.43 C5 — a log now says which build wrote it, and the bundle is checkable before the boot
 
 §11.42 shipped `-CapturedPromReference`. Two runs came back that could not be

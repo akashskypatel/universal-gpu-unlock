@@ -150,6 +150,63 @@ boots of the two builds used to be byte-identical files; the line is what makes
 them distinguishable, and it is the first line to compare when a log and a
 receipt disagree.
 
+### When a variant asks for the reviewed ESP profile
+
+`VARIANT_SKIPPED id=actuate-sequence REASON=NEEDS_LOCAL_BOOT_PROFILE` — and, under
+`-Only`, the `VARIANT_FAILED` that repeats it — is a setup step, not a catalogue
+defect. The `prepare` family compiles `src/boot_profile.h`, which includes
+`src/local/boot_profile.h` and stops with an `#error` when that file is absent.
+That is deliberate: an image allowed to write is pinned to one partition an
+operator read out and reviewed, and a compiled-in GUID is the only way the image
+can tell that partition from any other.
+
+`-WindowsEspGuid` is not a substitute. It belongs to the diagnostic handoff
+builders, which emit a read-only or stop-observation image; the `prepare` family
+has no such parameter, so passing it changes nothing about this skip.
+
+Read the current identifier, then write the file:
+
+```powershell
+# 1. The unique partition GUID of the Windows ESP. GptType is the ESP *type*
+#    (the same on every machine); Guid is this partition.
+Get-Partition | Where-Object GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' |
+  Select-Object DiskNumber, PartitionNumber, DriveLetter, Guid
+# If that column is missing on this Windows build, ask the storage provider:
+# Get-CimInstance -Namespace root\Microsoft\Windows\Storage -Class MSFT_Partition |
+#   Where-Object GptType -eq '{c12a7328-f81f-11d2-ba4b-00a0c93ec93b}' |
+#   Select-Object DiskNumber, PartitionNumber, DriveLetter, Guid
+```
+
+```powershell
+# 2. Write it in the initializer form the build expects.
+$guid = [guid]'00000000-0000-0000-0000-000000000000'   # <- the Guid printed above
+$n    = $guid.ToString('N')
+$d4   = (8..15 | ForEach-Object { '0x{0:x2}' -f $guid.ToByteArray()[$_] }) -join ','
+$init = '{0x' + $n.Substring(0,8) + ',0x' + $n.Substring(8,4) + ',0x' + $n.Substring(12,4) + ',{' + $d4 + '}}'
+New-Item -ItemType Directory -Force src\local | Out-Null
+@"
+/* SPDX-License-Identifier: GPL-2.0-only */
+/* Reviewed ESP profile for this machine. src/local/ is gitignored: this names
+ * one partition on one bench and must never be committed. */
+#pragma once
+#define GU_WINDOWS_PARTITION_INITIALIZER $init
+"@ | Set-Content -Encoding ASCII src\local\boot_profile.h
+
+# 3. The check the build and the preflight both rely on.
+python3 tools\session_preflight.py --profile src\local\boot_profile.h
+```
+
+Expect `PROFILE path=src\local\boot_profile.h PRESENT=1 GUID=REVIEWED`. The other
+three answers are each a different mistake: `PRESENT=0` is the wrong path (it is
+`src\local\`, not the repository root), `GUID=SYNTHETIC` is the placeholder
+`0x11111111` still being in the file, and `GUID=UNDEFINED` is a renamed or
+misspelled macro.
+
+A GUID read in an earlier session is not evidence about this one: a Windows
+reinstall or a re-partition changes it, and the image would be pinned to a
+partition that no longer exists. Read it again before rebuilding, and record the
+value in the session log next to `M1_RECOVERY_TOOLKIT_READY`.
+
 ## 3. Commands
 
 ```powershell

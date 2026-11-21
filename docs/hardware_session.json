@@ -1967,6 +1967,44 @@
           }
         ],
         "does_not_show": "that either fuse word reads the same when the transaction reads it, that the signature the version selects is the one the driver will accept, or that any signature authenticates (SIGNATURE_AUTHENTICATED=0 stands). It also does not answer the two questions that remain before a first write: which captured PROM reference the image trusts, and whether a staged asset bundle matches the pinned hashes."
+      },
+      {
+        "id": "physical-prepare-0004",
+        "captured": "2026-11-18",
+        "image": "prep-selected (built with -CapturedPromReference)",
+        "stage": "prepare",
+        "file": "tests/data/hardware_session/physical-prepare-0004.txt",
+        "sha256": "a454aa546d8db3be4e3e8e9b99488bc4f6ff29388449f96ab3c08be4ef80b96c",
+        "bytes": 1095,
+        "captured_bytes": 1095,
+        "lines": 15,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "two NVIDIA cards, no display attached, driven from a USB stick; Windows started after the image returned with no error and no hang",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "PROM_REFERENCE=CAPTURED ROWS=2 AUTHENTICATION=0",
+            "why": "the image names the table it was built with, and the token matches Switches.CapturedPromReference in the receipt; RUN0003 and RUN0004 could not be told apart because no such line existed"
+          },
+          {
+            "token": "ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=2 READ_ONLY=1",
+            "why": "the announce line sits above it, so the table is named before any stage can refuse"
+          },
+          {
+            "token": "ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0",
+            "why": "carrying the captured table changed nothing about the refusal: preparation is still CPU-only and the transaction is still refused"
+          },
+          {
+            "token": "ASSET_INSTALL PRESENT=0",
+            "why": "the NVRAM record is still absent because the installer was never run; it reports on the record, not on the files the loader hashes, so this is not the asset gate"
+          },
+          {
+            "token": "STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0",
+            "why": "the run ended where a preparation image is designed to end, with nothing written, retained or faulted"
+          }
+        ],
+        "history": "the fourth preparation boot. `RUN0004.TXT` turned out to be byte-identical to `physical-prepare-0003`, so this is the first preparation log that can be told apart from the one before it.",
+        "does_not_show": "nothing about the PROM read. The transaction is still refused before `GuInit`, so the captured table was never consulted, and `ASSET_INSTALL PRESENT=0` says only that the installer has never run."
       }
     ]
   },

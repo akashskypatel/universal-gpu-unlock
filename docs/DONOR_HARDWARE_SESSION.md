@@ -512,6 +512,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-readonly-0008` | `diag-vram-blocks` | `readonly` | 291 | `7ecffa0eaec2cf5b68e19ff2217f30e3964167048bb57a7e636a7ec9d81e88b1` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=0` |
 | `physical-readonly-0009` | `diag-vram-blocks` | `readonly` | 293 | `cd7920fcacf517280379f7ded17c87200278e4bc2eb847626bf4d6b2a8a780c5` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=6 GATES_FAILED=0` |
 | `physical-readonly-0010` | `diag-vram-fuse` | `readonly` | 327 | `f0030317273565c8afa376751dd2821aaaa01828dde34777198452423ad5168f` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=7 GATES_FAILED=0` |
+| `physical-prepare-0004` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 15 | `a454aa546d8db3be4e3e8e9b99488bc4f6ff29388449f96ab3c08be4ef80b96c` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -912,6 +913,32 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=7 GATES_FA
 *History:* The boot §11.40 asked for. Sixteen words per card at BAR0 0x8241c0, printed with the version gpu_unlock_fuse_version() computes, and gate R7 scores the read. The read set the probe already covered is unchanged - the fuse window is not part of it, which is why the totals are the same as -0008 and -0009 - and the sixteen extra reads are the only new ones.
 
 *What it does not show:* that either fuse word reads the same when the transaction reads it, that the signature the version selects is the one the driver will accept, or that any signature authenticates (SIGNATURE_AUTHENTICATED=0 stands). It also does not answer the two questions that remain before a first write: which captured PROM reference the image trusts, and whether a staged asset bundle matches the pinned hashes.
+
+### `physical-prepare-0004`
+
+*File:* `tests/data/hardware_session/physical-prepare-0004.txt` — 1095 bytes stored, 1095 as captured, 15 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-18. *Bench:* two NVIDIA cards, no display attached, driven from a USB stick; Windows started after the image returned with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-prepare-0004.txt --stage prepare
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `PROM_REFERENCE=CAPTURED ROWS=2 AUTHENTICATION=0` — the image names the table it was built with, and the token matches Switches.CapturedPromReference in the receipt; RUN0003 and RUN0004 could not be told apart because no such line existed
+* `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=2 READ_ONLY=1` — the announce line sits above it, so the table is named before any stage can refuse
+* `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0` — carrying the captured table changed nothing about the refusal: preparation is still CPU-only and the transaction is still refused
+* `ASSET_INSTALL PRESENT=0` — the NVRAM record is still absent because the installer was never run; it reports on the record, not on the files the loader hashes, so this is not the asset gate
+* `STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0` — the run ended where a preparation image is designed to end, with nothing written, retained or faulted
+
+*History:* the fourth preparation boot. `RUN0004.TXT` turned out to be byte-identical to `physical-prepare-0003`, so this is the first preparation log that can be told apart from the one before it.
+
+*What it does not show:* nothing about the PROM read. The transaction is still refused before `GuInit`, so the captured table was never consulted, and `ASSET_INSTALL PRESENT=0` says only that the installer has never run.
 
 ## Advancing between stages: `donor_gate.py`
 

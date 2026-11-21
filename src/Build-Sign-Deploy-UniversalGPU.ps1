@@ -845,7 +845,20 @@ try {
                     if ($Only) {
                         $named = ('Cannot build {0}: {1}. -Only asked for this image specifically, so ' +
                                   'this is an error rather than a skip; -All records it and carries on.')
-                        throw ($named -f $variantId, $skipReason)
+                        $message = $named -f $variantId, $skipReason
+                        # The one skip that is a setup step rather than a wrong argument
+                        # says what to create. A waived image compiles against the reviewed
+                        # local profile, and -WindowsEspGuid is not a substitute: that switch
+                        # belongs to the diagnostic handoff builders, and the prepare family
+                        # includes src/local/boot_profile.h directly.
+                        if ($skipReason -eq 'NEEDS_LOCAL_BOOT_PROFILE') {
+                            $message += (' REMEDY=create src\local\boot_profile.h from src\boot_profile.example.h ' +
+                                         'holding the reviewed ESP unique partition GUID; the directory is ' +
+                                         'gitignored, the file is per machine, and -WindowsEspGuid does not ' +
+                                         'stand in for it in the prepare family. ' +
+                                         'VERIFY=python3 tools\session_preflight.py --profile src\local\boot_profile.h')
+                        }
+                        throw $message
                     }
                     $skippedCount++
                     $results.Add([pscustomobject]@{

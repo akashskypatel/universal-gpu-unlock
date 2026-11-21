@@ -25,6 +25,7 @@ These tests keep it honest against the builders:
 from pathlib import Path
 import json
 import re
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -544,6 +545,67 @@ class TheDocumentIsRendered(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheReviewedProfileSkipSaysWhatToCreate(unittest.TestCase):
+    """`NEEDS_LOCAL_BOOT_PROFILE` is the one skip that is a setup step.
+
+    A waived image compiles `src/boot_profile.h`, which includes
+    `src/local/boot_profile.h`. That directory is gitignored and per machine, so
+    a fresh checkout cannot build an actuating image - and an operator who only
+    sees the skip reason has nowhere to go. The failure names the file, says what
+    goes in it, and says why `-WindowsEspGuid` is not a substitute.
+    """
+
+    def setUp(self):
+        self.script = (ROOT / "src" / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
+
+    def test_the_failure_names_the_file_to_create(self):
+        self.assertIn("REMEDY=create src\\local\\boot_profile.h from src\\boot_profile.example.h", self.script)
+
+    def test_the_failure_says_the_directory_is_per_machine(self):
+        self.assertIn("gitignored", self.script)
+        self.assertIn("-WindowsEspGuid does not", self.script)
+
+    def test_the_failure_carries_the_check_that_confirms_it(self):
+        self.assertIn("VERIFY=python3 tools\\session_preflight.py --profile src\\local\\boot_profile.h", self.script)
+
+    def test_the_remedy_is_only_attached_to_that_skip(self):
+        block = self.script[self.script.index("if ($skipReason -eq 'NEEDS_LOCAL_BOOT_PROFILE') {"):]
+        block = block[:block.index("throw $message")]
+        self.assertEqual(block.count("REMEDY="), 1)
+        for other in ("NEEDS_SELECTION", "NEEDS_ESP_GUID", "NEEDS_EXACTLY_ONE_BDF"):
+            self.assertNotIn(other, block)
+
+    def test_the_document_walks_through_it(self):
+        doc = (ROOT / "docs" / "BUILD_SIGN_DEPLOY.md").read_text(encoding="utf-8")
+        self.assertIn("### When a variant asks for the reviewed ESP profile", doc)
+        for token in ("NEEDS_LOCAL_BOOT_PROFILE", "src\\local\\boot_profile.h",
+                      "boot_profile.example.h", "MSFT_Partition",
+                      "GUID=REVIEWED", "0x11111111"):
+            self.assertIn(token, doc, token)
+
+    def test_the_document_says_a_guid_is_reread_and_not_assumed(self):
+        doc = (ROOT / "docs" / "BUILD_SIGN_DEPLOY.md").read_text(encoding="utf-8")
+        section = doc[doc.index("### When a variant asks for the reviewed ESP profile"):]
+        section = section[:section.index("## 3. Commands")]
+        self.assertIn("re-partition changes it", section)
+        self.assertIn("M1_RECOVERY_TOOLKIT_READY", section)
+
+    def test_the_prepare_family_has_no_guid_switch(self):
+        builder = (ROOT / "src" / "Build-Experimental-MSVC.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("WindowsEspGuid", builder,
+                         "the prepare builder must keep requiring the reviewed local profile")
+
+    def test_the_synthetic_guid_is_still_refused_by_the_preflight(self):
+        import session_preflight
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "boot_profile.h"
+            path.write_text("#define GU_WINDOWS_PARTITION_INITIALIZER {0x11111111,0x2222,0x3333,"
+                            "{0x84,0x44,0x55,0x66,0x77,0x88,0x99,0xaa}}\n", encoding="utf-8")
+            ok, note = session_preflight.check_profile(path)
+        self.assertFalse(ok)
+        self.assertIn("GUID=SYNTHETIC", note)
 
 
 class TheCapturedReferenceIsAnExplicitBuildOption(unittest.TestCase):
