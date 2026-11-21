@@ -1281,6 +1281,130 @@ class TheFuseWindowIsAGated(unittest.TestCase):
         self.assertNotIn(f"{self.GATE} RESULT=PASS", out)
 
 
+class TheFuseWindowWasRead(unittest.TestCase):
+    """What -0010 answered, held to the log it came from.
+
+    The window is only worth reading if the word the ucode id names is read and
+    the version is computed the way the transaction computes it. Every value here
+    is compared against the stored log, so the record cannot drift from the boot.
+    """
+
+    RUN = "physical-readonly-0010"
+    LOG = ROOT / "tests" / "data" / "hardware_session" / "physical-readonly-0010.txt"
+
+    def setUp(self):
+        self.manifest = json.loads((ROOT / "docs" / "hardware_session.json")
+                                   .read_text(encoding="utf-8"))
+        self.record = self.manifest["fuse_captures"]
+        self.cards = {card["card"]: card for card in self.record["cards"]}
+        self.text = self.LOG.read_text(encoding="utf-8")
+
+    @staticmethod
+    def fuse_version(raw: int) -> int:
+        """gpu_unlock_fuse_version(): poisoned or empty means zero."""
+        if raw == 0xFFFFFFFF or (raw & 0xFFFF0000) == 0xBADF0000:
+            return 0
+        value = raw & 0xFFFF
+        return value.bit_length()  # 0 for 0, otherwise highest set bit + 1
+
+    def log_words(self, card: str) -> dict[int, tuple[int, int, str]]:
+        """offset -> (raw, version, access), read out of the log itself."""
+        pattern = re.compile(
+            r"VRAM_BLOCK_PROBE_FUSE GPU=(\S+) BDF=\S+ OFFSET=0x([0-9a-f]+) UCODE_ID=(\d+) "
+            r"RAW=0x([0-9a-f]+) VERSION=(\d+) ACCESS=(\S+)"
+        )
+        words = {}
+        for line in self.text.splitlines():
+            match = pattern.search(line)
+            if match and match.group(1) == card:
+                words[int(match.group(2), 16)] = (int(match.group(4), 16),
+                                                  int(match.group(5)), match.group(6))
+        return words
+
+    def test_the_record_is_the_log(self):
+        base = _define(_read(BLOCKS), "GU_FUSE_FWSEC_UCODE1")
+        stride = _define(_read(BLOCKS), "GU_FUSE_FWSEC_STRIDE")
+        words = _define(_read(BLOCKS), "GU_FUSE_FWSEC_WORDS")
+        # The closing line this run recorded, quoted from the stored log.
+        for card, entry in self.cards.items():
+            self.assertIn(
+                f"VRAM_BLOCK_PROBE_FUSE_END GPU={card} BDF={entry['bdf']} BASE=0x8241c0 "
+                f"WORDS={words} READ={words} FAILED=0 UCODE9_OFFSET=0x{entry['ucode9_offset']:x}",
+                self.text,
+                f"{card}: the closing line the record describes is not in the log")
+        self.assertEqual(len(self.cards), 2)
+        for card, entry in self.cards.items():
+            logged = self.log_words(card)
+            self.assertEqual(len(logged), words, f"{card}: {len(logged)} word lines")
+            self.assertEqual(sorted(logged), [base + i * stride for i in range(words)])
+            self.assertEqual([entry["words_hex"][i] and int(entry["words_hex"][i], 16)
+                              for i in range(words)],
+                             [logged[base + i * stride][0] for i in range(words)],
+                             f"{card}: the recorded words are not the logged ones")
+            self.assertEqual(entry["window_words"], words)
+
+    def test_the_word_the_ucode_id_names_is_the_one_read(self):
+        base = _define(_read(BLOCKS), "GU_FUSE_FWSEC_UCODE1")
+        stride = _define(_read(BLOCKS), "GU_FUSE_FWSEC_STRIDE")
+        ucode9 = base + (9 - 1) * stride
+        for card, entry in self.cards.items():
+            self.assertEqual(entry["ucode9_offset"], ucode9, card)
+            self.assertEqual(entry["ucode9_offset"], base + (entry["ucode_id"] - 1) * stride)
+            logged = self.log_words(card)
+            self.assertEqual(logged[entry["ucode9_offset"]][0], entry["ucode9_raw"], card)
+            self.assertEqual(logged[entry["ucode9_offset"]][2], "STATE",
+                             f"{card}: the word came back refused, not read")
+
+    def test_the_version_is_computed_the_way_the_transaction_computes_it(self):
+        for card, entry in self.cards.items():
+            self.assertEqual(entry["fuse_version"], self.fuse_version(entry["ucode9_raw"]),
+                             f"{card}: the recorded version is not the rule's value")
+            logged = self.log_words(card)
+            for offset, (raw, version, _access) in logged.items():
+                self.assertEqual(version, self.fuse_version(raw),
+                                 f"{card}: id at 0x{offset:x} printed a version the rule does not give")
+
+    def test_the_window_is_not_uniform_and_the_id_matters(self):
+        # The tail words would refuse. If the window were assumed uniform, or the
+        # first word were read instead of the ninth, this run would have had no
+        # way to notice.
+        for card, entry in self.cards.items():
+            mask = entry["sig_versions"]
+            versions = [self.fuse_version(int(word, 16)) for word in entry["words_hex"]]
+            refused = [v for v in versions if not mask & (1 << v)]
+            self.assertTrue(refused,
+                            f"{card}: every word in the window is selectable, so this check proves nothing")
+            self.assertNotIn(entry["fuse_version"], refused,
+                             f"{card}: the word this run reports is one the mask refuses")
+
+    def test_both_cards_can_select_the_signature_their_fuse_names(self):
+        # The headline of -0010, stated as an assertion: the transaction would
+        # copy a packed signature on both cards instead of stopping with -ERANGE.
+        for card, entry in self.cards.items():
+            mask = entry["sig_versions"]
+            self.assertTrue(entry["selectable"], f"{card}: the fuse version is not in the mask")
+            self.assertEqual(entry["sig_count"], bin(mask).count("1"), card)
+            self.assertEqual(entry["slot"], bin(mask & ((1 << entry["fuse_version"]) - 1)).count("1"),
+                             f"{card}: the slot is not the count of lower set bits")
+            self.assertLess(entry["slot"], entry["sig_count"], card)
+            self.assertEqual(entry["sig_offset"], entry["slot"] * 384, card)
+            self.assertLessEqual(entry["sig_offset"] + 384, entry["sig_bytes"], card)
+
+    def test_the_fuse_record_and_the_prom_record_describe_the_same_cards(self):
+        captures = {capture["card"]: capture
+                    for capture in self.manifest["prom_captures"]["captures"]}
+        self.assertEqual(set(captures), set(self.cards))
+        self.assertEqual({capture["run"] for capture in captures.values()},
+                         {"physical-readonly-0009"},
+                         "the ROM records must still come from the boot that captured them")
+        self.assertEqual(self.record["run"], self.RUN)
+        for card, entry in self.cards.items():
+            self.assertEqual(captures[card]["ucode_id"], entry["ucode_id"], card)
+            self.assertEqual(captures[card]["sig_versions"], entry["sig_versions"], card)
+            self.assertEqual(captures[card]["sig_count"], entry["sig_count"], card)
+            self.assertEqual(captures[card]["sig_bytes"], entry["sig_bytes"], card)
+
+
 PROLOGUE = r"""
 #include <stdio.h>
 #include <stddef.h>

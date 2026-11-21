@@ -511,6 +511,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-readonly-0007` | `diag-vram-blocks` | `readonly` | 289 | `0f3b6ac6fc5b948edbb4c4cc5f31177c375b8164ae0841a4c1d9d49ac3709251` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=4 GATES_FAILED=0` |
 | `physical-readonly-0008` | `diag-vram-blocks` | `readonly` | 291 | `7ecffa0eaec2cf5b68e19ff2217f30e3964167048bb57a7e636a7ec9d81e88b1` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=0` |
 | `physical-readonly-0009` | `diag-vram-blocks` | `readonly` | 293 | `cd7920fcacf517280379f7ded17c87200278e4bc2eb847626bf4d6b2a8a780c5` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=6 GATES_FAILED=0` |
+| `physical-readonly-0010` | `diag-vram-fuse` | `readonly` | 327 | `f0030317273565c8afa376751dd2821aaaa01828dde34777198452423ad5168f` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=7 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -883,6 +884,34 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=6 GATES_FA
 *History:* The defect §11.37 found is fixed here and the boot was repeated, so this run answers two questions at once: MATCH=1 on both cards, and the two PROM files whose digests match the lines that describe them. The images themselves were parsed off the bench by tests/test_fwsec_v2.c and the result is recorded in `prom_captures`: both carry a version-3 FWSEC-FRTS descriptor with a non-zero ucode id and 384 bytes per signature, which is what GuAd104FwsecMatches() requires.
 
 *What it does not show:* that the files are authentic firmware (SIGNATURE_AUTHENTICATED=0 on every line), or that the signature slot the fuse word selects exists for either card: the transaction reads BAR0 0x8241e0 for ucode 9 and that word has never been read on this bench. The 1 MiB images are NVIDIA firmware and are not stored here, only their digests and the fields the parser reported.
+
+### `physical-readonly-0010`
+
+*File:* `tests/data/hardware_session/physical-readonly-0010.txt` — 43149 bytes stored, 43149 as captured, 327 lines. LF as captured.
+
+*Captured:* 2026-11-18. *Bench:* same bench and cabling as -0006 to -0009; first boot of the build that reads the fuse window.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0010.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=7 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `VRAM_BLOCK_PROBE_FUSE_END GPU=4090 BDF=0000:01:00.0 BASE=0x8241c0 WORDS=16 READ=16 FAILED=0 UCODE9_OFFSET=0x8241e0 UCODE9_RAW=0x00000001 UCODE9_VERSION=1 UCODE9_ACCESS=STATE UCODE9_UNREAD=0` — the word ucode 9 addresses on the 4090, read at last. It says 0x00000001, which is version 1, and the captured ROM's mask 0x3 contains bit 1, so unlock_transaction_fwsec() would copy the second of its two packed signatures and not stop with -ERANGE
+* `VRAM_BLOCK_PROBE_FUSE_END GPU=3080 BDF=0000:04:00.0 BASE=0x8241c0 WORDS=16 READ=16 FAILED=0 UCODE9_OFFSET=0x8241e0 UCODE9_RAW=0x00000003 UCODE9_VERSION=2 UCODE9_ACCESS=STATE UCODE9_UNREAD=0` — the same word on the 3080 reads 0x00000003 - version 2 - and its mask 0x7 contains bit 2, so it would copy the third of three. Both cards are selectable, which is the question this boot existed to answer
+* `VRAM_BLOCK_PROBE_FUSE GPU=4090 BDF=0000:01:00.0 OFFSET=0x8241fc UCODE_ID=16 RAW=0x00007fff VERSION=15` — the last word of the 4090's window is 0x00007fff, which is version 15 and selectable by no mask here. A probe that read one word and assumed the window was uniform would have been wrong about this card had the ROM named ucode 16; reading all sixteen is what makes the answer a measurement
+* `VRAM_BLOCK_PROBE_FUSE GPU=3080 BDF=0000:04:00.0 OFFSET=0x8241fc UCODE_ID=16 RAW=0x00000007 VERSION=3` — the 3080's last word is version 3, and its mask 0x7 has no bit 3. Its id-15 word is 0x00007fff as well. Three words in that window would have refused; the one the id names does not
+* `VRAM_BLOCK_PROBE_END CARDS=2 BLOCKS=42 CONTEXT=24 EXPECTED_READS=132 READS_SUCCEEDED=132 READS_FAILED=0 DIGESTS=2 NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=84 NOT_ACCESSIBLE=48 ROMS=2` — the write set and the read context are unchanged to the value: 132 of 132 reads landed, and the sixteen fuse words are not counted here because they are neither a write nor a context row
+* `VRAM_BLOCK_PROBE_CARD GPU=4090 READ=66 FAILED=0 OBSERVED=34 NOT_ACCESSIBLE=32 WRITE_SET_SHA256=79c7e4b70f94dca1b3c4a0c7483ba7cd6c4a7b9e4cf9948e0768f4f3a95247db` — the 4090's write set has the same digest for the third boot running, so the new reads changed nothing
+* `VRAM_BLOCK_PROBE_ROM GPU=4090 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x2684 LIVE_DEVICE=0x2684 MATCH=1` — the ROM readout is unchanged and no capture file was written in this boot - the capture is its own switch - so the fuse build did not disturb the path -0009 took
+
+*History:* The boot §11.40 asked for. Sixteen words per card at BAR0 0x8241c0, printed with the version gpu_unlock_fuse_version() computes, and gate R7 scores the read. The read set the probe already covered is unchanged - the fuse window is not part of it, which is why the totals are the same as -0008 and -0009 - and the sixteen extra reads are the only new ones.
+
+*What it does not show:* that either fuse word reads the same when the transaction reads it, that the signature the version selects is the one the driver will accept, or that any signature authenticates (SIGNATURE_AUTHENTICATED=0 stands). It also does not answer the two questions that remain before a first write: which captured PROM reference the image trusts, and whether a staged asset bundle matches the pinned hashes.
 
 ## Advancing between stages: `donor_gate.py`
 

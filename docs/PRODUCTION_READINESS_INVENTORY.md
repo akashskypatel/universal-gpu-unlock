@@ -460,6 +460,76 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.41 C5 — the fuse says 1 and 2, so both cards can select a signature
+
+`GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` is the boot §11.40 asked for. It scores
+`GATES=7 GATES_FAILED=0` — `R7` passes on its first run — and it answers the last
+unread word in front of the first write.
+
+| | 4090 `01:00.0` | 3080 `04:00.0` |
+| --- | --- | --- |
+| window base / words | `0x8241c0` / 16 of 16 read, 0 refused | the same |
+| ucode id the ROM reports | 9 | 9 |
+| word at `0x8241e0` | `0x00000001` | `0x00000003` |
+| `gpu_unlock_fuse_version()` | **1** | **2** |
+| ROM `sig_versions` | `0x3` (2 records) | `0x7` (3 records) |
+| bit present in the mask | yes (bit 1) | yes (bit 2) |
+| slot the transaction copies | 1 of 2, at `+384` | 2 of 3, at `+768` |
+| outcome of the read | selectable | selectable |
+
+**What this settles.** `unlock_transaction_fwsec()` reads that word before
+`pci_set_master()` and before any write, and refuses with `-ERANGE` when
+`sig_versions` has no bit at the version. On this bench it has one: both cards
+would copy a packed signature and continue, neither would refuse. That was the
+last read-only question about the firmware path — what remains is about *which
+bytes are trusted*, not *what the hardware says*.
+
+**The window is not uniform, which is why all sixteen words are kept.** The
+4090's window is `0x1` for ids 1-13, `0x7f` at 14 and `0x7fff` at 15 and 16; the
+3080's is mostly `0x1` with `0x3` at 1, 2 and 9, `0x7fff` at 15 and `0x7` at 16.
+Those tail words are versions 15, 15 and 3 — selectable by neither mask. A probe
+that read the first word and called the window uniform would have read a
+different number than a probe that honoured the id, and on a ROM naming ucode 16
+it would have reported a version the transaction refuses. Reading the id the
+captured ROM names, out of a window that is read whole, is what makes the answer
+a measurement rather than an assumption.
+
+**The read side is unchanged.** The block probe's own totals are
+identical to `-0008` and `-0009`: 132 of 132 reads, `READS_FAILED=0`, the same 42
+write-set words, the same per-card digests (`79c7e4b7…`, `c643a097…`), the same
+two ROM readings with `MATCH=1`, `NO_GPU_WRITES=1` on every line. The sixteen
+fuse words are neither a write nor a context row, which is why they do not appear
+in those totals and why adding them changed no digest. The 4090's window digest is
+now the third independent boot to print `422ea53f…70ad` and the 3080's
+`742549cf…9165`, and no capture file was written in this run: the capture is its
+own switch and was not used.
+
+**What this does not prove.** That the word reads the same when the transaction
+reads it — a fuse read twice is a repeat, not a stability proof. That the selected
+packed signature is the one the driver will accept, or that it authenticates:
+`SIGNATURE_AUTHENTICATED=0` is unchanged. And the two questions §11.39 listed
+ahead of a first write are still open, both of them about trust rather than
+hardware:
+
+* `GuPromReferenceCount()` is **0**, so `GuAd104PromMatches(…, TRUE)` in the
+  preparation path can only ever answer `UNVERIFIED`; the two digests this bench
+  has printed three times each are exactly the tuple that table wants.
+* The dual prepare boot `physical-prepare-0003` records `ASSET_INSTALL PRESENT=0`
+  — no bundle has ever been staged, so `GuAd104AssetsValid()` has nothing to
+  check and would report `EFI_CRC_ERROR` if it were reached.
+
+**Next, in order.** (1) Put the two captured ROMs into `src/prom_reference.c`
+behind their own switch — device, subsystem, digest, loader version, origin — so
+the image can say `REFS=2` and `PROM_IDENTITY=VERIFIED` for these two cards
+instead of `UNVERIFIED`, with the table checked against this document's digests
+by a test. (2) Stage an asset bundle so `ASSET_INSTALL PRESENT=1` and
+`GuAd104AssetsValid()` has something to validate. (3) Only then is the waiver a
+decision about a transaction whose every input has been read, measured and named.
+
+Counts stay 11 met / 15 partial / 17 not started, `C5` stays `none`,
+`hardware_verified` stays false for all 43 rows: a fuse word that names a
+selectable slot is a fact about a register, not an authenticated firmware image.
+
 ### 11.40 C5 — the fuse window is a read now, and a gate scores it
 
 §11.39 ended with one unread word in front of the first write. This change makes
@@ -544,7 +614,7 @@ the probe's `NO_GPU_WRITES=1`, the 132 words and both per-card digests are
 untouched by this change.
 
 **Next, in order.** (1) Run `-0010` with the `-VramBlockProbe` build and read
-`R7`'s twelve new lines. (2) If both versions are selectable, the slot question
+`R7`'s twelve new lines. **Done in §11.41.** (2) If both versions are selectable, the slot question
 is answered and what remains before the first write is the reference and asset
 question in §11.39. (3) If either reads 2 or 3, re-read that card's ROM for a
 ucode entry whose mask covers the fuse version - still a read, still no write.
