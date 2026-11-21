@@ -360,7 +360,7 @@ The SEC2 read plus the pinned Windows handoff, for a bench where the read-only i
 
 #### `diag-vram-blocks` — read-only probe of the actuating write set
 
-Forty-two BAR0 reads per verified card, at the addresses the waived transaction writes, plus the two context words it reads to choose them. It is the interlock for the first actuation: run the same image before and after, and any block that moved shows up as a different digest. Nothing is written.
+Forty-two BAR0 reads per verified card, at the addresses the waived transaction writes, plus the twenty-four words it reads without writing - the two HwCfg words `falcon_reset()` polls, the RISC-V halt word, the GFW and WPR2 bookkeeping words, and the rest of the set whose refused read stops the transaction. It is the interlock for the first actuation: run the same image before and after, and any block that moved shows up as a different digest. Nothing is written.
 
 ```powershell
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks -StageDrive G

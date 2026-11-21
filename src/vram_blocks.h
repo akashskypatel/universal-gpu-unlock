@@ -9,6 +9,10 @@
  * write set from unlock_610.c and fails when this list and that set disagree,
  * so a new write_bar() site cannot be added without a matching probe row.
  *
+ * The CONTEXT_ macros below are the same derivation over the writer's reads:
+ * words it inspects but never writes, including the ones whose value decides
+ * whether it proceeds (an inaccessible read is poll_us()'s -EIO).
+ *
  * The macros are plain numbers: this header carries the address map only and
  * must never grow a write path. The probe that consumes it lives behind
  * GU_VRAM_BLOCK_PROBE in gpu_topology_efi.c and issues BAR0 reads only.
@@ -91,9 +95,24 @@
 #define GU_VRAM_BLOCK_FEAT_SS0 0x0082381cu
 #define GU_VRAM_BLOCK_FEAT_SS1 0x00823820u
 
-/* Read-only context: the writer READS these words to decide what to write, so
- * the probe reports them too. They are not part of the write set and the drift
- * check excludes them by the CONTEXT_ prefix. */
+/* Read-only context: every word the writer READS without writing it.
+ *
+ * The write set above is what the transaction mutates; this list is what it
+ * reads to decide whether it may run and what to put in those words. The two
+ * are different hazards. A write to a word nobody read is recoverable and
+ * visible; a read that comes back inaccessible is the transaction's own stop
+ * signal, because poll_us() and every read_bar()+inaccessible() pair return
+ * -EIO/-ENODEV on that shape (src/vendor/unlock_610.c). So the probe reports
+ * these too: a NOT_ACCESSIBLE here on an actuating boot is the line that says
+ * the run died, or will die, before or inside its first write.
+ *
+ * The list is derived, not curated: tests/test_vram_block_probe.py computes
+ * every statically resolvable read_bar()/poll_us() target in
+ * src/vendor/unlock_610.c, subtracts the write set, and fails unless this list
+ * matches it exactly. Addresses the writer computes from a value it read (the
+ * fuse windows at 0x8241c0 and GU_FUSE_SEC2_UCODE1, and 0x1400 + engine * 4)
+ * are outside that set on purpose: a probe cannot name a word it would have to
+ * compute from a word it is trying to identify. */
 /* check_entry_selectors(): read_bar(work, GU_FEAT_PLM_OFFSET, &plm) */
 #define GU_VRAM_BLOCK_CONTEXT_FEAT_PLM 0x00823804u
 /* read_bar(work, GU_FEAT_READOUT_1_OFFSET, ...) */
@@ -109,5 +128,48 @@
 /* read_bar(work, 0, &chip), re-read later as SEC2_BASE + 0x94 / base + 0x94:
  * the chip word the transaction copies into eng->base + 0x84. */
 #define GU_VRAM_BLOCK_CONTEXT_CHIP 0x00000000u
+
+/* The rest of the read set. Each delta below appears at both engine bases,
+ * exactly as the write set does; the absolute words are outside an engine
+ * window. */
+/* log_falcon_state(): read_bar(work, base + 0x08, &irqstat) */
+#define GU_VRAM_BLOCK_CONTEXT_SEC2_IRQSTAT 0x00840008u
+#define GU_VRAM_BLOCK_CONTEXT_GSP_IRQSTAT 0x00110008u
+/* log_falcon_state(): read_bar(work, base + 0x80, &os) */
+#define GU_VRAM_BLOCK_CONTEXT_SEC2_RM_OS 0x00840080u
+#define GU_VRAM_BLOCK_CONTEXT_GSP_RM_OS 0x00110080u
+/* log_falcon_state(): read_bar(work, base + 0x94, &debug); also the chip word
+ * unlock_transaction_boot() re-reads as SEC2_BASE + 0x94 */
+#define GU_VRAM_BLOCK_CONTEXT_SEC2_DEBUG 0x00840094u
+#define GU_VRAM_BLOCK_CONTEXT_GSP_DEBUG 0x00110094u
+/* log_falcon_state(): read_bar(work, base + 0x108, &hwcfg). Not the 0xf4 word
+ * falcon_reset() polls: this one is the falcon2-adjacent HwCfg copy. */
+#define GU_VRAM_BLOCK_CONTEXT_SEC2_HWCFG2 0x00840108u
+#define GU_VRAM_BLOCK_CONTEXT_GSP_HWCFG2 0x00110108u
+/* The RISC-V block's halt word: read_bar(work, eng->falcon2 + 0x388, &riscv)
+ * in poll_falcon_engine_halt() and is_falcon_engine_halted(). ga102
+ * dev_riscv_pri.h, as nouveau's ga102_flcn_riscv_active() reads it. */
+#define GU_VRAM_BLOCK_CONTEXT_SEC2_RISCV 0x00841388u
+#define GU_VRAM_BLOCK_CONTEXT_GSP_RISCV 0x00111388u
+/* GFW handshake words, read before the layout is trusted:
+ * poll_us/read_bar(work, GU_GFW_PLM_OFFSET, ...) gates a boot at the entry
+ * signal, and GU_GFW_BOOT_OFFSET reports the ROM's own progress. */
+#define GU_VRAM_BLOCK_CONTEXT_GFW_PLM 0x00118128u
+#define GU_VRAM_BLOCK_CONTEXT_GFW_BOOT 0x00118234u
+/* The board's usable framebuffer size: read_bar(work, 0x001183a4, &mb). A word
+ * that does not read costs the actuating run its entire layout. */
+#define GU_VRAM_BLOCK_CONTEXT_BOOT_MEM_MB 0x001183a4u
+/* Memory-controller lock and WPR2 bookkeeping:
+ * 0x001fa7c8 the pre-lock PLM the layout reads first,
+ * 0x001fa824/0x001fa828 the WPR2 LOW/HIGH pair every stage re-reads,
+ * 0x001fa82c/0x001fa830 the boot descriptor's own low/high pair. */
+#define GU_VRAM_BLOCK_CONTEXT_PLM_LOCK 0x001fa7c8u
+#define GU_VRAM_BLOCK_CONTEXT_WPR2_LO 0x001fa824u
+#define GU_VRAM_BLOCK_CONTEXT_WPR2_HI 0x001fa828u
+#define GU_VRAM_BLOCK_CONTEXT_BOOT_DESC_LO 0x001fa82cu
+#define GU_VRAM_BLOCK_CONTEXT_BOOT_DESC_HI 0x001fa830u
+/* read_bar(work, 0x00625f04, &vga): the VGA/RM decoder word the layout uses to
+ * place the reserved window. */
+#define GU_VRAM_BLOCK_CONTEXT_VGA_CONFIG 0x00625f04u
 
 #endif

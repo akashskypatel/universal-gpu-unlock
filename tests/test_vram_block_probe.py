@@ -14,6 +14,9 @@ write set from ``src/vendor/unlock_610.c`` mechanically and holds
 * the derived set must equal the probe's block set exactly, so a new write site
   cannot be added without a matching probe row, and the probe cannot invent an
   address the writer never touches;
+* the same derivation over the writer's reads, minus the write set, must equal
+  the probe's read-context list, so an abort point (poll_us() or an inactive
+  read_bar()) cannot be missing from the evidence;
 * the probe function itself must stay read-only: no register write, no detach,
   no unlock, no Stop, no DMA, no reset, no FLR, no read-modify-write readback.
 
@@ -249,22 +252,31 @@ class WriteSetTest(unittest.TestCase):
             "the probe reads offsets the actuating sequence never writes",
         )
 
-    def test_context_words_are_the_writers_own_reads(self):
+    def test_context_words_are_exactly_the_writers_read_only_reads(self):
+        # The probe's read context must be the writer's whole read set minus the
+        # words it also writes: every other read is a place poll_us() or an
+        # inactive read_bar() aborts the transaction, so a word missing here is
+        # an abort point the operator cannot see before a boot.
         _, context = probe_blocks()
-        # The two selector words the writer reads to decide, the two HwCfg words
-        # falcon_reset polls before it writes anything, and BAR0+0.
-        self.assertEqual(
-            context,
-            {0x00823804, 0x00823818, 0x008400F4, 0x001100F4, 0x00000000},
-        )
-        self.assertEqual(context & structural_writes(), set())
         reads = structural_reads()
+        writes = structural_writes()
         self.assertEqual(
-            sorted(hex(v) for v in context - reads),
+            sorted(hex(v) for v in (reads - writes) - context),
             [],
-            "the probe reports a context word the writer never reads",
+            "the writer reads words the probe never reports",
         )
-        self.assertIn(0x008400F4, reads, "falcon_reset() must poll HwCfg")
+        self.assertEqual(
+            sorted(hex(v) for v in context - (reads - writes)),
+            [],
+            "the probe reports a context word the writer does not read, or writes",
+        )
+        self.assertEqual(context & writes, set())
+        # The words that decide whether an actuating run gets started at all.
+        for anchor in (0x008400F4, 0x001100F4, 0x008403C0, 0x00841388,
+                       0x00111388, 0x00823804, 0x00000000):
+            self.assertIn(anchor, reads | writes, f"0x{anchor:08x} is not read")
+        self.assertIn(0x008400F4, context, "falcon_reset() must poll HwCfg")
+        self.assertIn(0x00841388, context, "the RISC-V halt word must be read")
 
     def test_the_probe_classifies_with_the_writers_own_predicate(self):
         # Both functions are compiled here and driven over the same matrix: the
@@ -328,7 +340,7 @@ class WriteSetTest(unittest.TestCase):
                 re.MULTILINE,
             )
         )
-        self.assertEqual(len(names), 47)
+        self.assertEqual(len(names), 66)
         function = probe_function()
         missing = sorted(n for n in names if n not in function)
         self.assertEqual(missing, [], "probe table does not reference these blocks")

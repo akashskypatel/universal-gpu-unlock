@@ -318,8 +318,9 @@ static void ReportMsiB850Sec2Ucode1(int pci_ok) {
  * address that does not come back leaves the actuating run writing into a
  * block nobody has looked at.
  *
- * This probe reads exactly the table in vram_blocks.h, once per
- * identity-verified card, and writes nothing: no register write, no detach,
+ * This probe reads exactly the two tables in vram_blocks.h - the write set and
+ * the transaction's own read set - once per identity-verified card, and writes
+ * nothing: no register write, no detach,
  * no unlock, no NVIDIA Stop, no DMA, no reset, no FLR. A successful read
  * proves the word is reachable through PCI I/O and reports its entry-state
  * value. It proves nothing about what the value means: an engine mask, a
@@ -394,18 +395,40 @@ static const GU_VRAM_BLOCK_ROW VramWriteSet[] = {
 };
 #define GU_VRAM_BLOCK_WRITE_COUNT (sizeof(VramWriteSet)/sizeof(VramWriteSet[0]))
 
-/* The writer reads these to decide what to write, and to decide whether to run
- * at all; the probe reports them for context and keeps them out of the
- * write-set digest. HWCFG is the word falcon_reset() polls first: poll_us()
- * returns -EIO on an inaccessible read, so this line predicts whether an
- * actuating run reaches its first write. CHIP is BAR0+0, which the transaction
- * copies into each engine's 0x84. */
+/* The writer reads these and never writes them; the probe reports them for
+ * context and keeps them out of the write-set digest. They are the transaction's
+ * other hazard: poll_us() and every read_bar()+inaccessible() pair return
+ * -EIO/-ENODEV on a refused read, so a NOT_ACCESSIBLE word here is where an
+ * actuating run stops - or would have stopped, if it got that far. HWCFG is the
+ * word falcon_reset() polls before its first write; RISCV is the halt word the
+ * falcon waits are built on; CHIP is BAR0+0, which the transaction copies into
+ * each engine's 0x84. tests/test_vram_block_probe.py derives the whole list from
+ * the writer's read_bar()/poll_us() sites and fails if this table drifts. */
 static const GU_VRAM_BLOCK_ROW VramReadContext[] = {
   {"SEC2.HWCFG",GU_VRAM_BLOCK_CONTEXT_SEC2_HWCFG},
   {"GSP.HWCFG",GU_VRAM_BLOCK_CONTEXT_GSP_HWCFG},
   {"BAR0.CHIP",GU_VRAM_BLOCK_CONTEXT_CHIP},
   {"FEAT.PLM",GU_VRAM_BLOCK_CONTEXT_FEAT_PLM},
-  {"FEAT.READOUT1",GU_VRAM_BLOCK_CONTEXT_FEAT_READOUT1}
+  {"FEAT.READOUT1",GU_VRAM_BLOCK_CONTEXT_FEAT_READOUT1},
+  {"SEC2.IRQSTAT",GU_VRAM_BLOCK_CONTEXT_SEC2_IRQSTAT},
+  {"GSP.IRQSTAT",GU_VRAM_BLOCK_CONTEXT_GSP_IRQSTAT},
+  {"SEC2.RM_OS",GU_VRAM_BLOCK_CONTEXT_SEC2_RM_OS},
+  {"GSP.RM_OS",GU_VRAM_BLOCK_CONTEXT_GSP_RM_OS},
+  {"SEC2.DEBUG",GU_VRAM_BLOCK_CONTEXT_SEC2_DEBUG},
+  {"GSP.DEBUG",GU_VRAM_BLOCK_CONTEXT_GSP_DEBUG},
+  {"SEC2.HWCFG2",GU_VRAM_BLOCK_CONTEXT_SEC2_HWCFG2},
+  {"GSP.HWCFG2",GU_VRAM_BLOCK_CONTEXT_GSP_HWCFG2},
+  {"SEC2.RISCV",GU_VRAM_BLOCK_CONTEXT_SEC2_RISCV},
+  {"GSP.RISCV",GU_VRAM_BLOCK_CONTEXT_GSP_RISCV},
+  {"GFW.PLM",GU_VRAM_BLOCK_CONTEXT_GFW_PLM},
+  {"GFW.BOOT",GU_VRAM_BLOCK_CONTEXT_GFW_BOOT},
+  {"BOOT.MEM_MB",GU_VRAM_BLOCK_CONTEXT_BOOT_MEM_MB},
+  {"FB.PLM_LOCK",GU_VRAM_BLOCK_CONTEXT_PLM_LOCK},
+  {"FB.WPR2_LO",GU_VRAM_BLOCK_CONTEXT_WPR2_LO},
+  {"FB.WPR2_HI",GU_VRAM_BLOCK_CONTEXT_WPR2_HI},
+  {"FB.BOOT_DESC_LO",GU_VRAM_BLOCK_CONTEXT_BOOT_DESC_LO},
+  {"FB.BOOT_DESC_HI",GU_VRAM_BLOCK_CONTEXT_BOOT_DESC_HI},
+  {"FB.VGA_CONFIG",GU_VRAM_BLOCK_CONTEXT_VGA_CONFIG}
 };
 #define GU_VRAM_BLOCK_CONTEXT_COUNT (sizeof(VramReadContext)/sizeof(VramReadContext[0]))
 

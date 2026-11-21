@@ -460,6 +460,65 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.34 C5 — the probe now covers the reads that stop the transaction
+
+§11.33 left one question open: `falcon_reset()` polls `0x8400f4` before its first
+write, and the probe did not read it. Reading the upstream transaction to answer
+that turned up a second one, and this section is about both.
+
+**What the writer does with a refused read.** In `src/vendor/unlock_610.c` a write
+is a posted store - `write_bar()` is `writel()` on a mapped BAR0 word - so a
+register that reads back as `0xbadfXXXX` still takes a write. Reads are the other
+half: `poll_us()` tests the inaccessible shape *before* its mask and timeout
+logic and returns `-EIO` unconditionally, including in the calls marked
+`timeout_is_failure = false`; every other read in the transaction sits inside a
+`read_bar(...) || inaccessible(...)` guard. So the abort surface is the read set,
+not the write set: `0x8400f4` and `0x8403c0` in `falcon_reset()`, the FBIF pair
+`0x840600`/`0x840624` in `falcon_hs()`, `falcon2 + 0x388` in the halt waits, the
+GFW handshake words, and the WPR2 pair the layout re-reads at every stage.
+
+That also settles a recommendation §11.33 implied. Refusing to write a word the
+run never read would be the wrong interlock: on this bench `0x8403c0` reads
+`0x00000000` while fifteen of its SEC2 neighbours read refused, and the write to
+`0x8403c0` - the engine reset - is the operation that can make the block
+readable. The transaction already refuses where refusal is correct; what it could
+not do was tell the operator in advance.
+
+**What changed.** The read-context table grew from five words to twenty-four,
+one row per word appended after the existing five, and every one of them is
+derived rather than chosen: `tests/test_vram_block_probe.py` resolves each
+`read_bar()`/`poll_us()` target in the writer against both engine initializers,
+subtracts the write set, and now asserts *equality* with `src/vram_blocks.h`
+instead of the subset it used to check. A read the writer gains without a probe
+row fails the suite; a probe row with no writer site fails it too. The table is
+sixty-six words per card, `EXPECTED_READS=132` on the two-card bench.
+
+Three families of read are outside the derivation on purpose, and the header says
+so: `0x8241c0 + (ucode_id - 1) * 4`, `GU_FUSE_SEC2_UCODE1 + index * 4` and
+`0x1400 + 0x0e * 4`. Their addresses are computed from a value the probe is
+trying to identify, so a row for them would be a guess wearing a `BAR0_OFFSET=`.
+
+**What did not change.** The gate. `R4` still matches its format tokens and its
+prefix, so the captured `-0006` log - `CONTEXT=2`, `EXPECTED_READS=88` - scores
+`PASS` exactly as it did, and the image that produced it is not retroactively
+wrong. The synthetic fixture was regenerated for the new contract: sixty-six rows
+per card, `OBSERVED=72 NOT_ACCESSIBLE=60`, all four read-only gates `PASS` under
+`--self-test`, and dropping a write-set row still fails `R4`.
+
+**What it buys.** One more read-only boot answers, before anything is actuated:
+whether `0x8400f4` is refused on the 4090 (if it is, the transaction dies at
+`poll inaccessible` with nothing written), whether `0x8403c0` is refused (it
+reads `0x0` in `-0006`), and which of the remaining twenty-two read words are
+refused on each card. That is the difference between a plan that says "the write
+set is addressable" and one that says "here is every word that can stop the run,
+measured, before the run".
+
+**What it still cannot say.** Why a word is refused. Every row reports
+`CAUSE=UNKNOWN`, because the probe reads and does not reset, power-gate or
+interpret. `hardware_verified` stays `false` for all 43 items, the counts stay at
+11 met / 15 partial / 17 not started, and `C5` stays `none`: a read set measured
+before the fact is still not a post-actuation state.
+
 ### 11.33 C5 — the first interlock run: addressable, and half of it not readable
 
 The probe from §11.32 has now run on the donor bench, in the same session as the
@@ -517,8 +576,9 @@ first actuation is still open, and both are cheap to settle:
 * if `0xf4` reads, the sequence proceeds to write `engine | 1` into `0x8403c0`
   on an engine whose fifteen neighbouring SEC2 words are refused.
 
-The probe now reports `0xf4` on both engines (`SEC2.HWCFG`, `GSP.HWCFG`) and
-`BAR0+0` (`BAR0.CHIP`), so the next read-only boot answers it directly. Neither
+The probe now reports `0xf4` on both engines (`SEC2.HWCFG`, `GSP.HWCFG`), and
+§11.34 extends it to the transaction's whole read set, so the next read-only boot
+answers it directly and says which other words would have stopped the run. Neither
 outcome damages a card - one refuses, the other makes a single documented halt
 write - but the plan is not allowed to assume the first, and until this run
 nobody knew which it would be.
@@ -586,8 +646,9 @@ at both engine bases (`gu_sec2` at `0x00840000`, `gu_gsp` at `0x00110000`), plus
 the two speed selectors (`0x0082381c`, `0x00823820`) that
 `write_selector()` writes when the AD104 policy allows it. Forty-two words.
 
-There is now a read-only image that reads those forty-two words, and nothing
-else:
+There is now a read-only image that reads those forty-two words - and, since
+§11.34, every word the transaction reads without writing, because a refused read
+is its stop signal:
 
 * `src/vram_blocks.h` names each word once, with the writer's own expression in
   the comment above it. It is a table of constants and cannot grow a write path.
@@ -595,8 +656,9 @@ else:
   identity-verified card - the same `pci->Mem.Read` idiom, BDF check and driver
   binding check as the MSI fuse probes - and prints one line per word:
   `BLOCK=… BAR0_OFFSET=… ROLE=WRITE STATUS=OBSERVED RAW=…`, `ACCEPTANCE=UNVERIFIED`
-  on every one. Two more lines report the words the writer *reads* to choose its
-  writes (`GU_FEAT_PLM_OFFSET`, `GU_FEAT_READOUT_1_OFFSET`) as `ROLE=READ_CONTEXT`.
+  on every one. The same walk reports the words the writer *reads* without writing
+  as `ROLE=READ_CONTEXT`: two at first (`GU_FEAT_PLM_OFFSET`,
+  `GU_FEAT_READOUT_1_OFFSET`), twenty-four now, with §11.34 for why
 * A per-card SHA-256 over the forty-two values in table order makes the
   before/after comparison a one-line diff. The line says what it is:
   `DIGEST_CV=CHANGE_DETECTOR_ONLY`. A failed read withholds the digest and prints
