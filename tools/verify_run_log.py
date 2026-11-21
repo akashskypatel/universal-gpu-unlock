@@ -31,7 +31,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "docs" / "hardware_session.json"
 
-STAGE_ORDER = ("readonly", "prepare", "actuate")
+STAGE_ORDER = ("readonly", "prepare", "admission", "actuate")
 SYNTHETIC_MARKER = "SYNTHETIC_FIXTURE_NOT_A_HARDWARE_RUN"
 
 # printf conversion -> pattern fragment. Deliberately permissive on width and

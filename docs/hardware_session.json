@@ -773,6 +773,14 @@
       "build_note": "a selection without -EnableSingleTargetExecution and without the waiver compiles the preparation-only image (GPU-ACTIVE-PREP-*), which refuses to actuate before it starts"
     },
     {
+      "id": "admission",
+      "title": "Admission of a waived image, refused before mutation",
+      "what_it_costs": "nothing when it refuses, and that is the case this stage records: the image is allowed to write and did not. A run that gets past admission is scored as `actuate`, not here",
+      "exit": "the waived image prepared both cards, applied its admission policy, refused with a named reason, and the boot ended with nothing mutated, retained or faulted",
+      "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-sequence -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -StageDrive G -AcceptActuatingDeploy",
+      "build_note": "the same image the `actuate` stage uses; this stage exists because a refusal before mutation is a result, and it used to score as four missing-token failures"
+    },
+    {
       "id": "actuate",
       "title": "Waived actuation",
       "what_it_costs": "the one admission that may write: an ordered list executed one card at a time, no retry, with the firmware timer bounded or explicitly off; more than one target is admitted by the same waiver (`MULTI_TARGET_WITHOUT_WAIVER` otherwise)",
@@ -1146,6 +1154,74 @@
       "min_logs": 2,
       "proves": "the record survived whatever the actuation did, and a later boot could read it",
       "does_not_prove": "that the record was correct, or that the machine came back warm rather than through a power cycle"
+    },
+    {
+      "id": "N1_WAIVED_IMAGE_REFUSED_BEFORE_MUTATION",
+      "stage": "admission",
+      "title": "the waived image refused, and the boot ended with nothing written",
+      "requires": [
+        {
+          "emitter": "src/app.c",
+          "token": "STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u",
+          "why": "every failed boot prints one terminal line with the three counters. The strings are the source's own format; the counters are read in the same line the operator reads"
+        }
+      ],
+      "forbids": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY",
+          "why": "that is the preparation image's refusal, which is the `prepare` stage; admitting it here would make the two stages indistinguishable"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu ORDERED_SEQUENTIAL=1",
+          "why": "admission was granted: that boot is scored as `actuate`, not here - and a granted admission is the one shape that can end with mutated=1"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu",
+          "why": "a step that may write must not have started in a session that refused admission"
+        }
+      ],
+      "proves": "a waived image stopped before its transaction: it printed a terminal line with its counters, printed no admission-granted line and started no step",
+      "does_not_prove": "that the refusal was the right one for this card, and it reads the counters rather than proving them: the claim that nothing was written rests on the image's own three counters and on the absence of the lines that only a granted admission can print",
+      "requires_any": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=%s BDF=%04x:%02x:%02x.%x",
+          "why": "the link policy refused the card by name before any write"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=REFUSED REASON=MULTI_TARGET_WITHOUT_WAIVER SELECTED=%zu",
+          "why": "the image refused a multi-target selection because the waiver was not compiled in"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_EXECUTION=REFUSED REASON=NO_SELECTED_TARGET SELECTED=%zu NVIDIA_COUNT=%zu BEFORE_GU_INIT=1",
+          "why": "the compiled selection did not resolve to a card this machine has"
+        }
+      ]
+    },
+    {
+      "id": "N2_PREPARATION_COMPLETED_FIRST",
+      "stage": "admission",
+      "title": "the refusal came after both cards were prepared, not before",
+      "requires": [
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1",
+          "why": "inventory ran in read-only mode before anything was decided"
+        },
+        {
+          "emitter": "src/gpu_discovery.c",
+          "token": "ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0",
+          "why": "preparation finished with mutation still unauthorized, so the refusal is an admission decision rather than a failure to get that far"
+        }
+      ],
+      "forbids": [],
+      "proves": "the image prepared the selected cards first and refused at the policy boundary afterwards",
+      "does_not_prove": "that preparation itself is safe for a second card; the preparation session's own gates are in the `prepare` stage"
     }
   ],
   "advisories": [
@@ -1190,6 +1266,12 @@
       "token": "ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x",
       "why": "the probe's ROM read did not produce a structural readout: the header word was not a ROM signature, or the megabyte copy failed. Printed with a REASON= field, once per card, so an unreadable window is a line in the log instead of a missing one",
       "emitter": "src/gpu_topology_efi.c"
+    },
+    {
+      "id": "LINK_POLICY_OBSERVED",
+      "token": "PCI_LINK=%s WIDTH=%u",
+      "why": "the admission policy observes the PCIe link before an unlock may start and names what it saw: negotiated and advertised width and speed, ASPM request, training, data-link state, the four sticky Device Status error bits, and the slot's hot-plug and surprise flags. AER lives in extended config space, which this image does not snapshot, so it is named as unobserved. The same line is printed by the read-only preparation path as ACTIVE_LINK[n], so the bench can be corrected without an image that may write",
+      "emitter": "src/gpu_discovery.c"
     }
   ],
   "manual_gates": [
@@ -2005,6 +2087,48 @@
         ],
         "history": "the fourth preparation boot. `RUN0004.TXT` turned out to be byte-identical to `physical-prepare-0003`, so this is the first preparation log that can be told apart from the one before it.",
         "does_not_show": "nothing about the PROM read. The transaction is still refused before `GuInit`, so the captured table was never consulted, and `ASSET_INSTALL PRESENT=0` says only that the installer has never run."
+      },
+      {
+        "id": "physical-admission-0001",
+        "captured": "2026-11-18",
+        "image": "actuate-sequence (built with -CapturedPromReference)",
+        "stage": "admission",
+        "file": "tests/data/hardware_session/physical-admission-0001.txt",
+        "sha256": "2d0da33237793e2888b103b38d53bf61d575af91d7d7ab54fb747ce155de1db0",
+        "bytes": 956,
+        "captured_bytes": 956,
+        "lines": 12,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "two NVIDIA cards, no display attached, driven from a USB stick; Windows started after the image returned with no error and no hang",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9",
+            "why": "the cause, in the log's own words: Device Status reports the correctable-error and unsupported-request bits (9), the data-link layer reports itself inactive, and Link Control asks for ASPM L1. A x16 gen4 link is negotiated, so the card is present and readable - the admission policy is refusing the state, not the card"
+          },
+          {
+            "token": "ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=PCIE_ERROR_LOGGED BDF=0000:01:00.0",
+            "why": "the waived image refused at admission and named the 4090 by BDF before any write"
+          },
+          {
+            "token": "ACTIVE_PREPARE=COMPLETE SELECTED=2 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0",
+            "why": "both cards were prepared and mutation was still unauthorized when the policy ran, so the refusal is an admission decision and not a failure to get that far"
+          },
+          {
+            "token": "PROM_REFERENCE=CAPTURED ROWS=2 AUTHENTICATION=0",
+            "why": "the waived image carries the same two captured references as the preparation image, and says so before anything else happens"
+          },
+          {
+            "token": "ASSET_INSTALL PRESENT=0",
+            "why": "the installer record is still absent, and admission refused before any asset load, so this run says nothing about the bundle either way"
+          },
+          {
+            "token": "STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0",
+            "why": "the boot ended with no mutation, nothing retained and no fault: the refusal is a refusal"
+          }
+        ],
+        "history": "the first boot of an image that may write, and the first log from one. It stopped at admission.",
+        "does_not_show": "that the link is unhealthy, only what the snapshot said at that moment: the sticky Device Status bits are reported, not explained, and the platform owns clearing them. It also does not show an asset load or a PROM read, because admission refused before either."
       }
     ]
   },

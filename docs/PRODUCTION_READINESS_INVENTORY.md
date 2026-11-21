@@ -460,6 +460,57 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.46 — the first boot of an image that may write, and the link gate that stopped it
+
+`actuate-sequence` built, was signed, was staged, and booted. It refused at
+admission, before anything was written:
+
+```
+ACTIVE_PREPARE=COMPLETE SELECTED=2 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0
+PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=2
+  TRAINED=1 UP=0 ERRORS=9 HOTPLUG=0 SURPRISE=0 AER=UNOBSERVED UNHANDLED=HOTPLUG,AER
+ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=PCIE_ERROR_LOGGED BDF=0000:01:00.0
+STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0
+```
+
+**What the line says, and what it does not.** `ERRORS=9` is Device Status bits 0
+and 3 — the sticky correctable-error and unsupported-request bits — and `UP=0` is
+the Data Link Layer Link Active bit clear. `ASPM=2` is a Link Control L1 request.
+The x16 gen4 link is negotiated, so the card is present and its config space
+readable: the policy is refusing the *state*, not the card. Why those bits are set
+is not in the snapshot and not in this log; clearing them belongs to the platform.
+
+Three independent conditions would each refuse, and the log reports them in the
+policy's order (`errors` first, then ASPM, then training, then up), so a fix that
+clears the error bits still meets the ASPM request. That is worth knowing before
+touching the bench: **the bench has to be clean on all four counts, not just the
+one that is reported.**
+
+**What changed.** Two things, both about being able to see this without an image
+that may write:
+
+1. `src/gpu_discovery.c` prints the same observation from the **read-only
+   preparation path**, once per selected card, as
+   `ACTIVE_LINK[n] BDF=… PCI_LINK=… ADMISSION=ALLOW|REFUSE`, immediately before the
+   preparation refusal. Same snapshot, same policy function, no action: the
+   preparation image refuses anyway, so the verdict is a word in the log.
+2. Both link lines now name the four sticky bits (`ERROR_CE`, `ERROR_NONFATAL`,
+   `ERROR_FATAL`, `ERROR_UR`) and the card (`BDF=`), which the admission line did
+   not before. `PCI_LINK=` alone said "an error", not which.
+
+**A stage for refusals.** Every stage so far ended in either a read or an
+execution; a waived image that refuses had no stage and scored as four
+missing-token failures under `actuate` and as a P1 failure under `prepare`. The
+manifest now has `admission` between them, with
+`N1_WAIVED_IMAGE_REFUSED_BEFORE_MUTATION` (a terminal counter line, one of the
+three refusal shapes, and the absence of both a granted admission and a started
+step) and `N2_PREPARATION_COMPLETED_FIRST`. `RUN0006` is recorded as
+`physical-admission-0001` and scores `GATES=2 GATES_FAILED=0`.
+
+**Not proven, and unchanged.** No asset load and no PROM read appear in this log:
+admission refused before either. `hardware_verified` stays false for all 43
+entries, the counts stay 11 met / 15 partial / 17 not started, `C5` stays `none`.
+
 ### 11.45 — the sequence image does not claim a single target
 
 The first `-Only actuate-sequence` build with two BDFs compiled, printed its

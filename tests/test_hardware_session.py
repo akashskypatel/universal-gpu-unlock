@@ -37,7 +37,7 @@ FIXTURES = ROOT / "tests" / "fixtures" / "hardware_session"
 VERIFIER = ROOT / "tools" / "verify_run_log.py"
 PREFLIGHT = ROOT / "tools" / "session_preflight.py"
 
-STAGES = ("readonly", "prepare", "actuate")
+STAGES = ("readonly", "prepare", "admission", "actuate")
 
 
 def groups():
@@ -101,7 +101,7 @@ class TheGatesAreGrounded(unittest.TestCase):
 
 
 class TheStagesAreWellFormed(unittest.TestCase):
-    def test_stages_are_the_expected_three_in_order(self):
+    def test_stages_are_the_expected_four_in_order(self):
         self.assertEqual(tuple(stage["id"] for stage in MANIFEST["stages"]), STAGES)
         self.assertEqual(tuple(verify_run_log.STAGE_ORDER), STAGES)
 
@@ -116,7 +116,7 @@ class TheStagesAreWellFormed(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_gate_ids_are_prefixed_with_their_stage(self):
-        prefix = {"readonly": "R", "prepare": "P", "actuate": "A"}
+        prefix = {"readonly": "R", "prepare": "P", "admission": "N", "actuate": "A"}
         for gate in MANIFEST["gates"]:
             self.assertTrue(gate["id"].startswith(prefix[gate["stage"]]), gate["id"])
 
@@ -130,6 +130,82 @@ class TheStagesAreWellFormed(unittest.TestCase):
         for item in MANIFEST["manual_gates"]:
             self.assertTrue(item.get("record"), item["id"])
             self.assertTrue(item.get("why"), item["id"])
+
+
+class ARefusalBeforeMutationIsItsOwnStage(unittest.TestCase):
+    """The waived image can stop at admission, and that outcome had no stage.
+
+    RUN0006 is the first log from an image that may write, and it refused: a
+    sticky PCIe error and an ASPM request the image does not manage. Scored as
+    `actuate` it read as four missing-token failures, and scored as `prepare` as a
+    P1 failure - neither says what happened. `admission` says it: the image
+    prepared both cards, refused, and stopped with nothing written.
+    """
+
+    def test_the_stage_sits_between_preparation_and_execution(self):
+        self.assertEqual(STAGES, ("readonly", "prepare", "admission", "actuate"))
+        self.assertEqual(tuple(verify_run_log.STAGE_ORDER), STAGES)
+
+    def test_the_gate_refuses_a_granted_admission(self):
+        gate = [g for g in MANIFEST["gates"] if g["id"].startswith("N1_")][0]
+        forbidden = [group["token"] for group in gate["forbids"]]
+        self.assertIn("ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu ORDERED_SEQUENTIAL=1", forbidden)
+        self.assertIn("ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY", forbidden)
+        self.assertTrue(gate.get("requires_any"), "a refusal has more than one shape")
+
+    def test_the_admission_gates_score_the_captured_refusal(self):
+        run = [r for r in MANIFEST["captured_runs"]["runs"] if r["stage"] == "admission"]
+        self.assertTrue(run, "no captured admission run")
+        result = run_verifier(str(ROOT / run[0]["file"]), "--stage", "admission")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("GATES=2 GATES_FAILED=0", result.stdout)
+        self.assertIn("NOTE LINK_POLICY_OBSERVED PRESENT", result.stdout)
+
+    def test_a_granted_admission_fails_the_stage(self):
+        run = [r for r in MANIFEST["captured_runs"]["runs"] if r["stage"] == "admission"][0]
+        text = (ROOT / run["file"]).read_text(encoding="utf-8").replace("\r\n", "\n")
+        granted = text + "ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=2 ORDERED_SEQUENTIAL=1\n"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "granted.txt"
+            path.write_text(granted, encoding="utf-8")
+            result = run_verifier(str(path), "--stage", "admission")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FORBIDDEN token=", result.stdout)
+
+
+class TheReadOnlyPathReportsTheSameLinkPolicy(unittest.TestCase):
+    """A bench must be fixable with a boot that cannot write.
+
+    The waived image refuses an unlock on a link that has logged an error, is left
+    in an ASPM state the image does not manage, or is not up. Printing the same
+    observation from the preparation path means the operator can see which of the
+    three it is without staging an image that may write.
+    """
+
+    def setUp(self):
+        self.source = (ROOT / "src" / "gpu_discovery.c").read_text(encoding="utf-8")
+
+    def test_the_preparation_path_prints_the_link_observation(self):
+        self.assertIn('GuLog("ACTIVE_LINK[%zu] BDF=%04x:%02x:%02x.%x PCI_LINK=%s', self.source)
+        self.assertIn('GuLinkAccepted(verdict)?"ALLOW":"REFUSE"', self.source)
+
+    def test_it_is_printed_before_the_preparation_refusal(self):
+        link = self.source.index("ACTIVE_LINK[%zu]")
+        refusal = self.source.index("ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY")
+        self.assertLess(link, refusal)
+
+    def test_both_lines_name_the_four_sticky_bits_and_the_card(self):
+        for token in ("ERROR_CE=%u ERROR_NONFATAL=%u ERROR_FATAL=%u",
+                      "ERROR_UR=%u HOTPLUG=%u SURPRISE=%u",
+                      "BDF=%04x:%02x:%02x.%x"):
+            self.assertIn(token, self.source, token)
+
+    def test_the_observation_does_not_refuse_anything(self):
+        link = self.source.index("ACTIVE_LINK[%zu]")
+        refusal = self.source.index("ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY")
+        block = self.source[link:refusal]
+        self.assertNotIn("goto done", block)
+        self.assertNotIn("GuLinkAccepted(verdict)) {", block)
 
 
 class ThePatternsMatchRealLines(unittest.TestCase):

@@ -513,6 +513,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-readonly-0009` | `diag-vram-blocks` | `readonly` | 293 | `cd7920fcacf517280379f7ded17c87200278e4bc2eb847626bf4d6b2a8a780c5` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=6 GATES_FAILED=0` |
 | `physical-readonly-0010` | `diag-vram-fuse` | `readonly` | 327 | `f0030317273565c8afa376751dd2821aaaa01828dde34777198452423ad5168f` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=7 GATES_FAILED=0` |
 | `physical-prepare-0004` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 15 | `a454aa546d8db3be4e3e8e9b99488bc4f6ff29388449f96ab3c08be4ef80b96c` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-admission-0001` | `actuate-sequence (built with -CapturedPromReference)` | `admission` | 12 | `2d0da33237793e2888b103b38d53bf61d575af91d7d7ab54fb747ce155de1db0` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -940,6 +941,33 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 
 *What it does not show:* nothing about the PROM read. The transaction is still refused before `GuInit`, so the captured table was never consulted, and `ASSET_INSTALL PRESENT=0` says only that the installer has never run.
 
+### `physical-admission-0001`
+
+*File:* `tests/data/hardware_session/physical-admission-0001.txt` — 956 bytes stored, 956 as captured, 12 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-18. *Bench:* two NVIDIA cards, no display attached, driven from a USB stick; Windows started after the image returned with no error and no hang.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-admission-0001.txt --stage admission
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9` — the cause, in the log's own words: Device Status reports the correctable-error and unsupported-request bits (9), the data-link layer reports itself inactive, and Link Control asks for ASPM L1. A x16 gen4 link is negotiated, so the card is present and readable - the admission policy is refusing the state, not the card
+* `ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=PCIE_ERROR_LOGGED BDF=0000:01:00.0` — the waived image refused at admission and named the 4090 by BDF before any write
+* `ACTIVE_PREPARE=COMPLETE SELECTED=2 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0` — both cards were prepared and mutation was still unauthorized when the policy ran, so the refusal is an admission decision and not a failure to get that far
+* `PROM_REFERENCE=CAPTURED ROWS=2 AUTHENTICATION=0` — the waived image carries the same two captured references as the preparation image, and says so before anything else happens
+* `ASSET_INSTALL PRESENT=0` — the installer record is still absent, and admission refused before any asset load, so this run says nothing about the bundle either way
+* `STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0` — the boot ended with no mutation, nothing retained and no fault: the refusal is a refusal
+
+*History:* the first boot of an image that may write, and the first log from one. It stopped at admission.
+
+*What it does not show:* that the link is unhealthy, only what the snapshot said at that moment: the sticky Device Status bits are reported, not explained, and the platform owns clearing them. It also does not show an asset load or a PROM read, because admission refused before either.
+
 ## Advancing between stages: `donor_gate.py`
 
 One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.
@@ -1062,6 +1090,40 @@ Note: a selection without -EnableSingleTargetExecution and without the waiver co
 * `BOOT_STATE PRESENT=1 PHASE=%u BOOT_COUNT=%u STATUS=%#llx DEVICE=%04x` (src/boot_io.c) — a record from an earlier boot was found and decoded.
 * `BOOT_STATE PRESENT=0` (src/boot_io.c) — no record was found, which is the correct state for the first boot on a wiped machine.
 
+### `admission` — Admission of a waived image, refused before mutation
+
+*Build:*
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-sequence -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -StageDrive G -AcceptActuatingDeploy
+```
+
+Note: the same image the `actuate` stage uses; this stage exists because a refusal before mutation is a result, and it used to score as four missing-token failures.
+
+*Costs:* nothing when it refuses, and that is the case this stage records: the image is allowed to write and did not. A run that gets past admission is scored as `actuate`, not here
+
+*Exit criteria:* the waived image prepared both cards, applied its admission policy, refused with a named reason, and the boot ended with nothing mutated, retained or faulted
+
+| Gate | What it checks | Requires | Must not contain |
+| --- | --- | --- | --- |
+| `N1_WAIVED_IMAGE_REFUSED_BEFORE_MUTATION` | the waived image refused, and the boot ended with nothing written | `STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u`<br>`ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=%s BDF=%04x:%02x:%02x.%x` *(one of)*<br>`ACTIVE_EXECUTION=REFUSED REASON=MULTI_TARGET_WITHOUT_WAIVER SELECTED=%zu` *(one of)*<br>`ACTIVE_EXECUTION=REFUSED REASON=NO_SELECTED_TARGET SELECTED=%zu NVIDIA_COUNT=%zu BEFORE_GU_INIT=1` *(one of)* | `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY`<br>`ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu ORDERED_SEQUENTIAL=1`<br>`SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu` |
+| `N2_PREPARATION_COMPLETED_FIRST` | the refusal came after both cards were prepared, not before | `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1`<br>`ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0` | — |
+
+**`N1_WAIVED_IMAGE_REFUSED_BEFORE_MUTATION`** — proves: a waived image stopped before its transaction: it printed a terminal line with its counters, printed no admission-granted line and started no step. Does not prove: that the refusal was the right one for this card, and it reads the counters rather than proving them: the claim that nothing was written rests on the image's own three counters and on the absence of the lines that only a granted admission can print.
+
+* `STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u` (src/app.c) — every failed boot prints one terminal line with the three counters. The strings are the source's own format; the counters are read in the same line the operator reads.
+* `ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=%s BDF=%04x:%02x:%02x.%x` (src/gpu_discovery.c) — the link policy refused the card by name before any write.
+* `ACTIVE_EXECUTION=REFUSED REASON=MULTI_TARGET_WITHOUT_WAIVER SELECTED=%zu` (src/gpu_discovery.c) — the image refused a multi-target selection because the waiver was not compiled in.
+* `ACTIVE_EXECUTION=REFUSED REASON=NO_SELECTED_TARGET SELECTED=%zu NVIDIA_COUNT=%zu BEFORE_GU_INIT=1` (src/gpu_discovery.c) — the compiled selection did not resolve to a card this machine has.
+* must not contain `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY` (src/gpu_discovery.c): that is the preparation image's refusal, which is the `prepare` stage; admitting it here would make the two stages indistinguishable
+* must not contain `ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=%zu ORDERED_SEQUENTIAL=1` (src/gpu_discovery.c): admission was granted: that boot is scored as `actuate`, not here - and a granted admission is the one shape that can end with mutated=1
+* must not contain `SELECTED_GPU_STEP=ACTIVE ORDER=%zu TARGET=%zu PEERS=%zu` (src/gpu_discovery.c): a step that may write must not have started in a session that refused admission
+
+**`N2_PREPARATION_COMPLETED_FIRST`** — proves: the image prepared the selected cards first and refused at the policy boundary afterwards. Does not prove: that preparation itself is safe for a second card; the preparation session's own gates are in the `prepare` stage.
+
+* `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=%zu REQUESTED=%zu READ_ONLY=1` (src/gpu_discovery.c) — inventory ran in read-only mode before anything was decided.
+* `ACTIVE_PREPARE=COMPLETE SELECTED=%zu NVIDIA_COUNT=%zu MUTATION_AUTHORIZED=0` (src/gpu_discovery.c) — preparation finished with mutation still unauthorized, so the refusal is an admission decision rather than a failure to get that far.
+
 ### `actuate` — Waived actuation
 
 *Build:*
@@ -1132,6 +1194,7 @@ Printed as `NOTE` lines. An absent advisory is a finding to explain, not a failu
 * `WRITE_SET_NOT_READABLE` — `VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE` (src/gpu_topology_efi.c): the probe met words inside the actuating write set that the engine returns its own inaccessible() shape for: the read succeeded at the PCI I/O level and the value is not device state. Printed once per card that has any, so a run cannot look fully observed while part of the write set was refused
 * `SUPPLEMENTARY_PCI_OBSERVATION` — `PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0` (src/gpu_topology_efi.c): printed by `ReportPciEvidence`, which runs only when the strict collector failed (`if(!pci_ok)` in `GuTopoDiagnosticMain`). A healthy run does not print it, so its presence in a log is a finding to explain - and gate R2 required it until the first physical run showed that no healthy machine can satisfy that
 * `ROM_WINDOW_UNREADABLE` — `ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x` (src/gpu_topology_efi.c): the probe's ROM read did not produce a structural readout: the header word was not a ROM signature, or the megabyte copy failed. Printed with a REASON= field, once per card, so an unreadable window is a line in the log instead of a missing one
+* `LINK_POLICY_OBSERVED` — `PCI_LINK=%s WIDTH=%u` (src/gpu_discovery.c): the admission policy observes the PCIe link before an unlock may start and names what it saw: negotiated and advertised width and speed, ASPM request, training, data-link state, the four sticky Device Status error bits, and the slot's hot-plug and surprise flags. AER lives in extended config space, which this image does not snapshot, so it is named as unobserved. The same line is printed by the read-only preparation path as ACTIVE_LINK[n], so the bench can be corrected without an image that may write
 
 ## Never established by a log
 
