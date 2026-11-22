@@ -519,6 +519,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-prepare-0006` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-prepare-0007` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-prepare-0008` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `ac9cf3bb73f56ae4f49008892d06c16535292f5d707eeba0dbad1968e0accc56` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-readonly-0014` | `diag-topology-log` | `readonly` | 241 | `cd5fa956816016380c93aa6e4c87fe9c1ab2c4932774ac02bf1c3f92dd232eea` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -1072,6 +1073,38 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 *History:* RUN0010: the same boot as RUN0007 to RUN0009 on a build whose link policy weighs FER/NFER and the negotiated link instead of the sticky CE/UR bits and DLLLA. It is the read-only confirmation that the change admits the card it was meant to admit.
 
 *What it does not show:* that the admitted card can be unlocked: this file shows a passed gate, not a transaction. It also cannot show whether the one-target waived image will pass the checks the preparation path never reaches (BAR0 attributes, driver release, DMA quiescence)
+
+### `physical-readonly-0014`
+
+*File:* `tests/data/hardware_session/physical-readonly-0014.txt` — 23165 bytes stored, 23406 as captured, 241 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-18. *Bench:* Operator reports no display on the AMD iGPU, one display on the RTX 4090, and two displays on the RTX 3080; read-only diagnostic booted from USB..
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0014.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `DIAGNOSTIC_OUTPUT SCREEN=AVAILABLE DURABLE_LOG=1` — the saved-log read-only image ran with screen output available and durable logging enabled
+* `GOP_DISPLAY[0] HANDLE=0x75182b98 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:01:00.0 OWNER_ID=10de:2684 MODE_DESCRIPTOR=VALID MODE=0 MAX_MODE=12 INFO_SIZE=36 RESOLUTION=1920x1080 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=2048 FB_BASE=0xe800000000 FB_SIZE=0x870000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1` — the 4090 has a reported GOP mode and framebuffer descriptor; it does not prove that the framebuffer mapping is usable
+* `GOP_EDID[0] TYPE=ACTIVE STATUS=0 SIZE=256 BLOCKS=2 HEADER_VALID=1 BASE_CHECKSUM_VALID=1 MANUFACTURER=GSM PRODUCT=0x7700 READ_ONLY=1 SERIAL_OMITTED=1` — the 4090 GOP exposes this active EDID identity; no monitor serial number is recorded
+* `GOP_DISPLAY[1] HANDLE=0x746d2a18 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:04:00.0 OWNER_ID=10de:220a MODE_DESCRIPTOR=VALID MODE=2 MAX_MODE=14 INFO_SIZE=36 RESOLUTION=800x600 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=1024 FB_BASE=0xf400000000 FB_SIZE=0x258000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1` — the 3080 has a reported GOP mode and framebuffer descriptor, currently 800 by 600; it is still only a descriptor observation
+* `GOP_EDID[1] TYPE=ACTIVE STATUS=0 SIZE=256 BLOCKS=2 HEADER_VALID=1 BASE_CHECKSUM_VALID=1 MANUFACTURER=GSM PRODUCT=0x772a READ_ONLY=1 SERIAL_OMITTED=1` — the 3080 GOP exposes one active EDID identity; the log does not enumerate two distinct 3080 monitor outputs
+* `ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1 NVIDIA=2 INDEPENDENT=0 UNMATCHED=0 AMBIGUOUS=0 INDEPENDENT_WITHOUT_GOP=0 NOT_DETACH_EVIDENCE=1` — both configured error-console paths classify to NVIDIA; no independent graphics console is observed
+* `ERROR_CONSOLE_ISOLATION=CONFLICT` — the independent-console classification is a conflict, not evidence to release either card
+* `NVIDIA_GPU_COUNT=2 INDEPENDENT_GOP_COUNT=0 INDEPENDENT_CONOUT_MATCH=0 NVIDIA_CONOUT_MATCH=2 GOP_UNMATCHED=0 INDEPENDENT_CONSOLE_ASSOCIATION=0 CONOUT_WITHOUT_GOP=0 CONOUT_UNMATCHED=0 CONOUT_AMBIGUOUS=0` — both NVIDIA GPUs have GOP and ConOut relationships, while no independent GOP or independent ConOut association was captured
+* `TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1` — the diagnostic’s final topology policy refuses to call this console topology independent
+* `PCI_LINK_NODE BDF=0000:04:00.0 OBS=VALID SIDE_LOCAL=1 READ_ONLY=1 PCIE_CAP=0x78 TYPE=1 ASPM=2 SPEED=4 WIDTH=4 MAX_SPEED=4 MAX_WIDTH=16 TRAINING=0 DLL_ACTIVE=0 DEVICE_ERRORS=9` — the 3080 endpoint still reports ASPM L1, Gen4 x4 negotiated, and sticky Device Status bits 9; this read-only line does not attribute causality beyond the existing link-policy evidence
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — the image reports no dropped or overflowing diagnostic lines
+
+*History:* First captured read-only topology run in which both NVIDIA GPUs have displays connected while the AMD iGPU has none. The diagnostic finds a GOP, ConOut and ErrOut path for each NVIDIA GPU and no independent GOP/console association. The path is therefore classified CONFLICT. The 3080 chipset path still reports ASPM=2. Although the operator reports two displays connected to the 3080, the log has one GOP and one active EDID record for that adapter and does not inventory every physical connector. No controller was stopped and no GPU was changed.
+
+*What it does not show:* that either GOP framebuffer is mapped or usable; which physical display received the most recent console output; that every display connector was enumerated; that an AMD GOP is absent when the 4090 display is removed; or that either NVIDIA driver can safely be released or a firmware transaction can complete.
 
 ## Runs that stopped without terminating
 

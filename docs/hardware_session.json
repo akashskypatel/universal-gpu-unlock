@@ -2271,6 +2271,68 @@
         ],
         "history": "RUN0010: the same boot as RUN0007 to RUN0009 on a build whose link policy weighs FER/NFER and the negotiated link instead of the sticky CE/UR bits and DLLLA. It is the read-only confirmation that the change admits the card it was meant to admit.",
         "does_not_show": "that the admitted card can be unlocked: this file shows a passed gate, not a transaction. It also cannot show whether the one-target waived image will pass the checks the preparation path never reaches (BAR0 attributes, driver release, DMA quiescence)"
+      },
+      {
+        "id": "physical-readonly-0014",
+        "captured": "2026-11-18",
+        "image": "diag-topology-log",
+        "stage": "readonly",
+        "file": "tests/data/hardware_session/physical-readonly-0014.txt",
+        "sha256": "cd5fa956816016380c93aa6e4c87fe9c1ab2c4932774ac02bf1c3f92dd232eea",
+        "bytes": 23165,
+        "captured_bytes": 23406,
+        "lines": 241,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "Operator reports no display on the AMD iGPU, one display on the RTX 4090, and two displays on the RTX 3080; read-only diagnostic booted from USB.",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "DIAGNOSTIC_OUTPUT SCREEN=AVAILABLE DURABLE_LOG=1",
+            "why": "the saved-log read-only image ran with screen output available and durable logging enabled"
+          },
+          {
+            "token": "GOP_DISPLAY[0] HANDLE=0x75182b98 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:01:00.0 OWNER_ID=10de:2684 MODE_DESCRIPTOR=VALID MODE=0 MAX_MODE=12 INFO_SIZE=36 RESOLUTION=1920x1080 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=2048 FB_BASE=0xe800000000 FB_SIZE=0x870000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1",
+            "why": "the 4090 has a reported GOP mode and framebuffer descriptor; it does not prove that the framebuffer mapping is usable"
+          },
+          {
+            "token": "GOP_EDID[0] TYPE=ACTIVE STATUS=0 SIZE=256 BLOCKS=2 HEADER_VALID=1 BASE_CHECKSUM_VALID=1 MANUFACTURER=GSM PRODUCT=0x7700 READ_ONLY=1 SERIAL_OMITTED=1",
+            "why": "the 4090 GOP exposes this active EDID identity; no monitor serial number is recorded"
+          },
+          {
+            "token": "GOP_DISPLAY[1] HANDLE=0x746d2a18 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:04:00.0 OWNER_ID=10de:220a MODE_DESCRIPTOR=VALID MODE=2 MAX_MODE=14 INFO_SIZE=36 RESOLUTION=800x600 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=1024 FB_BASE=0xf400000000 FB_SIZE=0x258000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1",
+            "why": "the 3080 has a reported GOP mode and framebuffer descriptor, currently 800 by 600; it is still only a descriptor observation"
+          },
+          {
+            "token": "GOP_EDID[1] TYPE=ACTIVE STATUS=0 SIZE=256 BLOCKS=2 HEADER_VALID=1 BASE_CHECKSUM_VALID=1 MANUFACTURER=GSM PRODUCT=0x772a READ_ONLY=1 SERIAL_OMITTED=1",
+            "why": "the 3080 GOP exposes one active EDID identity; the log does not enumerate two distinct 3080 monitor outputs"
+          },
+          {
+            "token": "ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1 NVIDIA=2 INDEPENDENT=0 UNMATCHED=0 AMBIGUOUS=0 INDEPENDENT_WITHOUT_GOP=0 NOT_DETACH_EVIDENCE=1",
+            "why": "both configured error-console paths classify to NVIDIA; no independent graphics console is observed"
+          },
+          {
+            "token": "ERROR_CONSOLE_ISOLATION=CONFLICT",
+            "why": "the independent-console classification is a conflict, not evidence to release either card"
+          },
+          {
+            "token": "NVIDIA_GPU_COUNT=2 INDEPENDENT_GOP_COUNT=0 INDEPENDENT_CONOUT_MATCH=0 NVIDIA_CONOUT_MATCH=2 GOP_UNMATCHED=0 INDEPENDENT_CONSOLE_ASSOCIATION=0 CONOUT_WITHOUT_GOP=0 CONOUT_UNMATCHED=0 CONOUT_AMBIGUOUS=0",
+            "why": "both NVIDIA GPUs have GOP and ConOut relationships, while no independent GOP or independent ConOut association was captured"
+          },
+          {
+            "token": "TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1",
+            "why": "the diagnostic’s final topology policy refuses to call this console topology independent"
+          },
+          {
+            "token": "PCI_LINK_NODE BDF=0000:04:00.0 OBS=VALID SIDE_LOCAL=1 READ_ONLY=1 PCIE_CAP=0x78 TYPE=1 ASPM=2 SPEED=4 WIDTH=4 MAX_SPEED=4 MAX_WIDTH=16 TRAINING=0 DLL_ACTIVE=0 DEVICE_ERRORS=9",
+            "why": "the 3080 endpoint still reports ASPM L1, Gen4 x4 negotiated, and sticky Device Status bits 9; this read-only line does not attribute causality beyond the existing link-policy evidence"
+          },
+          {
+            "token": "DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0",
+            "why": "the image reports no dropped or overflowing diagnostic lines"
+          }
+        ],
+        "history": "First captured read-only topology run in which both NVIDIA GPUs have displays connected while the AMD iGPU has none. The diagnostic finds a GOP, ConOut and ErrOut path for each NVIDIA GPU and no independent GOP/console association. The path is therefore classified CONFLICT. The 3080 chipset path still reports ASPM=2. Although the operator reports two displays connected to the 3080, the log has one GOP and one active EDID record for that adapter and does not inventory every physical connector. No controller was stopped and no GPU was changed.",
+        "does_not_show": "that either GOP framebuffer is mapped or usable; which physical display received the most recent console output; that every display connector was enumerated; that an AMD GOP is absent when the 4090 display is removed; or that either NVIDIA driver can safely be released or a firmware transaction can complete."
       }
     ]
   },
