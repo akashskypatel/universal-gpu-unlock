@@ -2,10 +2,11 @@
 
 The donor card, the programmer and the known-good image are on the bench. This
 document turns the session into gates rather than an experiment with hope. It is
-checked against the code and captured logs, and **claims nothing beyond those
-records**: archived waived boots exposed failures but do not verify later fixes;
-`HARDWARE_VERIFIED=0` is printed by every check, and the list at the end is
-everything a log can never establish.
+checked against the code and captured logs. The operator-reported RUN0031 record
+below documents a successful physical RTX 4090 mutation separately from the
+formal gate score; it does not erase the remaining contract and provenance gaps.
+`HARDWARE_VERIFIED=0` remains the verifier's status, not a denial of the user's
+hardware result.
 
 `docs/hardware_session.json` is the source of truth; this file is rendered from
 it. `tools/verify_run_log.py` scores a captured log against the same manifest,
@@ -426,7 +427,7 @@ The active application, built without the waiver: it runs the real inventory and
 * `C9` — `ACTIVE_CONTEXT[%zu]=PREPARED CPU_ONLY=1 MUTATION_AUTHORIZED=0` (`src/gpu_discovery.c`): `PreparePlatformContexts` allocates one platform context per selected card and refuses an alias to the active context or a duplicate pointer, so two of these lines are evidence that two distinct per-card contexts existed at the same time in a read-only build
 * `B10` — `ACTIVE_REFRESH=PASSIVE_REVALIDATED TARGETS=%zu MUTATION_AUTHORIZED=0` (`src/gpu_discovery.c`): the cards were re-read after preparation and the revalidation passed: the log shows the second observation, not only the first
 
-*Does not prove:* that the ordered list may execute. Preparation and execution are different admissions: executing more than one target requires `-AcceptUnverifiedActuation` (`MULTI_TARGET_WITHOUT_WAIVER` otherwise), and nothing in a preparation log exercises a write, a Stop, a detach, a reset or a FLR. Two prepared contexts prove a list was built, not that a peer card is undisturbed during a mutation - there has never been a mutation.
+*Does not prove:* that the ordered list may execute. Preparation and execution are different admissions: executing more than one target requires `-AcceptUnverifiedActuation` (`MULTI_TARGET_WITHOUT_WAIVER` otherwise), and nothing in a preparation log exercises a write, a Stop, a detach, a reset or a FLR. Two prepared contexts prove a list was built, not that a peer card is undisturbed during a multi-target mutation. RUN0031 separately records an operator-confirmed single-target 4090 mutation, not execution of this ordered two-target list.
 
 #### `dxe-prep-selected` — DXE preparation for explicit targets
 
@@ -1185,6 +1186,49 @@ It prints `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC
 
 *What it does not show:* why the driver file was absent beyond the fact that this deploy does not stage it; it cannot say whether an install would succeed if the file were there
 
+## Operator-reported physical mutation outcome (separate from gate scores)
+
+This record preserves the operator's report and the attached RUN0031 plus before/after benchmark files. It is intentionally not inserted into captured_runs: the automated actuation verifier still fails A5 because this run has no next-boot BOOT_STATE record. The user confirms the RTX 4090 actuation/mutation succeeded on hardware.
+
+### physical-mutation-4090-RUN0031 — RTX 4090 BDF 0000:01:00.0
+
+The operator reports that the 4090 mutation succeeded physically. RUN0031 selects only 0000:01:00.0 (10de:2684); its runtime trace records a successful firmware transaction, selector changes, an FLR, and a final preboot verification. The separate before/after CUDA benchmarks are retained as operator-supplied outcome evidence. The same run also exercises the PCI I/O attribute-restore fix on this 4090 path: the log shows zero protocol attributes before enable, IO|MEM enabled, and the exclusive claim succeeding.
+
+**Evidence files (stored UTF-8/LF normalized):**
+
+| File | Captured format | Captured bytes | Stored bytes | Lines | SHA-256 |
+| --- | --- | ---: | ---: | ---: | --- |
+| `tests/data/hardware_session/physical-actuate-0031.txt` | UTF-8, LF | 29223 | 29223 | 406 | `41546566ee4b77947018391691e63b1fdf34a773d6fa10202c7eea28a0bdd6a6` |
+| `tests/data/hardware_session/benchmark-pre-0031.txt` | UTF-16LE, CR line endings | 6906 | 3385 | 67 | `40a412aa50061126d4e438ff59ff6756d0357c77f15738f4ea19355fc1a10914` |
+| `tests/data/hardware_session/benchmark-post-0031.txt` | UTF-16LE, CR line endings | 6906 | 3385 | 67 | `335be59b193f802b7ef862c9743893d6d3840f666b34cc9a5f193ec440edfc31` |
+
+**What RUN0031 records:**
+
+* `ACTIVE_PREPARED_STEP[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1` — The only prepared target in this transaction is the RTX 4090.
+* `ClaimRestore: pre-enable attrs=0 (plan=0x300 config_mask=0 enable_mask=0x300 exp=0x300)` — Hardware log captures the exact mismatch the change handles: PCI I/O protocol attributes were independently zero despite PCI config decode being in the expected state.
+* `ClaimRestore: post-enable attrs=0x300 (mem=1 bm=0)` — The implementation enabled IO|MEM protocol attributes without enabling Bus Master and observed them back on the 4090.
+* `MSI exclusive claim/decode result: status=0` — The PCI I/O claim/restore handoff completed successfully on this hardware run; this is distinct from host-test evidence.
+* `TRACE STEP=25 PHASE=firmware-transaction RESULT=0 MUTATED=1 DMA=0 FLRS=1` — The firmware transaction reports success and mutation, with one FLR.
+* `AD102 payload result: boot=0 halt=0 marker=0x67b00001 expected=0x67b00001 marker_ok=1 required_permissions=1` — The 4090 payload and expected marker are reported successful; this is not firmware-signature authentication.
+* `PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified` — The run itself stops before Windows; the separately attached post-run benchmark is operator-supplied evidence, not part of this line.
+* `PROM_REFERENCE=NONE ROWS=0 AUTHENTICATION=0` — This identity-reference/authentication limitation did not prevent this waived run from mutating, and remains separate from the successful transaction.
+* `STOP_CONTRACT device=2684 stage=2 OWNER=1 COLD=1 CONSOLE=1 PEERS=1 TARGET_GOP=0 LOG=0 RECOVERY=0 SIGNED_BOOTER=0 BOUND=0 DMA=0 DECISION=REFUSE` — The waived run proceeded despite six contract evidence gaps; the refusal is not evidence those requirements were met.
+
+**Bench comparison:**
+
+* RTX 4090 CUDA 0, FP16 8192: 63.05 TFLOP/s before and 178.36 TFLOP/s after; FP32 8192: 84.88 before and 139.88 after.
+* RTX 3080 CUDA 1, FP16 8192: 63.05 before and 63.45 after; BF16 8192: 68.75 before and 68.49 after; FP32 8192: 34.28 before and 34.24 after; copy bandwidth 769.75 before and 769.72 GiB/s after.
+* The benchmark files say CUDA ordinal is not a PCI BDF; target attribution follows their GPU model labels and the operator-provided before/after association.
+
+**Keep these distinctions:**
+
+* The mutation is operator-confirmed and supported by RUN0031 transaction readback; this does not authenticate the PROM firmware or prove Windows will accept an authenticated firmware image. SIGNATURE_AUTHENTICATED=0 remains explicit.
+* The Windows 617.42 Booter provenance/signature comparison is still unverified; captured PROM identity and payload marker reads are not firmware signature authentication.
+* The run verifier still scores RUN0031 alone as A5_NEXT_BOOT_READ_THE_RECORD=FAIL because no next-boot BOOT_STATE record is included. Operator confirmation does not silently change that formal score.
+* The user independently verified U/P/I recovery on hardware. RUN0031 still prints RECOVERY_VERIFIED=0 and the software STOP_CONTRACT RECOVERY field is still 0; external recovery verification and contract evidence consumption are separate.
+* RUN0031 selected the 4090 only. It does not show a mutation attempt on the 3080 BDF 0000:04:00.0; its before/after benchmark numbers are effectively unchanged.
+* The STOP_CONTRACT gaps TARGET_GOP, LOG, RECOVERY, SIGNED_BOOTER, BOUND and DMA were not cleared by successful 4090 mutation.
+
 ## Advancing between stages: `donor_gate.py`
 
 One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.
@@ -1414,27 +1458,27 @@ Printed as `NOTE` lines. An absent advisory is a finding to explain, not a failu
 * `LINK_POLICY_OBSERVED` — `PCI_LINK=%s WIDTH=%u` (src/gpu_discovery.c): the admission policy observes the PCIe link before an unlock may start and names what it saw: negotiated and advertised width and speed, ASPM request, training, the data-link state (reported as `UP`, not weighed - `UP_WEIGHED=0`), all four sticky Device Status error bits (with the uncorrected `FER`/`NFER` refusing and `CE`/`UR` recorded), and the slot's hot-plug and surprise flags. AER lives in extended config space, which this image does not snapshot, so it is named as unobserved. The same line is printed by the read-only preparation path as ACTIVE_LINK[n], so the bench can be corrected without an image that may write
 * `LINK_ADMISSION_PREVIEW` — `ACTIVE_LINK[%zu] BDF=%04x:%02x:%02x.%x PCI_LINK=%s` (src/gpu_discovery.c): the read-only preparation path prints the admission policy's own verdict for each selected card, one per card, before it refuses. ADMISSION=REFUSE here means the waived image would refuse the same way, so a waived boot can be avoided until both cards read ADMISSION=ALLOW
 
-## Never established by a log
+## Not established by the formal session verifier
 
 * `WINDOWS_61742_SIGNED_BOOTER` — no code in this tree observes the Windows 617.42 Booter; the comparison is external evidence that has to be produced separately and has never been produced
 * `TARGET_FIRMWARE_GOP_GONE` — the Stop contract's TARGET_GOP requirement is never observed - the image does not read the target's firmware GOP ownership
 * `LOG_DIRECTORY_CLOSED` — the contract's LOG requirement needs the log closed before the Stop; the image cannot close the file it is writing to
-* `RECOVERY_EXECUTED` — no recovery procedure has been executed on this card, so the requirement stays false no matter what the log shows
+* `RECOVERY_EXECUTED` — The user independently verified U/P/I recovery on hardware. This run log does not contain that external evidence, and software STOP_CONTRACT RECOVERY=0 remains a separate evidence-consumption gap.
 * `STOP_BOUND_MEASURED` — the vendor Stop callback has no measured worst-case duration; a log line that shows it returned says nothing about how long it could take
 * `DMA_IDLE_PROVEN` — the contract's DMA requirement is not observable here; bus-master state is checked, engine idleness is not
-* `WINDOWS_DEVICE_START` — the log ends at the handover; whether Windows started the device is only visible in Windows
-* `CUDA_THROUGHPUT` — a benchmark number is a measurement on a machine, not a property of this source
+* `WINDOWS_DEVICE_START` — RUN0031 stops before Windows, but the separately captured post-run CUDA benchmark shows the named GPUs executing CUDA in Windows; it does not establish future boots or firmware authentication.
+* `CUDA_THROUGHPUT` — The attached before/after CUDA captures report measured throughput on this machine; those values do not establish a source property or repeatability.
 * `COLD_STATE_AFTER_POWER_LOSS` — the state after cutting power mid-transaction has never been observed, and a clean run says nothing about it
 
 ## What every one of these checks refuses to claim
 
 The last section of the manifest is printed by the verifier as `NOT_PROVEN` on
-every run, pass or fail. It is the honest half of the document: these are the
-things a log cannot show, and each one is why the readiness tracker still counts
-hardware evidence as 0 of 43.
+every run, pass or fail. These are the items the automated session verifier
+still does not establish. Operator-supplied evidence is documented above but
+does not silently set contract fields or turn a failed formal gate into a pass.
 
-The 617.42 Booter comparison is the one to keep in view. It is external evidence
-that has never existed in this repository, no code here observes it, and a donor
-run does not produce it. A green session is a session that behaved as the plan
-says; it is not a statement that the card is safe, that Windows started it, or
-that the firmware accepted anything.
+The Windows 617.42 Booter comparison remains external evidence: no code here
+observes it, and a donor run does not produce it. The successful 4090 mutation
+and attached CUDA comparison are real hardware evidence; they do not establish
+the exact Booter provenance, cryptographic firmware authentication, or the
+unverified Stop-contract requirements.

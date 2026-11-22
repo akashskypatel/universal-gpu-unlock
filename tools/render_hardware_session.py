@@ -24,10 +24,11 @@ HEADER = """# Donor-hardware session: the gates a run has to pass
 
 The donor card, the programmer and the known-good image are on the bench. This
 document turns the session into gates rather than an experiment with hope. It is
-checked against the code and captured logs, and **claims nothing beyond those
-records**: archived waived boots exposed failures but do not verify later fixes;
-`HARDWARE_VERIFIED=0` is printed by every check, and the list at the end is
-everything a log can never establish.
+checked against the code and captured logs. The operator-reported RUN0031 record
+below documents a successful physical RTX 4090 mutation separately from the
+formal gate score; it does not erase the remaining contract and provenance gaps.
+`HARDWARE_VERIFIED=0` remains the verifier's status, not a denial of the user's
+hardware result.
 
 `docs/hardware_session.json` is the source of truth; this file is rendered from
 it. `tools/verify_run_log.py` scores a captured log against the same manifest,
@@ -82,15 +83,15 @@ FOOTER = """
 ## What every one of these checks refuses to claim
 
 The last section of the manifest is printed by the verifier as `NOT_PROVEN` on
-every run, pass or fail. It is the honest half of the document: these are the
-things a log cannot show, and each one is why the readiness tracker still counts
-hardware evidence as 0 of 43.
+every run, pass or fail. These are the items the automated session verifier
+still does not establish. Operator-supplied evidence is documented above but
+does not silently set contract fields or turn a failed formal gate into a pass.
 
-The 617.42 Booter comparison is the one to keep in view. It is external evidence
-that has never existed in this repository, no code here observes it, and a donor
-run does not produce it. A green session is a session that behaved as the plan
-says; it is not a statement that the card is safe, that Windows started it, or
-that the firmware accepted anything.
+The Windows 617.42 Booter comparison remains external evidence: no code here
+observes it, and a donor run does not produce it. The successful 4090 mutation
+and attached CUDA comparison are real hardware evidence; they do not establish
+the exact Booter provenance, cryptographic firmware authentication, or the
+unverified Stop-contract requirements.
 """
 
 
@@ -208,6 +209,31 @@ def render_captured_runs(spec: dict) -> str:
     return "".join(out)
 
 
+def render_operator_reported_results(spec: dict) -> str:
+    """Operator-attested physical outcomes, kept outside automated gate scores."""
+    out = [f"## {spec['title']}\n\n", f"{spec['note']}\n\n"]
+    for result in spec["results"]:
+        out.append(f"### {result['id']} — {result['title']}\n\n")
+        out.append(f"{result['summary']}\n\n")
+        out.append("**Evidence files (stored UTF-8/LF normalized):**\n\n")
+        out.append("| File | Captured format | Captured bytes | Stored bytes | Lines | SHA-256 |\n")
+        out.append("| --- | --- | ---: | ---: | ---: | --- |\n")
+        for record in result["files"]:
+            out.append(f"| `{record['file']}` | {record['capture_format']} | {record['captured_bytes']} | {record['bytes']} | "
+                       f"{record['lines']} | `{record['sha256']}` |\n")
+        out.append("\n**What RUN0031 records:**\n\n")
+        for item in result["observations"]:
+            out.append(f"* `{item['token']}` — {item['why']}\n")
+        out.append("\n**Bench comparison:**\n\n")
+        for item in result["benchmarks"]:
+            out.append(f"* {item}\n")
+        out.append("\n**Keep these distinctions:**\n\n")
+        for item in result["limitations"]:
+            out.append(f"* {item}\n")
+        out.append("\n")
+    return "".join(out)
+
+
 def render_go_no_go(spec: dict) -> str:
     out = ["## Advancing between stages: `donor_gate.py`\n\n", f"{spec['summary']}\n\n"]
     out.append("```powershell\n" + spec["command"] + "\n```\n\n")
@@ -228,6 +254,8 @@ def render(manifest: dict) -> str:
         out.append(render_captured_runs(manifest["captured_runs"]))
     if "stopped_runs" in manifest:
         out.append(render_captured_runs(manifest["stopped_runs"]))
+    if "operator_reported_results" in manifest:
+        out.append(render_operator_reported_results(manifest["operator_reported_results"]))
     if "go_no_go" in manifest:
         out.append(render_go_no_go(manifest["go_no_go"]))
     out.append("## The stages\n\n")
@@ -283,7 +311,7 @@ def render(manifest: dict) -> str:
         out.append(f"* `{item['id']}` — `{item['token']}`{also} ({item['emitter']}): {item['why']}\n")
     out.append("\n")
 
-    out.append("## Never established by a log\n\n")
+    out.append("## Not established by the formal session verifier\n\n")
     for item in manifest["never_established_by_a_log"]:
         out.append(f"* `{item['id']}` — {item['why']}\n")
     out.append(FOOTER)

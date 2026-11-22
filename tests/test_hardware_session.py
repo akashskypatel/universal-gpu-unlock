@@ -429,9 +429,10 @@ class TheReadOnlyGuideIsGrounded(unittest.TestCase):
             self.assertTrue(item["after"], item["goal"])
             self.assertTrue(item["why_not"], item["goal"])
 
-    def test_the_guide_distinguishes_archived_actuation_from_hardware_verification(self):
-        self.assertIn("Archived captures now include waived actuating boots", DOC)
-        self.assertIn("do not hardware-verify the subsequent fixes", DOC)
+    def test_the_guide_distinguishes_operator_report_from_formal_gate_verdict(self):
+        self.assertIn("operator-reported physical mutation outcome", DOC.lower())
+        self.assertIn("RUN0031", DOC)
+        self.assertIn("A5_NEXT_BOOT_READ_THE_RECORD=FAIL", DOC)
         self.assertNotIn("HARDWARE_VERIFIED=1", DOC)
         for item in self.status["items"]:
             self.assertFalse(item["hardware_verified"],
@@ -505,8 +506,9 @@ class TheFirstCompletedActuateStage(unittest.TestCase):
     """A5 needs the boot after, so an actuate stage is scored as a pair: the run
     that started the step and the run whose boot record shows what came of it.
     RUN0012 + RUN0014 are the first pair on this bench that satisfies all five
-    gates - which is not the same as an unlock, and the verdict says so
-    (`HARDWARE_VERIFIED=0`)."""
+    formal gates. RUN0031 is a later operator-confirmed successful 4090 mutation,
+    but it remains outside this pair and fails A5 when scored alone because no
+    next-boot record was included."""
 
     PAIR = ("tests/data/hardware_session/physical-actuate-0002.txt",
             "tests/data/hardware_session/physical-actuate-0004.txt")
@@ -536,12 +538,11 @@ class TheFirstCompletedActuateStage(unittest.TestCase):
 class TheGatesAreSatisfiableByAHealthyRun(unittest.TestCase):
     """A gate nobody can pass is worse than no gate.
 
-    The first physical read-only run failed `R2_ENUMERATION_COMPLETED` because R2
+    A physical read-only run failed `R2_ENUMERATION_COMPLETED` because R2
     required `PCI_OBSERVATION_ONLY=1 ...`, a line the strict collector prints only
-    when it has already failed: the token existed in the source, so the grounding
-    test above passed, and only silicon could show it was unreachable on a
-    working machine. These tests score a captured run and check every gate
-    against it, so the same defect fails the suite instead of the operator.
+    when it has already failed. These tests score captured runs against every
+    formal gate. Later operator-confirmed mutation evidence is stored separately
+    and does not alter those stage scores.
     """
 
     def setUp(self):
@@ -800,6 +801,32 @@ class SyntheticLogsAreRefused(unittest.TestCase):
         self.assertNotIn("RUN_LOG_VERDICT=PASS ", result.stdout)
 
 
+class OperatorReportedMutationIsSeparateFromGateScores(unittest.TestCase):
+    def test_reported_files_match_manifest_hash_size_and_line_count(self):
+        reports = MANIFEST["operator_reported_results"]["results"]
+        self.assertEqual(len(reports), 1)
+        report = reports[0]
+        for record in report["files"]:
+            data = (ROOT / record["file"]).read_bytes()
+            self.assertEqual(len(data), record["bytes"], record["file"])
+            self.assertEqual(data.count(b"\n"), record["lines"], record["file"])
+            self.assertEqual(hashlib.sha256(data).hexdigest(), record["sha256"], record["file"])
+        run = (ROOT / report["files"][0]["file"]).read_text(encoding="utf-8")
+        self.assertIn("TRACE STEP=25 PHASE=firmware-transaction RESULT=0 MUTATED=1", run)
+        self.assertIn("SELECTED=1 NVIDIA_COUNT=2", run)
+        self.assertIn("DECISION=REFUSE MISSING=TARGET_GOP,LOG,RECOVERY,SIGNED_BOOTER,BOUND,DMA", run)
+
+    def test_report_keeps_operator_attestation_distinct_from_formal_a5_score(self):
+        report = MANIFEST["operator_reported_results"]["results"][0]
+        self.assertIn("operator reports that the 4090 mutation succeeded physically", report["summary"])
+        self.assertIn("software STOP_CONTRACT RECOVERY field is still 0", " ".join(report["limitations"]))
+        self.assertIn("617.42", " ".join(report["limitations"]))
+        result = run_verifier(str(ROOT / report["files"][0]["file"]), "--stage", "actuate")
+        self.assertIn("A5_NEXT_BOOT_READ_THE_RECORD STAGE=actuate RESULT=FAIL", result.stdout)
+        self.assertIn("HARDWARE_VERIFIED=0", result.stdout)
+        self.assertIn("operator-reported physical mutation outcome", DOC.lower())
+
+
 class NothingClaimsHardwareVerification(unittest.TestCase):
     def test_no_manifest_field_claims_verification(self):
         text = json.dumps(MANIFEST)
@@ -829,7 +856,7 @@ class NothingClaimsHardwareVerification(unittest.TestCase):
 
     def test_the_document_never_claims_a_verified_card(self):
         self.assertNotIn("HARDWARE_VERIFIED=1", DOC)
-        self.assertIn("claims nothing", DOC)
+        self.assertIn("not a denial of the user's", DOC)
 
 
 class TheDocumentIsRendered(unittest.TestCase):

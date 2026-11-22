@@ -1,0 +1,406 @@
+ASSET_INSTALL PRESENT=0
+BOOT_STATE PRESENT=0
+PROM_REFERENCE=NONE ROWS=0 AUTHENTICATION=0
+ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=1 READ_ONLY=1
+ACTIVE_GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 CLASS=0300 LEGACY_UNLOCK_DEVICE_ID=1
+ACTIVE_GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 CLASS=0300 LEGACY_UNLOCK_DEVICE_ID=1
+ACTIVE_PREPARED_STEP[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 LEGACY_UNLOCK_DEVICE_ID=1 READ_ONLY=1
+ACTIVE_PREPARE=COMPLETE SELECTED=1 NVIDIA_COUNT=2 MUTATION_AUTHORIZED=0
+PCI_LINK=OK WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=0 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1 OK_ERRORS=1 OK_ASPM=1 OK_TRAINED=1 OK_LINK=1 UP_WEIGHED=0 HOTPLUG=0 SURPRISE=0 AER=UNOBSERVED UNHANDLED=HOTPLUG,AER BDF=0000:01:00.0
+ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=1 ORDERED_SEQUENTIAL=1 MUTATION_AUTHORIZED=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 SIGNED_BOOTER_UNVERIFIED=1 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION
+Ada Lovelace GPU detected: Device ID 0x2684
+GPU-Unlock fork: experimental: AD10X, volatile RAM-only attempt, no VBIOS flash
+WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD PHASE=pre-prepare
+TRACE STEP=1 ELAPSED=0s PHASE=prepare
+TRACE STEP=1 ELAPSED=0s PHASE=assets
+ASSET_INSTALL STATE=ABSENT FILES=5
+TRACE STEP=2 ELAPSED=0s PHASE=asset-load
+TRACE STEP=2 PHASE=asset-read INDEX=0 NAME=gpu-unlock/610.43.03/booter_load_ad102.bin BYTES=57672
+TRACE STEP=2 ELAPSED=1s PHASE=asset-read-bytes DONE=57672 OF=57672
+TRACE STEP=2 ELAPSED=1s PHASE=asset-read DONE=1 OF=5
+TRACE STEP=2 PHASE=asset-read INDEX=1 NAME=gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin BYTES=64000
+TRACE STEP=2 ELAPSED=1s PHASE=asset-read-bytes DONE=64000 OF=64000
+TRACE STEP=2 ELAPSED=1s PHASE=asset-read DONE=2 OF=5
+TRACE STEP=2 PHASE=asset-read INDEX=2 NAME=gpu-unlock/610.43.03/gsp_ga10x.bin BYTES=84277400
+TRACE STEP=2 ELAPSED=2s PHASE=asset-read-bytes DONE=1048576 OF=84277400
+TRACE STEP=2 ELAPSED=3s PHASE=asset-read-bytes DONE=2097152 OF=84277400
+TRACE STEP=2 ELAPSED=4s PHASE=asset-read-bytes DONE=3145728 OF=84277400
+TRACE STEP=2 ELAPSED=5s PHASE=asset-read-bytes DONE=4194304 OF=84277400
+TRACE STEP=2 ELAPSED=6s PHASE=asset-read-bytes DONE=5242880 OF=84277400
+TRACE STEP=2 ELAPSED=7s PHASE=asset-read-bytes DONE=6291456 OF=84277400
+TRACE STEP=2 ELAPSED=8s PHASE=asset-read-bytes DONE=7340032 OF=84277400
+TRACE STEP=2 ELAPSED=9s PHASE=asset-read-bytes DONE=8388608 OF=84277400
+TRACE STEP=2 ELAPSED=10s PHASE=asset-read-bytes DONE=9437184 OF=84277400
+TRACE STEP=2 ELAPSED=12s PHASE=asset-read-bytes DONE=10485760 OF=84277400
+TRACE STEP=2 ELAPSED=13s PHASE=asset-read-bytes DONE=11534336 OF=84277400
+TRACE STEP=2 ELAPSED=14s PHASE=asset-read-bytes DONE=12582912 OF=84277400
+TRACE STEP=2 ELAPSED=15s PHASE=asset-read-bytes DONE=13631488 OF=84277400
+TRACE STEP=2 ELAPSED=16s PHASE=asset-read-bytes DONE=14680064 OF=84277400
+TRACE STEP=2 ELAPSED=17s PHASE=asset-read-bytes DONE=15728640 OF=84277400
+TRACE STEP=2 ELAPSED=18s PHASE=asset-read-bytes DONE=16777216 OF=84277400
+TRACE STEP=2 ELAPSED=19s PHASE=asset-read-bytes DONE=17825792 OF=84277400
+TRACE STEP=2 ELAPSED=20s PHASE=asset-read-bytes DONE=18874368 OF=84277400
+TRACE STEP=2 ELAPSED=21s PHASE=asset-read-bytes DONE=19922944 OF=84277400
+TRACE STEP=2 ELAPSED=22s PHASE=asset-read-bytes DONE=20971520 OF=84277400
+TRACE STEP=2 ELAPSED=23s PHASE=asset-read-bytes DONE=22020096 OF=84277400
+TRACE STEP=2 ELAPSED=24s PHASE=asset-read-bytes DONE=23068672 OF=84277400
+TRACE STEP=2 ELAPSED=25s PHASE=asset-read-bytes DONE=24117248 OF=84277400
+TRACE STEP=2 ELAPSED=26s PHASE=asset-read-bytes DONE=25165824 OF=84277400
+TRACE STEP=2 ELAPSED=28s PHASE=asset-read-bytes DONE=26214400 OF=84277400
+TRACE STEP=2 ELAPSED=29s PHASE=asset-read-bytes DONE=27262976 OF=84277400
+TRACE STEP=2 ELAPSED=30s PHASE=asset-read-bytes DONE=28311552 OF=84277400
+TRACE STEP=2 ELAPSED=31s PHASE=asset-read-bytes DONE=29360128 OF=84277400
+TRACE STEP=2 ELAPSED=32s PHASE=asset-read-bytes DONE=30408704 OF=84277400
+TRACE STEP=2 ELAPSED=33s PHASE=asset-read-bytes DONE=31457280 OF=84277400
+TRACE STEP=2 ELAPSED=34s PHASE=asset-read-bytes DONE=32505856 OF=84277400
+TRACE STEP=2 ELAPSED=35s PHASE=asset-read-bytes DONE=33554432 OF=84277400
+TRACE STEP=2 ELAPSED=36s PHASE=asset-read-bytes DONE=34603008 OF=84277400
+TRACE STEP=2 ELAPSED=37s PHASE=asset-read-bytes DONE=35651584 OF=84277400
+TRACE STEP=2 ELAPSED=38s PHASE=asset-read-bytes DONE=36700160 OF=84277400
+TRACE STEP=2 ELAPSED=39s PHASE=asset-read-bytes DONE=37748736 OF=84277400
+TRACE STEP=2 ELAPSED=40s PHASE=asset-read-bytes DONE=38797312 OF=84277400
+TRACE STEP=2 ELAPSED=42s PHASE=asset-read-bytes DONE=39845888 OF=84277400
+TRACE STEP=2 ELAPSED=43s PHASE=asset-read-bytes DONE=40894464 OF=84277400
+TRACE STEP=2 ELAPSED=44s PHASE=asset-read-bytes DONE=41943040 OF=84277400
+TRACE STEP=2 ELAPSED=45s PHASE=asset-read-bytes DONE=42991616 OF=84277400
+TRACE STEP=2 ELAPSED=46s PHASE=asset-read-bytes DONE=44040192 OF=84277400
+TRACE STEP=2 ELAPSED=47s PHASE=asset-read-bytes DONE=45088768 OF=84277400
+TRACE STEP=2 ELAPSED=48s PHASE=asset-read-bytes DONE=46137344 OF=84277400
+TRACE STEP=2 ELAPSED=49s PHASE=asset-read-bytes DONE=47185920 OF=84277400
+TRACE STEP=2 ELAPSED=50s PHASE=asset-read-bytes DONE=48234496 OF=84277400
+TRACE STEP=2 ELAPSED=51s PHASE=asset-read-bytes DONE=49283072 OF=84277400
+TRACE STEP=2 ELAPSED=52s PHASE=asset-read-bytes DONE=50331648 OF=84277400
+TRACE STEP=2 ELAPSED=53s PHASE=asset-read-bytes DONE=51380224 OF=84277400
+TRACE STEP=2 ELAPSED=54s PHASE=asset-read-bytes DONE=52428800 OF=84277400
+TRACE STEP=2 ELAPSED=55s PHASE=asset-read-bytes DONE=53477376 OF=84277400
+TRACE STEP=2 ELAPSED=56s PHASE=asset-read-bytes DONE=54525952 OF=84277400
+TRACE STEP=2 ELAPSED=57s PHASE=asset-read-bytes DONE=55574528 OF=84277400
+TRACE STEP=2 ELAPSED=58s PHASE=asset-read-bytes DONE=56623104 OF=84277400
+TRACE STEP=2 ELAPSED=60s PHASE=asset-read-bytes DONE=57671680 OF=84277400
+TRACE STEP=2 ELAPSED=61s PHASE=asset-read-bytes DONE=58720256 OF=84277400
+TRACE STEP=2 ELAPSED=62s PHASE=asset-read-bytes DONE=59768832 OF=84277400
+TRACE STEP=2 ELAPSED=63s PHASE=asset-read-bytes DONE=60817408 OF=84277400
+TRACE STEP=2 ELAPSED=64s PHASE=asset-read-bytes DONE=61865984 OF=84277400
+TRACE STEP=2 ELAPSED=65s PHASE=asset-read-bytes DONE=62914560 OF=84277400
+TRACE STEP=2 ELAPSED=66s PHASE=asset-read-bytes DONE=63963136 OF=84277400
+TRACE STEP=2 ELAPSED=67s PHASE=asset-read-bytes DONE=65011712 OF=84277400
+TRACE STEP=2 ELAPSED=68s PHASE=asset-read-bytes DONE=66060288 OF=84277400
+TRACE STEP=2 ELAPSED=69s PHASE=asset-read-bytes DONE=67108864 OF=84277400
+TRACE STEP=2 ELAPSED=70s PHASE=asset-read-bytes DONE=68157440 OF=84277400
+TRACE STEP=2 ELAPSED=71s PHASE=asset-read-bytes DONE=69206016 OF=84277400
+TRACE STEP=2 ELAPSED=73s PHASE=asset-read-bytes DONE=70254592 OF=84277400
+TRACE STEP=2 ELAPSED=74s PHASE=asset-read-bytes DONE=71303168 OF=84277400
+TRACE STEP=2 ELAPSED=75s PHASE=asset-read-bytes DONE=72351744 OF=84277400
+TRACE STEP=2 ELAPSED=76s PHASE=asset-read-bytes DONE=73400320 OF=84277400
+TRACE STEP=2 ELAPSED=77s PHASE=asset-read-bytes DONE=74448896 OF=84277400
+TRACE STEP=2 ELAPSED=78s PHASE=asset-read-bytes DONE=75497472 OF=84277400
+TRACE STEP=2 ELAPSED=79s PHASE=asset-read-bytes DONE=76546048 OF=84277400
+TRACE STEP=2 ELAPSED=80s PHASE=asset-read-bytes DONE=77594624 OF=84277400
+TRACE STEP=2 ELAPSED=81s PHASE=asset-read-bytes DONE=78643200 OF=84277400
+TRACE STEP=2 ELAPSED=82s PHASE=asset-read-bytes DONE=79691776 OF=84277400
+TRACE STEP=2 ELAPSED=83s PHASE=asset-read-bytes DONE=80740352 OF=84277400
+TRACE STEP=2 ELAPSED=84s PHASE=asset-read-bytes DONE=81788928 OF=84277400
+TRACE STEP=2 ELAPSED=85s PHASE=asset-read-bytes DONE=82837504 OF=84277400
+TRACE STEP=2 ELAPSED=86s PHASE=asset-read-bytes DONE=83886080 OF=84277400
+TRACE STEP=2 ELAPSED=87s PHASE=asset-read-bytes DONE=84277400 OF=84277400
+TRACE STEP=2 ELAPSED=87s PHASE=asset-read DONE=3 OF=5
+TRACE STEP=2 PHASE=asset-read INDEX=3 NAME=gpu-unlock/610.43.03/gsp_boot_ad102.bin BYTES=36864
+TRACE STEP=2 ELAPSED=87s PHASE=asset-read-bytes DONE=36864 OF=36864
+TRACE STEP=2 ELAPSED=87s PHASE=asset-read DONE=4 OF=5
+TRACE STEP=2 PHASE=asset-read INDEX=4 NAME=gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin BYTES=84
+TRACE STEP=2 ELAPSED=87s PHASE=asset-read-bytes DONE=84 OF=84
+TRACE STEP=2 ELAPSED=87s PHASE=asset-read DONE=5 OF=5
+TRACE STEP=2 PHASE=asset-load STATUS=0
+TRACE STEP=3 ELAPSED=87s PHASE=read-only-diagnostic
+TRACE STEP=4 ELAPSED=87s PHASE=diag-config
+Config: OK
+TRACE STEP=5 ELAPSED=87s PHASE=diag-registers
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+TRACE STEP=6 ELAPSED=87s PHASE=diag-assets
+DIAGNOSTIC CONFIG=1 REGISTERS=1 PINNED_ASSETS=1
+TRACE STEP=7 ELAPSED=88s PHASE=diag-prom-copy
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=65536 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=131072 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=196608 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=262144 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=327680 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=393216 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=458752 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=524288 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=589824 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=655360 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=720896 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=786432 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=851968 OF=1048576
+TRACE STEP=7 ELAPSED=88s PHASE=io-copy DONE=917504 OF=1048576
+TRACE STEP=7 ELAPSED=89s PHASE=io-copy DONE=983040 OF=1048576
+TRACE STEP=7 ELAPSED=89s PHASE=io-copy DONE=1048576 OF=1048576
+TRACE STEP=7 ELAPSED=89s PHASE=io-copy DONE=1048576 OF=1048576
+PROM readout SHA256: 422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad PCIR_device=2684 STRUCTURE_VALID=1 SIGNATURE_AUTHENTICATED=0
+PROM_IDENTITY=UNVERIFIED DEVICE=2684 SUBSYS=88e61043 SHA256=422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad REASON=UNKNOWN_CARD REFS=0 DIAGNOSTIC_ALLOWED=1
+PROM_IDENTITY MODE=STRUCTURAL AUTHENTICATION=0
+TRACE STEP=8 ELAPSED=89s PHASE=diag-prom-parse
+gpu_unlock: ROM chain: pos=0 data=0x52494350 bytes=64512 type=0 last=0
+gpu_unlock: ROM chain: pos=0xfc00 data=0x52494350 bytes=85504 type=0x3 last=0
+gpu_unlock: ROM chain: pos=0x24a00 data=0x5344504e bytes=24576 type=0xe0 last=0
+gpu_unlock: ROM chain: pos=0x2aa00 data=0x5344504e bytes=451584 type=0xe0 last=128
+gpu_unlock: ROM expansion: base=0xfc00 ext=0x24a00 adjust=0x14e00
+gpu_unlock: ROM BIT: offset=0x1b0 size=12 stride=6 tokens=19 adjust=0x14e00
+gpu_unlock: ROM ucode table: offset=0x98cd8 version=1 header=6 stride=6 entries=16
+gpu_unlock: FWSEC descriptor: offset=0x4515c ROM_bytes=1048576 header=0x32c0301 version=3
+gpu_unlock: FWSEC raw descriptor[0:16]=01 03 2c 03 80 02 01 00 24 0b 00 00 1c 00 00 00
+gpu_unlock: FWSEC geometry: image_off=0x45488 size=0x10300 imem=0xf500 va=0 pa=0 dmem=0xd80 pa=0 pkc=0xb24 interface=0x1c engine=0x400 ucode=9 signatures=2 versions=0x3 bytes=768
+gpu_unlock: FWSEC signature records: count=2 bytes=768 sig_offset=0x45188 SIGNATURE_AUTHENTICATED=0
+TRACE STEP=9 ELAPSED=89s PHASE=diag-stability
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+DIAGNOSTIC PROM=1 FWSEC_PARSE=0 FWSEC_MATCH=1 STABLE=1 SIGNATURE_AUTHENTICATED=0
+TRACE STEP=10 ELAPSED=89s PHASE=read-only-cold-profile
+GuAd104Prepare: start
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+TRACE STEP=11 ELAPSED=89s PHASE=profile-prom-copy
+TRACE STEP=11 ELAPSED=89s PHASE=io-copy DONE=65536 OF=1048576
+TRACE STEP=11 ELAPSED=89s PHASE=io-copy DONE=131072 OF=1048576
+TRACE STEP=11 ELAPSED=89s PHASE=io-copy DONE=196608 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=262144 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=327680 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=393216 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=458752 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=524288 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=589824 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=655360 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=720896 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=786432 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=851968 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=917504 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=983040 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=1048576 OF=1048576
+TRACE STEP=11 ELAPSED=90s PHASE=io-copy DONE=1048576 OF=1048576
+PROM readout SHA256: 422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad PCIR_device=2684 STRUCTURE_VALID=1 SIGNATURE_AUTHENTICATED=0
+PROM_IDENTITY=REFUSED DEVICE=2684 SUBSYS=88e61043 SHA256=422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad REASON=UNKNOWN_CARD REFS=0 DIAGNOSTIC_ALLOWED=1
+PROM_IDENTITY MODE=STRUCTURAL AUTHENTICATION=0
+TRACE STEP=12 ELAPSED=90s PHASE=profile-prom-parse
+gpu_unlock: ROM chain: pos=0 data=0x52494350 bytes=64512 type=0 last=0
+gpu_unlock: ROM chain: pos=0xfc00 data=0x52494350 bytes=85504 type=0x3 last=0
+gpu_unlock: ROM chain: pos=0x24a00 data=0x5344504e bytes=24576 type=0xe0 last=0
+gpu_unlock: ROM chain: pos=0x2aa00 data=0x5344504e bytes=451584 type=0xe0 last=128
+gpu_unlock: ROM expansion: base=0xfc00 ext=0x24a00 adjust=0x14e00
+gpu_unlock: ROM BIT: offset=0x1b0 size=12 stride=6 tokens=19 adjust=0x14e00
+gpu_unlock: ROM ucode table: offset=0x98cd8 version=1 header=6 stride=6 entries=16
+gpu_unlock: FWSEC descriptor: offset=0x4515c ROM_bytes=1048576 header=0x32c0301 version=3
+gpu_unlock: FWSEC raw descriptor[0:16]=01 03 2c 03 80 02 01 00 24 0b 00 00 1c 00 00 00
+gpu_unlock: FWSEC geometry: image_off=0x45488 size=0x10300 imem=0xf500 va=0 pa=0 dmem=0xd80 pa=0 pkc=0xb24 interface=0x1c engine=0x400 ucode=9 signatures=2 versions=0x3 bytes=768
+gpu_unlock: FWSEC signature records: count=2 bytes=768 sig_offset=0x45188 SIGNATURE_AUTHENTICATED=0
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+GuAd104Prepare: prom_match=1 fwsec_res=0 fwsec_match=1 cfg2=1 reg2=1 ss0_stable=1
+TRACE STEP=13 ELAPSED=90s PHASE=profile-latch-selectors
+GuAd104Prepare: SUCCESS
+TRACE STEP=13 PHASE=prepare STATUS=0 PROFILE_VERIFIED=1 PROM_VERIFIED=1
+TRACE STEP=14 ELAPSED=90s PHASE=stage-windows-image
+GuBootLoadWindows: candidate 1 volume=0x76b3c998 found '\EFI\Microsoft\Boot\bootmgfw.efi' (match #1)
+Windows image staged: status=0 matches=1 pinned_GPT=1 path='\EFI\Microsoft\Boot\bootmgfw.efi'
+TRACE STEP=15 ELAPSED=91s PHASE=manual-choice
+TRACE STEP=15 PHASE=manual-choice KEY=U TRANSACTION=1 S3_SCRIPT=0
+Operator U/P: ordered selected transactions; no automatic retry
+WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD
+TRACE STEP=16 ELAPSED=94s PHASE=selected-gpu-execution
+TRACE STEP=17 ELAPSED=94s PHASE=selected-gpu-resource-reserve
+TRACE STEP=18 ELAPSED=94s PHASE=selected-gpu-state-begin
+SELECTED_GPU_STEP=ACTIVE ORDER=0 TARGET=0 PEERS=2
+TRACE STEP=19 ELAPSED=94s PHASE=preflight
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+TARGET_GOP=0 SURVIVOR_GOPS=1 HEADLESS=1 PHYSICAL=1
+HEADLESS_STAGE3=ELIGIBLE TARGET_DRIVER=0x76b74698 NON_TARGET_GOPS=1 BEFORE_STOP=1
+Driver(2) verified OK: ver=0x7000b size=162016
+MSI USB baseline: host=0x7521aa98 bus_agent=0x772cb318 dynamic_edges=33; host ownership pinned
+MSI preflight: status=0 graph=185 code_profiles=3
+MSI endpoints: pci=0x772dfd98 gop=0 console=0x76b6d898 pointer_agent=0x76b70218
+TRACE STEP=20 ELAPSED=94s PHASE=compatibility-reserve
+TRACE STEP=21 ELAPSED=94s PHASE=driver-release
+STOP_CONTRACT device=2684 stage=0 OWNER=1 COLD=0 CONSOLE=0 PEERS=0 TARGET_GOP=0 LOG=0 RECOVERY=0 SIGNED_BOOTER=0 BOUND=0 DMA=0 DECISION=REFUSE MISSING=COLD,CONSOLE,PEERS,TARGET_GOP,LOG,RECOVERY,SIGNED_BOOTER,BOUND,DMA
+MSI release WAIVED for original AD102/GA102 device=2684: VENDOR_STOP_BOUND=UNVERIFIED SIGNED_BOOTER=UNVERIFIED RECOVERY=UNVERIFIED WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION
+MSI driver detach intent: stage=3
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+STOP_CONTRACT device=2684 stage=2 OWNER=1 COLD=1 CONSOLE=1 PEERS=1 TARGET_GOP=0 LOG=0 RECOVERY=0 SIGNED_BOOTER=0 BOUND=0 DMA=0 DECISION=REFUSE MISSING=TARGET_GOP,LOG,RECOVERY,SIGNED_BOOTER,BOUND,DMA
+Driver(2) verified OK: ver=0x7000b size=162016
+MSI driver detach return: stage=3 status=0
+PCI config drift refused: offset=0x4 captured=0x100003 now=0x100000 bits=0x3 flrs=0
+PCI decode restored: offset=0x4 captured=0x100003 before=0x100000 after=0x100003 ACCEPTED=1 CAUSED_BY=driver-detach
+POST_STOP_QUIESCENCE=BUS_MASTER_ONLY TX_PENDING_CLEAR=1 POLLS=1 IOMMU=UNMANAGED QUEUE_READBACK=0 BUS_TRACE=0
+POST_STOP_BUS_MASTER=DISABLED VERIFIED=1 PREVIOUS=0
+MSI decode restore intent: status=0 IO_MEM_mask=0
+ClaimRestore: pre-enable attrs=0 (plan=0x300 config_mask=0 enable_mask=0x300 exp=0x300)
+ClaimRestore: post-enable attrs=0x300 (mem=1 bm=0)
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+MSI exclusive claim/decode result: status=0
+TRACE STEP=21 PHASE=driver-release STATUS=0 RELEASED=1
+TRACE STEP=22 ELAPSED=95s PHASE=cold-entry
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+TRACE STEP=23 ELAPSED=95s PHASE=compatibility-open
+TRACE STEP=24 ELAPSED=95s PHASE=shared-firmware-assets
+asset request: gpu-unlock/610.43.03/gsp_ga10x.bin
+asset result: gpu-unlock/610.43.03/gsp_ga10x.bin error=0 bytes=84277400
+asset cache cleanup: gpu-unlock/610.43.03/gsp_ga10x.bin devres_released=0
+TRACE STEP=25 ELAPSED=95s PHASE=firmware-transaction
+Config: OK
+Selectors: SS0=0x70701123, SS1=0x2 (fault=0)
+Registers: cold state verified (PMC=0x192000a1, SS0=0x70701123, SS1=2)
+driver probe resources: phase=entry empty=1
+asset request: gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin
+asset result: gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin error=0 bytes=64000
+asset cache cleanup: gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin devres_released=0
+asset request: gpu-unlock/610.43.03/gsp_boot_ad102.bin
+asset result: gpu-unlock/610.43.03/gsp_boot_ad102.bin error=0 bytes=36864
+asset cache cleanup: gpu-unlock/610.43.03/gsp_boot_ad102.bin devres_released=0
+asset request: gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin
+asset result: gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin error=0 bytes=84
+asset cache cleanup: gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin devres_released=0
+asset geometry: image=84226048 signature=4096 boot=36864 code=0x4800 data=0x800 manifest=0 parse=0
+asset request: gpu-unlock/610.43.03/booter_load_ad102.bin
+asset result: gpu-unlock/610.43.03/booter_load_ad102.bin error=0 bytes=57672
+asset cache cleanup: gpu-unlock/610.43.03/booter_load_ad102.bin devres_released=0
+claim: power=0 pm_cap=0x60 flags=0
+claim: command=0x3 capability=0x112c8de1 BAR_mask=0x1
+layout inputs: fb_mb=0x5ff4 vga=0x1 mmu_plm=0x45cb8f mmu_lo=0x100000 mmu_hi=0x5cf3ff0 image=84226048 boot=36864
+layout mmu: lo=0x10000000 hi=0x5cf3ff000 hi_exclusive=0x5cf400000 constrain=0
+mmu lock ignored: high address is not the FB top
+layout decoded: fb=0x5ff400000 vga=0x5ff300000 mmu_valid=0 mmu_low=0x10000000 frts=0x100000 heap=0x5800000 result=0
+layout ranges: nonwpr=0x5f4700000 wpr=0x5f4800000 heap=0x5f4900000 gsp=0x5fa1a0000 boot=0x5ff1f7000 frts=0x5ff200000 end=0x5ff300000 scrub_floor=0x5ef400000
+DMA masks: streaming=0xffffffffffff coherent=0xfffffffff requested=0xffffffff
+Booter signature: fuse_raw=0x1 version=1 signatures=2 size=768
+DMA buffers mapped: 2048
+DMA buffers mapped: 4096
+DMA buffers mapped: 6144
+DMA buffers mapped: 8192
+DMA buffers mapped: 10240
+DMA buffers mapped: 12288
+DMA buffers mapped: 14336
+DMA buffers mapped: 16384
+DMA buffers mapped: 18432
+DMA buffers mapped: 20480
+entry: plm=0xffffff8f ss0=0x70701123 ss1=0x2 wpr2_hi=0
+AD102 permission before-firmware: WPR_CFG[0x1fa7cc]=0x4cb8f before=0x4cb8f expected=0xfffff0ff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission before-firmware: FBPA[0x9a0148]=0xffffff0f before=0xffffff0f expected=0xffffffff required=0 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission before-firmware: WPR[0x1fa7c4]=0x4cb8f before=0x4cb8f expected=0xffffffff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission before-firmware: FEAT[0x823804]=0xffffff8f before=0xffffff8f expected=0xffffffff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 before-firmware: readout1=0x410080 fields=0 0 2 0 0 2 0 2 0 valid=1 full=0
+FWSEC: reading PROM at 0x300000
+TRACE STEP=25 ELAPSED=99s PHASE=io-copy DONE=65536 OF=1048576
+TRACE STEP=25 ELAPSED=99s PHASE=io-copy DONE=131072 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=196608 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=262144 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=327680 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=393216 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=458752 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=524288 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=589824 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=655360 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=720896 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=786432 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=851968 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=917504 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=983040 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=1048576 OF=1048576
+TRACE STEP=25 ELAPSED=100s PHASE=io-copy DONE=1048576 OF=1048576
+FWSEC: PROM bytes=1048576 signature=0xaa55
+PROM readout SHA256: 422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad PCIR_device=2684 STRUCTURE_VALID=1 SIGNATURE_AUTHENTICATED=0
+PROM_IDENTITY=REFUSED DEVICE=2684 SUBSYS=88e61043 SHA256=422ea53f6b3393720f991fa9e189efefeefce98d1f54486acbfa0ecb96a570ad REASON=UNKNOWN_CARD REFS=0 DIAGNOSTIC_ALLOWED=1
+PROM_IDENTITY MODE=STRUCTURAL AUTHENTICATION=0
+gpu_unlock: ROM chain: pos=0 data=0x52494350 bytes=64512 type=0 last=0
+gpu_unlock: ROM chain: pos=0xfc00 data=0x52494350 bytes=85504 type=0x3 last=0
+gpu_unlock: ROM chain: pos=0x24a00 data=0x5344504e bytes=24576 type=0xe0 last=0
+gpu_unlock: ROM chain: pos=0x2aa00 data=0x5344504e bytes=451584 type=0xe0 last=128
+gpu_unlock: ROM expansion: base=0xfc00 ext=0x24a00 adjust=0x14e00
+gpu_unlock: ROM BIT: offset=0x1b0 size=12 stride=6 tokens=19 adjust=0x14e00
+gpu_unlock: ROM ucode table: offset=0x98cd8 version=1 header=6 stride=6 entries=16
+gpu_unlock: FWSEC descriptor: offset=0x4515c ROM_bytes=1048576 header=0x32c0301 version=3
+gpu_unlock: FWSEC raw descriptor[0:16]=01 03 2c 03 80 02 01 00 24 0b 00 00 1c 00 00 00
+gpu_unlock: FWSEC geometry: image_off=0x45488 size=0x10300 imem=0xf500 va=0 pa=0 dmem=0xd80 pa=0 pkc=0xb24 interface=0x1c engine=0x400 ucode=9 signatures=2 versions=0x3 bytes=768
+gpu_unlock: FWSEC signature records: count=2 bytes=768 sig_offset=0x45188 SIGNATURE_AUTHENTICATED=0
+gpu_unlock: FWSEC interface: offset=0x1c version=1 header=4 stride=8 entries=2 FRTS=0x5ff200000
+gpu_unlock: FWSEC mapper: version=3 size=64 cmd_offset=0xd40 cmd_size=64
+FWSEC fuse: raw=0x1 version=1
+gpu_unlock: FWSEC signature selection: versions=0x3 fuse_version=1 sig_bytes=384
+Bus Master enable intent: command=0x3 attributes=0x300
+Bus Master enabled: command=0x7 attributes=0x700 matched=1
+Falcon reset begin: base=0x110000
+poll timeout tolerated: reg=0x1100f4 last=0x47b7 mask=0x80000000 expected=0x80000000 budget_us=1000
+Falcon pre-reset timeout tolerated per HW bug 3419321
+Falcon reset done: base=0x110000 hwcfg=0x67b7 chip=0x192000a1
+Falcon DMA: base=0x110000 dest=0 offset=0 src=0x71b7a000 size=0xf500 cmd=0x614
+Falcon DMA: base=0x110000 dest=0 offset=0 src=0x71b89500 size=0xd80 cmd=0x600
+Falcon start: base=0x110000 cpuctl=0x10 code_va=0 sig_dmem=0xb24 engine_mask=0x400 ucode=9 mailbox=0:0
+FWSEC result: scratch=0 expected_hi16=0
+FWSEC WPR2: low=0x5ff2000 high=0x5ff2e00 expected_page=0x5ff200 end=0x5ff300000
+Falcon reset begin: base=0x840000
+poll timeout tolerated: reg=0x8400f4 last=0x67b7 mask=0x80000000 expected=0x80000000 budget_us=1000
+Falcon pre-reset timeout tolerated per HW bug 3419321
+Falcon reset done: base=0x840000 hwcfg=0x67b7 chip=0x192000a1
+Falcon DMA: base=0x840000 dest=0 offset=0x100 src=0x74f53000 size=0x7d00 cmd=0x614
+Falcon DMA: base=0x840000 dest=0 offset=0 src=0x74f5ae00 size=0x6000 cmd=0x600
+Falcon start: base=0x840000 cpuctl=0x10 code_va=0x100 sig_dmem=0x10 engine_mask=0x1 ucode=3 mailbox=0:0x751a4000
+AD102 permission after-payload: WPR_CFG[0x1fa7cc]=0xfffff0ff before=0x4cb8f expected=0xfffff0ff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission after-payload: FBPA[0x9a0148]=0xffffff0f before=0xffffff0f expected=0xffffffff required=0 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission after-payload: WPR[0x1fa7c4]=0xffffffff before=0x4cb8f expected=0xffffffff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission after-payload: FEAT[0x823804]=0xffffffff before=0xffffff8f expected=0xffffffff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 after-payload: readout1=0x410080 fields=0 0 2 0 0 2 0 2 0 valid=1 full=0
+AD102 payload result: boot=0 halt=0 marker=0x67b00001 expected=0x67b00001 marker_ok=1 required_permissions=1 cpuctl=0x10 halted=1 debug=0xda550000 ss0=0x70701123 ss1=0x2
+selector read: SS0=0x70701123 expected_unlock=0x88888888
+selector write: SS0=0x88888888
+selector result: SS0=0x88888888 expected=0x88888888 matched=1
+selector read: SS1=0x2 expected_unlock=0x8
+selector write: SS1=0x8
+selector result: SS1=0x8 expected=0x8 matched=1
+SELECTOR_PATH=PHASED
+AD102 selectors-applied: readout1=0 fields=0 0 0 0 0 0 0 0 0 valid=1 full=1
+pre-FLR selectors: ss0=0x88888888 expected=0x88888888 ss1=0x8 expected=0x8 contract=unlocked
+AD102 pre-FLR: readout1=0 fields=0 0 0 0 0 0 0 0 0 valid=1 full=1
+PCIe FLR begin: BME=0 DMA retained, chip=0x192000a1
+PCIe FLR returned: result=0
+post-FLR BAR ready: chip=0x192000a1
+post-FLR GFW result: error=0 pci=0x268410de plm=0x8b8f boot=0x3ff cpuctl=0x10 budget_us=2050000
+engine reset assert: phase=post-FLR base=0x840000 before=0 write=0x1
+engine reset propagation: phase=post-FLR base=0x840000 first=0x1 tenth=0x1
+engine reset asserted: phase=post-FLR base=0x840000 error=0 last=0x1
+engine reset release: phase=post-FLR base=0x840000 before=0x1 write=0
+engine reset released: phase=post-FLR base=0x840000 engine=0 hwcfg2=0x67b7
+post-FLR SEC2 reset released, GSP halted, BME=0 pending=0 WPR2=1ffffe00:00000000 SS0=88888888 SS1=00000008 SS1_EXPECTED=00000008 contract=unlocked
+AD102 permission post-FLR: WPR_CFG[0x1fa7cc]=0x4cb8f before=0x4cb8f expected=0xfffff0ff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission post-FLR: FBPA[0x9a0148]=0xffffff0f before=0xffffff0f expected=0xffffffff required=0 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission post-FLR: WPR[0x1fa7c4]=0x4cb8f before=0x4cb8f expected=0xffffffff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 permission post-FLR: FEAT[0x823804]=0xffffffff before=0xffffff8f expected=0xffffffff required=1 valid=1 pci=0x268410de chip=0x192000a1
+AD102 post-FLR: readout1=0 fields=0 0 0 0 0 0 0 0 0 valid=1 full=1
+driver probe resources: phase=handoff empty=1
+restore streaming mask: actual=0xffffffffffff expected=0xffffffffffff
+restore coherent mask: actual=0xfffffffff expected=0xfffffffff
+restore PCI command: actual=0x3 original=0x3 mask=0x6
+TRACE STEP=25 PHASE=firmware-transaction RESULT=0 MUTATED=1 DMA=0 FLRS=1
+Selected GPU result=0 fault=0 safe=1 retained=0 flrs=1 DMA=0
+TRACE STEP=26 ELAPSED=113s PHASE=release-exclusive-claim
+PCI status drift tolerated: offset=0x80 captured=0x92930 now=0x2930 bits=0x90000 flrs=1
+MSI pre-close silicon verification: valid=1 chip=0x192000a1 cpu=0x10 hi=0 ss0=0x88888888 ss1=0x8 ss1_contract=unlocked readout=0 plm=0xffffffff
+TRACE STEP=27 ELAPSED=113s PHASE=final-Windows-verification
+PCI status drift tolerated: offset=0x80 captured=0x92930 now=0x2930 bits=0x90000 flrs=1
+Selected preboot transaction verified; stock Windows driver acceptance and throughput remain unverified
+TRACE STEP=28 ELAPSED=113s PHASE=selected-gpu-state-finish
+PCI status drift tolerated: offset=0x80 captured=0x92930 now=0x2930 bits=0x90000 flrs=1
+SELECTED_GPU_STEP=COMPLETE NEXT=1 PEERS_VERIFIED=2
+TRACE STEP=29 ELAPSED=113s PHASE=selected-gpu-next
+TRACE STEP=30 ELAPSED=113s PHASE=final-Windows-verification
+PCI status drift tolerated: offset=0x80 captured=0x92930 now=0x2930 bits=0x90000 flrs=1
+PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified
+TRACE STEP=31 ELAPSED=113s PHASE=close-USB-log
