@@ -49,6 +49,8 @@ typedef uint32_t UINT32;
 typedef uint64_t UINT64;
 typedef unsigned short UINT16;
 typedef size_t UINTN;
+typedef void *EFI_HANDLE;
+typedef uint8_t UINT8;
 #define VOID void
 typedef int EFI_STATUS;
 typedef int BOOLEAN;
@@ -61,15 +63,26 @@ typedef int BOOLEAN;
 #define EFI_COMPROMISED_DATA 5
 #define EFI_ACCESS_DENIED 6
 #define EFI_PCI_IO_ATTRIBUTE_BUS_MASTER 4u
+#define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
 #define EfiPciIoAttributeOperationGet 1
 #define EfiPciIoAttributeOperationDisable 2
-#define NOTE(...) ((void)0)
+/* The real NOTE is a GuLog. A no-op macro would leave the arguments unused and,
+ * with -Werror, would make this harness fail on formatting that the firmware
+ * build compiles happily - so the sink consumes them. */
+static void NoteSink(const char *format,...){(void)format;}
+#define NOTE(...) NoteSink(__VA_ARGS__)
 #define GU_TX_PENDING_POLLS %%s
 
 typedef struct EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
+typedef struct {
+  EFI_STATUS (*Read)(EFI_PCI_IO_PROTOCOL *, UINT8, UINT64, UINTN, VOID *);
+  EFI_STATUS (*Write)(EFI_PCI_IO_PROTOCOL *, UINT8, UINT64, UINTN, VOID *);
+} EFI_PCI_IO_ACCESS;
 struct EFI_PCI_IO_PROTOCOL {
   EFI_STATUS (*Attributes)(EFI_PCI_IO_PROTOCOL *, int, UINT64, UINT64 *);
+  EFI_PCI_IO_ACCESS Pci;
 };
+#define EfiPciIoWidthUint16 1
 typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 struct EFI_BOOT_SERVICES { EFI_STATUS (*Stall)(UINTN); };
 typedef struct { EFI_BOOT_SERVICES *BootServices; } EFI_SYSTEM_TABLE;
@@ -78,6 +91,7 @@ static struct {
   UINT32 config[64];
   UINT16 pcie_cap;
   EFI_SYSTEM_TABLE *table;
+  EFI_HANDLE pci;
 } Plan;
 static struct {
   int owned,fault,retained,flrs;
@@ -86,7 +100,36 @@ static struct {
 static UINT32 current[64];
 static UINT64 attrs;
 static int peer_fail,disable_fail,no_effect,other_attr_change,read_fail,disable_count;
+/* The decode-restore path: how many Command words were written, whether the write
+ * fails, and whether the readback lies. */
+static int decode_writes,decode_fail,decode_readback_lies;
 static EFI_PCI_IO_PROTOCOL pci;
+static EFI_STATUS PciWrite(EFI_PCI_IO_PROTOCOL *self,UINT8 width,UINT64 offset,
+                          UINTN count,VOID *buffer) {
+  (void)self;
+  if(width!=EfiPciIoWidthUint16||offset!=4u||count!=1u||!buffer)return EFI_UNSUPPORTED;
+  decode_writes++;
+  if(decode_fail)return EFI_DEVICE_ERROR;
+  current[1]=(current[1]&0xffff0000u)|(*(UINT16 *)buffer);
+  return EFI_SUCCESS;
+}
+static EFI_STATUS PciRead(EFI_PCI_IO_PROTOCOL *self,UINT8 width,UINT64 offset,
+                          UINTN count,VOID *buffer) {
+  (void)self;
+  if(width!=EfiPciIoWidthUint16||offset!=4u||count!=1u||!buffer)return EFI_UNSUPPORTED;
+  *(UINT16 *)buffer=decode_readback_lies?(UINT16)0u:(UINT16)(current[1]&0xffffu);
+  return EFI_SUCCESS;
+}
+/* The real path reaches the config space through the device handle, not through a
+ * cached protocol pointer: open PCI_IO on Plan.pci and require it to be the same
+ * instance the rest of the file uses. */
+static int PciGuid;
+static EFI_STATUS Interface(EFI_HANDLE handle,void *guid,VOID **out) {
+  (void)guid;
+  if(handle!=(EFI_HANDLE)&pci||!out)return EFI_UNSUPPORTED;
+  *out=&pci;
+  return EFI_SUCCESS;
+}
 static EFI_STATUS GuVerifyActivePeers(void *t) {
   (void)t;
   return peer_fail ? EFI_UNSUPPORTED : EFI_SUCCESS;
@@ -129,8 +172,12 @@ static void reset_case(unsigned cmd) {
   Plan.stage=3;
   attrs=cmd;
   pci.Attributes=Attributes;
+  pci.Pci.Read=PciRead;
+  pci.Pci.Write=PciWrite;
+  Plan.pci=(EFI_HANDLE)&pci;
   Gu.pci=&pci;
   peer_fail=disable_fail=no_effect=other_attr_change=read_fail=disable_count=0;
+  decode_writes=decode_fail=decode_readback_lies=0;
 }
 int main(void) {
   reset_case(6u);
@@ -188,7 +235,62 @@ int main(void) {
   assert(NormalizeMasterAfterStop()==EFI_NOT_READY);
   assert(disable_count==0);
 
-  puts("STATUS=COMPLETE PASS=11 REAL_PCI_MASTER_TRANSITION_CASES");
+  /* The bench case, RUN0012/RUN0013: the final detach cleared IO and memory
+   * decode (Command 0x0003 -> 0x0000) and left everything else alone. It is
+   * accepted, the Command word is written back, and the snapshot the rest of the
+   * path compares against is true again. */
+  reset_case(2u);
+  Plan.config[1]=0x100003u;      /* Status bit 20 set, Command IO|MEM */
+  current[1]=0x100000u;          /* decode cleared by the detaching driver */
+  assert(NormalizeMasterAfterStop()==EFI_SUCCESS);
+  assert(decode_writes==1 && (current[1]&0xffffu)==0x3u);
+  assert(Plan.master_normalized && !Gu.retained);
+
+  /* Clearing only one of the two enable bits is the same fact. */
+  reset_case(2u);
+  Plan.config[1]=0x100003u;
+  current[1]=0x100002u;
+  assert(NormalizeMasterAfterStop()==EFI_SUCCESS);
+  assert(decode_writes==1 && (current[1]&0xffffu)==0x3u);
+
+  /* A decode bit being SET is not the detach letting go, and never accepted. */
+  reset_case(2u);
+  Plan.config[1]=0x100000u;
+  current[1]=0x100003u;
+  assert(NormalizeMasterAfterStop()!=EFI_SUCCESS);
+  assert(decode_writes==0);
+
+  /* Another word changing at the same time is drift, not a detach. */
+  reset_case(2u);
+  Plan.config[1]=0x100003u;
+  current[1]=0x100000u;
+  current[2]=0xdeadbeefu;
+  assert(NormalizeMasterAfterStop()==EFI_NOT_READY);
+  assert(decode_writes==0);
+
+  /* The read-only Status half changing is not ours to explain either. */
+  reset_case(2u);
+  Plan.config[1]=0x100003u;
+  current[1]=0x101000u;
+  assert(NormalizeMasterAfterStop()==EFI_NOT_READY);
+  assert(decode_writes==0);
+
+  /* A write that fails, or a readback that does not match, refuses. */
+  reset_case(2u);
+  Plan.config[1]=0x100003u;
+  current[1]=0x100000u;
+  decode_fail=1;
+  assert(NormalizeMasterAfterStop()==EFI_NOT_READY);
+  assert(decode_writes==1);
+
+  reset_case(2u);
+  Plan.config[1]=0x100003u;
+  current[1]=0x100000u;
+  decode_readback_lies=1;
+  assert(NormalizeMasterAfterStop()==EFI_NOT_READY);
+  assert(decode_writes==1);
+
+  puts("STATUS=COMPLETE PASS=18 REAL_PCI_MASTER_TRANSITION_CASES");
   return 0;
 }
 """
@@ -202,6 +304,7 @@ class ActualMasterTransitionTests(unittest.TestCase):
                          source_body("TxPending"),
                          source_body("ConfigStablePostStop"),
                          source_body("WaitTxPendingClear"),
+                         source_body("RestoreDecodeClearedByDetach"),
                          source_body("NormalizeMasterAfterStop")]),
         )
         compiler = os.environ.get("CC", "gcc")
@@ -220,7 +323,7 @@ class ActualMasterTransitionTests(unittest.TestCase):
                 timeout=10, check=False,
             )
             self.assertEqual(execution.returncode, 0, execution.stderr)
-            self.assertIn("STATUS=COMPLETE PASS=11", execution.stdout)
+            self.assertIn("STATUS=COMPLETE PASS=18", execution.stdout)
 
 
 if __name__ == "__main__":

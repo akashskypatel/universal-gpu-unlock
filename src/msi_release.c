@@ -996,6 +996,57 @@ static BOOLEAN DecodeMask(const UINT32 c[64],UINT64 *mask) {
 }
 /* Change only the selected card's Bus Master bit after vendor Stop.
  * No raw PCI writes, no new bus master enable, and no unverified peer drift. */
+/* The vendor's Stop() is entitled to disable the card's IO and memory decode,
+ * and on this bench it does: RUN0012 and RUN0013 are the first boots that got
+ * this far, and both show the PCI Command word going 0x0003 -> 0x0000 at
+ * 0000:01:00.0 as the driver detaches. The post-Stop drift rule then refused the
+ * image's own release step: a driver that was told to let go did what it is
+ * supposed to, and the image called that drift.
+ *
+ * The rule is not relaxed. Every other word still has to match the capture, the
+ * only tolerated difference is those two enable bits being CLEAR (never set), and
+ * the Command register is written back to the captured value and read back before
+ * the rest of the path is allowed to compare anything. So the snapshot becomes
+ * true again instead of being excused, and a change the image did not cause still
+ * refuses exactly as it did before.
+ */
+static BOOLEAN RestoreDecodeClearedByDetach(UINT32 config[64]) {
+  EFI_PCI_IO_PROTOCOL *io=NULL;
+  if(!Plan.pci)return FALSE;
+  if(Interface(Plan.pci,&PciGuid,(VOID **)&io)!=EFI_SUCCESS||io!=Gu.pci||
+     !io->Pci.Write||!io->Pci.Read)return FALSE;
+  if(Plan.stage!=3||Plan.claimed||Gu.flrs)return FALSE;
+  UINT32 drift=config[1]^Plan.config[1];
+  /* Only the Command word may differ, only in bits 0..1, and only by clearing
+   * them: a bit that changed must be absent from the value read now. */
+  if(!drift||(drift&~0x3U)||(config[1]&drift))return FALSE;
+  /* Status is read-only: a change there is not the detach's to explain. */
+  if((config[1]>>16)!=(Plan.config[1]>>16))return FALSE;
+  for(UINTN i=0;i<64;i++)
+    if(i!=1&&config[i]!=Plan.config[i])return FALSE;
+  UINT32 before=config[1];
+  UINT16 want=(UINT16)(Plan.config[1]&0xffffU);
+  UINT16 value=want;
+  EFI_STATUS s=io->Pci.Write(io,EfiPciIoWidthUint16,4,1,&value);
+  if(EFI_ERROR(s)) {
+    NOTE("PCI decode restore refused: offset=0x4 captured=%#x now=%#x status=%#llx\n",
+      Plan.config[1],before,(unsigned long long)s);
+    return FALSE;
+  }
+  UINT16 readback=0;
+  s=io->Pci.Read(io,EfiPciIoWidthUint16,4,1,&readback);
+  if(EFI_ERROR(s)||readback!=want) {
+    NOTE("PCI decode restore refused: offset=0x4 captured=%#x now=%#x readback=%#x status=%#llx\n",
+      Plan.config[1],before,(unsigned)readback,(unsigned long long)s);
+    return FALSE;
+  }
+  config[1]=(config[1]&0xffff0000U)|readback;
+  NOTE("PCI decode restored: offset=0x4 captured=%#x before=%#x after=%#x "
+       "ACCEPTED=1 CAUSED_BY=driver-detach\n",
+    Plan.config[1],before,config[1]);
+  return TRUE;
+}
+
 static EFI_STATUS NormalizeMasterAfterStop(VOID) {
   UINT32 config[64];UINT64 before=0,after=0;
   const UINT64 master=EFI_PCI_IO_ATTRIBUTE_BUS_MASTER;
@@ -1003,6 +1054,12 @@ static EFI_STATUS NormalizeMasterAfterStop(VOID) {
      Gu.owned||Gu.fault||Gu.flrs!=0||Plan.master_normalized)return EFI_NOT_READY;
   if(GuVerifyActivePeers(Plan.table)!=EFI_SUCCESS)return EFI_NOT_READY;
   EFI_STATUS s=ReadConfigMode(config,TRUE);
+  /* One explained exception, and only one: our own final detach cleared the
+   * card's IO and memory decode. Restore it through the same config space, then
+   * run the unchanged rule over the restored snapshot. */
+  if(s==EFI_SUCCESS&&!ConfigStablePostStop(config)&&RestoreDecodeClearedByDetach(config)) {
+    s=ReadConfigMode(config,TRUE);
+  }
   if(s!=EFI_SUCCESS||!ConfigStablePostStop(config))return EFI_NOT_READY;
   if(!Gu.pci->Attributes)return EFI_UNSUPPORTED;
   s=Gu.pci->Attributes(Gu.pci,EfiPciIoAttributeOperationGet,0,&before);

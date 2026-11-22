@@ -127,6 +127,18 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
 }
 #endif
 
+/* The outcomes an operator can be told apart: a missing resident driver file, a
+ * full Driver table, a platform that will not take the variable, and everything
+ * else. driver_nvram.c logs the file it opened beside this. */
+static const char *DxeInstallReason(EFI_STATUS s) {
+  if(s==EFI_NOT_FOUND)return "DRIVER_FILE_ABSENT";
+  if(s==EFI_OUT_OF_RESOURCES)return "NO_FREE_DRIVER_SLOT";
+  if(s==EFI_UNSUPPORTED)return "PLATFORM_REFUSED";
+  if(s==EFI_ACCESS_DENIED)return "OWNED_SLOT_LOCKED";
+  if(s==EFI_COMPROMISED_DATA)return "NVRAM_ENTRY_INVALID";
+  return "UNEXPECTED";
+}
+
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(!image||!t||!t->BootServices||!t->RuntimeServices||!t->RuntimeServices->GetVariable)return EFI_INVALID_PARAMETER;
@@ -252,7 +264,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
     } else {
 
-      GuLog("ERROR: Failed to install DXE Driver: %#llx\n", (unsigned long long)s);
+      /* Name the reason, not only the status: RUN0014 answered this line with
+       * `0x800000000000000e` and nothing an operator could act on. */
+      GuLog("DXE_INSTALL=FAILED STATUS=%#llx REASON=%s\n",
+            (unsigned long long)s,DxeInstallReason(s));
 
       GuBootSay(L"\r\n\r\n[ERROR] Failed to install DXE Driver to NVRAM!\r\n"
 

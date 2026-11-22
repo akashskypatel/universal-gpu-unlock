@@ -3043,3 +3043,33 @@ A2 (build-time ESP GUID), A5 (Turing payload), A6 (asset install/hash
 pinning), A7 (persisted state/rollback), A8 (watchdog recovery), and every
 class-C item that needs hardware remain exactly as inventoried above, except
 where §11.11 and §11.12 record what did change.
+
+### 11.52 — U/P was the detach's own decode clear; I was a missing staged file
+
+RUN0012 and RUN0013 (`physical-actuate-0002` and `-0003`) reached the same
+`driver-release` refusal. In both, the vendor driver's final `Stop()` changed
+PCI Command from `0x100003` to `0x100000`, clearing I/O and memory decode; the
+post-Stop snapshot gate treated that expected detach effect as unexplained drift
+and stopped with `EFI_NOT_READY` before `S3_SCRIPT=1`. The matching observations
+make a timing race unlikely. The gate itself remains strict: the implementation
+restores the captured Command word only when the sole difference is bits 0–1
+cleared on the final unclaimed, non-FLR stage, verifies the write by readback,
+then re-runs the existing full snapshot check. Any other changed word, a set bit,
+a changed Status half, or a failed readback still refuses.
+
+RUN0014 (`physical-actuate-0004`) is a different failure: the pre-existing
+`EFI_NOT_FOUND` from the resident DXE driver lookup means
+`\EFI\Drivers\AdaUnlockDxe.efi` was absent on the image's volume. The
+`actuate-one-target` package does not stage that file; the diagnostic now says
+`REASON=DRIVER_FILE_ABSENT` and directs the operator to stage a `dxe-*` variant
+beside the image or skip I. It also names the driver-file lookup stage and the
+DXE installation status. This is an actionable packaging/setup finding, not a
+PCI failure.
+
+The U/P fix and I diagnostic are covered by host tests and the simulator; the
+three bench captures are archived and scored. RUN0012 plus RUN0014 satisfy the
+five actuate log gates as a pair, but neither capture verifies the new code:
+`HARDWARE_VERIFIED=0` remains the evidence boundary. Re-run only after selecting
+the PCH-side ASPM control for `04:00.0`, a documented Link Control write on the
+chipset link, or single-target-only operation. Do not infer a settings change
+or claim a repaired physical transaction from these logs.

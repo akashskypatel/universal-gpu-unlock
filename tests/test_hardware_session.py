@@ -18,6 +18,7 @@ the second honest against the first:
 """
 from pathlib import Path
 import hashlib
+import pathlib
 import json
 import re
 import subprocess
@@ -496,6 +497,38 @@ class AStoppedRunIsEvidenceAndNeverAPass(unittest.TestCase):
         for run in self.runs:
             self.assertIn(run["id"], self.doc)
             self.assertIn(run["verdict"], self.doc)
+
+
+class TheFirstCompletedActuateStage(unittest.TestCase):
+    """A5 needs the boot after, so an actuate stage is scored as a pair: the run
+    that started the step and the run whose boot record shows what came of it.
+    RUN0012 + RUN0014 are the first pair on this bench that satisfies all five
+    gates - which is not the same as an unlock, and the verdict says so
+    (`HARDWARE_VERIFIED=0`)."""
+
+    PAIR = ("tests/data/hardware_session/physical-actuate-0002.txt",
+            "tests/data/hardware_session/physical-actuate-0004.txt")
+    VERDICT = "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=0"
+
+    def test_the_pair_scores_all_five_actuate_gates(self):
+        result = run_verifier(*[str(ROOT / name) for name in self.PAIR], "--stage", "actuate")
+        self.assertIn(self.VERDICT, result.stdout.splitlines())
+        for gate in ("A1_WAIVER_RECORDED_ONCE", "A2_STOP_CONTRACT_CAPTURED",
+                     "A3_ONE_ORDERED_STEP_STARTED", "A4_STEP_TERMINATED",
+                     "A5_NEXT_BOOT_READ_THE_RECORD"):
+            self.assertIn("GATE %s STAGE=actuate RESULT=PASS" % gate, result.stdout, gate)
+
+    def test_either_half_alone_does_not(self):
+        # The pair is the unit because neither half is the stage: the first run has
+        # no next boot, and the second has no transaction.
+        for name in self.PAIR:
+            result = run_verifier(str(ROOT / name), "--stage", "actuate")
+            self.assertNotIn(self.VERDICT, result.stdout.splitlines(), name)
+
+    def test_the_pair_is_in_the_document(self):
+        self.assertIn("The first actuate stage that satisfied all five gates", DOC)
+        for name in self.PAIR:
+            self.assertIn(pathlib.Path(name).name.replace(".txt", ""), DOC)
 
 
 class TheGatesAreSatisfiableByAHealthyRun(unittest.TestCase):

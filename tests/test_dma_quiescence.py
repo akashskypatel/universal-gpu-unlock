@@ -102,16 +102,25 @@ typedef struct EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 struct EFI_BOOT_SERVICES { EFI_STATUS (*Stall)(UINTN Microseconds); };
 typedef struct { EFI_BOOT_SERVICES *BootServices; } EFI_SYSTEM_TABLE;
 
+typedef void *EFI_HANDLE;
 typedef struct EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
+typedef struct {
+  EFI_STATUS (*Read)(EFI_PCI_IO_PROTOCOL *, UINT8, UINT64, UINTN, VOID *);
+  EFI_STATUS (*Write)(EFI_PCI_IO_PROTOCOL *, UINT8, UINT64, UINTN, VOID *);
+} EFI_PCI_IO_ACCESS;
 struct EFI_PCI_IO_PROTOCOL {
   EFI_STATUS (*Attributes)(EFI_PCI_IO_PROTOCOL *, int, UINT64, UINT64 *);
+  EFI_PCI_IO_ACCESS Pci;
 };
+#define EfiPciIoWidthUint16 1
+#define EFI_ERROR(s) ((s) != EFI_SUCCESS)
 
 static struct {
   int ready, mutated, stage, claimed, master_normalized;
   UINT32 config[64];
   UINT16 pcie_cap;
   EFI_SYSTEM_TABLE *table;
+  EFI_HANDLE pci;
 } Plan;
 static struct { int owned, fault, retained, flrs; EFI_PCI_IO_PROTOCOL *pci; } Gu;
 
@@ -130,6 +139,33 @@ static EFI_SYSTEM_TABLE table;
 static EFI_STATUS Stall(UINTN Microseconds) {
   stalls++;
   (void)Microseconds;
+  return EFI_SUCCESS;
+}
+
+/* The decode restore reaches the Command register through the device handle.
+ * This harness keeps the card's Command word fixed, so the restore stays inert
+ * here; `tests/test_pci_master_transition.py` drives it directly. */
+static int PciGuid;
+static EFI_STATUS Interface(EFI_HANDLE handle, void *guid, VOID **out) {
+  (void)guid;
+  if (handle != (EFI_HANDLE)&pci || !out) return EFI_UNSUPPORTED;
+  *out = &pci;
+  return EFI_SUCCESS;
+}
+static unsigned decode_writes;
+static EFI_STATUS PciWrite(EFI_PCI_IO_PROTOCOL *self, UINT8 width, UINT64 offset,
+                           UINTN count, VOID *buffer) {
+  (void)self;
+  if (width != EfiPciIoWidthUint16 || offset != 4u || count != 1u || !buffer) return EFI_UNSUPPORTED;
+  decode_writes++;
+  current[1] = (current[1] & 0xFFFF0000u) | (*(UINT16 *)buffer);
+  return EFI_SUCCESS;
+}
+static EFI_STATUS PciRead(EFI_PCI_IO_PROTOCOL *self, UINT8 width, UINT64 offset,
+                          UINTN count, VOID *buffer) {
+  (void)self;
+  if (width != EfiPciIoWidthUint16 || offset != 4u || count != 1u || !buffer) return EFI_UNSUPPORTED;
+  *(UINT16 *)buffer = (UINT16)(current[1] & 0xFFFFu);
   return EFI_SUCCESS;
 }
 
@@ -210,6 +246,10 @@ static void Reset(int pending, unsigned command) {
   Plan.table = &table;
   attrs = command;
   pci.Attributes = Attributes;
+  pci.Pci.Read = PciRead;
+  pci.Pci.Write = PciWrite;
+  Plan.pci = (EFI_HANDLE)&pci;
+  decode_writes = 0;
   Gu.pci = &pci;
   peer_fail = disable_fail = read_fail = 0;
   fail_after = -1;
@@ -342,7 +382,8 @@ def harness() -> str:
     code = "\n\n".join(
         source_body(name)
         for name in ("ConfigStable", "TxPending", "ConfigStablePostStop",
-                     "WaitTxPendingClear", "NormalizeMasterAfterStop")
+                     "WaitTxPendingClear", "RestoreDecodeClearedByDetach",
+                     "NormalizeMasterAfterStop")
     )
     return HARNESS.replace("#define __POLL_BOUND__", "#define GU_TX_PENDING_POLLS %s"
                            % source_define("GU_TX_PENDING_POLLS")).replace(

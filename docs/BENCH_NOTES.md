@@ -180,3 +180,25 @@ Two properties are deliberate and worth keeping: the trace lines print **even
 while the image is silent** (one line per phase, not a dump), and the
 `WATCHDOG BOUND=` line now appears *before* the preparation, so a boot that stalls
 before the operator menu still says whether it was bounded.
+
+## RUN0012–RUN0014: detach drift and the DXE install failure
+
+RUN0012 (`U`) and RUN0013 (`P`) stop identically at `driver-release`: the
+vendor driver's final `Stop()` clears I/O and memory decode in PCI Command
+(`0x100003` to `0x100000`). The refusal was the snapshot gate rejecting that
+known detach side effect, not a flaky link. The code now restores the captured
+Command word only for that narrowly constrained final detach case, checks the
+readback, and then applies the original full snapshot rule unchanged.
+
+RUN0014 (`I`) instead reports `EFI_NOT_FOUND` while looking for
+`\\EFI\\Drivers\\AdaUnlockDxe.efi` on the boot image's volume. The
+`actuate-one-target` package does not include the `dxe-*` driver variant. Stage
+that variant beside the image before choosing I, or skip I; the diagnostic now
+identifies the missing file and stage. RUN0012 plus RUN0014 pass the five log
+verification gates as a pair; this is not a physical verification of the code
+change (`HARDWARE_VERIFIED=0`).
+
+The next permitted physical run still depends on the unresolved link-setting
+choice for `04:00.0`: PCH-side ASPM control, a documented chipset-link Link
+Control write, or single-target-only operation. No BIOS setting or link write
+was changed based on these captures.

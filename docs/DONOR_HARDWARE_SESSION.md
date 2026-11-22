@@ -1074,11 +1074,14 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 
 ## Runs that stopped without terminating
 
-A boot that ends mid-file is evidence, and it is the kind that used to survive only as a message in a chat. These entries pin the digest and the facts of a run that did not finish, and they carry no gate claim: `tests/test_hardware_session.py` re-scores each one and fails the suite if any of them ever reads PASS. The bucket is separate from the captured runs on purpose - `captured_runs` exists to show that the gates *are* satisfiable by a healthy boot, so a run that stopped belongs here and not there.
+A boot that ends mid-file is evidence, and it is the kind that used to survive only as a message in a chat. These entries pin the digest and the facts of a run that did not finish, and they carry no gate claim: `tests/test_hardware_session.py` re-scores each one and fails the suite if any of them ever reads PASS. The bucket is separate from the captured runs on purpose - `captured_runs` exists to show that the gates *are* satisfiable by a healthy boot, so a run that stopped belongs here and not there. The first actuate stage that satisfied all five gates is not a single file: A5 needs the boot after, so `physical-actuate-0002` (the U boot) and `physical-actuate-0004` (the boot whose record shows what came of it) are scored together by the suite, and it re-scores both halves alone to show neither is the stage.
 
 | Run | Image | Stage | Lines | SHA-256 of the stored log | Verdict |
 | --- | --- | --- | --- | --- | --- |
 | `physical-actuate-0001` | `actuate-one-target -SelectionBdf '0000:01:00.0' (built with -CapturedPromReference)` | `actuate` | 13 | `ab438a12406dc88bf79d12d90a8a6d0898b51172d4d7968d9234ba38a597da8c` | `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=4` |
+| `physical-actuate-0002` | `actuate-one-target -SelectionBdf '0000:01:00.0' (built with -CapturedPromReference), operator pressed U` | `actuate` | 153 | `e5a67c9b0157ff7332a0b47c780e251545a703ee813971d0b25697494a7243ff` | `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A5_NEXT_BOOT_READ_THE_RECORD SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=1` |
+| `physical-actuate-0003` | `actuate-one-target -SelectionBdf '0000:01:00.0' (built with -CapturedPromReference), operator pressed P` | `actuate` | 153 | `de6ee78fd935d7963988d4a2e327f1a14ccc3ec31ea2e32f844708440f4da922` | `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A5_NEXT_BOOT_READ_THE_RECORD SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=1` |
+| `physical-actuate-0004` | `actuate-one-target -SelectionBdf '0000:01:00.0' (built with -CapturedPromReference), operator pressed I` | `actuate` | 123 | `855ec11c6cdcc61a6215fbe156e06b2a1143af187e4783ba7fe1afc140e62ece` | `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=4` |
 
 ### `physical-actuate-0001`
 
@@ -1105,6 +1108,82 @@ It prints `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC
 *History:* RUN0011: the first waived one-target boot on this bench, after RUN0010 admitted 0000:01:00.0. Nothing else on the machine changed between the two runs.
 
 *What it does not show:* which phase it stopped in - that is the whole finding, and it is what the TRACE lines in the next build exist to answer. It also cannot say whether the machine hung or was simply reading 80 MiB from a slow stick: gate A4 fails because no STOP line was written, and A3 fails because no SELECTED_GPU_STEP line was either, so the transaction never started and nothing was mutated
+
+### `physical-actuate-0002`
+
+*File:* `tests/data/hardware_session/physical-actuate-0002.txt` — 10836 bytes stored, 10836 as captured, 153 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-21. *Bench:* the same machine, booted from the stick with the trace build; the operator pressed U at the menu and the run ended by itself with a STOP line.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-actuate-0002.txt --stage actuate
+```
+
+It prints `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A5_NEXT_BOOT_READ_THE_RECORD SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=1`.
+
+*What this log puts on paper:*
+
+* `TRACE STEP=2 PHASE=asset-read INDEX=2 NAME=gpu-unlock/610.43.03/gsp_ga10x.bin BYTES=84277400` — the trace answered RUN0011's question in one line: 84,277,400 bytes were read from the stick between ELAPSED=0s and ELAPSED=85s. That band is the minute of black screen, and it is a media read, not a hang
+* `WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD PHASE=pre-prepare` — reported before the preparation, so the record says this boot had no timer bound at all - the read could not have been interrupted by one
+* `GuAd104Prepare: SUCCESS` — the preparation completed on real silicon: PROM identity verified against the captured reference, FWSEC parsed, selectors latched. This is the first waived boot to reach the transaction
+* `MSI driver detach return: stage=3 status=0` — the card's UEFI driver was detached successfully at the third and final stage
+* `PCI config drift refused: offset=0x4 captured=0x100003 now=0x100000 bits=0x3 flrs=0` — the finding: the detaching driver cleared the card's IO and memory decode (Command 0x0003 -> 0x0000), and the post-Stop drift rule refused it. The image refused its own release step
+* `STOP: stage=driver-release status=0x8000000000000006 mutated=1 retained=0 fault=0` — terminated cleanly: status EFI_NOT_READY, `mutated=1` because the MSI release records its first mutation before DisconnectController - the FWSEC transaction never started, and `retained=0 fault=0` says nothing was left live
+
+*History:* RUN0012: the U boot. Scored together with RUN0014 it satisfies all five actuate gates (A1 waiver, A2 stop contract, A3 step started, A4 step terminated, A5 the next boot read the record) - the first time a waived boot has gone that far on this bench.
+
+*What it does not show:* that the transaction can complete: it reached driver release and stopped, because of the decode drift in the image's own rule. It also cannot say whether the drift is this card's driver or this board's firmware; only that it is deterministic between U and P
+
+### `physical-actuate-0003`
+
+*File:* `tests/data/hardware_session/physical-actuate-0003.txt` — 10914 bytes stored, 10914 as captured, 153 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-21. *Bench:* the same machine and the same build, operator pressed P (transaction plus S3 resume script).
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-actuate-0003.txt --stage actuate
+```
+
+It prints `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A5_NEXT_BOOT_READ_THE_RECORD SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=1`.
+
+*What this log puts on paper:*
+
+* `TRACE STEP=15 PHASE=manual-choice KEY=P TRANSACTION=1 S3_SCRIPT=1` — the P key was taken: the run intended to register the S3 resume script as well
+* `PCI config drift refused: offset=0x4 captured=0x100003 now=0x100000 bits=0x3 flrs=0` — identical to the U boot at the identical point, which makes the decode drift deterministic rather than a race
+* `STOP: stage=driver-release status=0x8000000000000006 mutated=1 retained=0 fault=0` — P and U stop in the same place: the S3 script is never reached, so the two keys are not yet distinguishable on this bench
+
+*History:* RUN0013: the P boot, byte-for-byte the same refusal as the U boot before it. Nothing about the S3 policy has been exercised against silicon.
+
+*What it does not show:* whether the S3 script can be registered at all - the run stops before registration. It also adds no new information about the drift; its value is that it repeats it
+
+### `physical-actuate-0004`
+
+*File:* `tests/data/hardware_session/physical-actuate-0004.txt` — 8823 bytes stored, 8823 as captured, 123 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-21. *Bench:* the boot after RUN0012/RUN0013: the machine was power-cycled, the stick re-booted, and the operator pressed I to install the resident DXE driver.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-actuate-0004.txt --stage actuate
+```
+
+It prints `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=4`.
+
+*What this log puts on paper:*
+
+* `BOOT_STATE PRESENT=1 PHASE=2 BOOT_COUNT=2 STATUS=0x8000000000000006 DEVICE=2684 BDF=0000:01:00.0 ARMED=0` — gate A5: the boot record written before RUN0012's first mutation was read back by the next boot, naming the device, the status it ended with, and that it never armed. This is the only state that survives a failed boot, and it worked
+* `Operator I: Requesting DXE Driver NVRAM installation` — the I path was entered deliberately, after two transaction attempts
+* `ERROR: Failed to install DXE Driver: 0x800000000000000e` — EFI_NOT_FOUND from the open of the resident driver file: `\\EFI\\Drivers\\AdaUnlockDxe.efi` was not on the volume the application was launched from, because the actuate-one-target deploy stages the application and not the DXE driver
+* `ACTIVE_PREPARE=INVENTORIED NVIDIA_COUNT=2 REQUESTED=1 READ_ONLY=1` — the machine still enumerates both cards and the selected list is unchanged after a power cycle - the recovery the bench reports is in the log
+
+*History:* RUN0014: the boot after the two transaction attempts. It satisfies A5 for the actuate stage and records the I attempt's failure.
+
+*What it does not show:* why the driver file was absent beyond the fact that this deploy does not stage it; it cannot say whether an install would succeed if the file were there
 
 ## Advancing between stages: `donor_gate.py`
 
