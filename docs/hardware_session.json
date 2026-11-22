@@ -1270,7 +1270,7 @@
     {
       "id": "LINK_POLICY_OBSERVED",
       "token": "PCI_LINK=%s WIDTH=%u",
-      "why": "the admission policy observes the PCIe link before an unlock may start and names what it saw: negotiated and advertised width and speed, ASPM request, training, data-link state, the four sticky Device Status error bits, and the slot's hot-plug and surprise flags. AER lives in extended config space, which this image does not snapshot, so it is named as unobserved. The same line is printed by the read-only preparation path as ACTIVE_LINK[n], so the bench can be corrected without an image that may write",
+      "why": "the admission policy observes the PCIe link before an unlock may start and names what it saw: negotiated and advertised width and speed, ASPM request, training, the data-link state (reported as `UP`, not weighed - `UP_WEIGHED=0`), all four sticky Device Status error bits (with the uncorrected `FER`/`NFER` refusing and `CE`/`UR` recorded), and the slot's hot-plug and surprise flags. AER lives in extended config space, which this image does not snapshot, so it is named as unobserved. The same line is printed by the read-only preparation path as ACTIVE_LINK[n], so the bench can be corrected without an image that may write",
       "emitter": "src/gpu_discovery.c"
     },
     {
@@ -1434,7 +1434,7 @@
             "why": "the report finished with no withheld lines, so an absent line above is absent from the run, not from the buffer"
           }
         ],
-        "history": "First scored against gate R2 as it then stood: `FAIL FIRST_FAILED=R2_ENUMERATION_COMPLETED`, because R2 required `PCI_OBSERVATION_ONLY=1 ...`, a line the strict collector prints only after it has already failed. The gate was wrong, not the run (§11.29). R2 now requires the strict walk's scope line, the owner-inventory line that only its success branch prints, and the report's final line; the suite re-scores this file on every run, so a gate that no healthy machine can satisfy fails the tests instead of the operator.",
+        "history": "First scored against gate R2 as it then stood: `FAIL FIRST_FAILED=R2_ENUMERATION_COMPLETED`, because R2 required `PCI_OBSERVATION_ONLY=1 ...`, a line the strict collector prints only after it has already failed. The gate was wrong, not the run (\u00a711.29). R2 now requires the strict walk's scope line, the owner-inventory line that only its success branch prints, and the report's final line; the suite re-scores this file on every run, so a gate that no healthy machine can satisfy fails the tests instead of the operator.",
         "does_not_show": "that the card is safe, that anything was unlocked, or that Windows accepted the device: no Stop was called, every eligibility flag in the log is zero, both driver-image signatures are unverified, and `hardware_verified` stays false for every item in the inventory."
       },
       {
@@ -1750,7 +1750,7 @@
             "why": "the app left through its failure path with `mutated=0 retained=0 fault=0` - the halt marker after a refusal, not a Stop contract"
           }
         ],
-        "history": "The first physical preparation run, and the run that found the second unreachable-token gate: P1 required `ACTIVE_APP=PREPARATION_ONLY`, which `src/app.c` prints only after `GuDiscoverSingleGpu` returns success, the very call that refuses here. The gate was wrong, not the image (§11.30); P1 now requires the refusal line discovery prints. With the identity rule in `tools/donor_gate.py` reading the selected card rather than the census, `-0001` and this file compose into the first `DONOR_GATE VERDICT=GO` this workbench has produced from real logs.",
+        "history": "The first physical preparation run, and the run that found the second unreachable-token gate: P1 required `ACTIVE_APP=PREPARATION_ONLY`, which `src/app.c` prints only after `GuDiscoverSingleGpu` returns success, the very call that refuses here. The gate was wrong, not the image (\u00a711.30); P1 now requires the refusal line discovery prints. With the identity rule in `tools/donor_gate.py` reading the selected card rather than the census, `-0001` and this file compose into the first `DONOR_GATE VERDICT=GO` this workbench has produced from real logs.",
         "does_not_show": "that the card can be actuated, or that preparation's conclusions are right: it shows the entrypoint refused, the preflight completed, and nothing was mutated. No Stop, no detach, no FLR, no firmware write appears in these 12 lines."
       },
       {
@@ -1980,7 +1980,7 @@
         "observations": [
           {
             "token": "VRAM_BLOCK_PROBE_ROM GPU=4090 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x2684 LIVE_DEVICE=0x2684 MATCH=1",
-            "why": "the megabyte at BAR0 + 0x300000 on the 4090, compared against the device half of the identity. MATCH=1 is the fix §11.37 made, confirmed on the card it was written for: the earlier build printed the vendor half and read 0"
+            "why": "the megabyte at BAR0 + 0x300000 on the 4090, compared against the device half of the identity. MATCH=1 is the fix \u00a711.37 made, confirmed on the card it was written for: the earlier build printed the vendor half and read 0"
           },
           {
             "token": "VRAM_BLOCK_PROBE_ROM GPU=3080 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x220a LIVE_DEVICE=0x220a MATCH=1",
@@ -2007,7 +2007,7 @@
             "why": "the same for the 3080. A read-only run that changed a digest would be a finding; this one did not"
           }
         ],
-        "history": "The defect §11.37 found is fixed here and the boot was repeated, so this run answers two questions at once: MATCH=1 on both cards, and the two PROM files whose digests match the lines that describe them. The images themselves were parsed off the bench by tests/test_fwsec_v2.c and the result is recorded in `prom_captures`: both carry a version-3 FWSEC-FRTS descriptor with a non-zero ucode id and 384 bytes per signature, which is what GuAd104FwsecMatches() requires.",
+        "history": "The defect \u00a711.37 found is fixed here and the boot was repeated, so this run answers two questions at once: MATCH=1 on both cards, and the two PROM files whose digests match the lines that describe them. The images themselves were parsed off the bench by tests/test_fwsec_v2.c and the result is recorded in `prom_captures`: both carry a version-3 FWSEC-FRTS descriptor with a non-zero ucode id and 384 bytes per signature, which is what GuAd104FwsecMatches() requires.",
         "does_not_show": "that the files are authentic firmware (SIGNATURE_AUTHENTICATED=0 on every line), or that the signature slot the fuse word selects exists for either card: the transaction reads BAR0 0x8241e0 for ucode 9 and that word has never been read on this bench. The 1 MiB images are NVIDIA firmware and are not stored here, only their digests and the fields the parser reported."
       },
       {
@@ -2023,7 +2023,7 @@
         "line_endings": "LF as captured",
         "bench": "same bench and cabling as -0006 to -0009; first boot of the build that reads the fuse window",
         "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=7 GATES_FAILED=0",
-        "history": "The boot §11.40 asked for. Sixteen words per card at BAR0 0x8241c0, printed with the version gpu_unlock_fuse_version() computes, and gate R7 scores the read. The read set the probe already covered is unchanged - the fuse window is not part of it, which is why the totals are the same as -0008 and -0009 - and the sixteen extra reads are the only new ones.",
+        "history": "The boot \u00a711.40 asked for. Sixteen words per card at BAR0 0x8241c0, printed with the version gpu_unlock_fuse_version() computes, and gate R7 scores the read. The read set the probe already covered is unchanged - the fuse window is not part of it, which is why the totals are the same as -0008 and -0009 - and the sixteen extra reads are the only new ones.",
         "observations": [
           {
             "token": "VRAM_BLOCK_PROBE_FUSE_END GPU=4090 BDF=0000:01:00.0 BASE=0x8241c0 WORDS=16 READ=16 FAILED=0 UCODE9_OFFSET=0x8241e0 UCODE9_RAW=0x00000001 UCODE9_VERSION=1 UCODE9_ACCESS=STATE UCODE9_UNREAD=0",
@@ -2169,6 +2169,74 @@
         ],
         "history": "the same boot as RUN0006, run on the preparation image so the link can be inspected without an image that may write. It reproduces RUN0006's refusal exactly.",
         "does_not_show": "which of the four conditions to fix first, or whether a cold boot was taken before it: the log is one snapshot. It also cannot say whether the sticky bits are set by firmware enumeration on every boot, which is the next question"
+      },
+      {
+        "id": "physical-prepare-0006",
+        "captured": "2026-11-21",
+        "image": "prep-selected (built with -CapturedPromReference)",
+        "stage": "prepare",
+        "file": "tests/data/hardware_session/physical-prepare-0006.txt",
+        "sha256": "def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6",
+        "bytes": 1584,
+        "captured_bytes": 1584,
+        "lines": 17,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "the same machine as RUN0007, after the BIOS setting `Advanced \\ PCIe Subsystem Settings` -> `ASPM Control for CPU PCIe` was set to `Disabled` and saved; warm boot, no AC removal (see RUN0007 for the earlier `Auto` value). Windows `PCI Express -> Link State Power Management` was already `Off`",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=0 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1",
+            "why": "the CPU-attached 4090 now reads ASPM=0 where RUN0007 read ASPM=2: the photographed BIOS setting controls this card's Link Control, so `Auto` had been the source of the L1 request. ERRORS=9 with ERROR_CE=1 ERROR_UR=1 and ERROR_FATAL=0 ERROR_NONFATAL=0: the sticky bits present are exactly the two that mean `corrected` and `unsupported request`, which is what made the policy's treatment of those bits a decision to take rather than a fault to fix"
+          },
+          {
+            "token": "ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=4 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1",
+            "why": "the 3080 still reads ASPM=2: the knob is scoped to CPU lanes by its own name, and this card sits behind the chipset, so the request is programmed somewhere this board does not expose as an ASPM entry. It also still negotiates WIDTH=4 of MAX_WIDTH=16"
+          },
+          {
+            "token": "ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1",
+            "why": "the refusal comes from the preparation-only path before GuInit, so nothing reached an unlock call"
+          },
+          {
+            "token": "STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0",
+            "why": "mutated=0: a read-only boot, even though the ASPM request changed between RUN0007 and this run - the change was made by firmware from a BIOS setting, not by this image"
+          }
+        ],
+        "history": "RUN0008: the first boot after the BIOS change. It is the run that separates \"the knob does not work\" from \"the knob does not reach this card\": the CPU-attached 4090 moved from ASPM=2 to ASPM=0 and the chipset-attached 3080 did not move at all.",
+        "does_not_show": "that a warm boot is enough to clear anything: it is not, which is why RUN0009 repeats this after a Fundamental Reset. Also does not show whether the sticky bits are firmware enumeration's, since that needs a cold boot to test"
+      },
+      {
+        "id": "physical-prepare-0007",
+        "captured": "2026-11-21",
+        "image": "prep-selected (built with -CapturedPromReference)",
+        "stage": "prepare",
+        "file": "tests/data/hardware_session/physical-prepare-0007.txt",
+        "sha256": "def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6",
+        "bytes": 1584,
+        "captured_bytes": 1584,
+        "lines": 17,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "the same machine and the same BIOS setting as RUN0008, but after `shutdown /s`, AC removed for 60 s and the stick booted from the firmware boot menu with no Windows boot in between: a Fundamental Reset",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=0 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1",
+            "why": "ASPM=0 survives a Fundamental Reset: the BIOS value is what firmware programs at every boot, so a warm reboot and a cold boot agree here. The sticky bits do not clear: CE and UR are set again before the image runs"
+          },
+          {
+            "token": "ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=4 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1",
+            "why": "the 3080 still reads ASPM=2 after a full AC removal, which rules out a stale value left by an earlier Windows session and leaves firmware-enumeration or a PCH-side setting as the cause"
+          },
+          {
+            "token": "ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1",
+            "why": "the refusal comes from the preparation-only path before GuInit, so nothing reached an unlock call"
+          },
+          {
+            "token": "STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0",
+            "why": "mutated=0: a read-only boot, even though the ASPM request changed between RUN0007 and this run - the change was made by firmware from a BIOS setting, not by this image"
+          }
+        ],
+        "history": "RUN0009, and the run that decides the question RUN0008 could not: whether `ERRORS=9` is left over from an earlier session or written by firmware on every boot. The output is byte-identical to RUN0008 (same sha256), so the answer is the second one.",
+        "does_not_show": "that the bits can be cleared at all on this board; it shows they are re-set before the image runs. It also cannot say which firmware phase writes them, only that it happens before this image's first config read"
       }
     ]
   },

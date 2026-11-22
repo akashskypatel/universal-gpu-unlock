@@ -515,6 +515,8 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-prepare-0004` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 15 | `a454aa546d8db3be4e3e8e9b99488bc4f6ff29388449f96ab3c08be4ef80b96c` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-admission-0001` | `actuate-sequence (built with -CapturedPromReference)` | `admission` | 12 | `2d0da33237793e2888b103b38d53bf61d575af91d7d7ab54fb747ce155de1db0` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-prepare-0005` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `77481b33b59e5afaa0056673f6f51a1666d253b1fd6685fa380411d4c9d65ee7` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-prepare-0006` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-prepare-0007` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -994,6 +996,56 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 
 *What it does not show:* which of the four conditions to fix first, or whether a cold boot was taken before it: the log is one snapshot. It also cannot say whether the sticky bits are set by firmware enumeration on every boot, which is the next question
 
+### `physical-prepare-0006`
+
+*File:* `tests/data/hardware_session/physical-prepare-0006.txt` — 1584 bytes stored, 1584 as captured, 17 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-21. *Bench:* the same machine as RUN0007, after the BIOS setting `Advanced \ PCIe Subsystem Settings` -> `ASPM Control for CPU PCIe` was set to `Disabled` and saved; warm boot, no AC removal (see RUN0007 for the earlier `Auto` value). Windows `PCI Express -> Link State Power Management` was already `Off`.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-prepare-0006.txt --stage prepare
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=0 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1` — the CPU-attached 4090 now reads ASPM=0 where RUN0007 read ASPM=2: the photographed BIOS setting controls this card's Link Control, so `Auto` had been the source of the L1 request. ERRORS=9 with ERROR_CE=1 ERROR_UR=1 and ERROR_FATAL=0 ERROR_NONFATAL=0: the sticky bits present are exactly the two that mean `corrected` and `unsupported request`, which is what made the policy's treatment of those bits a decision to take rather than a fault to fix
+* `ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=4 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1` — the 3080 still reads ASPM=2: the knob is scoped to CPU lanes by its own name, and this card sits behind the chipset, so the request is programmed somewhere this board does not expose as an ASPM entry. It also still negotiates WIDTH=4 of MAX_WIDTH=16
+* `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1` — the refusal comes from the preparation-only path before GuInit, so nothing reached an unlock call
+* `STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0` — mutated=0: a read-only boot, even though the ASPM request changed between RUN0007 and this run - the change was made by firmware from a BIOS setting, not by this image
+
+*History:* RUN0008: the first boot after the BIOS change. It is the run that separates "the knob does not work" from "the knob does not reach this card": the CPU-attached 4090 moved from ASPM=2 to ASPM=0 and the chipset-attached 3080 did not move at all.
+
+*What it does not show:* that a warm boot is enough to clear anything: it is not, which is why RUN0009 repeats this after a Fundamental Reset. Also does not show whether the sticky bits are firmware enumeration's, since that needs a cold boot to test
+
+### `physical-prepare-0007`
+
+*File:* `tests/data/hardware_session/physical-prepare-0007.txt` — 1584 bytes stored, 1584 as captured, 17 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-21. *Bench:* the same machine and the same BIOS setting as RUN0008, but after `shutdown /s`, AC removed for 60 s and the stick booted from the firmware boot menu with no Windows boot in between: a Fundamental Reset.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-prepare-0007.txt --stage prepare
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=0 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1` — ASPM=0 survives a Fundamental Reset: the BIOS value is what firmware programs at every boot, so a warm reboot and a cold boot agree here. The sticky bits do not clear: CE and UR are set again before the image runs
+* `ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=4 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=2 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1 ERROR_NONFATAL=0 ERROR_FATAL=0 ERROR_UR=1` — the 3080 still reads ASPM=2 after a full AC removal, which rules out a stale value left by an earlier Windows session and leaves firmware-enumeration or a PCH-side setting as the cause
+* `ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1` — the refusal comes from the preparation-only path before GuInit, so nothing reached an unlock call
+* `STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0` — mutated=0: a read-only boot, even though the ASPM request changed between RUN0007 and this run - the change was made by firmware from a BIOS setting, not by this image
+
+*History:* RUN0009, and the run that decides the question RUN0008 could not: whether `ERRORS=9` is left over from an earlier session or written by firmware on every boot. The output is byte-identical to RUN0008 (same sha256), so the answer is the second one.
+
+*What it does not show:* that the bits can be cleared at all on this board; it shows they are re-set before the image runs. It also cannot say which firmware phase writes them, only that it happens before this image's first config read
+
 ## Advancing between stages: `donor_gate.py`
 
 One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.
@@ -1220,7 +1272,7 @@ Printed as `NOTE` lines. An absent advisory is a finding to explain, not a failu
 * `WRITE_SET_NOT_READABLE` — `VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE` (src/gpu_topology_efi.c): the probe met words inside the actuating write set that the engine returns its own inaccessible() shape for: the read succeeded at the PCI I/O level and the value is not device state. Printed once per card that has any, so a run cannot look fully observed while part of the write set was refused
 * `SUPPLEMENTARY_PCI_OBSERVATION` — `PCI_OBSERVATION_ONLY=1 NOT_TOPOLOGY=1 CAN_DETACH=0 CAN_UNLOCK=0` (src/gpu_topology_efi.c): printed by `ReportPciEvidence`, which runs only when the strict collector failed (`if(!pci_ok)` in `GuTopoDiagnosticMain`). A healthy run does not print it, so its presence in a log is a finding to explain - and gate R2 required it until the first physical run showed that no healthy machine can satisfy that
 * `ROM_WINDOW_UNREADABLE` — `ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x` (src/gpu_topology_efi.c): the probe's ROM read did not produce a structural readout: the header word was not a ROM signature, or the megabyte copy failed. Printed with a REASON= field, once per card, so an unreadable window is a line in the log instead of a missing one
-* `LINK_POLICY_OBSERVED` — `PCI_LINK=%s WIDTH=%u` (src/gpu_discovery.c): the admission policy observes the PCIe link before an unlock may start and names what it saw: negotiated and advertised width and speed, ASPM request, training, data-link state, the four sticky Device Status error bits, and the slot's hot-plug and surprise flags. AER lives in extended config space, which this image does not snapshot, so it is named as unobserved. The same line is printed by the read-only preparation path as ACTIVE_LINK[n], so the bench can be corrected without an image that may write
+* `LINK_POLICY_OBSERVED` — `PCI_LINK=%s WIDTH=%u` (src/gpu_discovery.c): the admission policy observes the PCIe link before an unlock may start and names what it saw: negotiated and advertised width and speed, ASPM request, training, the data-link state (reported as `UP`, not weighed - `UP_WEIGHED=0`), all four sticky Device Status error bits (with the uncorrected `FER`/`NFER` refusing and `CE`/`UR` recorded), and the slot's hot-plug and surprise flags. AER lives in extended config space, which this image does not snapshot, so it is named as unobserved. The same line is printed by the read-only preparation path as ACTIVE_LINK[n], so the bench can be corrected without an image that may write
 * `LINK_ADMISSION_PREVIEW` — `ACTIVE_LINK[%zu] BDF=%04x:%02x:%02x.%x PCI_LINK=%s` (src/gpu_discovery.c): the read-only preparation path prints the admission policy's own verdict for each selected card, one per card, before it refuses. ADMISSION=REFUSE here means the waived image would refuse the same way, so a waived boot can be avoided until both cards read ADMISSION=ALLOW
 
 ## Never established by a log

@@ -162,9 +162,20 @@ GU_LINK_VERDICT GuCheckLinkState(const UINT32 Config[64], UINT16 Pcie, GU_LINK *
   LinkCaps = Config[(Offset + 0x0cU) / 4U];
   SlotCaps = Config[(Offset + 0x14U) / 4U];
 
-  /* Device Status: a card that already logged one of the sticky PCIe errors is
-   * not a card to start an unlock on. Clearing them belongs to the platform,
-   * which this image does not own. */
+  /* Device Status bits 3..0 are URD, FER, NFER and CED. Only the two that mean
+   * an *uncorrected* error refuse: a fatal or non-fatal error is an event the
+   * link did not recover from, and an unlock must not start on one.
+   *
+   * The other two are not refusals, and the bench settled that rather than an
+   * argument. RUN0008 and RUN0009 are two boots of the preparation image on this
+   * machine, the second after a full AC removal with the CPU-PCIe ASPM request
+   * disabled: on both boots, both cards, before any operating system ran, Device
+   * Status read 0x9 - correctable error and unsupported request - with a x16 gen4
+   * link trained. Firmware enumeration generates them, a correctable error is
+   * corrected by definition, and the sticky bits can only be cleared by writing
+   * Device Status (a config write this path does not make) or by a Fundamental
+   * Reset that had just been performed. Refusing them refused every card on this
+   * bench on every boot. */
   Link.errors = (UINT8)(DeviceStatus & 0x0fU);
   Link.trained = (UINT8)((LinkStatus & (1U << 11U)) == 0);
   Link.up = (UINT8)((LinkStatus & (1U << 13U)) != 0);
@@ -177,10 +188,16 @@ GU_LINK_VERDICT GuCheckLinkState(const UINT32 Config[64], UINT16 Pcie, GU_LINK *
   Link.surprise = (UINT8)((SlotCaps >> 5U) & 1U);
   *Out = Link;
 
-  if (Link.errors != 0) return GU_LINK_ERROR_LOGGED;
+  if ((Link.errors & 0x06U) != 0) return GU_LINK_ERROR_LOGGED;
   if (Link.aspm != 0) return GU_LINK_ASPM_ENABLED;
   if (!Link.trained) return GU_LINK_NOT_TRAINED;
-  if (!Link.up) return GU_LINK_DOWN;
+  /* Link Status DLLLA is reported, not weighed. It reads 0 on this bench on a
+   * link that is trained, negotiating x16 gen4, and answering these very config
+   * reads - one boot even observed the ASPM request change the firmware had just
+   * made, which is only possible from a live snapshot. A zero here therefore does
+   * not describe a link that is down, and refusing on it refused every card on
+   * this machine (RUN0007 to RUN0009). GU_LINK_DOWN stays in the vocabulary so
+   * logs and receipts from earlier builds still decode. */
   if (Link.width == 0 || Link.speed == 0 || Link.speed == 0x0fU) return GU_LINK_UNUSABLE;
   return GU_LINK_OK;
 }

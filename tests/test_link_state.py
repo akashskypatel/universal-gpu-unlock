@@ -140,14 +140,27 @@ int main(void) {
   EXPECT(link.errors == 0x02 && link.aspm == 1);
   EXPECT(strcmp(GuLinkReason(GU_LINK_ERROR_LOGGED), "PCIE_ERROR_LOGGED") == 0);
 
-  /* 3. Each sticky error bit is its own refusal. */
+  /* 3. Only the uncorrected bits refuse. A fatal or non-fatal error is an event
+   *    the link did not recover from; a correctable error and an unsupported
+   *    request are recorded and not weighed, because firmware enumeration sets
+   *    them on this bench on every boot (RUN0008 and RUN0009: 0x9 on both cards,
+   *    before any operating system ran, after a full AC removal). */
   for (UINT8 bit = 0; bit < 4; ++bit) {
     card = Healthy();
     card.errors = (UINT8)(1u << bit);
     Card(c, 0x50, card);
-    EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_ERROR_LOGGED);
+    GU_LINK_VERDICT expected = (bit == 1u || bit == 2u) ? GU_LINK_ERROR_LOGGED : GU_LINK_OK;
+    EXPECT(GuCheckLinkState(c, 0x50, &link) == expected);
     EXPECT(link.errors == (UINT8)(1u << bit));
   }
+  /* The state the bench actually presents: correctable error and unsupported
+   * request together, on a trained x16 gen4 link. It is reported, and it is not
+   * a refusal. */
+  card = Healthy();
+  card.errors = 0x09;
+  Card(c, 0x50, card);
+  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_OK);
+  EXPECT(link.errors == 0x09 && GuLinkAccepted(GU_LINK_OK));
 
   /* 4. An ASPM request this image does not manage is refused, with the state
    *    reported so a log says which request it was. */
@@ -158,8 +171,10 @@ int main(void) {
   EXPECT(link.aspm == 3 && link.errors == 0);
   EXPECT(strcmp(GuLinkReason(GU_LINK_ASPM_ENABLED), "ASPM_ENABLED") == 0);
 
-  /* 5. An untrained link is refused before the down check, and a trained but
-   *    inactive link is refused as down. */
+  /* 5. An untrained link is refused. A trained link whose DLLLA bit reads 0 is
+   *    not: the bit reads 0 on this bench over a link that is negotiating x16
+   *    gen4 and answering the config read that produced this snapshot, so it is
+   *    reported (link.up) and the verdict ignores it. */
   card = Healthy();
   card.trained = 0;
   card.up = 0;
@@ -169,8 +184,8 @@ int main(void) {
   card = Healthy();
   card.up = 0;
   Card(c, 0x50, card);
-  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_DOWN);
-  EXPECT(link.trained == 1 && link.up == 0);
+  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_OK);
+  EXPECT(link.trained == 1 && link.up == 0 && link.width == 16 && link.speed == 3);
 
   /* 6. Trained, active, and still useless: no negotiated width or no speed. */
   card = Healthy();

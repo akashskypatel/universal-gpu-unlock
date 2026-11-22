@@ -460,6 +460,77 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.49 — a fundamental reset does not clear the sticky bits, so the gate refused every healthy machine
+
+Two more preparation boots arrived, byte-identical to each other
+(`def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6`, 17 lines):
+`physical-prepare-0006` was taken after the photographed BIOS setting was changed
+to `Disabled` and saved, and `physical-prepare-0007` after `shutdown /s`, 60 s
+without AC power, and the stick booted from the firmware menu with no Windows boot
+in between - a Fundamental Reset. Both are stored, re-scored by
+`tests/test_hardware_session.py`, and both say:
+
+| | 4090 `0000:01:00.0` | 3080 `0000:04:00.0` |
+| --- | --- | --- |
+| RUN0008, warm, `ASPM Control for CPU PCIe = Disabled` | `ASPM=0 TRAINED=1 UP=0 ERRORS=9` | `ASPM=2 TRAINED=1 UP=0 ERRORS=9` |
+| RUN0009, after 60 s without AC | `ASPM=0 TRAINED=1 UP=0 ERRORS=9` | `ASPM=2 TRAINED=1 UP=0 ERRORS=9` |
+| RUN0007, `Auto` (for comparison) | `ASPM=2 TRAINED=1 UP=0 ERRORS=9` | `ASPM=2 TRAINED=1 UP=0 ERRORS=9` |
+
+**Three things are now settled, and one of them was a decision.**
+
+1. **The BIOS knob works and is scoped to CPU lanes, exactly as its name says.**
+   The CPU-attached 4090 moved `ASPM=2 → ASPM=0`; the chipset-attached 3080 did
+   not move. So `Auto` was the source of the 4090's L1 request, and the 3080's
+   request is programmed somewhere this board exposes under a different name -
+   which is a fact about the board, not a second knob to guess at.
+2. **A Fundamental Reset does not clear `CE|UR`.** Both cards read `ERRORS=9` on
+   the first boot after full AC removal, before any operating system ran. Since the
+   bits survive the only event that can clear them (besides a Device Status write,
+   which the admission path never makes), they are written by firmware enumeration
+   on every boot on this machine. The gate as written - refuse any non-zero Device
+   Status - therefore refused both cards on every boot of every healthy run, and
+   the fourth condition could not be reached on this bench by any bench action.
+3. **`UP=0` is not a consequence of ASPM**, which retires the hypothesis §11.47
+   recorded: the 4090 keeps `UP=0` with the request disabled, on a x16 gen4 link
+   that is answering the config read that produced the snapshot.
+
+**The decision, taken in the open.** `GuCheckLinkState` now weighs the uncorrected
+bits only: `FER` and `NFER` refuse (`GU_LINK_ERROR_LOGGED`), `CE` and `UR` are
+recorded and do not. `DLLLA` is recorded as `UP` and not weighed, and the log says
+so with `UP_WEIGHED=0`. This is not a relaxation of an operating condition: a
+correctable error is corrected by definition, an unsupported request is what a
+device answers when firmware enumerates something it does not implement, and a
+snapshot read *over* the link is evidence the link carried it - whereas `FER` and
+`NFER` still refuse, and so do ASPM, no-training and no-negotiated-width. What it
+replaces is a condition that no healthy machine can satisfy, which is the failure
+mode the captured-runs record exists to make visible rather than to paper over.
+
+Receipts, so the change cannot be quieter than the record:
+
+* `src/checks.c` carries the evidence for both rules in the code beside them, and
+  `src/checks.h` states what is weighed and what is only recorded.
+* `tests/test_link_state.py` pins the split bit by bit: `FER` and `NFER` refuse,
+  `CE` and `UR` do not, the bench's exact `0x09` on a trained x16 gen4 link is
+  `GU_LINK_OK`, and a trained link with `DLLLA=0` is accepted while its `up` field
+  is still reported as read.
+* `tests/test_hardware_session.py` pins the log tokens (`OK_ERRORS` computed over
+  `0x06`, `OK_LINK` in place of `OK_UP`, `UP_WEIGHED=0` in both emitters) and the
+  verdict order that the single `PCI_LINK=` reason still follows.
+* `docs/BENCH_NOTES.md` names, for each condition, where it is set on this board
+  and what proves it moved - including that `CE|UR` cannot be moved.
+
+**What still refuses, and is not being relaxed.** The 3080 reads `ASPM=2` after a
+full AC removal, so firmware programs it at every boot on the link behind the
+chipset. Clearing it would mean writing Link Control - a config write on a live
+link - which this image does not do and which the record would have to name
+explicitly. Two ways forward, and they are the user's to choose: find the PCH-side
+control on this board, or run the 4090 alone (`-SelectionBdf '0000:01:00.0'`,
+`actuate-one-target`), where every weighed condition already reads clean.
+
+**Unchanged.** `hardware_verified` stays false for all 43 entries, the counts stay
+11 met / 15 partial / 17 not started, `C5` stays `none`, and no run has yet
+mutated a card.
+
 ### 11.48 — the board's one ASPM knob is `Auto`, and `Auto` is not `Disabled`
 
 The bench was read back and photographed: `Advanced \ PCIe Subsystem Settings` has
@@ -505,10 +576,10 @@ ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=4 MAX_WIDTH=16
 different slots, present the *same* sticky bits (correctable error and unsupported
 request), the *same* ASPM L1 request and the *same* inactive data-link bit. A
 per-card fault does not look like that; a platform state does. The two conditions
-are also probably one fact observed twice: with ASPM L1 enabled the link idles in
-L1, and Link Status reports the data-link layer inactive there. A bench fix that
-only clears the error bits would still meet `ASPM_ENABLED`, and one that only
-disables ASPM may still meet `PCIE_ERROR_LOGGED`.
+looked like one fact observed twice: with ASPM L1 enabled the link idles in L1,
+and Link Status reports the data-link layer inactive there. §11.49 disproved that
+reading - with the ASPM request disabled the bit still read `UP=0` - so the link
+bit is now reported and not weighed.
 
 **A second, unrelated observation.** The 3080 negotiates `WIDTH=4` of `MAX_WIDTH=16`
 while the 4090 negotiates x16. No earlier log recorded link width at all, so this
@@ -519,7 +590,7 @@ dual transaction depends on.
 
 **What changed.** Both link lines now weigh the four conditions separately, so a
 refusal says how many things are wrong instead of only the first:
-`OK_ERRORS=0 OK_ASPM=0 OK_TRAINED=1 OK_UP=0` in this log - three of four fail, and
+`OK_ERRORS=0 OK_ASPM=0 OK_TRAINED=1 OK_LINK=1` in this log - two of four fail, and
 a fixer can see all three at once. The order in `GuCheckLinkState` is unchanged and
 a test pins it, because that order is what the single `PCI_LINK=` verdict reports.
 A new advisory, `LINK_ADMISSION_PREVIEW`, makes the point that `ADMISSION=REFUSE`
@@ -1988,10 +2059,10 @@ it finds, in this order:
 
 | Verdict | What was read | Token in the log |
 | --- | --- | --- |
-| `GU_LINK_ERROR_LOGGED` | Device Status `CED`/`NFER`/`FER`/`URD` (sticky, we do not clear them) | `PCIE_ERROR_LOGGED` |
+| `GU_LINK_ERROR_LOGGED` | Device Status `FER`/`NFER` - the *uncorrected* bits (sticky, we do not clear them). `CED`/`URD` are reported and not weighed: §11.49 shows firmware sets them on every boot of this bench, and a correctable error is corrected by definition | `PCIE_ERROR_LOGGED` |
 | `GU_LINK_ASPM_ENABLED` | Link Control ASPM request, `L0s`/`L1` | `ASPM_ENABLED` |
 | `GU_LINK_NOT_TRAINED` | Link Status bit 11 | `LINK_NOT_TRAINED` |
-| `GU_LINK_DOWN` | Link Status bit 13 (DLL link active) | `LINK_DOWN` |
+| `GU_LINK_DOWN` | not returned: Link Status bit 13 (DLL link active) is reported as `UP` and not weighed, because it reads 0 over links that are demonstrably carrying traffic (§11.49). Kept in the vocabulary so older logs still decode | `LINK_DOWN` |
 | `GU_LINK_UNUSABLE` | negotiated width 0, or speed 0/reserved | `LINK_UNUSABLE` |
 | `GU_LINK_ABSENT` | no usable capability offset | `PCIE_CAPABILITY_ABSENT` |
 

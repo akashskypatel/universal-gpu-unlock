@@ -20,8 +20,18 @@ BOOLEAN GuCheckConfigInitialMaster(const UINT32 Config[64], UINTN Segment,
  * The admission policy above reads the capability chain; it never read the
  * link. A card can be a supported display function, in D0, with MSI off, and
  * still be attached over a link that is not trained, that firmware left in an
- * ASPM state this image does not manage, or that has already logged a PCIe
- * error. Those are the conditions an unlock must not start on.
+ * ASPM state this image does not manage, or that has already logged an
+ * uncorrected PCIe error. Those are the conditions an unlock must not start on.
+ *
+ * What is *not* one, and why: Device Status bits 0 and 3 (correctable error and
+ * unsupported request) are recorded and not refused. A correctable error is
+ * corrected by definition; an unsupported request is what a device answers when
+ * a request names something it does not implement, and firmware enumeration
+ * produces them. Two boots on this bench - the second after a full AC removal
+ * with the ASPM request disabled - showed 0x9 on both cards before any operating
+ * system ran, so refusing them refused every card on every boot. DLLLA (Link
+ * Status bit 13) is likewise recorded and not weighed: it reads 0 on a trained,
+ * negotiating link that is answering the read itself.
  *
  * The extended capability space (where AER lives) starts at 0x100 and is not
  * part of the 256-byte snapshot, so AER is reported as unobservable rather
@@ -41,7 +51,7 @@ typedef enum {
   GU_LINK_ERROR_LOGGED, /* the card already recorded a PCIe error */
   GU_LINK_ASPM_ENABLED, /* firmware asked for L0s/L1 on a link we do not manage */
   GU_LINK_NOT_TRAINED,
-  GU_LINK_DOWN,
+  GU_LINK_DOWN,          /* retained for logs from builds that weighed DLLLA */
   GU_LINK_UNUSABLE      /* trained and active, but no width or no speed */
 } GU_LINK_VERDICT;
 

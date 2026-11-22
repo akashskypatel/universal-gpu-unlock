@@ -202,11 +202,12 @@ class TheReadOnlyPathReportsTheSameLinkPolicy(unittest.TestCase):
 
     def test_each_condition_is_reported_separately(self):
         """A verdict names the first failure; the operator needs all four."""
-        for token in ("OK_ERRORS=%u OK_ASPM=%u OK_TRAINED=%u OK_UP=%u",):
+        for token in ("OK_ERRORS=%u OK_ASPM=%u OK_TRAINED=%u OK_LINK=%u UP_WEIGHED=0",):
             self.assertEqual(self.source.count(token), 2,
                              "both link lines must weigh the same four conditions")
-        for expr in ("(unsigned)(link.errors==0)", "(unsigned)(link.aspm==0)",
-                     "(unsigned)(link.trained!=0)", "(unsigned)(link.up!=0)"):
+        for expr in ("(unsigned)((link.errors&0x06U)==0)", "(unsigned)(link.aspm==0)",
+                     "(unsigned)(link.trained!=0)",
+                     "(unsigned)(link.width!=0&&link.speed!=0&&link.speed!=0x0fU)"):
             self.assertEqual(self.source.count(expr), 2, expr)
 
     def test_the_four_conditions_are_the_ones_the_verdict_uses(self):
@@ -214,7 +215,8 @@ class TheReadOnlyPathReportsTheSameLinkPolicy(unittest.TestCase):
         body = checks[checks.index("GU_LINK_VERDICT GuCheckLinkState("):]
         body = body[:body.index("BOOLEAN GuLinkAccepted")]
         order = [body.index(marker) for marker in
-                 ("Link.errors != 0", "Link.aspm != 0", "!Link.trained", "!Link.up")]
+                 ("(Link.errors & 0x06U) != 0", "Link.aspm != 0", "!Link.trained",
+                  "Link.width == 0")]
         self.assertEqual(order, sorted(order), "the policy order is what the log explains")
 
     def test_the_observation_does_not_refuse_anything(self):
@@ -246,7 +248,7 @@ class TheBenchNotesNameWhereEachConditionIsSet(unittest.TestCase):
             self.assertIn(token, self.notes, token)
 
     def test_it_names_all_four_conditions_and_their_flags(self):
-        for token in ("OK_ERRORS", "OK_ASPM", "OK_TRAINED", "OK_UP",
+        for token in ("OK_ERRORS", "OK_ASPM", "OK_TRAINED", "OK_LINK",
                       "Fundamental Reset", "AC removal", "Link Status bit 13"):
             self.assertIn(token, self.notes, token)
 

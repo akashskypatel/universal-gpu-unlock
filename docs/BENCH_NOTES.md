@@ -1,9 +1,10 @@
 # Bench notes: the four link conditions and where they are set
 
-The admission policy refuses an unlock on a PCIe link that has logged an error,
-that asks for ASPM, that is not trained, or that does not report itself up
-(`GuCheckLinkState`, `src/checks.c`). `RUN0006` and `RUN0007` are the first two
-logs where that policy met the bench, and both cards failed three of the four:
+The admission policy refuses an unlock on a PCIe link that has logged an
+*uncorrected* error, that asks for ASPM, that is not trained, or that negotiated no
+width or speed (`GuCheckLinkState`, `src/checks.c`). `RUN0006` and `RUN0007` are the
+first two logs where that policy met the bench, and both cards failed three of the
+five things it reads:
 
 ```
 ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=PCIE_ERROR_LOGGED WIDTH=16 MAX_WIDTH=16
@@ -39,14 +40,17 @@ to record rather than a second setting to guess at.
 
 | condition | `OK_` flag | where it comes from | what changes it | proof |
 | --- | --- | --- | --- | --- |
-| sticky error bits (CE/UR) | `OK_ERRORS` | Device Status (config 0x06), set by hardware and by firmware enumeration | a **Fundamental Reset** — full AC removal, not a reboot. The image will not write Device Status: that is a config write, and the admission path makes none | `ERRORS=0` and `ERROR_CE=0 ERROR_UR=0` |
+| uncorrected error bits (FER/NFER) | `OK_ERRORS` | Device Status (config 0x06): bits 2 and 1 | a **Fundamental Reset** — full AC removal, not a reboot. The image will not write Device Status: that is a config write, and the admission path makes none | `OK_ERRORS=1`, and `ERROR_FATAL=0 ERROR_NONFATAL=0` |
+| corrected / unsupported bits (CE/UR) | none: recorded as `ERROR_CE`, `ERROR_UR` | Device Status bits 0 and 3 | firmware enumeration sets them on this machine on every boot (RUN0008, RUN0009), so there is nothing to change; a correctable error is corrected by definition | they are in the log and do not refuse |
 | ASPM request | `OK_ASPM` | Link Control (config 0x10), programmed by firmware or the OS | the BIOS knob above; for an OS-programmed value, the Windows power plan's *PCI Express → Link State Power Management* | `ASPM=0` |
 | training | `OK_TRAINED` | Link Status bit 11 | seating, slot, riser, the card itself | `TRAINED=1` |
-| data-link active | `OK_UP` | Link Status bit 13 | usually a consequence of the two above: a link idling in L1 reports the data-link layer inactive | `UP=1` with `ASPM=0` |
+| negotiated width and speed | `OK_LINK` | Link Status bits 3:0 and 9:4 | training, the slot's lane wiring, the card | `WIDTH` and `SPEED` non-zero, `SPEED` not the reserved `0xf` |
+| data-link active | reported as `UP`, **not weighed** (`UP_WEIGHED=0`) | Link Status bit 13 | nothing: RUN0008 and RUN0009 read `UP=0` on the 4090 with `ASPM=0`, x16 gen4 trained, while answering the very config read that produced the snapshot | `UP` is in the log; the verdict does not use it |
 
-`UP=0` next to `ASPM=2` is probably one fact, not two. If `UP` is still `0` with
-`ASPM=0` and `TRAINED=1`, the link is not coming up and that is a hardware
-finding.
+`UP=0` was *assumed* to be a consequence of the L1 request. RUN0008 disproved
+that: with the CPU-PCIe ASPM request disabled, the 4090 read `ASPM=0 TRAINED=1
+UP=0` while a x16 gen4 link was answering the read. The bit is therefore recorded
+and not weighed - see the corrections below.
 
 ## The order that produces a clean reading
 
@@ -72,3 +76,34 @@ change belongs next to them: the setting, its old and new value, the cold-boot
 protocol, and the two `ACTIVE_LINK` lines that followed. A link state is not a
 property of the card; it is a property of what the machine did before the image
 ran, which is why it goes in the log rather than in the code.
+
+## What RUN0008 and RUN0009 settled
+
+Two boots of the preparation image, the second after a full AC removal with the
+CPU-PCIe ASPM request set to `Disabled`:
+
+| | 4090 `0000:01:00.0` | 3080 `0000:04:00.0` |
+| --- | --- | --- |
+| RUN0008 (before the power cycle) | `ASPM=0 ERRORS=9 UP=0` | `ASPM=2 ERRORS=9 UP=0` |
+| RUN0009 (after 60 s without AC) | `ASPM=0 ERRORS=9 UP=0` | `ASPM=2 ERRORS=9 UP=0` |
+
+1. **The BIOS knob works and is scoped exactly as the label says.** The
+   CPU-attached 4090 went from `ASPM=2` to `ASPM=0`; the chipset-attached 3080 did
+   not move, so its L1 request comes from somewhere this board does not expose as
+   an "ASPM" entry.
+2. **A full AC removal does not clear the sticky error bits.** Both cards read
+   `ERRORS=9` on the first boot after a Fundamental Reset, before any operating
+   system ran. Firmware enumeration sets them, on every boot, on this machine.
+3. **`UP=0` is not caused by ASPM** - the 4090 keeps it with the request disabled.
+
+Consequences, taken deliberately:
+
+* The admission policy now refuses on the **uncorrected** bits only (`FER`,
+  `NFER`). `CE` and `UR` are recorded (`ERROR_CE`, `ERROR_UR`) and not weighed: a
+  correctable error is corrected by definition, and an unsupported request is what
+  a device answers when firmware enumerates something it does not implement.
+* `DLLLA` is reported (`UP`) and not weighed (`UP_WEIGHED=0`), because a snapshot
+  read over the link is evidence that the link carried it.
+
+What still refuses on this bench: the 3080's `ASPM=2`. That is one condition, on
+one card, and it is not something the image may fix by writing Link Control.
