@@ -1118,7 +1118,7 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
           observed++;
           continue;
         }
-        GU_LINK link;
+        GU_LINK link = {0};   /* a log that never reached the check prints zeros, not stack */
         GU_LINK_VERDICT verdict=GuCheckLinkState(storage.observed[index].config,
                                                  link_caps.pcie,&link);
         GuLog("ACTIVE_LINK[%zu] BDF=%04x:%02x:%02x.%x PCI_LINK=%s WIDTH=%u MAX_WIDTH=%u "
@@ -1199,7 +1199,7 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
    * weighed, for the reasons GuCheckLinkState gives. AER lives in extended config space,
    * which this snapshot does not reach, so it is named as unobserved. */
   {
-    GU_LINK link;
+    GU_LINK link = {0};   /* a log that never reached the check prints zeros, not stack */
     GU_LINK_VERDICT verdict=GuCheckLinkState(config,caps.pcie,&link);
     GuLog("PCI_LINK=%s WIDTH=%u MAX_WIDTH=%u SPEED=%u MAX_SPEED=%u ASPM=%u "
           "TRAINED=%u UP=%u ERRORS=%u ERROR_CE=%u ERROR_NONFATAL=%u ERROR_FATAL=%u "
