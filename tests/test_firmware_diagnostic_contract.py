@@ -26,6 +26,28 @@ class DiagnosticContract(unittest.TestCase):
         self.assertNotIn("Pci.Write(",read)
         self.assertNotIn("DisconnectController(",read)
 
+    def test_gop_mode_framebuffer_descriptor_and_edid_are_observed_read_only(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        report=source.split("static void ReportEdid(",1)[1]
+        for token in ("OWNER_CLASS=%s", "MODE_DESCRIPTOR=VALID", "RESOLUTION=%ux%u",
+                      "FB_BASE=%#llx", "FB_SIZE=%#llx", "FB_DESCRIPTOR_PRESENT=%u",
+                      "GOP_EDID[%zu] TYPE=%s", "MANUFACTURER=%s PRODUCT=%#x",
+                      "FRAMEBUFFER_NOT_TOUCHED MODE_NOT_SET NO_STOP_EVIDENCE=1"):
+            self.assertIn(token,report)
+        self.assertIn("if(gop_ok)ReportGopDisplayState(bs);",source)
+        self.assertNotIn("->SetMode(",report)
+        self.assertNotIn("->Blt(",report)
+        self.assertNotIn("Mem.Write(",report)
+        self.assertIn("SERIAL_OMITTED=1",report)
+
+    def test_headless_diagnostic_requires_durable_logging(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        entry=source.split("EFI_STATUS EFIAPI UefiMain(",1)[1]
+        self.assertIn("#ifndef GU_TOPO_SAVE_LOG",entry)
+        self.assertIn("if(!table->ConOut)return EFI_INVALID_PARAMETER;",entry)
+        self.assertIn("DIAGNOSTIC_OUTPUT SCREEN=%s DURABLE_LOG=%u",entry)
+        self.assertIn("if(gop_ok)ReportGopDisplayState(bs);",entry)
+
     def test_bounded_fwsec_raw_read(self):
         descriptor=C.split("static int descriptor(",1)[1].split("int gpu_unlock_vbios_fwsec(",1)[0]
         self.assertLess(descriptor.index("range(length, off, 44)"),descriptor.index("raw descriptor[0:16]"))

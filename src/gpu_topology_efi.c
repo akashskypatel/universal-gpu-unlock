@@ -63,6 +63,11 @@ static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID TextOutGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID DriverBindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID;
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
+/* EDID interfaces are optional UEFI protocols; keep their tiny wire layout
+ * local so older EDK2 header sets can still build this read-only image. */
+static EFI_GUID EdidActiveGuid={0xbd8c1056,0x9f36,0x44ec,{0x92,0xa8,0xa6,0x33,0x7f,0x81,0x79,0x86}};
+static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,{0xa0,0x49,0x8a,0xd0,0x6c,0x1a,0x66,0xaa}};
+typedef struct { UINT32 SizeOfEdid; UINT8 *Edid; } GU_EDID_PROTOCOL;
 #ifdef GU_MSI_B850_ROM_VARIABLES
 static EFI_GUID LoadedImagePathGuid=EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID;
 #endif
@@ -97,6 +102,7 @@ static EFI_GUID FsGuid=EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 /* Number of formatted lines that could not be published. A dropped line is a
  * diagnostic omission, so it is counted and reported instead of vanishing. */
 static size_t LogDropped;
+static void ReportGopDisplayState(EFI_BOOT_SERVICES *bs);
 
 /* One bounded, format-free marker per capture. The rejected content is never
  * partially published, and this routine cannot recurse through formatting. */
@@ -2711,11 +2717,23 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #ifndef GU_TOPO_SAVE_LOG
   (void)image;
 #endif
-  if(!table || !table->BootServices || !table->ConOut ||
+  if(!table || !table->BootServices ||
      !table->BootServices->LocateHandleBuffer ||
      !table->BootServices->HandleProtocol ||
      !table->BootServices->FreePool)return EFI_INVALID_PARAMETER;
+#ifndef GU_TOPO_SAVE_LOG
+  /* Without a screen or a durable file this standalone image would lose the
+   * observation entirely. Permit headless capture only in the save-log build. */
+  if(!table->ConOut)return EFI_INVALID_PARAMETER;
+#endif
   System=table;bs=table->BootServices;SelfImage=image;
+  Say("DIAGNOSTIC_OUTPUT SCREEN=%s DURABLE_LOG=%u\r\n",
+      table->ConOut&&table->ConOut->OutputString?"AVAILABLE":"UNAVAILABLE",
+#ifdef GU_TOPO_SAVE_LOG
+      1U);
+#else
+      0U);
+#endif
   Say("GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls\r\n");
   Say("READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n");
   pci_ok=CapturePci(bs);
@@ -2756,6 +2774,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   /* A stale GOP census cannot support a final read-only COMPLETE verdict. */
   if(gop_ok)gop_ok=RevalidateGop(bs);
   else Say("GOP_CAPTURE_RECHECK STABLE=0 SKIPPED_INITIAL_CAPTURE_FAILED=1 NON_ATOMIC=1\r\n");
+  if(gop_ok)ReportGopDisplayState(bs);
+  else Say("GOP_DISPLAY_DATA=UNAVAILABLE GOP_CAPTURE_NOT_STABLE=1\r\n");
   console_ok=console_stable;
   error_ok=error_stable;
   Snapshot.console_available=(uint8_t)console_ok;
@@ -2916,4 +2936,94 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   return result==GU_TOPO_COMPLETE?EFI_SUCCESS:EFI_UNSUPPORTED;
 #endif
 #endif
+}
+
+/* Kept after UefiMain so host tests can isolate the pure capture/cleanup
+ * routines without importing GOP/EDID firmware protocol definitions. */
+static void ReportEdid(EFI_BOOT_SERVICES *bs,EFI_HANDLE handle,size_t index,
+                       const char *kind,const EFI_GUID *guid) {
+  GU_EDID_PROTOCOL *protocol=NULL;
+  EFI_STATUS status=bs->HandleProtocol(handle,(EFI_GUID *)guid,(VOID **)&protocol);
+  if(EFI_ERROR(status) || !protocol) {
+    Say("GOP_EDID[%zu] TYPE=%s STATUS=%#llx PRESENT=0 READ_ONLY=1\r\n",
+        index,kind,(unsigned long long)status);
+    return;
+  }
+  if(!protocol->Edid || protocol->SizeOfEdid<128U ||
+     protocol->SizeOfEdid>4096U || (protocol->SizeOfEdid%128U)!=0) {
+    Say("GOP_EDID[%zu] TYPE=%s STATUS=0 SIZE=%u DATA=INVALID_OR_UNBOUNDED READ_ONLY=1\r\n",
+        index,kind,(unsigned)protocol->SizeOfEdid);
+    return;
+  }
+  {
+    const UINT8 *edid=protocol->Edid;
+    UINTN i;
+    UINT8 checksum=0;
+    UINT16 manufacturer=(UINT16)(((UINT16)edid[8]<<8U)|edid[9]);
+    UINT16 product=(UINT16)((UINT16)edid[10]|((UINT16)edid[11]<<8U));
+    UINTN a=(manufacturer>>10U)&31U,b=(manufacturer>>5U)&31U,c=manufacturer&31U;
+    char vendor[4]="???";
+    if(a>=1U&&a<=26U&&b>=1U&&b<=26U&&c>=1U&&c<=26U) {
+      vendor[0]=(char)('A'+a-1U);vendor[1]=(char)('A'+b-1U);
+      vendor[2]=(char)('A'+c-1U);
+    }
+    for(i=0;i<128U;i++)checksum=(UINT8)(checksum+edid[i]);
+    Say("GOP_EDID[%zu] TYPE=%s STATUS=0 SIZE=%u BLOCKS=%u HEADER_VALID=%u BASE_CHECKSUM_VALID=%u MANUFACTURER=%s PRODUCT=%#x READ_ONLY=1 SERIAL_OMITTED=1\r\n",
+        index,kind,(unsigned)protocol->SizeOfEdid,
+        (unsigned)(protocol->SizeOfEdid/128U),
+        (unsigned)(edid[0]==0x00&&edid[1]==0xff&&edid[2]==0xff&&
+                   edid[3]==0xff&&edid[4]==0xff&&edid[5]==0xff&&
+                   edid[6]==0xff&&edid[7]==0x00),
+        (unsigned)(checksum==0),vendor,(unsigned)product);
+  }
+}
+
+/* Report descriptor-level graphics state without setting a mode, issuing a
+ * BLT, mapping/touching the framebuffer, or treating a GOP as a Stop target. */
+static void ReportGopDisplayState(EFI_BOOT_SERVICES *bs) {
+  size_t j;
+  for(j=0;j<Snapshot.gop_count;j++) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=(EFI_GRAPHICS_OUTPUT_PROTOCOL *)Snapshot.gop[j].protocol;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode=gop?gop->Mode:NULL;
+    size_t i,owner_count=0,owner_index=0,nvidia_count=0;
+    const char *owner_class="UNKNOWN";
+    for(i=0;i<Snapshot.pci_count;i++) {
+      const GU_TOPO_PCI *p=&Snapshot.pci[i];
+      if((p->identity.class_code&0xff00U)!=0x0300U ||
+         !GuTopoPathOnController(&p->path,&Snapshot.gop[j].path))continue;
+      owner_count++;
+      owner_index=i;
+      if((p->identity.pci_id&0xffffU)==0x10deU)nvidia_count++;
+    }
+    if(owner_count==1U) {
+      const GU_TOPO_PCI *p=&Snapshot.pci[owner_index];
+      owner_class=(p->identity.pci_id&0xffffU)==0x10deU?"NVIDIA_DISPLAY":"INDEPENDENT_DISPLAY";
+    } else if(owner_count>1U)owner_class=nvidia_count?"AMBIGUOUS_NVIDIA_PATH":"AMBIGUOUS_PATH";
+    Say("GOP_DISPLAY[%zu] HANDLE=%p OWNER_CLASS=%s GRAPHICS_PCI_MATCHES=%zu ",
+        j,Snapshot.gop[j].handle,owner_class,owner_count);
+    if(owner_count==1U) {
+      const GU_GPU_RECORD *id=&Snapshot.pci[owner_index].identity;
+      Say("OWNER_BDF=%04x:%02x:%02x.%u OWNER_ID=%04x:%04x ",
+          (unsigned)id->segment,(unsigned)id->bus,(unsigned)id->device,
+          (unsigned)id->function,(unsigned)(id->pci_id&0xffffU),
+          (unsigned)(id->pci_id>>16));
+    }
+    if(!gop || !mode || !mode->Info || mode->SizeOfInfo<sizeof(EFI_GRAPHICS_OUTPUT_MODE_INFORMATION)) {
+      Say("MODE_DESCRIPTOR=INVALID GOP_PRESENT=%u MODE_PRESENT=%u\r\n",
+          (unsigned)!!gop,(unsigned)!!mode);
+    } else {
+      EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info=mode->Info;
+      unsigned fb_present=(unsigned)(mode->FrameBufferBase!=0 && mode->FrameBufferSize!=0 &&
+                                     info->PixelFormat!=PixelBltOnly);
+      Say("MODE_DESCRIPTOR=VALID MODE=%u MAX_MODE=%u INFO_SIZE=%zu RESOLUTION=%ux%u PIXEL_FORMAT=%u PIXELS_PER_SCANLINE=%u FB_BASE=%#llx FB_SIZE=%#llx FB_DESCRIPTOR_PRESENT=%u READ_ONLY=1\r\n",
+          (unsigned)mode->Mode,(unsigned)mode->MaxMode,(size_t)mode->SizeOfInfo,
+          (unsigned)info->HorizontalResolution,(unsigned)info->VerticalResolution,
+          (unsigned)info->PixelFormat,(unsigned)info->PixelsPerScanLine,
+          (unsigned long long)mode->FrameBufferBase,
+          (unsigned long long)mode->FrameBufferSize,fb_present);
+    }
+    ReportEdid(bs,Snapshot.gop[j].handle,j,"ACTIVE",&EdidActiveGuid);
+    ReportEdid(bs,Snapshot.gop[j].handle,j,"DISCOVERED",&EdidDiscoveredGuid);
+  }
+  Say("GOP_DISPLAY_DATA=DESCRIPTORS_ONLY FRAMEBUFFER_NOT_TOUCHED MODE_NOT_SET NO_STOP_EVIDENCE=1\r\n");
 }

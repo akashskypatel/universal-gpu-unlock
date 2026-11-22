@@ -1,5 +1,36 @@
 # Dynamic read-only NVIDIA GPU and PCI/GOP topology diagnostic
 
+## Fixed-cable display inventory (read-only)
+
+The generic diagnostic now emits one `GOP_DISPLAY[n]` row per captured GOP,
+classifies its graphics-PCI path as NVIDIA, independent display, ambiguous, or
+unknown, and reports the owner BDF when the path has one unambiguous graphics
+controller. It records the current GOP mode descriptor (resolution, pixel
+format, scanline stride, framebuffer base and size), plus optional active and
+discovered EDID manufacturer/product identifiers with base-block header and
+checksum checks. EDID serial numbers are intentionally omitted.
+
+These are **firmware-reported descriptors**, not proof that framebuffer memory
+is mapped/usable or that a physical monitor is attached. `GOP_DISPLAY_DATA`
+explicitly says no framebuffer access, mode set, BLT, Stop, or detach occurred.
+The existing configured `ConOut`/`ErrOut`, text-output openers, and GOP-to-PCI
+path evidence remain separate observations; a GOP or `ConOut` association does
+not alone establish safe driver release.
+
+A `-SaveLog` build can now run even when `SystemTable->ConOut` is absent. It
+records `DIAGNOSTIC_OUTPUT SCREEN=UNAVAILABLE DURABLE_LOG=1` and writes the
+numbered report to the launch volume. A build without durable logging still
+refuses that headless condition, so it cannot silently lose its only output.
+
+For the final cable arrangement, build the generic saved-log image with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog
+```
+
+This first pass remains strictly observational; it does not test a 3080 display
+release or authorize either GPU transaction.
+
 ### Separate SEC2 version-register comparison (opt-in MSI fuse diagnostic)
 
 The first physical fuse log `0031` resolved the production FWSEC/GSP
