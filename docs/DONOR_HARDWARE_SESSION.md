@@ -520,6 +520,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-prepare-0007` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-prepare-0008` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `ac9cf3bb73f56ae4f49008892d06c16535292f5d707eeba0dbad1968e0accc56` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-readonly-0014` | `diag-topology-log` | `readonly` | 241 | `cd5fa956816016380c93aa6e4c87fe9c1ab2c4932774ac02bf1c3f92dd232eea` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0015` | `diag-topology-log` | `readonly` | 193 | `34bdb0494bf2895274020addafd60cd44271d412ae9d7fad80a784fc59a93741` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -1105,6 +1106,38 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FA
 *History:* First captured read-only topology run in which both NVIDIA GPUs have displays connected while the AMD iGPU has none. The diagnostic finds a GOP, ConOut and ErrOut path for each NVIDIA GPU and no independent GOP/console association. The path is therefore classified CONFLICT. The 3080 chipset path still reports ASPM=2. Although the operator reports two displays connected to the 3080, the log has one GOP and one active EDID record for that adapter and does not inventory every physical connector. No controller was stopped and no GPU was changed.
 
 *What it does not show:* that either GOP framebuffer is mapped or usable; which physical display received the most recent console output; that every display connector was enumerated; that an AMD GOP is absent when the 4090 display is removed; or that either NVIDIA driver can safely be released or a firmware transaction can complete.
+
+### `physical-readonly-0015`
+
+*File:* `tests/data/hardware_session/physical-readonly-0015.txt` — 18952 bytes stored, 19145 as captured, 193 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-18. *Bench:* Operator reports three displays connected to the RTX 3080 and none connected to the AMD iGPU or RTX 4090; read-only diagnostic booted from USB..
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0015.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `DIAGNOSTIC_OUTPUT SCREEN=AVAILABLE DURABLE_LOG=1` — the saved-log diagnostic ran and completed with screen output available
+* `GOP_DISPLAY[0] HANDLE=0x74ed2418 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:04:00.0 OWNER_ID=10de:220a MODE_DESCRIPTOR=VALID MODE=0 MAX_MODE=14 INFO_SIZE=36 RESOLUTION=2560x1440 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=4096 FB_BASE=0xf400000000 FB_SIZE=0x1680000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1` — the 3080 GOP is the sole captured GOP; its reported current firmware mode is 2560 by 1440
+* `GOP_EDID[0] TYPE=ACTIVE STATUS=0 SIZE=256 BLOCKS=2 HEADER_VALID=1 BASE_CHECKSUM_VALID=1 MANUFACTURER=GSM PRODUCT=0x772a READ_ONLY=1 SERIAL_OMITTED=1` — one active EDID identity is exposed on the 3080 GOP; this does not enumerate all three reported display connectors
+* `ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1 NVIDIA=1 INDEPENDENT=0 UNMATCHED=0 AMBIGUOUS=0 INDEPENDENT_WITHOUT_GOP=0 NOT_DETACH_EVIDENCE=1` — the configured ErrOut path classifies to NVIDIA, with no independent console association
+* `ERROR_CONSOLE_ISOLATION=CONFLICT` — the console isolation verdict remains a conflict
+* `GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 PCI_INDEX=1 PARENT=0 ROOT_PORT=0 DEPTH=1 ANCESTRY=1 ROOT_VALID=1 GOP_COUNT=0` — the 4090 remains enumerated but has no captured GOP in this boot
+* `GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 PCI_INDEX=5 PARENT=4 ROOT_PORT=2 DEPTH=3 ANCESTRY=1 ROOT_VALID=1 GOP_COUNT=1` — the 3080 has the single captured GOP
+* `NVIDIA_GPU_COUNT=2 INDEPENDENT_GOP_COUNT=0 INDEPENDENT_CONOUT_MATCH=0 NVIDIA_CONOUT_MATCH=1 GOP_UNMATCHED=0 INDEPENDENT_CONSOLE_ASSOCIATION=0 CONOUT_WITHOUT_GOP=0 CONOUT_UNMATCHED=0 CONOUT_AMBIGUOUS=0` — both cards are inventoried; the only GOP/ConOut match is NVIDIA and there is no independent AMD GOP or console match
+* `TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1` — the diagnostic refuses to classify this as an independent console topology
+* `PCI_LINK_NODE BDF=0000:04:00.0 OBS=VALID SIDE_LOCAL=1 READ_ONLY=1 PCIE_CAP=0x78 TYPE=1 ASPM=2 SPEED=4 WIDTH=4 MAX_SPEED=4 MAX_WIDTH=16 TRAINING=0 DLL_ACTIVE=0 DEVICE_ERRORS=9` — the 3080 endpoint still reports ASPM L1 and Gen4 x4; this observation alone does not establish link-policy admission
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — the saved report is complete according to the image
+
+*History:* Read-only run using the operator’s intended fixed display layout: three reported displays on the 3080, with the 4090 and AMD iGPU headless. The diagnostic captures one GOP, one configured ConOut path and one ErrOut path, all associated with the 3080; the 4090 remains enumerated but has no GOP in this boot. No independent AMD GOP or console association is observed, so the topology remains CONFLICT. The 3080 endpoint still reports ASPM=2. The operator reports three physical displays, but this GOP handle exposes only one active EDID record and the log does not inventory each connector. No controller was stopped and no GPU was changed.
+
+*What it does not show:* that all three physical displays were individually enumerated or that the GOP framebuffer is usable; the exact physical destination of the latest text output; that AMD GOP is impossible under another BIOS policy; that the 3080 driver can safely be released; or that a firmware transaction, Windows acceptance, or recovery succeeds.
 
 ## Runs that stopped without terminating
 
