@@ -258,7 +258,7 @@ VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
   GuLog("TRACE STEP=%u ELAPSED=%s PHASE=%s DONE=%u OF=%u\n",(unsigned)TraceSteps,
         TraceElapsedText(elapsed,sizeof(elapsed)),phase?phase:"?",
         (unsigned)done,(unsigned)total);
-  if(phase&&strncmp(phase,"asset-read",10)==0) {
+  if(TraceAssetReadActive) {
     TraceFormat(line,sizeof(line),"[gu] %s %u of %u\r\n",phase,
                 (unsigned)done,(unsigned)total);
     TraceSay(line);
