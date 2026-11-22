@@ -8,6 +8,10 @@
 #include "s3_save.h"
 #include "boot_io.h"
 
+/* GU_PHASE and GU_TRACE_BEGIN come from boot_io.h. Every stage assignment is
+ * also a trace line there, so the string a refusal prints at the end and the line
+ * a stall prints at the moment it stalls cannot drift apart. */
+
 /* The app and the DXE driver must not diverge on the release/firmware
  * order or skip the final selected-target Windows handover validation. */
 static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
@@ -21,37 +25,42 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
   if(!table||!table->BootServices||!image||!stage||!owner->handle||!owner->pci)
     return EFI_INVALID_PARAMETER;
-  *stage="preflight";
+  GU_PHASE("preflight");
   s=GuMsiPreflight(table,image,owner->handle);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
-  *stage="compatibility-reserve";
+  GU_PHASE("compatibility-reserve");
   s=GuCompatReserveDevice(owner);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
-  *stage="driver-release";
+  GU_PHASE("driver-release");
   s=GuMsiRelease();
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
-  *stage="cold-entry";
+  GuTraceDetail("driver-release","STATUS=%#llx RELEASED=%u",
+                (unsigned long long)s,(unsigned)GuMsiReleased());
+  GU_PHASE("cold-entry");
   if(!GuMsiReleased()||owner!=GuPlatformActive||
      !GuAd104ColdEntryFor(owner)||owner!=GuPlatformActive)return EFI_NOT_READY;
   owner->display_check=GuMsiReleased;
   owner->display_ok=TRUE;
   owner->armed=TRUE;
 
-  *stage="compatibility-open";
+  GU_PHASE("compatibility-open");
   s=GuCompatOpenDevice(owner,&dev);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault||
      GuCompatOwner(dev)!=owner)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
-  *stage="shared-firmware-assets";
+  GU_PHASE("shared-firmware-assets");
   result=gpu_unlock_610_load_shared(dev,&shared);
   if(owner!=GuPlatformActive)return EFI_NOT_READY;
   if(!result) {
-    *stage="firmware-transaction";
+    GU_PHASE("firmware-transaction");
     result=gpu_unlock_610_unlock(dev,&shared);
   }
+  GuTraceDetail("firmware-transaction","RESULT=%d MUTATED=%u DMA=%u FLRS=%u",
+                result,(unsigned)GuMsiMutated(),(unsigned)owner->dma_count,
+                (unsigned)owner->flrs);
   if(owner!=GuPlatformActive)return EFI_NOT_READY;
   int released=gpu_unlock_610_release_shared(dev,&shared);
   if(owner!=GuPlatformActive)return EFI_NOT_READY;
@@ -64,11 +73,11 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
         (unsigned)owner->retained,(unsigned)owner->flrs,(unsigned)owner->dma_count);
   if(result||owner!=GuPlatformActive||owner->fault||!GuSafeToReturnFor(owner))return EFI_DEVICE_ERROR;
 
-  *stage="release-exclusive-claim";
+  GU_PHASE("release-exclusive-claim");
   s=GuMsiFinish();
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
-  *stage="final-Windows-verification";
+  GU_PHASE("final-Windows-verification");
   if(!GuMsiReadyForWindows()||owner!=GuPlatformActive||owner->fault)return EFI_NOT_READY;
   GuLog("Selected preboot transaction verified; stock Windows driver acceptance and throughput remain unverified\n");
   return EFI_SUCCESS;
@@ -83,12 +92,12 @@ EFI_STATUS GuExecuteUnlock(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
   if(!table || !table->BootServices || !image || !stage)
     return EFI_INVALID_PARAMETER;
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
-  *stage="selected-gpu-resource-reserve";
+  GU_PHASE("selected-gpu-resource-reserve");
   EFI_STATUS s=GuMsiReserveSelectedState(table->BootServices);
   if(s!=EFI_SUCCESS)return s;
   if(owner!=GuPlatformActive)return EFI_NOT_READY;
 #ifdef GU_ACTIVE_SINGLE_TARGET
-  *stage="selected-gpu-state-begin";
+  GU_PHASE("selected-gpu-state-begin");
   s=GuBeginSelectedGpuStep(table,owner,
                            GuMsiPlanOwnerToken(),owner->asset_entries);
   if(s!=EFI_SUCCESS)return s;
@@ -97,7 +106,7 @@ EFI_STATUS GuExecuteUnlock(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
     GuAbortSelectedGpuStep();
     return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
   }
-  *stage="selected-gpu-state-finish";
+  GU_PHASE("selected-gpu-state-finish");
   /* Core already checked GuMsiFinish and the full Windows handover. */
   BOOLEAN ready=GuMsiReadyForWindows() && owner==GuPlatformActive &&
                 !owner->fault && GuSafeToReturnFor(owner);
@@ -119,13 +128,14 @@ EFI_STATUS GuExecuteUnlock(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
 EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage) {
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
   if(!stage||!owner->handle||!owner->pci)return EFI_INVALID_PARAMETER;
-  *stage="assets";
+  GU_TRACE_BEGIN();
+  GU_PHASE("assets");
   EFI_STATUS s=GuBootLoadAssets();
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
-  *stage="read-only-diagnostic";
+  GU_PHASE("read-only-diagnostic");
   (VOID)GuDiagnosticScan(owner);
   if(owner!=GuPlatformActive||owner->fault)return EFI_DEVICE_ERROR;
-  *stage="read-only-cold-profile";
+  GU_PHASE("read-only-cold-profile");
   s=GuAd104Prepare();
   return s!=EFI_SUCCESS?s:(owner!=GuPlatformActive||owner->fault)?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
@@ -142,11 +152,11 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
   EFI_STATUS s;
   for(;;) {
-    *stage="selected-gpu-execution";
+    GU_PHASE("selected-gpu-execution");
     s=GuExecuteUnlock(owner,table,image,stage);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     if(policy!=GU_S3_DISABLED) {
-      *stage="s3-registration";
+      GU_PHASE("s3-registration");
       EFI_STATUS s3=GuRegisterS3(owner,table);
       GuLog("S3 selected GPU registration status=%#llx\n",(unsigned long long)s3);
       if(owner!=GuPlatformActive||owner->retained||owner->fault||
@@ -159,7 +169,7 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
     /* Recheck the current identity after optional resume-script work.
      * Do not advance on an invalid record or mistake failure for completion. */
     int more=0;
-    *stage="selected-gpu-next";
+    GU_PHASE("selected-gpu-next");
     s=GuSelectedSequenceHasNext(table,&more);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     if(more) {
@@ -178,7 +188,7 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
 #endif
     break;
   }
-  *stage="final-Windows-verification";
+  GU_PHASE("final-Windows-verification");
   if(owner!=GuPlatformActive||!GuExecutionReadyForWindows(table)||owner!=GuPlatformActive) {
     s=EFI_NOT_READY;
     goto failed;

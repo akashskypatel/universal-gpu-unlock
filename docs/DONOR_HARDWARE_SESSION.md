@@ -1072,6 +1072,40 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 
 *What it does not show:* that the admitted card can be unlocked: this file shows a passed gate, not a transaction. It also cannot show whether the one-target waived image will pass the checks the preparation path never reaches (BAR0 attributes, driver release, DMA quiescence)
 
+## Runs that stopped without terminating
+
+A boot that ends mid-file is evidence, and it is the kind that used to survive only as a message in a chat. These entries pin the digest and the facts of a run that did not finish, and they carry no gate claim: `tests/test_hardware_session.py` re-scores each one and fails the suite if any of them ever reads PASS. The bucket is separate from the captured runs on purpose - `captured_runs` exists to show that the gates *are* satisfiable by a healthy boot, so a run that stopped belongs here and not there.
+
+| Run | Image | Stage | Lines | SHA-256 of the stored log | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| `physical-actuate-0001` | `actuate-one-target -SelectionBdf '0000:01:00.0' (built with -CapturedPromReference)` | `actuate` | 13 | `ab438a12406dc88bf79d12d90a8a6d0898b51172d4d7968d9234ba38a597da8c` | `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=4` |
+
+### `physical-actuate-0001`
+
+*File:* `tests/data/hardware_session/physical-actuate-0001.txt` — 1169 bytes stored, 1169 as captured, 13 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-21. *Bench:* the same machine, booted from the stick; the operator reports the screen went black and stayed black for over a minute with nothing printed, then a 60 s power cycle, after which Windows started and the card enumerated normally.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-actuate-0001.txt --stage actuate
+```
+
+It prints `RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=4`.
+
+*What this log puts on paper:*
+
+* `ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=1 ORDERED_SEQUENTIAL=1 MUTATION_AUTHORIZED=1` — gate A1 passes: the waiver is recorded once. `MUTATION_AUTHORIZED=1` is the point at which this log stops being a preparation
+* `PCI_LINK=OK WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=0` — the admitted card passed the same link gate the preparation run reported, on the build that may write
+* `Ada Lovelace GPU detected: Device ID 0x2684` — the card was identified and bound; the preparation that follows this line is the band the run stopped in
+* `ASSET_INSTALL STATE=ABSENT FILES=5` — the last line of the run. It is printed at the start of GuBootLoadAssets, before five firmware files are read from removable media - one of them 84,277,400 bytes - and hashed, with no further log line until the whole band finishes
+* `BOOT_STATE PRESENT=0` — no boot record existed yet, so this run never reached the intent record that is written before the first mutation
+
+*History:* RUN0011: the first waived one-target boot on this bench, after RUN0010 admitted 0000:01:00.0. Nothing else on the machine changed between the two runs.
+
+*What it does not show:* which phase it stopped in - that is the whole finding, and it is what the TRACE lines in the next build exist to answer. It also cannot say whether the machine hung or was simply reading 80 MiB from a slow stick: gate A4 fails because no STOP line was written, and A3 fails because no SELECTED_GPU_STEP line was either, so the transaction never started and nothing was mutated
+
 ## Advancing between stages: `donor_gate.py`
 
 One stage's gates passing is not permission to run the next stage. This tool composes the stage verdicts into a single go/no-go answer and is the only thing in the repository that does so.

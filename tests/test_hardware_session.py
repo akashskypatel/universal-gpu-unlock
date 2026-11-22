@@ -441,6 +441,63 @@ class TheReadOnlyGuideIsGrounded(unittest.TestCase):
         self.assertLess(guide_at, stages_at)
 
 
+class AStoppedRunIsEvidenceAndNeverAPass(unittest.TestCase):
+    """RUN0011 is the log this bucket exists for: a waived boot that wrote
+    thirteen lines, went black, and was power-cycled. It has to be pinned like any
+    other run - digest, size, quoted facts - while claiming nothing at all, and the
+    separation from `captured_runs` is the point: that bucket's contract is that
+    every entry passes every gate of its stage, so a run that stopped cannot live
+    there without breaking it."""
+
+    def setUp(self):
+        self.spec = MANIFEST["stopped_runs"]
+        self.runs = self.spec["runs"]
+        self.doc = DOC
+
+    def stored(self, run):
+        path = ROOT / run["file"]
+        self.assertTrue(path.is_file(), run["file"])
+        return path.read_bytes().replace(b"\r\n", b"\n")
+
+    def test_the_bucket_does_not_duplicate_the_captured_runs(self):
+        captured = {run["id"] for run in MANIFEST["captured_runs"]["runs"]}
+        self.assertTrue(self.runs)
+        for run in self.runs:
+            self.assertNotIn(run["id"], captured, run["id"])
+
+    def test_every_stopped_run_matches_its_recorded_digest_and_size(self):
+        for run in self.runs:
+            data = self.stored(run)
+            self.assertEqual(hashlib.sha256(data).hexdigest(), run["sha256"], run["id"])
+            self.assertEqual(len(data), run["bytes"], run["id"])
+            self.assertEqual(data.count(b"\n"), run["lines"], run["id"])
+
+    def test_a_stopped_run_never_scores_as_a_pass(self):
+        for run in self.runs:
+            result = run_verifier(str(ROOT / run["file"]), "--stage", run["stage"])
+            self.assertNotEqual(result.returncode, 0, run["id"])
+            self.assertIn(run["verdict"], result.stdout.splitlines(), run["id"])
+            for line in result.stdout.splitlines():
+                if line.startswith("RUN_LOG_VERDICT="):
+                    self.assertNotIn("VERDICT=PASS", line, run["id"])
+            self.assertIn("SYNTHETIC=0", result.stdout, run["id"])
+            self.assertIn("HARDWARE_VERIFIED=0", result.stdout, run["id"])
+
+    def test_every_quoted_fact_is_in_the_log(self):
+        for run in self.runs:
+            text = self.stored(run).decode("utf-8")
+            self.assertTrue(run["observations"], run["id"])
+            for entry in run["observations"]:
+                self.assertIn(entry["token"], text, f"{run['id']}: {entry['token']!r} is not in the log")
+                self.assertTrue(entry["why"], f"{run['id']}: {entry['token']!r} says nothing")
+
+    def test_the_run_is_in_the_document_with_its_verdict(self):
+        self.assertIn(self.spec["title"], self.doc)
+        for run in self.runs:
+            self.assertIn(run["id"], self.doc)
+            self.assertIn(run["verdict"], self.doc)
+
+
 class TheGatesAreSatisfiableByAHealthyRun(unittest.TestCase):
     """A gate nobody can pass is worse than no gate.
 

@@ -310,10 +310,16 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   struct gpu_unlock_fwsec fw;
   if(owner->started||owner->owned||owner->retained||owner->profile_verified||owner->fault)
     return EFI_NOT_READY;
+  /* Each of these three can touch the device: config space, then BAR0, then a
+   * CPU-side asset digest. RUN0011's log ended before the DIAGNOSTIC line below,
+   * which is two of these calls wide, so each one names itself first. */
+  GuTracePhase("diag-config");
   BOOLEAN config_ok=ConfigFor(owner);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-registers");
   BOOLEAN regs_ok=config_ok&&RegistersFor(owner,&before0,&before1);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-assets");
   BOOLEAN assets_ok=GuAd104AssetsValid(owner);
   GuLog("DIAGNOSTIC CONFIG=%u REGISTERS=%u PINNED_ASSETS=%u\n",
         (unsigned)config_ok,(unsigned)regs_ok,(unsigned)assets_ok);
@@ -323,13 +329,16 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!prom)return owner->fault||owner->retained?EFI_DEVICE_ERROR:EFI_OUT_OF_RESOURCES;
   if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-prom-copy");
   BOOLEAN copied=GuCopyFromIo(owner,prom,(VOID *)(UINTN)(owner->bar_base+0x300000),1048576U);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
   BOOLEAN prom_ok=copied&&!owner->fault&&GuAd104PromMatches(owner,prom,1048576U,FALSE);
+  GuTracePhase("diag-prom-parse");
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-stability");
   BOOLEAN cfg2=ConfigFor(owner);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   BOOLEAN reg2=cfg2&&RegistersFor(owner,&after0,&after1);
@@ -392,8 +401,10 @@ EFI_STATUS GuAd104Prepare(VOID) {
     GuLog("GuAd104Prepare: PROM alloc failed\n");
     return EFI_OUT_OF_RESOURCES;
   }
+  GuTracePhase("profile-prom-copy");
   BOOLEAN copied=GuCopyFromIo(&Gu,prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
   BOOLEAN prom_match = copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576,TRUE);
+  GuTracePhase("profile-prom-parse");
   int fwsec_res = prom_match?gpu_unlock_vbios_fwsec(prom,1048576,&fw):-1;
   BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2 = ConfigFor(&Gu);
@@ -407,6 +418,7 @@ EFI_STATUS GuAd104Prepare(VOID) {
    * this image has no reference for, which retrying cannot change. */
   if(!valid) return PromReferenceMismatch?EFI_UNSUPPORTED:EFI_COMPROMISED_DATA;
   Gu.prom_verified=TRUE;
+  GuTracePhase("profile-latch-selectors");
   if(!GuLatchEntrySelectors(ss0,ss1)) {
     Gu.prom_verified=FALSE;
     GuLog("GuAd104Prepare: GuLatchEntrySelectors failed\n");

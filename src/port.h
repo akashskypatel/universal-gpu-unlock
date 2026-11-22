@@ -324,6 +324,23 @@ VOID GuStarted(VOID);
 VOID GuQuiesced(VOID);
 VOID GuLog(const char *Format, ...);
 VOID GuLogText(const char *Text);
+/* Verbose actuation trace.
+ *
+ * A phase that can block must say so before it blocks, in the USB log *and* on
+ * the console. RUN0011 is the reason: the waived boot wrote thirteen lines, went
+ * black, and stayed black for over a minute inside a call that logged nothing
+ * until it returned. From the outside that is indistinguishable from a fault, and
+ * from the log alone it cannot even be told which call it was. Each line here is
+ * flushed by GuLog and mirrored to the console even while the image is otherwise
+ * silent, so a stall names its own last phase. */
+VOID GuTraceReset(VOID);
+VOID GuTracePhase(const char *Phase);
+VOID GuTraceDetail(const char *Phase, const char *Format, ...);
+VOID GuTraceProgress(const char *Phase, UINTN Done, UINTN Total);
+VOID GuTraceDelay(UINT64 Ticks);
+/* Console lines that must be visible even while the image is silent. */
+VOID GuTraceScreen(const char *Text);
+VOID GuTraceStop(const char *Stage, UINT64 Status);
 BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *Destination,const VOID *Source,size_t Bytes);
 /* Read-only ownership proof for retained CPU objects, including inactive platforms. */
 BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes);

@@ -149,3 +149,34 @@ quiescence, the boot-state record written *before* the first mutation so a power
 loss still names the card, and one ordered step per target with no automatic
 retry. All of those come after `BEFORE_GU_INIT=1`, so RUN0010 says nothing about
 them.
+
+## Reading a stalled waived boot
+
+RUN0011 (`physical-actuate-0001`) was the first waived boot on this bench. It wrote
+thirteen lines, went black, and sat for over a minute until it was power-cycled.
+Nothing in the file said where it stopped, because the band it stopped in
+(`GuPrepareBoundGpu`: five firmware files off removable media - one of them
+84,277,400 bytes - then the PROM read) printed nothing until it finished.
+
+The build now traces every phase, to the log and to the screen:
+
+```
+TRACE STEP=2 ELAPSED=3s PHASE=asset-read INDEX=2 NAME=gpu-unlock/610.43.03/gsp_ga10x.bin BYTES=84277400
+TRACE STEP=2 PHASE=asset-read DONE=3 OF=5
+```
+
+Read the last three lines before the silence like this:
+
+| Last thing in the log | What it means | What to do |
+| --- | --- | --- |
+| `PHASE=asset-read INDEX=<n> NAME=<f>` | it is reading that file from the stick, not hung | wait; `DONE=n OF=5` follows each file |
+| `PHASE=assets` and nothing more | the media read did not return | stick out, reseat, try another port |
+| `PHASE=diag-config` / `diag-registers` | it stopped at config space or the first BAR0 read | the trace now names the call; report the line |
+| `PHASE=diag-prom-copy` with `DONE=` climbing | the 1 MiB PROM read is running | wait for `DONE=1048576 OF=1048576` |
+| `PHASE=vendor-wait ACCUMULATED_US=` climbing | a firmware step is waiting, and it is alive | wait for the bound |
+| `[gu] STOP stage=...` on screen | the run ended by itself | copy the line and the twenty lines above it |
+
+Two properties are deliberate and worth keeping: the trace lines print **even
+while the image is silent** (one line per phase, not a dump), and the
+`WATCHDOG BOUND=` line now appears *before* the preparation, so a boot that stalls
+before the operator menu still says whether it was bounded.

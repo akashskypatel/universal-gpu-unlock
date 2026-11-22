@@ -8,6 +8,15 @@ EFI_STATUS GuBootChoose(CHAR16 *);
 EFI_STATUS GuBootWindows(VOID);
 EFI_STATUS GuBootClose(VOID);
 
+/* One stage, named twice: `*stage` is what a refusal prints at the end and the
+ * trace is what a stall prints at the moment it stalls. The macro expands inside
+ * a function that owns a `const char **stage`, and it lives here so a harness
+ * that splices one function out of its file still sees the same definition. */
+#define GU_PHASE(NAME) do { *stage=(NAME); GuTracePhase(NAME); } while(0)
+/* The trace counter starts at the first stage that can block, so `STEP=` is
+ * comparable between logs instead of counting from process start. */
+#define GU_TRACE_BEGIN() GuTraceReset()
+
 /* The bounded firmware timer. It is armed once, in GuBootOpen, for a build with
  * GU_WATCHDOG_SECONDS!=0, and cancelled before the handover. Both are inert in
  * the default build, which disables the timer exactly as before. */

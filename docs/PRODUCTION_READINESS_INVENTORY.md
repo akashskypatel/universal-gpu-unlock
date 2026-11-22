@@ -460,6 +460,92 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.51 — the waived boot stalled inside a band that printed nothing, and could not say which one
+
+`actuate-one-target -SelectionBdf '0000:01:00.0'` was built, signed, staged and
+booted on the bench. `physical-actuate-0001` is what came back: thirteen lines,
+then a black screen for over a minute with nothing printed, then a 60 s power
+cycle. After the cycle Windows started and the card enumerated normally.
+
+```
+ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=1 ORDERED_SEQUENTIAL=1 MUTATION_AUTHORIZED=1 ...
+Ada Lovelace GPU detected: Device ID 0x2684
+GPU-Unlock fork: experimental: AD10X, volatile RAM-only attempt, no VBIOS flash
+ASSET_INSTALL STATE=ABSENT FILES=5
+```
+
+Gate A1 passes - the waiver was recorded - and nothing after it does. No `STOP`
+line, no `SELECTED_GPU_STEP=ACTIVE`, no `GuAd104Prepare: start`, no `DIAGNOSTIC`
+line, and `mutated` is never reported because app.c never reached its `failed:`
+label. So the boot ended inside `GuPrepareBoundGpu`, in the band that starts at
+`ASSET_INSTALL` and ends at the first `DIAGNOSTIC` line, and **the log could not
+say where**. That is the whole finding, and it is a defect in the image rather
+than in the card: an operator watching a black screen learned nothing, and the
+file that has to explain it named no phase.
+
+**What the band contains, and why it is long.** `GuBootLoadAssets` reads five
+firmware files from removable media and hashes each one. From the simulator's
+model of the same table, one of them is `gsp_ga10x.bin` at **84,277,400 bytes**;
+the other four total about 160 KiB. Eighty megabytes off a USB stick, plus a
+SHA-256 per file, is seconds on fast media and a minute or more on a slow one -
+and the band emitted exactly one line, at its start, for all of it. The candidates
+after it (`ConfigFor`, `RegistersFor`'s first BAR0 read, `GuAd104Prepare`) each
+also ran with no line until they returned, so a stop anywhere in a window of that
+width was unattributable.
+
+**The fix is the trace, not a guess about the cause.** `GuTracePhase`,
+`GuTraceDetail`, `GuTraceProgress`, `GuTraceDelay` and `GuTraceStop`
+(`src/boot_io.c`, declared in `src/port.h`) emit, flushed by `GuLog` and mirrored
+to the console:
+
+```
+TRACE STEP=1 ELAPSED=0s PHASE=assets
+TRACE STEP=2 ELAPSED=0s PHASE=asset-load
+TRACE STEP=2 PHASE=asset-read INDEX=2 NAME=gpu-unlock/610.43.03/gsp_ga10x.bin BYTES=84277400
+TRACE STEP=2 PHASE=asset-read DONE=3 OF=5
+TRACE STEP=3 ELAPSED=14s PHASE=read-only-diagnostic
+TRACE STEP=4 ELAPSED=14s PHASE=diag-config
+...
+TRACE STEP=22 ELAPSED=63s PHASE=firmware-transaction
+```
+
+Reasons this is safe to leave on: every stage assignment in `unlock_execution.c`
+goes through one `GU_PHASE` macro, so a stage string and its trace line cannot
+drift; the console mirror does **not** honour `GuBootSilence`, because silence is
+what left the bench staring at a black screen - it is one short line per phase,
+not a scrolling dump; the vendor's delay loop is rate-limited by *accumulated*
+delay (one line per 250 ms) so tracing it cannot become the slow thing; the
+elapsed field reads `NA` when the firmware offers no clock, so the model world
+still traces; and `GuTraceStop` prints the STOP line to the screen, so a stopped
+run is readable from the machine instead of only from a USB file carried to
+another computer.
+
+**One more thing the log could not answer.** The `WATCHDOG BOUND=` line was only
+printed *after* the operator choice, and this boot never reached the choice - so
+the record cannot say whether this stall was bounded at all. It is now reported
+before the preparation as well (`PHASE=pre-prepare`), because that bound is the
+only thing that ends a hung preparation on its own.
+
+**What is pinned.** `tests/test_actuation_trace.py` (16 tests) holds the emitters,
+the flush, the console exception, the ordering of each trace before the call it
+announces, the per-file asset band, the copy progress, the rate limit and the
+pre-prepare watchdog line; `sim/sim_main.c` additionally requires
+`TRACE STEP=`, `PHASE=driver-release` and `PHASE=firmware-transaction` to appear
+in a captured application log from the transaction scenarios - the simulator
+reports 25 traced phases from `assets` to `selected-gpu-state-finish` and
+`SIM_VERIFY=PASS SCENARIOS=18 FAILED=0`. The stopped run is held in a new
+`stopped_runs` bucket, re-scored by the suite, with a test that fails if any entry
+there ever reads PASS.
+
+**What this does not establish.** The trace names the phase on the next boot; it
+does not prove which phase this one stopped in, and it does not make the
+transaction shorter. Reading 80 MiB per boot from the stick is now visible, but
+whether it is acceptable is a design question (a staged copy on the ESP already
+exists as `asset_install`, and `ASSET_INSTALL STATE=ABSENT` says this bench is not
+using it). `hardware_verified` stays false for all 43 entries, the counts stay
+11 met / 15 partial / 17 not started, `C5` stays `none`, and no run has mutated a
+card.
+
 ### 11.50 — the first admitted card, and what a waived boot adds that a preparation boot cannot see
 
 RUN0010 (`physical-prepare-0008`) is the read-only boot on the build that weighs

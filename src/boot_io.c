@@ -141,6 +141,128 @@ VOID GuLog(const char *format,...) {
 
 VOID GuLogText(const char *text){GuLog("%s",text);}
 
+/* ---- Verbose actuation trace ----------------------------------------------
+ *
+ * See port.h. Two properties matter more than the format:
+ *
+ * 1. The console mirror bypasses Silent. GuBootSilence() is deliberate for the
+ *    transaction - it keeps the screen clean while the GPU is being driven - but
+ *    a silent screen plus a log that stops mid-file is exactly the state RUN0011
+ *    reported as a stall. Trace lines are the exception: they are short, they end
+ *    in a newline, and they are what a person standing at the machine reads.
+ * 2. Nothing here can block or allocate. GetTime is used when the firmware offers
+ *    it and the elapsed field reads NA when it does not, so a model world without
+ *    a clock still traces.
+ */
+static size_t TraceFormat(char *out,size_t capacity,const char *format,...) {
+  va_list args;
+  size_t n;
+  va_start(args,format);
+  n=GuFormatV(out,capacity,format,args);
+  va_end(args);
+  return n;
+}
+
+static UINTN TraceSteps;
+static UINTN TraceStartSeconds;
+static BOOLEAN TraceClockStarted;
+static UINT64 TraceDelayShown;
+
+static BOOLEAN TraceClock(UINTN *seconds) {
+  EFI_RUNTIME_SERVICES *rt=Table?Table->RuntimeServices:NULL;
+  EFI_TIME now;
+  if(!seconds||!rt||!rt->GetTime)return FALSE;
+  if(EFI_ERROR(rt->GetTime(&now,NULL)))return FALSE;
+  *seconds=((UINTN)now.Hour*3600U)+((UINTN)now.Minute*60U)+(UINTN)now.Second;
+  return TRUE;
+}
+
+static const char *TraceElapsedText(char *buffer,UINTN size) {
+  UINTN now=0;
+  if(!TraceClockStarted) {
+    TraceClockStarted=TraceClock(&TraceStartSeconds);
+  }
+  if(!TraceClockStarted||!TraceClock(&now))return "NA";
+  /* Seconds of day, so a boot that crosses midnight still reports a small
+   * number: one subtraction, wrapped into a day, is precise enough for a
+   * heartbeat and cannot be wrong by more than that. */
+  UINTN delta=(now+86400U-TraceStartSeconds)%86400U;
+  TraceFormat(buffer,size,"%us",(unsigned)delta);
+  return buffer;
+}
+
+static VOID TraceSay(const char *text) {
+  CHAR16 wide[96];
+  UINTN i=0;
+  if(!Table||!Table->ConOut||!Table->ConOut->OutputString||!text)return;
+  for(;i+1U<sizeof(wide)/sizeof(wide[0])&&text[i];i++)
+    wide[i]=(CHAR16)(unsigned char)text[i];
+  wide[i]=0;
+  /* Straight to ConOut: this is the line that must appear even when the rest of
+   * the screen is deliberately silent. */
+  Table->ConOut->OutputString(Table->ConOut,wide);
+}
+
+VOID GuTraceScreen(const char *text){TraceSay(text);}
+
+VOID GuTraceStop(const char *stage,UINT64 status) {
+  char line[128];
+  TraceFormat(line,sizeof(line),"[gu] STOP stage=%s status=%#llx\r\n",
+              stage?stage:"?",(unsigned long long)status);
+  TraceSay(line);
+}
+
+VOID GuTraceReset(VOID) {
+  TraceSteps=0;
+  TraceStartSeconds=0;
+  TraceClockStarted=FALSE;
+  TraceDelayShown=0;
+}
+
+VOID GuTraceDetail(const char *phase,const char *format,...) {
+  char detail[160];
+  va_list args;
+  if(!Log)return;
+  if(!format)format="";
+  va_start(args,format);
+  {size_t n=GuFormatV(detail,sizeof(detail),format,args);(void)n;}
+  va_end(args);
+  GuLog("TRACE STEP=%u PHASE=%s %s\n",(unsigned)TraceSteps,phase?phase:"?",detail);
+}
+
+VOID GuTracePhase(const char *phase) {
+  char elapsed[16];char line[128];
+  if(!Log)return;
+  ++TraceSteps;
+  GuLog("TRACE STEP=%u ELAPSED=%s PHASE=%s\n",(unsigned)TraceSteps,
+        TraceElapsedText(elapsed,sizeof(elapsed)),phase?phase:"?");
+  TraceFormat(line,sizeof(line),"[gu] %u %s (%s)\r\n",(unsigned)TraceSteps,
+           phase?phase:"?",TraceElapsedText(elapsed,sizeof(elapsed)));
+  TraceSay(line);
+}
+
+VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
+  char elapsed[16];
+  if(!Log)return;
+  GuLog("TRACE STEP=%u ELAPSED=%s PHASE=%s DONE=%u OF=%u\n",(unsigned)TraceSteps,
+        TraceElapsedText(elapsed,sizeof(elapsed)),phase?phase:"?",
+        (unsigned)done,(unsigned)total);
+}
+
+/* The vendor transaction waits through one delay hook. A firmware step that
+ * takes a minute spends that minute here, so report it as it goes - on a
+ * threshold of accumulated delay, not per call, because the loop is tight and an
+ * unthrottled trace would be the slow thing. */
+VOID GuTraceDelay(UINT64 ticks) {
+  char elapsed[16];
+  if(!Log)return;
+  if(ticks<TraceDelayShown+250000ULL)return;
+  TraceDelayShown=ticks;
+  GuLog("TRACE STEP=%u ELAPSED=%s PHASE=vendor-wait ACCUMULATED_US=%llu\n",
+        (unsigned)TraceSteps,TraceElapsedText(elapsed,sizeof(elapsed)),
+        (unsigned long long)ticks);
+}
+
 BOOLEAN GuBootLogOpen(VOID){return Log!=NULL;}
 EFI_HANDLE GuBootGetTargetEspVolume(VOID){return TargetEspVolume;}
 const CHAR16 *GuBootGetLogPath(VOID){return Log?ActiveLogPath:NULL;}
@@ -635,9 +757,16 @@ EFI_STATUS GuBootLoadAssets(VOID) {
 #endif
   Gu.asset_load_attempted=TRUE; /* Latch before the first file operation. */
   EFI_STATUS status=EFI_SUCCESS;
+  /* Five firmware files are read and hashed from removable media before any
+   * register is touched, and until this trace existed the only line that band
+   * could produce was a failure. RUN0011 stopped with `ASSET_INSTALL ...` as its
+   * last line and no way to tell this loop from the diagnostic that follows it. */
+  GuTracePhase("asset-load");
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
     VOID *p=NULL;
+    GuTraceDetail("asset-read","INDEX=%u NAME=%s BYTES=%u",(unsigned)i,
+                  a->name?a->name:"?",(unsigned)a->bytes);
     status=ReadFile(Root,a->path,a->bytes,&p);
     if(status==EFI_NOT_FOUND&&i==2&&arch->alternate_gsp_path)
       status=ReadFile(Root,arch->alternate_gsp_path,a->bytes,&p);
@@ -659,8 +788,10 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     }
     GuAssets[i].name=a->name;
     GuAssets[i].firmware=(struct firmware){a->bytes,p};
+    GuTraceProgress("asset-read",(UINTN)i+1U,(UINTN)GU_ASSET_COUNT);
   }
   if(status==EFI_SUCCESS&&!GuAd104AssetsValid(&Gu))status=EFI_CRC_ERROR;
+  GuTraceDetail("asset-load","STATUS=%#llx",(unsigned long long)status);
   if(status!=EFI_SUCCESS) {
     for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
       if(GuAssets[i].firmware.data)GuFree((VOID *)GuAssets[i].firmware.data);

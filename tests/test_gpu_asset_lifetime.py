@@ -266,6 +266,12 @@ static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
   return TRUE;
 }
 static void GuFree(VOID *p) {if(p){freed++;free(p);}}
+/* The trace is a port facility (src/boot_io.c). This harness splices a function
+ * out of its file, so it supplies that port itself; the lines are inert here. */
+static void __attribute__((unused)) GuTracePhase(const char *phase){(void)phase;}
+static void __attribute__((unused)) GuTraceDetail(const char *phase,const char *format,...){(void)phase;(void)format;}
+static void __attribute__((unused)) GuTraceProgress(const char *phase,size_t done,size_t total){(void)phase;(void)done;(void)total;}
+static void __attribute__((unused)) GuTraceDelay(unsigned long long ticks){(void)ticks;}
 static void GuLog(const char *fmt,...) {(void)fmt;}
 ''' + LOADER + r'''
 #define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}} while(0)
@@ -398,6 +404,12 @@ static BOOLEAN GuCheckConfig(UINT32 *c,UINTN s,UINTN b,UINTN d,UINTN f,GU_CAPS *
   *caps=(GU_CAPS){1,2,3,4,5};return TRUE;
 }
 static BOOLEAN GuIsSupportedPciId(UINT32 id){return id==0x268410deU||id==0x220a10deU;}
+/* The trace is a port facility (src/boot_io.c). This harness splices a function
+ * out of its file, so it supplies that port itself; the lines are inert here. */
+static void __attribute__((unused)) GuTracePhase(const char *phase){(void)phase;}
+static void __attribute__((unused)) GuTraceDetail(const char *phase,const char *format,...){(void)phase;(void)format;}
+static void __attribute__((unused)) GuTraceProgress(const char *phase,size_t done,size_t total){(void)phase;(void)done;(void)total;}
+static void __attribute__((unused)) GuTraceDelay(unsigned long long ticks){(void)ticks;}
 static void GuLog(const char *fmt,...){(void)fmt;}
 static BOOLEAN RegistersFor(GU_PLATFORM *platform,UINT32 *a,UINT32 *b){
   if(!platform||platform!=active){if(platform)platform->fault=1;return FALSE;}

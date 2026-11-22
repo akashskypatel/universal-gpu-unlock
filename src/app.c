@@ -164,7 +164,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   /* A selection that cannot be resolved is not fatal here: discovery refuses
    * it and reports why, which is the behaviour the refusal tests pin. */
   s=ResolveTargetsOnConsole(t);
-  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND) {stage="selection";goto failed;}
+  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND) {stage="selection";GuTracePhase(stage);goto failed;}
 #endif
   s=GuDiscoverSingleGpu(image,t);if(s!=EFI_SUCCESS)goto failed;
 #ifdef GU_ASSET_INSTALL_ONLY
@@ -210,11 +210,29 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   }
 
+  /* The preparation is the longest silent band in this application: it loads
+   * five firmware files, reads the PROM and hashes both. RUN0011 stopped inside
+   * it with nothing on screen and nothing more in the log.
+   *
+   * The timer is reported here as well as after the operator choice, because the
+   * bound is the only thing that ends a hung preparation on its own. A run that
+   * stalls before the menu has to be able to say whether this boot was bounded. */
+  {
+    UINTN bound=0;
+    if(GuBootWatchdogArmed(&bound))
+      GuLog("WATCHDOG BOUND=%u SECONDS ACTIVE=1 PHASE=pre-prepare\n",(unsigned)bound);
+    else
+      GuLog("WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD PHASE=pre-prepare\n");
+  }
+  GuTracePhase("prepare");
   s=GuPrepareBoundGpu(owner,&stage);if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  GuTraceDetail("prepare","STATUS=%#llx PROFILE_VERIFIED=%u PROM_VERIFIED=%u",
+                (unsigned long long)s,(unsigned)owner->profile_verified,
+                (unsigned)owner->prom_verified);
 
-  stage="stage-windows-image";s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  stage="stage-windows-image";GuTracePhase(stage);s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 
-  stage="manual-choice";s=GuBootChoose(&choice);if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  stage="manual-choice";GuTracePhase(stage);s=GuBootChoose(&choice);if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 
   if (choice == L'I') {
 
@@ -286,6 +304,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   }
 
+  /* Which key was pressed is the difference between a transaction and a stock
+   * boot, and until now it appeared in no log at all. */
+  GuTraceDetail("manual-choice","KEY=%c TRANSACTION=%u S3_SCRIPT=%u",(char)choice,
+                (unsigned)(choice == L'U' || choice == L'P'),
+                (unsigned)(choice == L'P'));
   BOOLEAN unlock = (choice == L'U' || choice == L'P');
 
   BOOLEAN enable_s3 = (choice == L'P');
@@ -342,9 +365,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     L" Launching Windows Boot Manager; post-boot benchmark required.\r\n\r\n"
   );
 
-  stage="close-USB-log";s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  stage="close-USB-log";GuTracePhase(stage);s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
-  stage="start-Windows";s=GuBootWindows();
+  stage="start-Windows";GuTracePhase(stage);s=GuBootWindows();
 
   /* A returned Windows image is not a successful handoff. */
 
@@ -356,6 +379,9 @@ failed:
   if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
 
   GuLog("STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",stage,(unsigned long long)s,GuMsiMutated(),Gu.retained,Gu.fault);
+  /* A stopped run has to be readable from the machine, not only from the USB
+   * file that has to be carried to another computer afterwards. */
+  GuTraceStop(stage,(UINT64)s);
 
   if(GuExecutionNeedsContainment()) {
 

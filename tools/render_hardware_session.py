@@ -226,6 +226,8 @@ def render(manifest: dict) -> str:
         out.append(render_readonly_guide(manifest["readonly_guide"]))
     if "captured_runs" in manifest:
         out.append(render_captured_runs(manifest["captured_runs"]))
+    if "stopped_runs" in manifest:
+        out.append(render_captured_runs(manifest["stopped_runs"]))
     if "go_no_go" in manifest:
         out.append(render_go_no_go(manifest["go_no_go"]))
     out.append("## The stages\n\n")

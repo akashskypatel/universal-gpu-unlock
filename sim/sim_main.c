@@ -572,6 +572,21 @@ int main(int argc, char **argv) {
                   SimWatchdogArms(), SimWatchdogMaxSeconds(), SimWatchdogCancels());
   }
 
+  if (strcmp(stage, "transaction") == 0) {
+    /* The waived path has to be readable while it runs. RUN0011 stopped inside
+     * the preparation with thirteen lines in the log and nothing on screen, and
+     * no part of that log named the phase it stopped in; a transaction that
+     * emitted no trace would put the bench back in exactly that state. Checked
+     * here, after the transaction, because a trace checked before it runs would
+     * only ever find the phases that ran before it. */
+    Check(SimLogContains("TRACE STEP="), "the transaction emitted no trace line");
+    Check(SimLogContains("PHASE=driver-release"), "the driver release was not traced");
+    Check(SimLogContains("PHASE=firmware-transaction"),
+          "the firmware transaction was not traced");
+    Check(SimLogContains("[gu] STOP") == 0,
+          "a passing transaction printed a STOP line to the console");
+  }
+
   SimReportLine("SIM_CAPTURED_LOG_BYTES=%zu", SimLogLength());
   SimReportLine("SIM_RESULT=%s CHECKS_FAILED=%d",
                 SimFailures() ? "FAIL" : "PASS", SimFailures());

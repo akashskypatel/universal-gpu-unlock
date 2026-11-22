@@ -2274,6 +2274,50 @@
       }
     ]
   },
+  "stopped_runs": {
+    "title": "Runs that stopped without terminating",
+    "note": "A boot that ends mid-file is evidence, and it is the kind that used to survive only as a message in a chat. These entries pin the digest and the facts of a run that did not finish, and they carry no gate claim: `tests/test_hardware_session.py` re-scores each one and fails the suite if any of them ever reads PASS. The bucket is separate from the captured runs on purpose - `captured_runs` exists to show that the gates *are* satisfiable by a healthy boot, so a run that stopped belongs here and not there.",
+    "runs": [
+      {
+        "id": "physical-actuate-0001",
+        "captured": "2026-11-21",
+        "image": "actuate-one-target -SelectionBdf '0000:01:00.0' (built with -CapturedPromReference)",
+        "stage": "actuate",
+        "file": "tests/data/hardware_session/physical-actuate-0001.txt",
+        "sha256": "ab438a12406dc88bf79d12d90a8a6d0898b51172d4d7968d9234ba38a597da8c",
+        "bytes": 1169,
+        "captured_bytes": 1169,
+        "lines": 13,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "the same machine, booted from the stick; the operator reports the screen went black and stayed black for over a minute with nothing printed, then a 60 s power cycle, after which Windows started and the card enumerated normally",
+        "verdict": "RUN_LOG_VERDICT=FAIL FIRST_FAILED=A2_STOP_CONTRACT_CAPTURED SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=5 GATES_FAILED=4",
+        "observations": [
+          {
+            "token": "ACTIVE_EXECUTION=WAIVED_UNVERIFIED SELECTED=1 ORDERED_SEQUENTIAL=1 MUTATION_AUTHORIZED=1",
+            "why": "gate A1 passes: the waiver is recorded once. `MUTATION_AUTHORIZED=1` is the point at which this log stops being a preparation"
+          },
+          {
+            "token": "PCI_LINK=OK WIDTH=16 MAX_WIDTH=16 SPEED=4 MAX_SPEED=4 ASPM=0",
+            "why": "the admitted card passed the same link gate the preparation run reported, on the build that may write"
+          },
+          {
+            "token": "Ada Lovelace GPU detected: Device ID 0x2684",
+            "why": "the card was identified and bound; the preparation that follows this line is the band the run stopped in"
+          },
+          {
+            "token": "ASSET_INSTALL STATE=ABSENT FILES=5",
+            "why": "the last line of the run. It is printed at the start of GuBootLoadAssets, before five firmware files are read from removable media - one of them 84,277,400 bytes - and hashed, with no further log line until the whole band finishes"
+          },
+          {
+            "token": "BOOT_STATE PRESENT=0",
+            "why": "no boot record existed yet, so this run never reached the intent record that is written before the first mutation"
+          }
+        ],
+        "history": "RUN0011: the first waived one-target boot on this bench, after RUN0010 admitted 0000:01:00.0. Nothing else on the machine changed between the two runs.",
+        "does_not_show": "which phase it stopped in - that is the whole finding, and it is what the TRACE lines in the next build exist to answer. It also cannot say whether the machine hung or was simply reading 80 MiB from a slow stick: gate A4 fails because no STOP line was written, and A3 fails because no SELECTED_GPU_STEP line was either, so the transaction never started and nothing was mutated"
+      }
+    ]
+  },
   "prom_captures": {
     "note": "The files the -0009 boot wrote and what the transaction's own parser reported for each. The 1 MiB NVIDIA firmware images are NOT stored in this repository: the digest in the stored log and the digest here tie the record to the bytes, and tests/test_vram_block_probe.py holds the parsed fields to the conditions GuAd104FwsecMatches() applies.",
     "parser": "tests/test_fwsec_v2.c in file mode: gpu_unlock_vbios_fwsec() from src/vendor/vbios_610.c walks the image, and the admission bits are the four conditions of GuAd104FwsecMatches() in src/profile.c",

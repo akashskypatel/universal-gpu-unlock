@@ -118,6 +118,13 @@ typedef struct {
   struct pci_dev *compat_device;
 } GU_PLATFORM;
 static GU_PLATFORM platforms[2],*active=&platforms[0];
+/* The trace is a port facility (src/boot_io.c) and this harness supplies the
+ * port. Copies and delays are counted here, not printed: the trace lines are
+ * inert so the chunk accounting this test is about stays exact. */
+static void __attribute__((unused)) GuTracePhase(const char *phase){(void)phase;}
+static void __attribute__((unused)) GuTraceDetail(const char *phase,const char *format,...){(void)phase;(void)format;}
+static void __attribute__((unused)) GuTraceProgress(const char *phase,UINTN done,UINTN total){(void)phase;(void)done;(void)total;}
+static void __attribute__((unused)) GuTraceDelay(UINT64 ticks){(void)ticks;}
 #define Gu (*active)
 #define GuPlatformActive active
 static int allocs,reads,fail_alloc,wrong_pool_owner,change_active_after_alloc;

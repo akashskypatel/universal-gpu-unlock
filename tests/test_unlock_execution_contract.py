@@ -31,7 +31,17 @@ class SharedExecutionContract(unittest.TestCase):
              "GuMsiReadyForWindows("]
         indices=[core.index(op) for op in ops]
         self.assertEqual(indices,sorted(indices))
-        self.assertIn("*stage=",core)
+        # Every stage of the core is one GU_PHASE, in this order. The macro sets
+        # `*stage` and traces at the same moment (src/boot_io.h), so the order of
+        # the phases is the order of the stage strings a refusal can print.
+        phases=[line.strip().split('"')[1] for line in core.splitlines()
+                if "GU_PHASE(" in line]
+        self.assertEqual(phases,["preflight","compatibility-reserve","driver-release",
+                                 "cold-entry","compatibility-open",
+                                 "shared-firmware-assets","firmware-transaction",
+                                 "release-exclusive-claim","final-Windows-verification"])
+        self.assertIn("*stage=(NAME); GuTracePhase(NAME);",
+                      (ROOT/"boot_io.h").read_text(encoding="utf-8"))
         self.assertIn("result||owner!=GuPlatformActive||owner->fault",core)
         self.assertIn("GuCompatOwner(dev)!=owner",core)
         self.assertLess(core.index("owner!=GuPlatformActive"),core.index("GuMsiPreflight("))
@@ -297,6 +307,15 @@ static void GuLog(const char *fmt,...) {
 }
 static int __attribute__((unused)) LogHas(const char *needle) {return strstr(logtext,needle)!=NULL;}
 static void GuAbortSelectedGpuStep(void){aborted=1;}
+/* The trace is a port facility (src/boot_io.c). This harness splices two
+ * functions out of their file, so it supplies the port and the two macros its
+ * real translation unit gets from boot_io.h. They are inert here: what this
+ * harness checks is the ordered policy, not the verbosity. */
+static void __attribute__((unused)) GuTracePhase(const char *phase){(void)phase;}
+static void __attribute__((unused)) GuTraceDetail(const char *phase,const char *format,...){(void)phase;(void)format;}
+static void __attribute__((unused)) GuTraceReset(void){}
+#define GU_PHASE(NAME) do { *stage=(NAME); GuTracePhase(NAME); } while(0)
+#define GU_TRACE_BEGIN() do { } while(0)
 static EFI_STATUS GuBootLoadAssets(void){
   loads++;
   if(aborted||Gu.assets||Gu.completed||!Gu.pci)violations++;
