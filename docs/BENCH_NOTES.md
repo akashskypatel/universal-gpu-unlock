@@ -107,3 +107,45 @@ Consequences, taken deliberately:
 
 What still refuses on this bench: the 3080's `ASPM=2`. That is one condition, on
 one card, and it is not something the image may fix by writing Link Control.
+
+## The boot that admits a card, and the boot that writes
+
+RUN0010 (`physical-prepare-0008`) is the first log on this bench where a card
+reads `ADMISSION=ALLOW`:
+
+```
+ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=OK WIDTH=16 ... ASPM=0 TRAINED=1 UP=0
+  ERRORS=9 ERROR_CE=1 ERROR_UR=1 OK_ERRORS=1 OK_ASPM=1 OK_TRAINED=1 OK_LINK=1
+  UP_WEIGHED=0 ADMISSION=ALLOW
+ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=ASPM_ENABLED WIDTH=4 ... ASPM=2 ...
+  OK_ERRORS=1 OK_ASPM=0 OK_TRAINED=1 OK_LINK=1 UP_WEIGHED=0 ADMISSION=REFUSE
+```
+
+The 3080 now refuses on `ASPM` alone. The preparation image refuses either way -
+`ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1` -
+so a green reading here is a passed gate, not a transaction.
+
+**The waived image asks for a key.** `GuBootChoose` (`src/boot_io.c`) prints a
+menu and waits **30 seconds**, then defaults to `S`:
+
+```
+  [U] Experimental selected GPU transaction (RAM-only)
+  [P] Experimental GPU transaction with S3 resume script
+  [I] Install DXE Driver to UEFI NVRAM (Auto-boot / S3)
+  [R] Remove DXE Driver from UEFI NVRAM
+  [S] Stock Windows (Skip unlock, normal boot)
+```
+
+If nothing is pressed the log says `Operator skipped: no GPU transaction, no
+driver release; stock Windows` and the machine boots Windows. That is the only
+outcome of a run that looks like nothing happened, and it is a person at the
+console, not a setting. `U` runs the transaction without the S3 resume script;
+`P` registers it; `I`/`R` only touch NVRAM.
+
+**What the waived boot adds that no preparation boot can see:** the watchdog line
+(`WATCHDOG BOUND=<n> SECONDS ACTIVE=1`, or `BOUND=0 ... REASON=NO_BUILD_THRESHOLD`),
+the BAR0 attribute read compared against config, the driver release, DMA
+quiescence, the boot-state record written *before* the first mutation so a power
+loss still names the card, and one ordered step per target with no automatic
+retry. All of those come after `BEFORE_GU_INIT=1`, so RUN0010 says nothing about
+them.

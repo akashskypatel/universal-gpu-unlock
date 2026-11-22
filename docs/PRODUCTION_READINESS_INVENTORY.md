@@ -460,6 +460,56 @@ window, 1 MiB ROM buffer, ~80 MB radix table) is still arithmetic in the source
 and unmeasured for two cards, and no byte of evidence here comes from silicon.
 `M4_ONE_CARD_ONLY` therefore still applies to every donor run.
 
+### 11.50 — the first admitted card, and what a waived boot adds that a preparation boot cannot see
+
+RUN0010 (`physical-prepare-0008`) is the read-only boot on the build that weighs
+uncorrected errors only. It is the confirmation the policy change needed:
+
+```
+ACTIVE_LINK[0] ... PCI_LINK=OK ... ASPM=0 TRAINED=1 UP=0 ERRORS=9 ERROR_CE=1
+  ERROR_UR=1 OK_ERRORS=1 OK_ASPM=1 OK_TRAINED=1 OK_LINK=1 UP_WEIGHED=0 ADMISSION=ALLOW
+ACTIVE_LINK[1] ... PCI_LINK=ASPM_ENABLED ... ASPM=2 ... OK_ASPM=0 ADMISSION=REFUSE
+ACTIVE_EXECUTION=REFUSED REASON=SELECTION_PREPARATION_ONLY BEFORE_GU_INIT=1
+STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0
+```
+
+The 4090 is the first card on this bench to read `ADMISSION=ALLOW`, and the 3080
+now refuses on exactly one condition - the chipset-side `ASPM=2` that §11.49 left
+standing. Nothing else about either card changed, and the boot still mutated
+nothing: admission is a gate, not a transaction.
+
+**Reviewing the waived boot before running it.** Reading the source in the order
+the image executes it, four things are true of `actuate-one-target` on
+`0000:01:00.0` that the preparation log cannot show:
+
+1. **It is interactive.** `GuBootChoose` waits 30 s at a `[U/P/I/R/S]` prompt and
+   defaults to `S`. Without a keypress the log reads `Operator skipped: no GPU
+   transaction, no driver release; stock Windows` and Windows boots. A run that
+   "did nothing" is this, not a fault.
+2. **It re-reads the link and re-checks the capability chain for the selected
+   card** before anything is released - the same two checks RUN0010 passed - and
+   then, unlike the preparation path, it continues into `RefreshGpuRecords`,
+   `BindPreparedSequence` and the waiver line
+   `ACTIVE_EXECUTION=WAIVED_UNVERIFIED ... MUTATION_AUTHORIZED=1 ... WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION`.
+3. **The checks it adds are the ones a read-only boot never reaches:** BAR0 window
+   attributes compared against config (`BAR0 config/attribute mismatch`),
+   `WATCHDOG BOUND=<n> SECONDS ACTIVE=1` or `BOUND=0 ... NO_BUILD_THRESHOLD`,
+   driver release, DMA quiescence, and a `GU_BOOT_STATE_INTENT` record written
+   *before* the first mutation so a power loss still names the card.
+4. **One boot executes the ordered list.** `GuExecutePreparedSequence` loops the
+   prepared steps in-boot, each gated on its predecessor's completion record, with
+   no automatic retry, and only returns success once
+   `GuExecutionReadyForWindows` verifies the sequence.
+
+**What one target does not settle.** The 3080 is present and is not a target: the
+single-target build admits an inventory of two, tracks the other card for drift,
+and never addresses it. So a green `mutated=1` on `01:00.0` qualifies one card's
+transaction and says nothing about the second - the dual sequence still waits on
+the `ASPM=2` that §11.49 declined to normalise without approval.
+
+**Unchanged.** `hardware_verified` stays false for all 43 entries, the counts stay
+11 met / 15 partial / 17 not started, `C5` stays `none`.
+
 ### 11.49 — a fundamental reset does not clear the sticky bits, so the gate refused every healthy machine
 
 Two more preparation boots arrived, byte-identical to each other

@@ -517,6 +517,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-prepare-0005` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `77481b33b59e5afaa0056673f6f51a1666d253b1fd6685fa380411d4c9d65ee7` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-prepare-0006` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-prepare-0007` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `def79c67d7140a474b2698e774cccae3ab2e48811265657c7a0e5c5fa54f7ab6` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
+| `physical-prepare-0008` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `ac9cf3bb73f56ae4f49008892d06c16535292f5d707eeba0dbad1968e0accc56` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -1045,6 +1046,31 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FA
 *History:* RUN0009, and the run that decides the question RUN0008 could not: whether `ERRORS=9` is left over from an earlier session or written by firmware on every boot. The output is byte-identical to RUN0008 (same sha256), so the answer is the second one.
 
 *What it does not show:* that the bits can be cleared at all on this board; it shows they are re-set before the image runs. It also cannot say which firmware phase writes them, only that it happens before this image's first config read
+
+### `physical-prepare-0008`
+
+*File:* `tests/data/hardware_session/physical-prepare-0008.txt` — 1593 bytes stored, 1593 as captured, 17 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-21. *Bench:* the same machine as RUN0008/RUN0009, booted from the stick with no Windows boot in between; no BIOS change since RUN0009.
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-prepare-0008.txt --stage prepare
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=OK WIDTH=16` — the first time any log on this bench has admitted a card: the 4090 now reads PCI_LINK=OK and ADMISSION=ALLOW, with the four weighed conditions at OK_ERRORS=1 OK_ASPM=1 OK_TRAINED=1 OK_LINK=1. Its ERRORS=9 (CE|UR) is still reported and still not weighed
+* `ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=ASPM_ENABLED` — the 3080 refuses on one condition and one only: ASPM=2 on a link behind the chipset. Everything else about that card now reads OK, which makes the chipset-side L1 request the last standing refusal on the bench
+* `OK_LINK=1 UP_WEIGHED=0` — the tokens of the build that weighs uncorrected errors only, so this file cannot be confused with a log from the earlier build (which printed OK_UP and refused on it)
+* `STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0` — still a read-only boot: one card is admitted but the preparation path refuses before GuInit, so admission alone never writes
+
+*History:* RUN0010: the same boot as RUN0007 to RUN0009 on a build whose link policy weighs FER/NFER and the negotiated link instead of the sticky CE/UR bits and DLLLA. It is the read-only confirmation that the change admits the card it was meant to admit.
+
+*What it does not show:* that the admitted card can be unlocked: this file shows a passed gate, not a transaction. It also cannot show whether the one-target waived image will pass the checks the preparation path never reaches (BAR0 attributes, driver release, DMA quiescence)
 
 ## Advancing between stages: `donor_gate.py`
 

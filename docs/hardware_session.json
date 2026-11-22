@@ -2237,6 +2237,40 @@
         ],
         "history": "RUN0009, and the run that decides the question RUN0008 could not: whether `ERRORS=9` is left over from an earlier session or written by firmware on every boot. The output is byte-identical to RUN0008 (same sha256), so the answer is the second one.",
         "does_not_show": "that the bits can be cleared at all on this board; it shows they are re-set before the image runs. It also cannot say which firmware phase writes them, only that it happens before this image's first config read"
+      },
+      {
+        "id": "physical-prepare-0008",
+        "captured": "2026-11-21",
+        "image": "prep-selected (built with -CapturedPromReference)",
+        "stage": "prepare",
+        "file": "tests/data/hardware_session/physical-prepare-0008.txt",
+        "sha256": "ac9cf3bb73f56ae4f49008892d06c16535292f5d707eeba0dbad1968e0accc56",
+        "bytes": 1593,
+        "captured_bytes": 1593,
+        "lines": 17,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "the same machine as RUN0008/RUN0009, booted from the stick with no Windows boot in between; no BIOS change since RUN0009",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "ACTIVE_LINK[0] BDF=0000:01:00.0 PCI_LINK=OK WIDTH=16",
+            "why": "the first time any log on this bench has admitted a card: the 4090 now reads PCI_LINK=OK and ADMISSION=ALLOW, with the four weighed conditions at OK_ERRORS=1 OK_ASPM=1 OK_TRAINED=1 OK_LINK=1. Its ERRORS=9 (CE|UR) is still reported and still not weighed"
+          },
+          {
+            "token": "ACTIVE_LINK[1] BDF=0000:04:00.0 PCI_LINK=ASPM_ENABLED",
+            "why": "the 3080 refuses on one condition and one only: ASPM=2 on a link behind the chipset. Everything else about that card now reads OK, which makes the chipset-side L1 request the last standing refusal on the bench"
+          },
+          {
+            "token": "OK_LINK=1 UP_WEIGHED=0",
+            "why": "the tokens of the build that weighs uncorrected errors only, so this file cannot be confused with a log from the earlier build (which printed OK_UP and refused on it)"
+          },
+          {
+            "token": "STOP: stage=discover status=0x8000000000000003 mutated=0 retained=0 fault=0",
+            "why": "still a read-only boot: one card is admitted but the preparation path refuses before GuInit, so admission alone never writes"
+          }
+        ],
+        "history": "RUN0010: the same boot as RUN0007 to RUN0009 on a build whose link policy weighs FER/NFER and the negotiated link instead of the sticky CE/UR bits and DLLLA. It is the read-only confirmation that the change admits the card it was meant to admit.",
+        "does_not_show": "that the admitted card can be unlocked: this file shows a passed gate, not a transaction. It also cannot show whether the one-target waived image will pass the checks the preparation path never reaches (BAR0 attributes, driver release, DMA quiescence)"
       }
     ]
   },
