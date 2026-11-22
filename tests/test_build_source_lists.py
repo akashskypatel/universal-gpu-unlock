@@ -91,8 +91,7 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
 @unittest.skipUnless(shutil.which(waiver_build_diff.compiler()) and shutil.which("nm"),
                      "no host compiler for the link check")
 class TheImagesWouldLink(unittest.TestCase):
-    def test_every_listed_unit_finds_the_symbols_it_needs(self):
-        units = app_sources()
+    def _check_units(self, units: list[str]) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             workdir = Path(temporary)
             defined: set[str] = set()
@@ -109,8 +108,6 @@ class TheImagesWouldLink(unittest.TestCase):
                     if not parts:
                         continue
                     name = parts[-1]
-                    # Only this project's own functions: EFI services, libc and
-                    # compiler builtins belong to the environment, not the image.
                     if re.fullmatch(r"Gu[A-Z]\w*", name):
                         imported.add(name)
                 undefined[unit] = imported
@@ -118,6 +115,12 @@ class TheImagesWouldLink(unittest.TestCase):
                        if names - defined}
             self.assertEqual(missing, {},
                              "these builders would not link: " + repr(missing))
+
+    def test_every_listed_unit_finds_the_symbols_it_needs(self):
+        self._check_units(app_sources())
+
+    def test_dxe_recovery_dependencies_would_link(self):
+        self._check_units(builder_sources("Build-Dxe-Driver.ps1"))
 
 
 if __name__ == "__main__":
