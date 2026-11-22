@@ -1,17 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /* Persisted boot record: the only piece of state that survives a failed boot.
  *
- * The image re-applies the transaction on every boot and has no rollback, so a
- * machine that loses power mid-transaction boots again with no evidence that an
- * attempt was in flight. This module keeps one fixed-size record in NVRAM:
+ * This module keeps one fixed-size record in NVRAM:
  *
  *   phase = INTENT   written before the first GPU mutation, naming the card
  *   phase = OUTCOME  written after the sequence returns, with the status
  *
- * The record is deliberately INERT. Nothing in the actuation path branches on
- * it: it cannot admit, refuse, skip or repeat a transaction, because whether a
- * re-applied transaction is safe is unproven. It exists so the next boot, and a
- * human with the USB log, can see what the previous boot was doing.
+ * An unmatched INTENT or a non-success OUTCOME is a recovery latch: the DXE
+ * entrypoint skips all GPU work and removes its owned Driver#### entry from
+ * DriverOrder. This makes the next boot fail closed instead of repeating a
+ * failed/interrupted transaction. The USB application recognizes the same latch before GPU discovery and removes
+ * the owned NVRAM entry entirely. Neither path tries to repair GPU state.
  *
  * Reset path: GuBootStateDelete removes the record. A record that fails its
  * size/magic/reserved-byte check is treated as absent and logged, never
@@ -56,7 +55,7 @@ EFI_STATUS GuBootStateWrite(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *State)
 EFI_STATUS GuBootStateDelete(EFI_SYSTEM_TABLE *Table);
 
 /* Build and write one phase transition. A write failure is returned for the
- * log and never propagated into the decision that produced it. */
+ * log; the caller's recovery policy remains conservative if no latch is stored. */
 EFI_STATUS GuBootStateRecord(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *Previous,
                              UINT32 Phase, UINT64 Status, UINT16 DeviceId,
                              UINT16 Segment, UINT16 Bus, UINT8 Device, UINT8 Function,

@@ -11,6 +11,7 @@
 #include "vendor/unlock_610.h"
 #include "s3_save.h"
 #include "boot_state.h"
+#include "driver_nvram.h"
 
 /* UEFI ReadyToBoot event group: 7ce88fb3-4bd7-4679-87a8-a8d8dee50d2b.
  * Run when console and PCI bindings are initialized, instead of assuming
@@ -32,12 +33,28 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   EFI_STATUS s = GuBootOpen(image, t);
   if (s != EFI_SUCCESS) return s;
 
-  /* Report what the previous boot left behind. The record is inert: it never
-   * admits, refuses, skips or repeats a transaction. */
-  /* boot_io reported the previous boot's record when it opened; this read only
-   * carries the boot counter forward. It never changes the path. */
+  /* boot_io reports the previous record. This read carries its contents into
+   * the recovery check below; only failed/interrupted transactions can select
+   * the no-GPU recovery path. */
   GU_BOOT_STATE boot_state; BOOLEAN boot_state_present = FALSE;
   boot_state_present = (GuBootStateRead(t, &boot_state) == EFI_SUCCESS);
+
+  /* An unmatched INTENT, or a non-success OUTCOME, means the prior DXE
+   * transaction was interrupted or failed. Do not touch PCI or retry: remove
+   * our verified Driver#### entry from DriverOrder, then let firmware continue
+   * to the normal boot target. If NVRAM refuses the write, this invocation
+   * still performs no GPU work and the next boot retries this recovery check. */
+  if (boot_state_present &&
+      (boot_state.Phase == GU_BOOT_STATE_INTENT ||
+       (boot_state.Phase == GU_BOOT_STATE_OUTCOME && boot_state.Status != EFI_SUCCESS))) {
+    EFI_STATUS disabled = GuDisableDriverOption(t);
+    GuLog("DXE_RECOVERY=FAILED_OR_INTERRUPTED DRIVER_ORDER_DISABLE=%#llx ACTION=SKIP_GPU\n",
+          (unsigned long long)disabled);
+    GuBootSay(L"\r\n[RECOVERY] An earlier DXE attempt did not complete.\r\n"
+              L"The GPU transaction is disabled for this boot; continuing normally.\r\n");
+    EFI_STATUS closed = GuBootClose();
+    return closed == EFI_SUCCESS ? EFI_SUCCESS : closed;
+  }
 
   const char *stage = "dxe-discover";
   s = GuDiscoverSingleGpu(image, t);

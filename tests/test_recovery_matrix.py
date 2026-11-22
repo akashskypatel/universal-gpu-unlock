@@ -134,7 +134,8 @@ class TheDocumentMatchesTheManifest(unittest.TestCase):
 
     def test_the_document_says_what_it_is_not(self):
         flat = " ".join(DOC.split())
-        self.assertIn("not a claim that any of this has been executed", flat)
+        self.assertIn("verified on hardware", flat)
+        self.assertIn("60-second cold boot with USB removed", flat)
         self.assertIn("CAN_UNLOCK=false", DOC)
         self.assertIn("RECOVERY_VERIFIED=false", DOC)
 

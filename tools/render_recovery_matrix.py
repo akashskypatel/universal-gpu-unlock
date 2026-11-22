@@ -23,10 +23,11 @@ DOCUMENT = ROOT / "docs" / "RECOVERY_MATRIX.md"
 HEADER = """# Recovery matrix
 
 What to do when a boot did not end the way it should, and what proves you are
-back. This is a plan checked against the code, **not a claim that any of this has
-been executed**: no hardware run has produced any of these failures, and the
-eligibility gates still read `CAN_DETACH=false`, `CAN_UNLOCK=false`,
-`CAN_FLASH=false`, `RECOVERY_VERIFIED=false`.
+back. This is a plan checked against the code. The recovery routes are covered by
+source/host contracts but have **not** been verified on hardware. The user reported
+full recovery after a 60-second cold boot with USB removed; that does not validate
+the new firmware recovery routes. Eligibility gates still read
+`CAN_DETACH=false`, `CAN_UNLOCK=false`, `CAN_FLASH=false`, `RECOVERY_VERIFIED=false`.
 
 Every class below is grounded in something this repository prints or stores:
 
@@ -42,9 +43,9 @@ it by `tools/render_recovery_matrix.py`; `tests/test_recovery_matrix.py` fails i
 they differ, if a symptom line no longer exists, or if any class starts claiming a
 verified recovery.
 
-Recovery is per card and per class. There is no rollback, no re-flash path, and
-nothing in the image branches on the record - a re-applied transaction is not
-proven safe, so the image never retries on its own behalf.
+Recovery is per card and per class. There is no rollback or re-flash path. A
+failed/interrupted boot record now blocks another DXE transaction and selects a
+no-GPU recovery path; the code does not attempt to repair GPU firmware state.
 
 ---
 

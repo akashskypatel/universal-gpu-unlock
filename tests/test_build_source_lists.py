@@ -49,12 +49,12 @@ def app_sources() -> list[str]:
     return [entry.replace("\\", "/") for entry in run_simulation.APP_SOURCES]
 
 
-# The only reviewed difference: the DXE driver has its own entrypoint and does
-# not perform the application's boot-order NVRAM writes. Everything else - every
-# module the program actually contains - must be identical.
+# Reviewed differences: the DXE image has its own entrypoint, while the app has
+# the app-only entrypoint and interactive install/remove flow. Both now compile
+# driver_nvram.c: the DXE uses it for fail-closed self-disable recovery.
 ALLOWED_DELTA = {
     "Build-Experimental-MSVC.ps1": (set(), set()),
-    "Build-Dxe-Driver.ps1": ({"dxe_main.c"}, {"app.c", "driver_nvram.c"}),
+    "Build-Dxe-Driver.ps1": ({"dxe_main.c"}, {"app.c"}),
 }
 
 

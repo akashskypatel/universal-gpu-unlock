@@ -92,6 +92,7 @@ try {
         'gpu_discovery.c',
         'gpu_selection.c',
         'boot_state.c',
+        'driver_nvram.c',
         'asset_install.c',
         'gpu_execution_state.c',
         'gpu_windows_path.c',

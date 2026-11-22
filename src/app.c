@@ -157,10 +157,42 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   s=GuBootOpen(image,t);if(s!=EFI_SUCCESS)return s;
 
-  /* boot_io reported the previous boot's record when it opened; this read only
-   * carries the boot counter forward. It never changes the path. */
+  /* boot_io reported the previous boot's record when it opened; this read
+   * carries it forward and selects the recovery-only path when needed. */
   GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
   boot_state_present=(GuBootStateRead(t,&boot_state)==EFI_SUCCESS);
+
+  /* USB recovery is intentionally before GPU discovery/preparation: those
+   * stages may be exactly what failed on the previous boot. An unfinished
+   * INTENT or failed OUTCOME means the prior transaction did not complete
+   * safely, so remove our owned DXE option, clear the latch when possible,
+   * and continue to Windows without touching PCI. */
+  if(boot_state_present&&
+     (boot_state.Phase==GU_BOOT_STATE_INTENT||
+      (boot_state.Phase==GU_BOOT_STATE_OUTCOME&&boot_state.Status!=EFI_SUCCESS))) {
+    GuLog("USB_RECOVERY=FAILED_OR_INTERRUPTED ACTION=REMOVE_DXE_AND_SKIP_GPU\n");
+    GuBootSay(L"\r\n[RECOVERY] An earlier GPU/DXE attempt did not complete.\r\n"
+              L"Removing the AdaUnlock DXE boot entry; no GPU will be touched.\r\n");
+    EFI_STATUS load=GuBootLoadWindows();
+    EFI_STATUS remove=GuRemoveDriverOption(t);
+    if(remove==EFI_NOT_FOUND)remove=EFI_SUCCESS;
+    GuLog("USB_RECOVERY DRIVER_REMOVE=%#llx WINDOWS_LOAD=%#llx\n",
+          (unsigned long long)remove,(unsigned long long)load);
+    if(remove==EFI_SUCCESS) {
+      EFI_STATUS deleted=GuBootStateDelete(t);
+      GuLog("USB_RECOVERY BOOT_STATE_DELETE=%#llx\n",(unsigned long long)deleted);
+      GuBootSay(L"[RECOVERY] DXE entry removed. Continuing without GPU changes.\r\n");
+    } else {
+      GuBootSay(L"[ERROR] Could not remove the DXE boot entry. See USB log.\r\n");
+    }
+    EFI_STATUS closed=GuBootClose();
+    if(remove!=EFI_SUCCESS||closed!=EFI_SUCCESS||load!=EFI_SUCCESS) {
+      if(t->RuntimeServices&&t->RuntimeServices->ResetSystem)
+        t->RuntimeServices->ResetSystem(EfiResetWarm,EFI_ABORTED,0,NULL);
+      return remove!=EFI_SUCCESS?remove:(closed!=EFI_SUCCESS?closed:load);
+    }
+    return GuBootWindows();
+  }
 
   /* Name the reference table this image was built with before any stage can
    * refuse. Nothing below this line is reached by a preparation-only build, so

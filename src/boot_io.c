@@ -454,8 +454,8 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   }
 
   /* The persisted record is the only state that survives a failed boot, so it
-   * is reported here, once, for every entrypoint. It stays inert: it never
-   * admits, refuses, skips or repeats a transaction. */
+   * is reported here, once, for every entrypoint. An unmatched INTENT is also
+   * consumed by the entrypoint-specific fail-closed recovery path. */
   {
     GU_BOOT_STATE previous;
     EFI_STATUS read=GuBootStateRead(Table,&previous);

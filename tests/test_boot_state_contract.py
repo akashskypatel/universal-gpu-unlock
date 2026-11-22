@@ -1,17 +1,8 @@
-"""Contract tests for the persisted boot record (A7, partial).
+"""Contract tests for the persisted boot record and fail-closed recovery.
 
-The record is the only state that survives a failed boot. These tests pin the
-properties that make it safe to write at all:
-
-  1. it is inert - no actuation decision may branch on it;
-  2. it is written in two phases, intent before the first mutation and outcome
-     after, so a power loss is visible on the next boot;
-  3. a corrupt or short record is refused, never repaired or guessed at;
-  4. a write failure is logged and never changes the transaction's result;
-  5. both entrypoints (application and DXE driver) do the same thing.
-
-Nothing here claims that re-applying the transaction is safe, and nothing claims
-hardware evidence.
+An unmatched INTENT prevents a repeated DXE transaction and causes the USB app
+recovery route to run before GPU discovery. These contracts do not claim
+physical hardware recovery evidence.
 """
 from pathlib import Path
 import shutil
@@ -30,39 +21,38 @@ BOOT_IO = (SRC / "boot_io.c").read_text(encoding="utf-8")
 ENTRYPOINTS = (("app.c", APP), ("dxe_main.c", DXE), ("boot_io.c", BOOT_IO))
 
 
-class RecordIsInert(unittest.TestCase):
-    def test_nothing_branches_on_the_record(self):
-        for name, text in ENTRYPOINTS:
-            for line in text.splitlines():
-                if "boot_state" not in line and "BOOT_STATE" not in line:
-                    continue
-                stripped = line.strip()
-                # No control transfer may depend on the record: not an early
-                # return, not a goto, not a break. It may only be logged.
-                for forbidden in ("goto ", "return ", "break;", "continue;"):
-                    self.assertNotIn(forbidden, stripped,
-                                     "%s transfers control on the record: %s" % (name, stripped))
-                # The one permitted condition is the warning about an
-                # interrupted previous boot, and its body is a log call.
-                if "if(" in stripped or "if (" in stripped:
-                    self.assertIn("Phase", stripped,
-                                  "%s branches on the record: %s" % (name, stripped))
-                    self.assertIn("INTENT", stripped,
-                                  "%s branches on the record: %s" % (name, stripped))
-        self.assertIn("Nothing in the actuation path branches on", HEADER)
+class RecoveryPolicy(unittest.TestCase):
+    def test_dxe_latches_out_interrupted_attempt_before_discovery(self):
+        recovery = DXE.index("DXE_RECOVERY=FAILED_OR_INTERRUPTED")
+        disable = DXE.index("GuDisableDriverOption(t)")
+        discover = DXE.index("GuDiscoverSingleGpu(image, t)")
+        self.assertLess(recovery, discover)
+        self.assertLess(disable, discover)
+        self.assertIn("ACTION=SKIP_GPU", DXE)
+        self.assertIn("boot_state.Status != EFI_SUCCESS", DXE)
 
-    def test_module_has_no_decision_surface(self):
-        # No function in the module returns a policy answer.
-        self.assertNotIn("EFI_BOOT_STATE_", STATE)
-        for forbidden in ("GuPreflight", "GuActuationAdmitted", "GU_ACTUATION_ADMITTED"):
-            self.assertNotIn(forbidden, STATE)
+    def test_usb_recovery_removes_dxe_before_discovery(self):
+        recovery = APP.index("USB_RECOVERY=FAILED_OR_INTERRUPTED")
+        remove = APP.index("GuRemoveDriverOption(t)")
+        discover = APP.index("GuDiscoverSingleGpu(image,t)")
+        self.assertLess(recovery, discover)
+        self.assertLess(remove, discover)
+        self.assertIn("GuBootStateDelete(t)", APP)
+        self.assertIn("GuBootWindows()", APP)
+        self.assertIn("boot_state.Status!=EFI_SUCCESS", APP)
+
+    def test_recovery_only_disables_or_removes_owned_driver_option(self):
+        self.assertIn("EFI_STATUS GuDisableDriverOption", (SRC / "driver_nvram.c").read_text())
+        self.assertIn("return RemoveOwnedFromOrder(rs, order, count, own);", (SRC / "driver_nvram.c").read_text())
+        self.assertIn("GuRemoveDriverOption(t)", APP)
+        self.assertNotIn("GuExecutePreparedSequence", DXE.split("DXE_RECOVERY=FAILED_OR_INTERRUPTED", 1)[1].split("const char *stage", 1)[0])
 
 
 class TwoPhaseWrites(unittest.TestCase):
     def test_intent_precedes_the_sequence_and_outcome_follows(self):
         for name, text in (("app.c", APP), ("dxe_main.c", DXE)):
             intent = text.index("GU_BOOT_STATE_INTENT")
-            outcome = text.index("GU_BOOT_STATE_OUTCOME")
+            outcome = text.rindex("GU_BOOT_STATE_OUTCOME")
             sequence = min(text.index("GuExecutePreparedSequence"),
                            text.index("GuExecuteUnlock") if "GuExecuteUnlock" in text else 10**9)
             self.assertLess(intent, sequence, name)

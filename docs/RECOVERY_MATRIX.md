@@ -1,10 +1,11 @@
 # Recovery matrix
 
 What to do when a boot did not end the way it should, and what proves you are
-back. This is a plan checked against the code, **not a claim that any of this has
-been executed**: no hardware run has produced any of these failures, and the
-eligibility gates still read `CAN_DETACH=false`, `CAN_UNLOCK=false`,
-`CAN_FLASH=false`, `RECOVERY_VERIFIED=false`.
+back. This is a plan checked against the code. The recovery routes are covered by
+source/host contracts but have **not** been verified on hardware. The user reported
+full recovery after a 60-second cold boot with USB removed; that does not validate
+the new firmware recovery routes. Eligibility gates still read
+`CAN_DETACH=false`, `CAN_UNLOCK=false`, `CAN_FLASH=false`, `RECOVERY_VERIFIED=false`.
 
 Every class below is grounded in something this repository prints or stores:
 
@@ -20,9 +21,9 @@ it by `tools/render_recovery_matrix.py`; `tests/test_recovery_matrix.py` fails i
 they differ, if a symptom line no longer exists, or if any class starts claiming a
 verified recovery.
 
-Recovery is per card and per class. There is no rollback, no re-flash path, and
-nothing in the image branches on the record - a re-applied transaction is not
-proven safe, so the image never retries on its own behalf.
+Recovery is per card and per class. There is no rollback or re-flash path. A
+failed/interrupted boot record now blocks another DXE transaction and selects a
+no-GPU recovery path; the code does not attempt to repair GPU firmware state.
 
 ---
 
@@ -252,6 +253,36 @@ Recovered when:
 * the next boot reports no INTENT record
 
 Not verified: Only one card has ever been driven, and not on hardware; the two-target run in the plan has not happened.
+
+---
+
+### `dxe-failure-recovery-latch`
+
+**DXE transaction failed and the next boot must not repeat it**
+
+| | |
+| --- | --- |
+| Symptom | `DXE_RECOVERY=FAILED_OR_INTERRUPTED` (src/dxe_main.c)<br>`USB_RECOVERY=FAILED_OR_INTERRUPTED` (src/app.c) |
+| Record | `Phase`, `Status`, `BootCount`, `DeviceId`, `Segment`, `Bus`, `Device`, `Function` |
+| Record state | An unmatched INTENT or an OUTCOME whose Status is not EFI_SUCCESS is treated as a persistent recovery latch. |
+| Card state | Unknown until separately diagnosed. Recovery changes only AdaUnlock boot registration; it does not reset or repair GPU state. |
+| Machine state | The next DXE invocation performs no GPU discovery or mutation and removes the owned option from DriverOrder. The USB recovery route removes the owned Driver#### entry entirely before handing off to Windows. |
+| Simulator | none |
+
+Steps:
+
+1. Without USB, allow the next boot to reach the DXE recovery check; it skips GPU work, disables the owned DriverOrder entry, and continues normal boot.
+2. With USB, launch the app; it detects the failed/interrupted record before GPU discovery, removes the owned DXE entry, and boots Windows without touching PCI.
+3. If the NVRAM operation fails, stop and use the firmware boot picker to choose Windows Boot Manager; do not select an unlock/transaction mode.
+4. After recovery, use only the read-only diagnostic until GPU state is independently confirmed.
+
+Recovered when:
+
+* the recovery log reports DXE_RECOVERY or USB_RECOVERY and no transaction is attempted
+* the owned AdaUnlock option is absent from DriverOrder (no-USB route) or removed from Driver#### and DriverOrder (USB route)
+* the system reaches Windows without another DXE transaction
+
+Not verified: Source contract tests cover ordering and ownership of the recovery actions; these new firmware paths have not been tested on hardware. The user separately reported full recovery after a 60-second cold boot with USB removed.
 
 ---
 
