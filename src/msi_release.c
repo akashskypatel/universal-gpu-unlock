@@ -994,6 +994,15 @@ static BOOLEAN DecodeMask(const UINT32 c[64],UINT64 *mask) {
   for(UINTN i=0;i<64;i++)if(i!=1&&c[i]!=Plan.config[i])return FALSE;
   *mask=(missing&1?EFI_PCI_IO_ATTRIBUTE_IO:0)|(missing&2?EFI_PCI_IO_ATTRIBUTE_MEMORY:0);return TRUE;
 }
+/* The final vendor Stop can clear PCI Command decode bits, which this image
+ * restores through config space before claiming PCI_IO exclusively. That raw
+ * config restore does not restore PCI_IO's own enabled-attribute state. Include
+ * any original IO/MEM attribute missing from the protocol readback, even when
+ * DecodeMask reports no remaining config-register delta. Never include BusMaster. */
+static UINT64 ClaimRestoreAttributeMask(UINT64 original,UINT64 current) {
+  const UINT64 decode=EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY;
+  return original&decode&~current;
+}
 /* Change only the selected card's Bus Master bit after vendor Stop.
  * No raw PCI writes, no new bus master enable, and no unverified peer drift. */
 /* The vendor's Stop() is entitled to disable the card's IO and memory decode,
@@ -1093,7 +1102,7 @@ static EFI_STATUS NormalizeMasterAfterStop(VOID) {
 static EFI_STATUS ClaimRestore(VOID) {
   if(!Plan.master_normalized)return EFI_NOT_READY;
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;EFI_PCI_IO_PROTOCOL *io=NULL;
-  UINT32 c[64];UINT64 mask=0,attrs=0,supported=0;
+  UINT32 c[64];UINT64 mask=0,attrs=0,supported=0,enable_mask=0;
   EFI_STATUS s=ReadConfig(c);if(s==EFI_SUCCESS&&!DecodeMask(c,&mask))s=EFI_NOT_READY;
   GuLog("MSI decode restore intent: status=%#llx IO_MEM_mask=%#llx\n",(unsigned long long)s,(unsigned long long)mask);
   EFI_TPL old=b->RaiseTPL(TPL_NOTIFY);
@@ -1112,11 +1121,14 @@ static EFI_STATUS ClaimRestore(VOID) {
   if(s!=EFI_SUCCESS) GuLog("ClaimRestore failed at OpenProtocol: %#llx\n", (unsigned long long)s);
   if(s==EFI_SUCCESS){Plan.claimed=TRUE;Gu.owned=TRUE;if(io!=Gu.pci){GuLog("ClaimRestore failed: io != Gu.pci\n");s=EFI_COMPROMISED_DATA;}}
   if(s==EFI_SUCCESS)s=io->Attributes(io,EfiPciIoAttributeOperationGet,0,&attrs);
+  if(s==EFI_SUCCESS)enable_mask=ClaimRestoreAttributeMask(Plan.attributes,attrs);
   if(s==EFI_SUCCESS) {
     UINT64 exp_pre = Plan.attributes & ~(mask|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
     UINT64 chk_pre = attrs & (EFI_PCI_IO_ATTRIBUTE_IO|EFI_PCI_IO_ATTRIBUTE_MEMORY|EFI_PCI_IO_ATTRIBUTE_BUS_MASTER);
-    GuLog("ClaimRestore: pre-enable attrs=%#llx (plan=%#llx mask=%#llx exp=%#llx)\n",
-      (unsigned long long)attrs, (unsigned long long)Plan.attributes, (unsigned long long)mask, (unsigned long long)exp_pre);
+    GuLog("ClaimRestore: pre-enable attrs=%#llx (plan=%#llx config_mask=%#llx enable_mask=%#llx exp=%#llx)\n",
+      (unsigned long long)attrs, (unsigned long long)Plan.attributes,
+      (unsigned long long)mask, (unsigned long long)enable_mask,
+      (unsigned long long)exp_pre);
     if((attrs & EFI_PCI_IO_ATTRIBUTE_BUS_MASTER) ||
        (chk_pre != exp_pre && chk_pre != Plan.attributes && chk_pre != 0 && chk_pre != EFI_PCI_IO_ATTRIBUTE_IO)) {
       GuLog("ClaimRestore failed at pre-enable attrs: attrs=%#llx exp=%#llx\n", (unsigned long long)attrs, (unsigned long long)exp_pre);
@@ -1124,8 +1136,8 @@ static EFI_STATUS ClaimRestore(VOID) {
     }
   }
   if(s==EFI_SUCCESS)s=io->Attributes(io,EfiPciIoAttributeOperationSupported,0,&supported);
-  if(s==EFI_SUCCESS&&(supported&mask)!=mask) {
-    GuLog("ClaimRestore failed at supported: supported=%#llx missing mask=%#llx\n", (unsigned long long)supported, (unsigned long long)mask);
+  if(s==EFI_SUCCESS&&(supported&enable_mask)!=enable_mask) {
+    GuLog("ClaimRestore failed at supported: supported=%#llx missing mask=%#llx\n", (unsigned long long)supported, (unsigned long long)enable_mask);
     s=EFI_UNSUPPORTED;
   }
   if(s==EFI_SUCCESS)s=Snapshot(&Current);
@@ -1134,8 +1146,8 @@ static EFI_STATUS ClaimRestore(VOID) {
     GraphDiff(3, TRUE);
     s=EFI_NOT_READY;
   }
-  if(s==EFI_SUCCESS&&mask) {
-    s=io->Attributes(io,EfiPciIoAttributeOperationEnable,mask,NULL);
+  if(s==EFI_SUCCESS&&enable_mask) {
+    s=io->Attributes(io,EfiPciIoAttributeOperationEnable,enable_mask,NULL);
     if(s!=EFI_SUCCESS) GuLog("ClaimRestore failed at Attributes Enable: %#llx\n", (unsigned long long)s);
   }
   b->RestoreTPL(old);

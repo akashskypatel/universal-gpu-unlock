@@ -24,7 +24,7 @@ def source_define(name):
 
 def source_body(name):
     match = re.search(
-        r"\bstatic\s+(?:BOOLEAN|EFI_STATUS)\s+" + re.escape(name)
+        r"\bstatic\s+(?:BOOLEAN|EFI_STATUS|UINT64)\s+" + re.escape(name)
         + r"\s*\([^;]*?\)\s*\{", SOURCE, re.DOTALL
     )
     if not match:
@@ -62,6 +62,8 @@ typedef int BOOLEAN;
 #define EFI_DEVICE_ERROR 4
 #define EFI_COMPROMISED_DATA 5
 #define EFI_ACCESS_DENIED 6
+#define EFI_PCI_IO_ATTRIBUTE_IO 0x100u
+#define EFI_PCI_IO_ATTRIBUTE_MEMORY 0x200u
 #define EFI_PCI_IO_ATTRIBUTE_BUS_MASTER 4u
 #define EFI_ERROR(s) ((s)!=EFI_SUCCESS)
 #define EfiPciIoAttributeOperationGet 1
@@ -180,6 +182,13 @@ static void reset_case(unsigned cmd) {
   decode_writes=decode_fail=decode_readback_lies=0;
 }
 int main(void) {
+  /* RUN0023/25/28: raw PCI config was restored to IO|MEM, but PCI_IO's own
+   * attribute state still read zero. The latter must be independently enabled. */
+  assert(ClaimRestoreAttributeMask(0x300u,0u)==0x300u);
+  assert(ClaimRestoreAttributeMask(0x300u,0x100u)==0x200u);
+  assert(ClaimRestoreAttributeMask(0x100u,0u)==0x100u);
+  assert((ClaimRestoreAttributeMask(0x300u,0u)&EFI_PCI_IO_ATTRIBUTE_BUS_MASTER)==0);
+
   reset_case(6u);
   assert(NormalizeMasterAfterStop()==EFI_SUCCESS);
   assert(Plan.master_normalized && !(current[1]&4u) && !(attrs&4u));
@@ -290,13 +299,22 @@ int main(void) {
   assert(NormalizeMasterAfterStop()==EFI_NOT_READY);
   assert(decode_writes==1);
 
-  puts("STATUS=COMPLETE PASS=18 REAL_PCI_MASTER_TRANSITION_CASES");
+  puts("STATUS=COMPLETE PASS=22 REAL_PCI_MASTER_TRANSITION_CASES");
   return 0;
 }
 """
 
 
 class ActualMasterTransitionTests(unittest.TestCase):
+    def test_claim_restore_uses_protocol_attribute_state_after_config_restore(self):
+        claim = source_body("ClaimRestore")
+        derive = "enable_mask=ClaimRestoreAttributeMask(Plan.attributes,attrs)"
+        self.assertIn(derive, claim)
+        self.assertLess(claim.index(derive),
+                        claim.index("EfiPciIoAttributeOperationSupported"))
+        self.assertIn("EfiPciIoAttributeOperationSupported,0,&supported", claim)
+        self.assertIn("EfiPciIoAttributeOperationEnable,enable_mask", claim)
+
     def test_normalization_with_independent_mock_io(self):
         code = HARNESS.replace("%%s", source_define("GU_TX_PENDING_POLLS")).replace(
             "__ACTUAL_CODE__",
@@ -305,6 +323,7 @@ class ActualMasterTransitionTests(unittest.TestCase):
                          source_body("ConfigStablePostStop"),
                          source_body("WaitTxPendingClear"),
                          source_body("RestoreDecodeClearedByDetach"),
+                         source_body("ClaimRestoreAttributeMask"),
                          source_body("NormalizeMasterAfterStop")]),
         )
         compiler = os.environ.get("CC", "gcc")
@@ -323,7 +342,7 @@ class ActualMasterTransitionTests(unittest.TestCase):
                 timeout=10, check=False,
             )
             self.assertEqual(execution.returncode, 0, execution.stderr)
-            self.assertIn("STATUS=COMPLETE PASS=18", execution.stdout)
+            self.assertIn("STATUS=COMPLETE PASS=22", execution.stdout)
 
 
 if __name__ == "__main__":
