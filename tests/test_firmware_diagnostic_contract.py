@@ -10,6 +10,22 @@ B=(P/"boot_io.c").read_text(encoding="utf-8")
 A=(P/"app.c").read_text(encoding="utf-8")
 V=(P/"version.h").read_text(encoding="utf-8")
 class DiagnosticContract(unittest.TestCase):
+    def test_each_pci_path_node_logs_side_local_link_state_read_only(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        read=source.split("static int ReadPci(",1)[1].split("static int CapturePci(",1)[0]
+        report=source.split("for(i=0;i<Snapshot.pci_count;i++) {",1)[1].split(
+            "for(i=0;i<Snapshot.gop_count;i++) {",1)[0]
+        self.assertIn("GuTopoReadPcieLink(cfg,&node->link)",read)
+        self.assertIn("node->link_status=",read)
+        self.assertIn("PCI_LINK_NODE BDF=",report)
+        self.assertIn("SIDE_LOCAL=1 READ_ONLY=1",report)
+        for field in ("ASPM=%u", "SPEED=%u", "WIDTH=%u", "MAX_SPEED=%u",
+                      "MAX_WIDTH=%u", "TRAINING=%u", "DLL_ACTIVE=%u",
+                      "DEVICE_ERRORS=%u"):
+            self.assertIn(field,report)
+        self.assertNotIn("Pci.Write(",read)
+        self.assertNotIn("DisconnectController(",read)
+
     def test_bounded_fwsec_raw_read(self):
         descriptor=C.split("static int descriptor(",1)[1].split("int gpu_unlock_vbios_fwsec(",1)[0]
         self.assertLess(descriptor.index("range(length, off, 44)"),descriptor.index("raw descriptor[0:16]"))

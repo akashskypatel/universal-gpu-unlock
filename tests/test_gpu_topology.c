@@ -91,6 +91,34 @@ int main(void) {
   CHECK(GuTopoClassRelevant(0x0300U));
   CHECK(GuTopoClassRelevant(0x0302U));
   CHECK(GuTopoClassRelevant(0x0380U));
+  /* Read-only decoder exposes the endpoint and each bridge's own side of a
+   * PCIe link; the 3080's observed ASPM=2 and negotiated x4 must not be hidden. */
+  {
+    uint32_t config[64]={0};
+    GU_TOPO_LINK_OBS link;
+    config[0x04U/4U]=1U<<20U; /* PCI Status: Capabilities List present. */
+    config[0x34U/4U]=0x40U;
+    config[0x40U/4U]=0x00020010U; /* PCIe v2 endpoint. */
+    config[0x48U/4U]=0x00090000U; /* Device Status: CE | UR, raw only. */
+    config[0x4cU/4U]=0x00000104U; /* Gen4, max x16. */
+    config[0x50U/4U]=0x00440002U; /* ASPM L1, Gen4 x4, DLLLA clear. */
+    CHECK(GuTopoReadPcieLink(config,&link)==1);
+    CHECK(link.present && link.port_type==0 && link.capability_offset==0x40U);
+    CHECK(link.aspm==2 && link.speed==4 && link.width==4);
+    CHECK(link.max_speed==4 && link.max_width==16 && !link.training);
+    CHECK(!link.dll_active && link.device_errors==9);
+    config[0x40U/4U]=0x00420010U; /* PCIe v2 Root Port. */
+    config[0x50U/4U]=0x00440000U;
+    CHECK(GuTopoReadPcieLink(config,&link)==1 && link.port_type==4 && link.aspm==0);
+    config[0x40U/4U]=0x00920010U; /* RC integrated endpoint: no link registers. */
+    CHECK(GuTopoReadPcieLink(config,&link)==0 && !link.present);
+    config[0x40U/4U]=0x00024010U; /* Self-looping capability chain. */
+    CHECK(GuTopoReadPcieLink(config,&link)==-1 && !link.present);
+    memset(config,0,sizeof(config));
+    CHECK(GuTopoReadPcieLink(config,&link)==0 && !link.present);
+    CHECK(GuTopoReadPcieLink(NULL,&link)==-1);
+    CHECK(GuTopoReadPcieLink(config,NULL)==-1);
+  }
   /* A GOP is associated only by a valid complete controller path prefix. */
   {
     GU_TOPO_PATH controller=Path(1,0,0,0),child=controller;

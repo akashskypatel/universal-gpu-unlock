@@ -15,11 +15,24 @@ typedef struct {
 } GU_TOPO_PATH;
 
 typedef struct {
+  uint8_t present;       /* A conventional PCIe capability with Link registers. */
+  uint8_t port_type;     /* PCIe capability Device/Port Type, not inferred from BDF. */
+  uint8_t aspm;          /* This function's Link Control ASPM request; side-local. */
+  uint8_t speed, width;  /* This function's Link Status negotiated values. */
+  uint8_t max_speed, max_width;
+  uint8_t training, dll_active;
+  uint8_t device_errors; /* Device Status[3:0], raw sticky status bits. */
+  uint16_t capability_offset;
+} GU_TOPO_LINK_OBS;
+
+typedef struct {
   GU_GPU_RECORD identity;
   GU_TOPO_PATH path;
   uint8_t root_port;  /* PCIe capability Port Type == 4; not inferred from name. */
   uint8_t bridge;     /* Class 06:04 */
   uint8_t primary, secondary, subordinate; /* PCI bridge bus registers 0x18..0x1a. */
+  GU_TOPO_LINK_OBS link; /* Read-only, side-local PCIe snapshot; never authorization. */
+  int link_status;    /* 1=observed, 0=absent/non-link function, -1=malformed. */
   unsigned by_driver; /* OpenProtocolInformation BY_DRIVER observers, if available. */
   void *first_owner_agent; /* Handle token only, NOT a verified driver identity. */
   uint8_t openers_known;
@@ -81,6 +94,12 @@ int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
  * unrelated host, audio, network or USB functions. All protocol handles are
  * still visited; excluded classes never participate in GuTopoAssess. */
 int GuTopoClassRelevant(uint16_t class_code);
+/* Decode one conventional PCIe capability from a stable 256-byte config
+ * snapshot. Returns 1 for a link-capable function, 0 if absent/non-link, and
+ * -1 for a malformed capability chain. Output is zeroed unless it returns 1.
+ * Link fields are local to this function and must not be treated as a complete
+ * upstream-to-endpoint link verdict. */
+int GuTopoReadPcieLink(const uint32_t config[64], GU_TOPO_LINK_OBS *out);
 
 /* Compare the only initial header words used to classify a handle: PCI
  * vendor/device identity and class/revision. Command/status is deliberately

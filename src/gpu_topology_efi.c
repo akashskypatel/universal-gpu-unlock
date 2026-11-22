@@ -1867,6 +1867,7 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   node->identity.pci_id=cfg[0];node->identity.subsystem_id=cfg[11];
   node->identity.class_code=(UINT16)(cfg[2]>>16);
   node->bridge=node->identity.class_code==0x0604;
+  node->link_status=GuTopoReadPcieLink(cfg,&node->link);
   if(node->bridge) {
     node->primary=(UINT8)cfg[0x18/4];
     node->secondary=(UINT8)(cfg[0x18/4]>>8);
@@ -2815,6 +2816,19 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       (unsigned)p->identity.class_code,(unsigned)p->root_port,
       (unsigned)p->primary,(unsigned)p->secondary,(unsigned)p->subordinate,
       p->by_driver,(unsigned)p->openers_known,p->first_owner_agent,p->path.length);
+    Say("PCI_LINK_NODE BDF=%04x:%02x:%02x.%u OBS=%s SIDE_LOCAL=1 READ_ONLY=1",
+        (unsigned)p->identity.segment,(unsigned)p->identity.bus,
+        (unsigned)p->identity.device,(unsigned)p->identity.function,
+        p->link_status>0?"VALID":p->link_status==0?"ABSENT":"MALFORMED");
+    if(p->link_status>0)
+      Say(" PCIE_CAP=%#x TYPE=%u ASPM=%u SPEED=%u WIDTH=%u MAX_SPEED=%u MAX_WIDTH=%u TRAINING=%u DLL_ACTIVE=%u DEVICE_ERRORS=%u\r\n",
+          (unsigned)p->link.capability_offset,(unsigned)p->link.port_type,
+          (unsigned)p->link.aspm,(unsigned)p->link.speed,(unsigned)p->link.width,
+          (unsigned)p->link.max_speed,(unsigned)p->link.max_width,
+          (unsigned)p->link.training,(unsigned)p->link.dll_active,
+          (unsigned)p->link.device_errors);
+    else
+      Say(" NO_LINK_FIELDS=1\r\n");
     SayPath("PCI",i,&p->path);
   }
   for(i=0;i<Snapshot.gop_count;i++) {
