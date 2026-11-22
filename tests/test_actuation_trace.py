@@ -73,6 +73,16 @@ class TheTraceNamesThePhaseBeforeItBlocks(unittest.TestCase):
         self.assertIn("if(ticks<TraceDelayShown+250000ULL)return;", body)
         self.assertIn('PHASE=vendor-wait ACCUMULATED_US=%llu', body)
 
+    def test_long_vendor_waits_pulse_on_screen_and_asset_reads_count_up(self):
+        delay = self.boot.split("VOID GuTraceDelay(UINT64 ticks) {")[1].split("\n}")[0]
+        self.assertIn('".","..","..."', delay)
+        self.assertIn('"\\r[gu] %u vendor-wait %s', delay)
+        self.assertIn("TraceSay(line);", delay)
+        self.assertIn('GuTraceProgress("asset-read-bytes",at,expected)', self.boot)
+        self.assertIn('"[gu] %s %u of %u\\r\\n"', self.boot)
+        stop = self.boot.split("VOID GuTraceStop(")[1].split("\n}")[0]
+        self.assertIn("if(TraceSpinnerActive)TraceSay(\"\\r\\n\");", stop)
+
 
 class EveryStageIsAlsoATraceLine(unittest.TestCase):
     """`*stage=` is what a refusal prints at the end; the trace is what a stall

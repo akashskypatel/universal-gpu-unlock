@@ -376,6 +376,16 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
     def test_the_script_refuses_a_dxe_as_a_boot_application(self):
         self.assertIn("A DXE boot-service driver cannot be staged as BOOTX64.EFI", SCRIPT)
 
+    def test_actuating_one_target_can_stage_its_signed_dxe_companion_in_driver_path(self):
+        self.assertIn("[switch]$StageDxeCompanion", SCRIPT)
+        self.assertIn("-StageDxeCompanion is only supported with -Only actuate-one-target", SCRIPT)
+        self.assertIn("$companion[0]) + @($variants)", SCRIPT)
+        self.assertIn("Stage-SignedDxeCompanion", SCRIPT)
+        self.assertIn("Join-Path $driversDir 'AdaUnlockDxe.efi'", SCRIPT)
+        self.assertIn("EFI\\Drivers\\AdaUnlockDxe.efi", SCRIPT)
+        self.assertIn("STAGED_DXE_COMPANION PATH=", SCRIPT)
+        self.assertIn("$dxeStageVariantId -and $dxeStageVariantId -eq $variantId", SCRIPT)
+
     def test_the_script_requires_an_explicit_switch_before_staging_an_actuating_image(self):
         self.assertIn("-AcceptActuatingDeploy", SCRIPT)
         self.assertIn("Refusing to stage", SCRIPT)

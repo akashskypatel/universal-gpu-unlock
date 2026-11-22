@@ -297,10 +297,14 @@ class TheBuildCommandsExist(unittest.TestCase):
             for switch in switches:
                 self.assertIn(switch, text, f"{stage['id']}: {switch} is not in {script}")
 
-    def test_the_waiver_switch_is_only_in_the_actuation_stage(self):
-        waiver = [stage["id"] for stage in MANIFEST["stages"]
-                  if "-AcceptUnverifiedActuation" in stage["build"]]
-        self.assertEqual(waiver, ["actuate"])
+    def test_only_actuation_staging_has_explicit_actuating_deploy_consent(self):
+        deploy = [stage["id"] for stage in MANIFEST["stages"]
+                  if "-AcceptActuatingDeploy" in stage["build"]]
+        self.assertEqual(deploy, ["admission", "actuate"])
+        catalogue = json.loads((ROOT / "docs" / "image_variants.json").read_text(encoding="utf-8"))
+        for variant_id in ("actuate-sequence", "actuate-one-target"):
+            variant = next(v for v in catalogue["variants"] if v["id"] == variant_id)
+            self.assertTrue(variant["switches"]["AcceptUnverifiedActuation"])
 
 
 class TheReadOnlyGuideIsGrounded(unittest.TestCase):
@@ -425,11 +429,9 @@ class TheReadOnlyGuideIsGrounded(unittest.TestCase):
             self.assertTrue(item["after"], item["goal"])
             self.assertTrue(item["why_not"], item["goal"])
 
-    def test_the_guide_never_claims_a_run_happened(self):
-        # The guide now states the two facts separately, because they differ:
-        # read-only and preparation have run on the bench, actuation has not.
-        self.assertIn("was executed on this bench", DOC)
-        self.assertIn("**no actuating image has ever run**", DOC)
+    def test_the_guide_distinguishes_archived_actuation_from_hardware_verification(self):
+        self.assertIn("Archived captures now include waived actuating boots", DOC)
+        self.assertIn("do not hardware-verify the subsequent fixes", DOC)
         self.assertNotIn("HARDWARE_VERIFIED=1", DOC)
         for item in self.status["items"]:
             self.assertFalse(item["hardware_verified"],

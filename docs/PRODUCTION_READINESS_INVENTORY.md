@@ -1690,7 +1690,7 @@ The read path is the same one the transaction uses: `GuRead32For`
 the probe makes, with the same bar index and width. So the refusal should
 reproduce inside the actuating image rather than being an artifact of reading
 BAR0 from outside it. That is an expectation from the source, not a measurement:
-the actuating image has never run.
+at the time of this entry the actuating image had not yet run.
 
 **What changed in the tree because of it.** A probe that prints
 `STATUS=OBSERVED` for a refused read is worse than no probe, so:

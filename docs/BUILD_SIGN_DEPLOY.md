@@ -87,7 +87,7 @@ Secure Boot off, and the signature is then only an integrity record - say so: us
 | `dxe-prep-selected` | `GPU-ACTIVE-PREP-DXE-<label>.efi` | `refuses-before-mutation` | one or more BDFs | the same preparation as a boot-service driver; it cannot be staged as BOOTX64.EFI |
 | `dxe-compile-one-target` | `GPU-ONE-TARGET-COMPILE-ONLY-DXE-<label>.efi` | `compile-only` | one BDF | proves the DXE entrypoint links for this selection |
 | `dxe-compile-sequence` | `GPU-SEQUENCE-COMPILE-ONLY-DXE-<label>.efi` | `compile-only` | two or more BDFs | two or more targets, compile-checked only |
-| `dxe-actuate-one-target` | `GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-<label>.efi` | `actuates` | one BDF, private `src/local/boot_profile.h` | NVRAM-installed driver form of the waived transaction; sign-only, never staged |
+| `dxe-actuate-one-target` | `GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-<label>.efi` | `actuates` | one BDF, private `src/local/boot_profile.h` | NVRAM-installed driver form; -StageDxeCompanion stages this exact paired build at EFI\Drivers\AdaUnlockDxe.efi, never as BOOTX64.EFI |
 | `dxe-actuate-sequence` | `GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-<label>.efi` | `actuates` | two or more BDFs, private `src/local/boot_profile.h` | NVRAM-installed driver form, ordered |
 | `dxe-actuate-runtime-selection` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi` | `actuates` | private `src/local/boot_profile.h` | NVRAM-installed driver, target at boot |
 
@@ -237,7 +237,7 @@ value in the session log next to `M1_RECOVERY_TOOLKIT_READY`.
 
 # The waived transaction, staged deliberately on a donor card.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target `
-    -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy
+    -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion
 ```
 
 `-All` never stages, and it is bounded: 31 variants, one `VARIANT_BEGIN` and one
@@ -253,9 +253,15 @@ the sequence ones build; with one BDF it is the other way round
 Staging takes two things, and neither is a duplicate of the other:
 `-StageDrive <letter>` is the intent to write a stick, and `-Only <id>` is which
 image - exactly one, because a stick holds one `BOOTX64.EFI`. `-SignOnly` is
-exclusive with `-StageDrive`, and `-All` can never stage. A staging run ends with
-`STAGED <id> PATH=… DRIVE=…:`, so a successful summary cannot be read as "signed
-but not copied".
+exclusive with `-StageDrive`, and `-All` can never stage. The ordinary staging run replaces only `EFI\BOOT\BOOTX64.EFI`. For the waived
+one-target image, `-StageDxeCompanion` is an explicit paired build: it builds and
+signs the matching `dxe-actuate-one-target` variant first, stages that image at
+`EFI\Drivers\AdaUnlockDxe.efi` (the path the I/NVRAM installer opens), then
+stages the application at `EFI\BOOT\BOOTX64.EFI`. Both artifacts are hash
+verified and replacements receive local backups. It is restricted to
+`-Only actuate-one-target`, a single BDF, `-StageDrive`, and
+`-AcceptActuatingDeploy`; the driver is never renamed to BOOTX64.EFI. The output
+includes `STAGED_DXE_COMPANION` and `STAGED actuate-one-target` receipts.
 
 `-Deploy <id>` still exists as an optional assertion: if you pass it, it must be
 the image the selection named, and a disagreement is an error rather than a

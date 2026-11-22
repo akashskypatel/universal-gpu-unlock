@@ -268,6 +268,7 @@ static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
 static void GuFree(VOID *p) {if(p){freed++;free(p);}}
 /* The trace is a port facility (src/boot_io.c). This harness splices a function
  * out of its file, so it supplies that port itself; the lines are inert here. */
+static BOOLEAN TraceAssetReadActive;
 static void __attribute__((unused)) GuTracePhase(const char *phase){(void)phase;}
 static void __attribute__((unused)) GuTraceDetail(const char *phase,const char *format,...){(void)phase;(void)format;}
 static void __attribute__((unused)) GuTraceProgress(const char *phase,size_t done,size_t total){(void)phase;(void)done;(void)total;}

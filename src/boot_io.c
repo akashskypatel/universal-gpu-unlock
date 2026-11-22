@@ -167,6 +167,9 @@ static UINTN TraceSteps;
 static UINTN TraceStartSeconds;
 static BOOLEAN TraceClockStarted;
 static UINT64 TraceDelayShown;
+static UINT8 TraceSpinnerDots;
+static BOOLEAN TraceSpinnerActive;
+static BOOLEAN TraceAssetReadActive;
 
 static BOOLEAN TraceClock(UINTN *seconds) {
   EFI_RUNTIME_SERVICES *rt=Table?Table->RuntimeServices:NULL;
@@ -207,6 +210,8 @@ VOID GuTraceScreen(const char *text){TraceSay(text);}
 
 VOID GuTraceStop(const char *stage,UINT64 status) {
   char line[128];
+  if(TraceSpinnerActive)TraceSay("\r\n");
+  TraceSpinnerActive=FALSE;
   TraceFormat(line,sizeof(line),"[gu] STOP stage=%s status=%#llx\r\n",
               stage?stage:"?",(unsigned long long)status);
   TraceSay(line);
@@ -217,6 +222,9 @@ VOID GuTraceReset(VOID) {
   TraceStartSeconds=0;
   TraceClockStarted=FALSE;
   TraceDelayShown=0;
+  TraceSpinnerDots=0;
+  TraceSpinnerActive=FALSE;
+  TraceAssetReadActive=FALSE;
 }
 
 VOID GuTraceDetail(const char *phase,const char *format,...) {
@@ -233,6 +241,9 @@ VOID GuTraceDetail(const char *phase,const char *format,...) {
 VOID GuTracePhase(const char *phase) {
   char elapsed[16];char line[128];
   if(!Log)return;
+  if(TraceSpinnerActive)TraceSay("\r\n");
+  TraceSpinnerActive=FALSE;
+  TraceSpinnerDots=0;
   ++TraceSteps;
   GuLog("TRACE STEP=%u ELAPSED=%s PHASE=%s\n",(unsigned)TraceSteps,
         TraceElapsedText(elapsed,sizeof(elapsed)),phase?phase:"?");
@@ -242,11 +253,16 @@ VOID GuTracePhase(const char *phase) {
 }
 
 VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
-  char elapsed[16];
+  char elapsed[16];char line[128];
   if(!Log)return;
   GuLog("TRACE STEP=%u ELAPSED=%s PHASE=%s DONE=%u OF=%u\n",(unsigned)TraceSteps,
         TraceElapsedText(elapsed,sizeof(elapsed)),phase?phase:"?",
         (unsigned)done,(unsigned)total);
+  if(phase&&strncmp(phase,"asset-read",10)==0) {
+    TraceFormat(line,sizeof(line),"[gu] %s %u of %u\r\n",phase,
+                (unsigned)done,(unsigned)total);
+    TraceSay(line);
+  }
 }
 
 /* The vendor transaction waits through one delay hook. A firmware step that
@@ -261,6 +277,15 @@ VOID GuTraceDelay(UINT64 ticks) {
   GuLog("TRACE STEP=%u ELAPSED=%s PHASE=vendor-wait ACCUMULATED_US=%llu\n",
         (unsigned)TraceSteps,TraceElapsedText(elapsed,sizeof(elapsed)),
         (unsigned long long)ticks);
+  TraceSpinnerDots=(UINT8)(TraceSpinnerDots%3U+1U);
+  {
+    static const char *dots[]={".","..","..."};
+    char line[96];
+    TraceFormat(line,sizeof(line),"\r[gu] %u vendor-wait %s   ",
+                (unsigned)TraceSteps,dots[TraceSpinnerDots-1U]);
+    TraceSay(line);
+    TraceSpinnerActive=TRUE;
+  }
 }
 
 BOOLEAN GuBootLogOpen(VOID){return Log!=NULL;}
@@ -526,6 +551,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
     UINTN n=expected-at;if(n>1048576)n=1048576;UINTN wanted=n;
 
     s=f->Read(f,&n,(UINT8 *)p+at);if(s==EFI_SUCCESS&&n!=wanted)s=EFI_DEVICE_ERROR;at+=n;
+    if(s==EFI_SUCCESS&&TraceAssetReadActive)GuTraceProgress("asset-read-bytes",at,expected);
 
   }
 
@@ -762,6 +788,7 @@ EFI_STATUS GuBootLoadAssets(VOID) {
    * could produce was a failure. RUN0011 stopped with `ASSET_INSTALL ...` as its
    * last line and no way to tell this loop from the diagnostic that follows it. */
   GuTracePhase("asset-load");
+  TraceAssetReadActive=TRUE;
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
     VOID *p=NULL;
@@ -790,6 +817,7 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     GuAssets[i].firmware=(struct firmware){a->bytes,p};
     GuTraceProgress("asset-read",(UINTN)i+1U,(UINTN)GU_ASSET_COUNT);
   }
+  TraceAssetReadActive=FALSE;
   if(status==EFI_SUCCESS&&!GuAd104AssetsValid(&Gu))status=EFI_CRC_ERROR;
   GuTraceDetail("asset-load","STATUS=%#llx",(unsigned long long)status);
   if(status!=EFI_SUCCESS) {

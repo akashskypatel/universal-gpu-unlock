@@ -12,9 +12,9 @@
     "title": "Read-only hardware execution guide, step by step",
     "intro": [
       "The sections after this one describe the gates. This one is the sequence that produces a log to score, for every image in the catalogue that writes nothing to the GPU, and names the fact in each log that a hardware-dependent item is waiting for.",
-      "Every read-only and preparation run stored under `captured_runs` below was executed on this bench; **no actuating image has ever run**. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips."
+      "Archived captures now include waived actuating boots as well as read-only and preparation runs. The U/P/I captures documented below exposed software/setup failures; they do not hardware-verify the subsequent fixes. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips."
     ],
-    "naming": "There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with two switches: `-Only <id>` chooses the image from `docs/image_variants.json`, and `-StageDrive <letter>` copies the signed `EFI\\BOOT\\BOOTX64.EFI` onto the stick after a verified backup of whatever was there. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.",
+    "naming": "There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with `-Only <id>` and `-StageDrive <letter>`. Ordinary runs copy the signed `EFI\\BOOT\\BOOTX64.EFI`; the waived one-target application can also use `-StageDxeCompanion` to build/sign its matching driver and stage `EFI\\Drivers\\AdaUnlockDxe.efi` for the I path. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.",
     "preconditions": [
       {
         "id": "M1_RECOVERY_TOOLKIT_READY",
@@ -785,8 +785,8 @@
       "title": "Waived actuation",
       "what_it_costs": "the one admission that may write: an ordered list executed one card at a time, no retry, with the firmware timer bounded or explicitly off; more than one target is admitted by the same waiver (`MULTI_TARGET_WITHOUT_WAIVER` otherwise)",
       "exit": "the waiver is recorded once, the pre-Stop contract is captured, the step reaches a terminal record, and the next boot reads the record it left",
-      "build": ".\\src\\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation",
-      "build_note": "the only waiver switch; it also needs a reviewed local/boot_profile.h or -RuntimeEsp, and the matched assets on the ESP. `-SelectionBdfs 'a,b'` builds the ordered two-card list, and the step lines then carry `ORDER=`/`TARGET=` indexes into it"
+      "build": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion",
+      "build_note": "the single-target waived app and matching DXE driver are both built and signed first; the script stages `EFI\\Drivers\\AdaUnlockDxe.efi` and then `EFI\\BOOT\\BOOTX64.EFI`, with local backups. `-StageDxeCompanion` does not install a Driver#### NVRAM option; the operator's I path remains an explicit separate firmware action. This does not authorize a 3080 run or change hardware/link policy."
     }
   ],
   "gates": [
@@ -1434,7 +1434,7 @@
             "why": "the report finished with no withheld lines, so an absent line above is absent from the run, not from the buffer"
           }
         ],
-        "history": "First scored against gate R2 as it then stood: `FAIL FIRST_FAILED=R2_ENUMERATION_COMPLETED`, because R2 required `PCI_OBSERVATION_ONLY=1 ...`, a line the strict collector prints only after it has already failed. The gate was wrong, not the run (\u00a711.29). R2 now requires the strict walk's scope line, the owner-inventory line that only its success branch prints, and the report's final line; the suite re-scores this file on every run, so a gate that no healthy machine can satisfy fails the tests instead of the operator.",
+        "history": "First scored against gate R2 as it then stood: `FAIL FIRST_FAILED=R2_ENUMERATION_COMPLETED`, because R2 required `PCI_OBSERVATION_ONLY=1 ...`, a line the strict collector prints only after it has already failed. The gate was wrong, not the run (§11.29). R2 now requires the strict walk's scope line, the owner-inventory line that only its success branch prints, and the report's final line; the suite re-scores this file on every run, so a gate that no healthy machine can satisfy fails the tests instead of the operator.",
         "does_not_show": "that the card is safe, that anything was unlocked, or that Windows accepted the device: no Stop was called, every eligibility flag in the log is zero, both driver-image signatures are unverified, and `hardware_verified` stays false for every item in the inventory."
       },
       {
@@ -1750,7 +1750,7 @@
             "why": "the app left through its failure path with `mutated=0 retained=0 fault=0` - the halt marker after a refusal, not a Stop contract"
           }
         ],
-        "history": "The first physical preparation run, and the run that found the second unreachable-token gate: P1 required `ACTIVE_APP=PREPARATION_ONLY`, which `src/app.c` prints only after `GuDiscoverSingleGpu` returns success, the very call that refuses here. The gate was wrong, not the image (\u00a711.30); P1 now requires the refusal line discovery prints. With the identity rule in `tools/donor_gate.py` reading the selected card rather than the census, `-0001` and this file compose into the first `DONOR_GATE VERDICT=GO` this workbench has produced from real logs.",
+        "history": "The first physical preparation run, and the run that found the second unreachable-token gate: P1 required `ACTIVE_APP=PREPARATION_ONLY`, which `src/app.c` prints only after `GuDiscoverSingleGpu` returns success, the very call that refuses here. The gate was wrong, not the image (§11.30); P1 now requires the refusal line discovery prints. With the identity rule in `tools/donor_gate.py` reading the selected card rather than the census, `-0001` and this file compose into the first `DONOR_GATE VERDICT=GO` this workbench has produced from real logs.",
         "does_not_show": "that the card can be actuated, or that preparation's conclusions are right: it shows the entrypoint refused, the preflight completed, and nothing was mutated. No Stop, no detach, no FLR, no firmware write appears in these 12 lines."
       },
       {
@@ -1980,7 +1980,7 @@
         "observations": [
           {
             "token": "VRAM_BLOCK_PROBE_ROM GPU=4090 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x2684 LIVE_DEVICE=0x2684 MATCH=1",
-            "why": "the megabyte at BAR0 + 0x300000 on the 4090, compared against the device half of the identity. MATCH=1 is the fix \u00a711.37 made, confirmed on the card it was written for: the earlier build printed the vendor half and read 0"
+            "why": "the megabyte at BAR0 + 0x300000 on the 4090, compared against the device half of the identity. MATCH=1 is the fix §11.37 made, confirmed on the card it was written for: the earlier build printed the vendor half and read 0"
           },
           {
             "token": "VRAM_BLOCK_PROBE_ROM GPU=3080 BAR0_OFFSET=0x300000 BYTES=1048576 SIGNATURE=0xaa55 PCIR_OFFSET=0x0170 PCIR_VENDOR=0x10de PCIR_DEVICE=0x220a LIVE_DEVICE=0x220a MATCH=1",
@@ -2007,7 +2007,7 @@
             "why": "the same for the 3080. A read-only run that changed a digest would be a finding; this one did not"
           }
         ],
-        "history": "The defect \u00a711.37 found is fixed here and the boot was repeated, so this run answers two questions at once: MATCH=1 on both cards, and the two PROM files whose digests match the lines that describe them. The images themselves were parsed off the bench by tests/test_fwsec_v2.c and the result is recorded in `prom_captures`: both carry a version-3 FWSEC-FRTS descriptor with a non-zero ucode id and 384 bytes per signature, which is what GuAd104FwsecMatches() requires.",
+        "history": "The defect §11.37 found is fixed here and the boot was repeated, so this run answers two questions at once: MATCH=1 on both cards, and the two PROM files whose digests match the lines that describe them. The images themselves were parsed off the bench by tests/test_fwsec_v2.c and the result is recorded in `prom_captures`: both carry a version-3 FWSEC-FRTS descriptor with a non-zero ucode id and 384 bytes per signature, which is what GuAd104FwsecMatches() requires.",
         "does_not_show": "that the files are authentic firmware (SIGNATURE_AUTHENTICATED=0 on every line), or that the signature slot the fuse word selects exists for either card: the transaction reads BAR0 0x8241e0 for ucode 9 and that word has never been read on this bench. The 1 MiB images are NVIDIA firmware and are not stored here, only their digests and the fields the parser reported."
       },
       {
@@ -2023,7 +2023,7 @@
         "line_endings": "LF as captured",
         "bench": "same bench and cabling as -0006 to -0009; first boot of the build that reads the fuse window",
         "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=7 GATES_FAILED=0",
-        "history": "The boot \u00a711.40 asked for. Sixteen words per card at BAR0 0x8241c0, printed with the version gpu_unlock_fuse_version() computes, and gate R7 scores the read. The read set the probe already covered is unchanged - the fuse window is not part of it, which is why the totals are the same as -0008 and -0009 - and the sixteen extra reads are the only new ones.",
+        "history": "The boot §11.40 asked for. Sixteen words per card at BAR0 0x8241c0, printed with the version gpu_unlock_fuse_version() computes, and gate R7 scores the read. The read set the probe already covered is unchanged - the fuse window is not part of it, which is why the totals are the same as -0008 and -0009 - and the sixteen extra reads are the only new ones.",
         "observations": [
           {
             "token": "VRAM_BLOCK_PROBE_FUSE_END GPU=4090 BDF=0000:01:00.0 BASE=0x8241c0 WORDS=16 READ=16 FAILED=0 UCODE9_OFFSET=0x8241e0 UCODE9_RAW=0x00000001 UCODE9_VERSION=1 UCODE9_ACCESS=STATE UCODE9_UNREAD=0",

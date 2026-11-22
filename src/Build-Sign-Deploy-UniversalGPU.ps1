@@ -35,10 +35,13 @@ The catalogue labels each variant:
   stop-only               calls the original vendor Stop; may hang
   actuates                the waived transaction; every eligibility flag is false
 
-Only a single named variant can be staged, only to EFI\BOOT\BOOTX64.EFI on a
-verified writable non-system FAT32 USB stick, only after a verified local backup
-of the file being replaced, and - for stop-only/actuates - only with
--AcceptActuatingDeploy. A DXE driver (subsystem 11) can never be staged.
+One named application variant can be staged to EFI\BOOT\BOOTX64.EFI on a
+verified writable non-system FAT32 USB stick, after a verified local backup of
+the file being replaced. Stop-only/actuating images also require
+-AcceptActuatingDeploy. A DXE driver (subsystem 11) is never staged as
+BOOTX64.EFI. For the waived one-target app, -StageDxeCompanion additionally
+builds, signs and stages its matching DXE image at
+EFI\Drivers\AdaUnlockDxe.efi for the app's explicit I path.
 
 .PARAMETER All
 Build and sign every variant the catalogue permits with the arguments given.
@@ -63,6 +66,12 @@ The USB drive letter to stage onto. This is the switch that stages: it takes the
 one image -Only selected, builds it, signs it and copies it to
 EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
 -AcceptActuatingDeploy, and a matrix run (-All) can never stage.
+
+.PARAMETER StageDxeCompanion
+For -Only actuate-one-target only: build and sign the matching
+`dxe-actuate-one-target` image, stage it at EFI\Drivers\AdaUnlockDxe.efi,
+then stage the application at EFI\BOOT\BOOTX64.EFI. Requires -StageDrive and
+-AcceptActuatingDeploy; the paired stage is rolled back if application staging fails.
 
 .PARAMETER CapturedPromReference
 Carry the two captured per-card firmware references
@@ -108,12 +117,13 @@ Print the catalogue and exit. Nothing is built, signed or staged.
 .EXAMPLE
 # The waived one-target image, staged deliberately, on a donor card.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target -SelectionBdf '0000:01:00.0' `
-    -StageDrive G -AcceptActuatingDeploy
+    -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion
 
 .NOTES
-Signed images are authentic, not safe. No variant in this catalogue has been
-booted on hardware by this repository, and the Windows 617.42 Booter provenance
-is external evidence that no build here produces.
+Signed images are authentic, not safe. Archived bench runs exist, but signing
+alone does not make a build hardware-verified; the recent U/P/I captures do not
+verify the fixes in the current source. The
+Windows 617.42 Booter provenance is external evidence that no build here produces.
 #>
 [CmdletBinding()]
 param(
@@ -135,6 +145,7 @@ param(
     [string]$Deploy,
     [switch]$SignOnly,
     [switch]$AcceptActuatingDeploy,
+    [switch]$StageDxeCompanion,
     [switch]$CapturedPromReference,
     [switch]$SkipDbCheck,
     [switch]$List
@@ -700,6 +711,93 @@ if ($List) {
     exit 0
 }
 
+function Stage-SignedDxeCompanion {
+    param([string]$Drive, [string]$Root, [string]$SignedFile, [string]$SignedSha256,
+          [string]$LocalOutput, [string]$ExpectedVolumeId)
+    if ((Assert-UsbVolume $Drive) -ne $Root) { throw 'Drive letter identity changed.' }
+    if ([string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
+        throw 'Target USB volume identity changed before DXE staging.'
+    }
+    if ([IO.Path]::GetPathRoot($SignedFile).TrimEnd('\') -ieq $Root.TrimEnd('\') -or
+        [IO.Path]::GetPathRoot($LocalOutput).TrimEnd('\') -ieq $Root.TrimEnd('\')) {
+        throw 'Signed source and local backups must not reside on the USB destination drive.'
+    }
+    if ((Get-Sha256 $SignedFile) -ne $SignedSha256) { throw 'Signed DXE hash changed before staging.' }
+
+    $efiRoot = Join-Path $Root 'EFI'
+    $driversDir = Join-Path $efiRoot 'Drivers'
+    foreach ($dir in @($efiRoot, $driversDir)) {
+        if (-not (Test-Path -LiteralPath $dir)) { [void](New-Item -ItemType Directory -Path $dir -ErrorAction Stop) }
+        Assert-NormalDirectory $dir
+    }
+    $destination = Join-Path $driversDir 'AdaUnlockDxe.efi'
+    if ((Test-Path -LiteralPath $destination) -and -not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+        throw "Refusing non-file DXE destination: $destination"
+    }
+    $oldPresent = Test-Path -LiteralPath $destination -PathType Leaf
+    $oldSha = $null; $backup = $null
+    if ($oldPresent) {
+        $answer = Read-Host 'Type YES/Yes/yes/y/Y to replace only USB EFI\Drivers\AdaUnlockDxe.efi'
+        if ($answer -cne 'YES' -and $answer -cne 'Yes' -and $answer -cne 'yes' -and $answer -cne 'y' -and $answer -cne 'Y') {
+            throw 'DXE companion replacement cancelled; existing driver preserved.'
+        }
+        $backup = Join-Path $LocalOutput ('dxe-usb-backup-{0}-{1}' -f
+            [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmssfff'), [guid]::NewGuid().ToString('N'))
+        [void](New-Item -ItemType Directory -Path $backup -ErrorAction Stop)
+        $saved = Join-Path $backup 'AdaUnlockDxe.efi'
+        $oldSha = Get-Sha256 $destination
+        Copy-Item -LiteralPath $destination -Destination $saved -ErrorAction Stop
+        if ((Get-Sha256 $saved) -ne $oldSha -or (Get-Sha256 $destination) -ne $oldSha) {
+            throw 'DXE backup verification failed; existing driver preserved.'
+        }
+        Say "Verified original USB DXE backup: $saved"
+    }
+    $temporary = Join-Path $driversDir ('.new-dxe-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
+    try {
+        if ((Assert-UsbVolume $Drive) -ne $Root -or
+            [string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
+            throw 'Target USB identity changed during DXE staging.'
+        }
+        Copy-Item -LiteralPath $SignedFile -Destination $temporary -ErrorAction Stop
+        if ((Get-Sha256 $temporary) -ne $SignedSha256) { throw 'Staged DXE temporary hash mismatch.' }
+        if ([bool](Test-Path -LiteralPath $destination -PathType Leaf) -ne [bool]$oldPresent) {
+            throw 'DXE destination presence changed during staging.'
+        }
+        if ($oldPresent -and (Get-Sha256 $destination) -ne $oldSha) {
+            throw 'DXE destination changed during staging; existing driver preserved.'
+        }
+        if ($oldPresent) { Remove-Item -LiteralPath $destination -Force -ErrorAction Stop }
+        Move-Item -LiteralPath $temporary -Destination $destination -ErrorAction Stop
+        if ((Get-Sha256 $destination) -ne $SignedSha256) { throw 'Deployed DXE hash mismatch.' }
+    } catch {
+        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue }
+        if ($oldPresent -and $backup -and (Test-Path -LiteralPath (Join-Path $backup 'AdaUnlockDxe.efi'))) {
+            Copy-Item -LiteralPath (Join-Path $backup 'AdaUnlockDxe.efi') -Destination $destination -Force -ErrorAction SilentlyContinue
+        } elseif (-not $oldPresent -and (Test-Path -LiteralPath $destination -PathType Leaf)) {
+            Remove-Item -LiteralPath $destination -Force -ErrorAction SilentlyContinue
+        }
+        throw
+    }
+    return [pscustomobject]@{ Path = $destination; BackupDirectory = $backup; SignedSha256 = $SignedSha256;
+                             Replaced = [bool]$oldPresent; PreviousSha256 = $oldSha }
+}
+
+function Restore-DxeCompanionDeployment($Deployment, [string]$Drive, [string]$Root, [string]$ExpectedVolumeId) {
+    if (-not $Deployment) { return }
+    if ((Assert-UsbVolume $Drive) -ne $Root -or
+        [string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
+        throw 'Cannot roll back DXE companion: target USB identity changed.'
+    }
+    if ($Deployment.Replaced) {
+        $saved = Join-Path $Deployment.BackupDirectory 'AdaUnlockDxe.efi'
+        if ((Get-Sha256 $saved) -ne $Deployment.PreviousSha256) { throw 'DXE rollback backup hash mismatch.' }
+        Copy-Item -LiteralPath $saved -Destination $Deployment.Path -Force -ErrorAction Stop
+        if ((Get-Sha256 $Deployment.Path) -ne $Deployment.PreviousSha256) { throw 'DXE rollback restore hash mismatch.' }
+    } elseif (Test-Path -LiteralPath $Deployment.Path -PathType Leaf) {
+        Remove-Item -LiteralPath $Deployment.Path -Force -ErrorAction Stop
+    }
+}
+
 # --- preflight ------------------------------------------------------------
 
 try {
@@ -716,6 +814,15 @@ try {
     if ($Deploy -and $SignOnly) { throw '-SignOnly and -Deploy are mutually exclusive: a sign-only run never touches a USB stick.' }
     if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
     $variants = @(Select-Variants)
+    if ($StageDxeCompanion) {
+        if (-not $StageDrive) { throw '-StageDxeCompanion requires -StageDrive <letter>.' }
+        if ($variants.Count -ne 1 -or $variants[0].id -ne 'actuate-one-target') {
+            throw '-StageDxeCompanion is only supported with -Only actuate-one-target and one selected BDF.'
+        }
+        if (-not $AcceptActuatingDeploy) {
+            throw '-StageDxeCompanion requires -AcceptActuatingDeploy; it stages the waived app and its matching DXE driver.'
+        }
+    }
     if ($StageDrive) {
         # The selection is what names the image; a stick holds one BOOTX64.EFI, so
         # staging more than one variant is not a thing.
@@ -748,6 +855,21 @@ try {
             Say ("WARNING: staging ACTUATING_IMAGE={0} SAFETY={1}; it may write the GPU. Recovery toolkit on the bench is not optional." -f
                  $deployVariant.id, $deployVariant.safety)
         }
+    }
+
+    $dxeStageVariantId = $null
+    if ($StageDxeCompanion) {
+        $companion = @($catalogue.variants | Where-Object { $_.id -eq 'dxe-actuate-one-target' })
+        if ($companion.Count -ne 1) { throw 'Catalogue must contain exactly one dxe-actuate-one-target companion.' }
+        $companionSafety = $catalogue.safety_classes.($companion[0].safety)
+        if ($companion[0].safety -ne 'actuates' -or $familyById[$companion[0].family].subsystem -ne 11 -or
+            -not $companionSafety.writes_gpu) {
+            throw 'The catalogue companion must remain an actuating subsystem-11 DXE image.'
+        }
+        $dxeStageVariantId = [string]$companion[0].id
+        # Build/sign the resident driver first; the boot application is staged
+        # only after its companion has been prepared successfully.
+        $variants = @($companion[0]) + @($variants)
     }
 
     $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
@@ -825,6 +947,8 @@ try {
     $variantTotal = $variants.Count
     $variantIndex = 0
     $stagedPath = $null
+    $pendingBootImage = $null
+    $pendingDxeImage = $null
     $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
     $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
     $localProfileSkips = 0
@@ -975,15 +1099,19 @@ try {
             if ($signedHash -eq $sourceHash) { throw "Signed image is byte-identical to its input ($variantId)." }
             Say "Verified signed SHA-256: $signedHash"
 
+            $receiptPath = "$signedEfi.json"
             $deployment = $null
-            if ($stageVariantId -and $stageVariantId -eq $variantId) {
+            if ($StageDxeCompanion -and $stageVariantId -eq $variantId) {
+                $pendingBootImage = [pscustomobject]@{ Path = $signedEfi; Sha256 = $signedHash; Receipt = $receiptPath }
+            } elseif ($StageDxeCompanion -and $dxeStageVariantId -eq $variantId) {
+                $pendingDxeImage = [pscustomobject]@{ Path = $signedEfi; Sha256 = $signedHash; Receipt = $receiptPath }
+            } elseif ($stageVariantId -and $stageVariantId -eq $variantId) {
                 $deployment = Stage-SignedEfi -Drive $drive -Root $usbRoot -SignedFile $signedEfi `
                                   -SignedSha256 $signedHash -LocalOutput $OutputDirectory `
                                   -ExpectedVolumeId $targetVolumeId
                 $stagedPath = $deployment.Path
             }
 
-            $receiptPath = "$signedEfi.json"
             [ordered]@{
                 VariantId = $variantId
                 Family = $variant.family
@@ -1004,7 +1132,10 @@ try {
                 DbEnrolled = $dbEnrolled
                 VerifiedBySbverify = $true
                 Destination = $(if ($deployment) { $deployment.Path } else { $null })
-                ReplacedBootEfi = $(if ($deployment) { $deployment.ReplacedBootEfi } else { $false })
+                DxeCompanionStaged = [bool]($dxeStageVariantId -and $variantId -eq $dxeStageVariantId -and $deployment)
+                DxeCompanionPath = $null
+                DxeCompanionSha256 = $null
+                ReplacedBootEfi = $(if ($deployment -and $variantId -eq $stageVariantId) { $deployment.ReplacedBootEfi } else { $false })
                 PreservedOtherEfiCount = $(if ($deployment) { $deployment.PreservedOtherEfiCount } else { 0 })
                 BackupDirectory = $(if ($deployment) { $deployment.BackupDirectory } else { $null })
                 HardwareVerified = $false
@@ -1028,7 +1159,47 @@ try {
                 id = $variantId; family = $variant.family; safety = $variant.safety
                 status = 'FAILED'; reason = $_.Exception.Message
             })
-            if ($stageVariantId -and $stageVariantId -eq $variantId) { throw }
+            if (($stageVariantId -and $stageVariantId -eq $variantId) -or ($dxeStageVariantId -and $dxeStageVariantId -eq $variantId)) { throw }
+        }
+    }
+
+    if ($StageDxeCompanion) {
+        if (-not $pendingDxeImage -or -not $pendingBootImage -or $failedCount) {
+            throw 'Paired deployment not staged: both signed companion artifacts must build and verify first.'
+        }
+        $dxeDeployment = Stage-SignedDxeCompanion -Drive $drive -Root $usbRoot `
+            -SignedFile $pendingDxeImage.Path -SignedSha256 $pendingDxeImage.Sha256 `
+            -LocalOutput $OutputDirectory -ExpectedVolumeId $targetVolumeId
+        try {
+            $bootDeployment = Stage-SignedEfi -Drive $drive -Root $usbRoot `
+                -SignedFile $pendingBootImage.Path -SignedSha256 $pendingBootImage.Sha256 `
+                -LocalOutput $OutputDirectory -ExpectedVolumeId $targetVolumeId
+        } catch {
+            $stageError = $_.Exception.Message
+            try { Restore-DxeCompanionDeployment $dxeDeployment $drive $usbRoot $targetVolumeId }
+            catch { throw "Application staging failed: $stageError. DXE companion rollback failed: $($_.Exception.Message)" }
+            throw "Application staging failed; DXE companion was rolled back: $stageError"
+        }
+        $stagedPath = $bootDeployment.Path
+        Say ("STAGED_DXE_COMPANION PATH={0} DRIVE={1}: SHA256={2}" -f
+             $dxeDeployment.Path, $drive.ToUpperInvariant(), $pendingDxeImage.Sha256)
+        $dxeReceipt = Get-Content -LiteralPath $pendingDxeImage.Receipt -Raw | ConvertFrom-Json
+        $dxeReceipt.Destination = $dxeDeployment.Path
+        $dxeReceipt.DxeCompanionStaged = $true
+        $dxeReceipt.BackupDirectory = $dxeDeployment.BackupDirectory
+        $dxeReceipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $pendingDxeImage.Receipt -Encoding UTF8 -ErrorAction Stop
+        $appReceipt = Get-Content -LiteralPath $pendingBootImage.Receipt -Raw | ConvertFrom-Json
+        $appReceipt.Destination = $bootDeployment.Path
+        $appReceipt.DxeCompanionStaged = $true
+        $appReceipt.DxeCompanionPath = $dxeDeployment.Path
+        $appReceipt.DxeCompanionSha256 = $pendingDxeImage.Sha256
+        $appReceipt.ReplacedBootEfi = $bootDeployment.ReplacedBootEfi
+        $appReceipt.BackupDirectory = $bootDeployment.BackupDirectory
+        $appReceipt.PreservedOtherEfiCount = $bootDeployment.PreservedOtherEfiCount
+        $appReceipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $pendingBootImage.Receipt -Encoding UTF8 -ErrorAction Stop
+        foreach ($result in $results) {
+            if ($result.id -eq 'dxe-actuate-one-target') { $result.destination = $dxeDeployment.Path }
+            if ($result.id -eq 'actuate-one-target') { $result.destination = $bootDeployment.Path }
         }
     }
 

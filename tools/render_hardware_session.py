@@ -23,11 +23,11 @@ DOCUMENT = ROOT / "docs" / "DONOR_HARDWARE_SESSION.md"
 HEADER = """# Donor-hardware session: the gates a run has to pass
 
 The donor card, the programmer and the known-good image are on the bench. This
-document is what turns that into a session with gates rather than an experiment
-with hope. It is checked against the code and against a captured log, and it
-**claims nothing**: no run described here has happened, `HARDWARE_VERIFIED=0` is
-printed by every check, and the list at the end is everything a log can never
-establish.
+document turns the session into gates rather than an experiment with hope. It is
+checked against the code and captured logs, and **claims nothing beyond those
+records**: archived waived boots exposed failures but do not verify later fixes;
+`HARDWARE_VERIFIED=0` is printed by every check, and the list at the end is
+everything a log can never establish.
 
 `docs/hardware_session.json` is the source of truth; this file is rendered from
 it. `tools/verify_run_log.py` scores a captured log against the same manifest,

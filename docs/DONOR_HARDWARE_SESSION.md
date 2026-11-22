@@ -1,11 +1,11 @@
 # Donor-hardware session: the gates a run has to pass
 
 The donor card, the programmer and the known-good image are on the bench. This
-document is what turns that into a session with gates rather than an experiment
-with hope. It is checked against the code and against a captured log, and it
-**claims nothing**: no run described here has happened, `HARDWARE_VERIFIED=0` is
-printed by every check, and the list at the end is everything a log can never
-establish.
+document turns the session into gates rather than an experiment with hope. It is
+checked against the code and captured logs, and **claims nothing beyond those
+records**: archived waived boots exposed failures but do not verify later fixes;
+`HARDWARE_VERIFIED=0` is printed by every check, and the list at the end is
+everything a log can never establish.
 
 `docs/hardware_session.json` is the source of truth; this file is rendered from
 it. `tools/verify_run_log.py` scores a captured log against the same manifest,
@@ -58,9 +58,9 @@ card.
 
 The sections after this one describe the gates. This one is the sequence that produces a log to score, for every image in the catalogue that writes nothing to the GPU, and names the fact in each log that a hardware-dependent item is waiting for.
 
-Every read-only and preparation run stored under `captured_runs` below was executed on this bench; **no actuating image has ever run**. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips.
+Archived captures now include waived actuating boots as well as read-only and preparation runs. The U/P/I captures documented below exposed software/setup failures; they do not hardware-verify the subsequent fixes. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips.
 
-**The name.** There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with two switches: `-Only <id>` chooses the image from `docs/image_variants.json`, and `-StageDrive <letter>` copies the signed `EFI\BOOT\BOOTX64.EFI` onto the stick after a verified backup of whatever was there. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.
+**The name.** There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with `-Only <id>` and `-StageDrive <letter>`. Ordinary runs copy the signed `EFI\BOOT\BOOTX64.EFI`; the waived one-target application can also use `-StageDxeCompanion` to build/sign its matching driver and stage `EFI\Drivers\AdaUnlockDxe.efi` for the I path. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.
 
 ### Before the first boot
 
@@ -1346,10 +1346,10 @@ Note: the same image the `actuate` stage uses; this stage exists because a refus
 *Build:*
 
 ```powershell
-.\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:01:00.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion
 ```
 
-Note: the only waiver switch; it also needs a reviewed local/boot_profile.h or -RuntimeEsp, and the matched assets on the ESP. `-SelectionBdfs 'a,b'` builds the ordered two-card list, and the step lines then carry `ORDER=`/`TARGET=` indexes into it.
+Note: the single-target waived app and matching DXE driver are both built and signed first; the script stages `EFI\Drivers\AdaUnlockDxe.efi` and then `EFI\BOOT\BOOTX64.EFI`, with local backups. `-StageDxeCompanion` does not install a Driver#### NVRAM option; the operator's I path remains an explicit separate firmware action. This does not authorize a 3080 run or change hardware/link policy..
 
 *Costs:* the one admission that may write: an ordered list executed one card at a time, no retry, with the firmware timer bounded or explicitly off; more than one target is admitted by the same waiver (`MULTI_TARGET_WITHOUT_WAIVER` otherwise)
 

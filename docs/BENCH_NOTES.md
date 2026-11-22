@@ -202,3 +202,38 @@ The next permitted physical run still depends on the unresolved link-setting
 choice for `04:00.0`: PCH-side ASPM control, a documented chipset-link Link
 Control write, or single-target-only operation. No BIOS setting or link write
 was changed based on these captures.
+
+## The chipset-connected RTX 3080: what the attached topology does and does not say
+
+The uploaded topology capture `GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` puts the
+3080 at `04:00.0` behind this enumerated path:
+
+```
+00:02.1 -> 02:00.0 -> 03:00.0 -> 04:00.0 (RTX 3080)
+```
+
+The run's PCI records identify `00:02.1` as an AMD root-port function, followed
+by AMD `1022:43f4` and `1022:43f5` bridge functions. This is distinct from the
+4090 at `01:00.0`, directly below `00:01.1`. RUN0009 reports ASPM `0` for the
+4090 but ASPM `2` for the 3080; the latter's link is Gen4 x4 against a reported
+maximum x16. The BIOS option photographed as `ASPM Control for CPU PCIe` is
+scoped to CPU PCIe, so it is not evidence of control over this chipset path.
+
+**Recommendation:** do not try a speculative Link Control write or change the
+CPU-side BIOS option for the 3080. The attachments establish topology and an
+ASPM mismatch, not which chipset bridge's Link Control is authoritative, a
+safe register-write policy, or a verified PCH ASPM setup control. Keep the next
+active scope single-target only and defer an active 3080 attempt until a
+read-only capture documents the applicable chipset-link capability/control and
+its current state. This is a scope recommendation, not a claim that a
+4090-only actuation is cleared by the other outstanding safety gates.
+
+## Screen heartbeat
+
+The silent-screen exception now advances a visible `.` / `..` / `...` cycle at
+the same accumulated-delay interval as the `vendor-wait` log lines. Long asset
+reads also show byte progress as `asset-read-bytes N of TOTAL` on the screen,
+and each completed asset shows `asset-read N of 5`. A wait that returns to the
+phase loop therefore no longer leaves only a static stage label. This cannot
+animate inside a firmware call that never returns control; the line before a
+blocking call and the bounded watchdog remain the evidence for that case.

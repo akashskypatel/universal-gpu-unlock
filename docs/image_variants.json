@@ -559,7 +559,7 @@
         "ACTUATION_VERIFIED=0"
       ],
       "requires_selection": "single",
-      "note": "NVRAM-installed driver form of the waived transaction; sign-only, never staged",
+      "note": "NVRAM-installed driver form; -StageDxeCompanion stages this exact paired build at EFI\\Drivers\\AdaUnlockDxe.efi, never as BOOTX64.EFI",
       "requires_local_boot_profile": true
     },
     {
