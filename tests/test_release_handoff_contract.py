@@ -440,18 +440,21 @@ int main(void){
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 typedef void *EFI_HANDLE;
 typedef size_t UINTN;
 typedef uint32_t UINT32;
 typedef int BOOLEAN;
 typedef int EFI_STATUS;
-typedef struct { uint32_t Data1; } EFI_GUID;
+typedef struct { uint32_t Data1; uint16_t Data2,Data3; uint8_t Data4[8]; } EFI_GUID;
 #define TRUE 1
 #define FALSE 0
 #define EFI_SUCCESS 0
 #define EFI_ACCESS_DENIED 1
 #define EFI_DEVICE_ERROR 2
 #define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 8
+#define EFI_OPEN_PROTOCOL_BY_DRIVER 16
+#define GU_STOP_RELEASE_ONLY_BENCH 1
 """ + records + r"""
 typedef struct { EFI_HANDLE handle; } SURVIVOR_GOP;
 typedef struct {
@@ -462,11 +465,20 @@ typedef struct {
 static PLAN Plan;
 static GRAPH Original;
 static EFI_GUID TextGuid={1},GopGuid={2},PathGuid={3};
+static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,
+                                   {0xa0,0x49,0x8a,0xd0,0x6c,0x1a,0x66,0xaa}};
 static void GuLog(const char *format,...){(void)format;}
 static int peer,foreign;
-static EFI_HANDLE bad_path;
-static int Guid(const EFI_GUID *a,const EFI_GUID *b){return a->Data1==b->Data1;}
+static EFI_HANDLE bad_path,bad_driver;
+static int driver_checks;
+static int Guid(const EFI_GUID *a,const EFI_GUID *b){return memcmp(a,b,sizeof(*a))==0;}
 static int GuIsPreparedPeerHandle(EFI_HANDLE h){return h==&peer;}
+static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which){
+  CHECK_UNUSED:
+  (void)which;
+  driver_checks++;
+  return (!a||a==bad_driver)?EFI_ACCESS_DENIED:EFI_SUCCESS;
+}
 static EFI_STATUS GopOnTarget(EFI_HANDLE h,BOOLEAN *on_target){
   if(h==bad_path)return EFI_DEVICE_ERROR;
   *on_target=h!=&foreign;return EFI_SUCCESS;
@@ -523,6 +535,45 @@ int main(void) {
   Original.count=13;
   CHECK(ClassifyIdleOutput(&edges[12])==EFI_SUCCESS && ProtectedHandle(&other));
   CHECK(!Removed(&edges[13],3));
+  /* RUN0040: exactly one EDID Discovered BY_DRIVER open on an NVIDIA child.
+   * The parent DevicePath edge remains the only child relationship to PCI.
+   * The EDID dependent may disappear at stage 3, not stage 1 or 2. */
+  edges[12].idle_output=FALSE;
+  Original.count=14;
+  edges[13]=(EDGE){.handle=&other,.controller=&other,.agent=&out_agent,
+                   .protocol=EdidDiscoveredGuid,.attributes=EFI_OPEN_PROTOCOL_BY_DRIVER,
+                   .count=1};
+  int prior=driver_checks;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_SUCCESS);
+  CHECK(driver_checks==prior+1);
+  CHECK(edges[12].idle_output&&edges[13].idle_output);
+  CHECK(!Removed(&edges[13],0)&&!Removed(&edges[13],1)&&
+        !Removed(&edges[13],2)&&Removed(&edges[13],3));
+  /* A second non-EDID consumer cannot be mistaken for display metadata. */
+  edges[12].idle_output=FALSE;edges[13].idle_output=FALSE;
+  edges[13].protocol=TextGuid;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[12].idle_output&&!edges[13].idle_output);
+  /* A Data1-only GUID match is not sufficient for this exception. */
+  edges[13].protocol=EdidDiscoveredGuid;
+  edges[13].protocol.Data2^=1;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13].protocol=EdidDiscoveredGuid;
+  /* A non-driver relationship or a repeated open is not safe to remove. */
+  edges[13].attributes=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13].attributes=EFI_OPEN_PROTOCOL_BY_DRIVER;edges[13].count=2;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13].count=1;
+  /* Validation failure must not mark either original edge removable. */
+  bad_driver=&out_agent;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[12].idle_output&&!edges[13].idle_output);
+  bad_driver=NULL;
+  /* A consumer with peer ownership can never be admitted. */
+  edges[13].agent=&peer;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[13].idle_output);
   return 0;
 }
 """
