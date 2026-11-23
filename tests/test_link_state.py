@@ -206,6 +206,38 @@ int main(void) {
   Card(c, 0x50, card);
   EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_UNUSABLE);
 
+  /* ASPM alone is the only admitted exception. When the same real PCI
+   * snapshot includes a missing/unsafe link, return that stronger refusal
+   * before the ASPM result that an experimental build may waive. */
+  card = Healthy();
+  card.aspm = 2;
+  card.trained = 0;
+  Card(c, 0x50, card);
+  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_NOT_TRAINED);
+  EXPECT(!GuLinkAccepted(GU_LINK_NOT_TRAINED));
+  card = Healthy();
+  card.aspm = 2;
+  card.width = 0;
+  Card(c, 0x50, card);
+  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_UNUSABLE);
+  EXPECT(!GuLinkAccepted(GU_LINK_UNUSABLE));
+  card = Healthy();
+  card.aspm = 2;
+  card.speed = 0;
+  Card(c, 0x50, card);
+  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_UNUSABLE);
+  card = Healthy();
+  card.aspm = 2;
+  card.speed = 0x0f;
+  Card(c, 0x50, card);
+  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_UNUSABLE);
+  card = Healthy();
+  card.aspm = 2;
+  card.errors = 0x04;
+  Card(c, 0x50, card);
+  EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_ERROR_LOGGED);
+  EXPECT(!GuLinkAccepted(GU_LINK_ERROR_LOGGED));
+
   /* 7. A degraded link is a fact to log, not a refusal: x1 Gen1 still trains,
    *    still reports its advertised maximum, and is accepted. */
   card = Healthy();
