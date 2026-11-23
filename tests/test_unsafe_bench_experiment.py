@@ -162,6 +162,53 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         ready = self.boot.split("BOOLEAN GuBootLogOpen(VOID)", 1)[1].split("EFI_HANDLE GuBootGetTargetEspVolume", 1)[0]
         self.assertIn("Log!=NULL&&BootFileStatus==EFI_SUCCESS", ready)
 
+    def test_multi_gpu_warning_uses_independent_gop_before_each_stop(self):
+        warning = self.release.split("EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID)", 1)[1].split(
+            "EFI_STATUS GuMsiReattachAfterStop", 1)[0]
+        sequence = self.execution.split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[1].split(
+            "#endif", 1)[0]
+        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(VOID)", 1)[1].split(
+            "EFI_STATUS GuBootBenchReportCompletion", 1)[0]
+        self.assertIn("GuSelectedGpuRecordAt(i,&selected)", warning)
+        self.assertIn("selected.handle==Plan.pci", warning)
+        self.assertIn("(selected.pci_id&0xffffU)!=0x10deU", warning)
+        self.assertIn("GuDevicePathHasPrefix(", warning)
+        self.assertIn("Plan.survivors[k].path_bytes", warning)
+        self.assertIn("Interface(chosen->handle,&GopGuid,(VOID **)&g)", warning)
+        self.assertIn("g!=chosen->interface", warning)
+        self.assertIn("EfiBltVideoFill", warning)
+        self.assertIn("EfiBltBufferToVideo", warning)
+        self.assertIn("PHYSICAL_PIXELS_VERIFIED=0", warning)
+        self.assertIn("GuVerifyActivePeers(Plan.table)", warning)
+        self.assertIn("count>1U?", countdown)
+        self.assertIn("GuMsiStopReleaseWarnSurvivor()", countdown)
+        self.assertIn("count>1U&&display!=EFI_SUCCESS)return display", countdown)
+        self.assertLess(sequence.index("GuMsiPreflight("),
+                        sequence.index("GuBootBenchCountdown()"))
+        self.assertLess(sequence.index("GuBootBenchCountdown()"),
+                        sequence.index("GuMsiRelease()"))
+        self.assertLess(sequence.index("GuMsiRelease()"),
+                        sequence.index("GuMsiReattachAfterStop()"))
+        self.assertLess(sequence.index("GuMsiReattachAfterStop()"),
+                        sequence.index("GuSelectNextGpu(table)"))
+        self.assertNotIn("warning_done", sequence)
+
+    def test_warning_font_contains_every_character_drawn(self):
+        warning = self.release.split("typedef struct {char symbol;UINT8 row[7];} GU_BENCH_GLYPH;", 1)[1].split(
+            "EFI_STATUS GuMsiReattachAfterStop", 1)[0]
+        glyph_table = warning.split("static const GU_BENCH_GLYPH BenchGlyphs[]={", 1)[1].split("};", 1)[0]
+        import re
+        glyphs = set(re.findall(r"\\{'(.)',\\{", glyph_table))
+        phrases = ["WARNING GPU DRIVER STOP TEST", "TARGET 0000:00:00.0",
+                   "DISPLAY MAY GO DARK", "RECOVERY MAY NEED POWER OFF"]
+        for char in "".join(phrases):
+            if char != " ":
+                self.assertIn(char, glyphs)
+        self.assertIn("Gu.discovery_identity.segment", warning)
+        self.assertIn("Gu.discovery_identity.bus", warning)
+        self.assertIn("Gu.discovery_identity.device", warning)
+        self.assertIn("Gu.discovery_identity.function", warning)
+
     def test_stop_only_console_gate_accepts_non_target_nvidia_survivor_but_requires_it(self):
         check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
         variable = self.release.split("static EFI_STATUS AmdConsoleVariable", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[0]
