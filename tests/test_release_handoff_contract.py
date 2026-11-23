@@ -474,7 +474,6 @@ static int driver_checks;
 static int Guid(const EFI_GUID *a,const EFI_GUID *b){return memcmp(a,b,sizeof(*a))==0;}
 static int GuIsPreparedPeerHandle(EFI_HANDLE h){return h==&peer;}
 static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which){
-  CHECK_UNUSED:
   (void)which;
   driver_checks++;
   return (!a||a==bad_driver)?EFI_ACCESS_DENIED:EFI_SUCCESS;
