@@ -117,7 +117,7 @@ Print the catalogue and exit. Nothing is built, signed or staged.
 .EXAMPLE
 # Bootable Stop/release-only test application; stages as EFI\BOOT\BOOTX64.EFI.
 # Confirm G: is the intended USB. No BDFs selects every supported NVIDIA GPU at boot.
-# Requires the private boot profile and signing setup.
+# Uses runtime ESP discovery (no private boot profile). Requires the personal WSL signing key, certificate and enrolled db.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
     -StageDrive G -AcceptActuatingDeploy
 
