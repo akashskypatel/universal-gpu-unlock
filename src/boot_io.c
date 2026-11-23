@@ -178,7 +178,7 @@ static EFI_STATUS BenchBuildTargetText(CHAR16 *out,UINTN capacity) {
 }
 EFI_STATUS GuBootBenchCountdown(VOID) {
   static CHAR16 prefix[]=L"\r\n*** WARNING: Live NVIDIA Stop/release and reattach test starts in 3 seconds. ***\r\n"
-    L"These supported NVIDIA cards, detected on this boot, will be processed in order:\r\n";
+    L"These supported NVIDIA cards selected for this test will be processed in order:\r\n";
   static CHAR16 suffix[]=L"\r\n\r\nFirmware reattachment is attempted, not guaranteed. Displays on these cards may go black, disconnect, or flicker.\r\n"
     L"Disconnect those displays; use an independent display. Stop may hang; recovery is not verified.\r\n\r\n";
   static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];

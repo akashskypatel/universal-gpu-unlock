@@ -116,9 +116,16 @@ Print the catalogue and exit. Nothing is built, signed or staged.
 
 .EXAMPLE
 # Bootable Stop/release-only test application; stages as EFI\BOOT\BOOTX64.EFI.
-# Confirm G: is the intended USB. Requires the private boot profile and signing setup.
+# Confirm G: is the intended USB. No BDFs selects every supported NVIDIA GPU at boot.
+# Requires the private boot profile and signing setup.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
     -StageDrive G -AcceptActuatingDeploy
+
+.EXAMPLE
+# Optional fixed ordered subset: replace these placeholders with two or more
+# BDFs from the target machine's current read-only inventory.
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
+    -SelectionBdfs '<BDF1>,<BDF2>' -StageDrive G -AcceptActuatingDeploy
 
 .EXAMPLE
 # The waived one-target image, staged deliberately, on a donor card.
@@ -636,6 +643,9 @@ function Test-VariantSelection($Variant) {
     # image under a name this catalogue gives to a different variant.
     $count = Get-SelectionCount
     $needs = $null
+    if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and $count -eq 1) {
+        return 'NEEDS_TWO_OR_MORE_BDFS'
+    }
     if ($Variant.PSObject.Properties.Name -contains 'requires_selection') { $needs = $Variant.requires_selection }
     if ($needs -eq 'single' -and $count -ne 1) {
         if ($count -eq 0) { return 'NEEDS_SELECTION' }
@@ -658,6 +668,14 @@ function Test-VariantSelection($Variant) {
 }
 
 function Get-VariantBinary($Variant) {
+    if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
+        (Get-SelectionCount) -ge 2) {
+        $label = [string]$script:SelectionSpec.Label
+        if ($Variant.family -eq 'prepare-dxe') {
+            return "GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-$label.efi"
+        }
+        return "GPU-SEQUENCE-STOP-RELEASE-BENCH-$label.EFI"
+    }
     # The label is whatever src/Gpu-Selection-Build.ps1 would compute, so the
     # expectation and the builder cannot use different spellings.
     $label = ''
@@ -678,6 +696,12 @@ function Build-VariantArguments($Variant) {
         } else {
             $arguments[$name] = $value
         }
+    }
+    if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
+        (Get-SelectionCount) -ge 2) {
+        [void]$arguments.Remove('RuntimeSelection')
+        if ($SelectionBdf) { $arguments['SelectionBdf'] = $SelectionBdf }
+        else { $arguments['SelectionBdfs'] = $SelectionBdfs }
     }
     if ($Variant.PSObject.Properties.Name -contains 'requires_selection' -and $Variant.requires_selection) {
         if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
@@ -1064,6 +1088,12 @@ try {
                 # catalogue guessed. Anything else in angle brackets is a mistake
                 # and is refused instead of being matched literally.
                 $attestation = $declared.Replace('<selection-count>', [string](Get-SelectionCount))
+                if ($variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
+                    (Get-SelectionCount) -ge 2) {
+                    $attestation = $attestation.Replace('RUNTIME_SELECTION=1', 'RUNTIME_SELECTION=0')
+                    $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION',
+                        ('TARGET_ORDER=' + ($script:SelectionSpec.Locations -join ',')))
+                }
                 if ($attestation -match '<[^>]+>') {
                     throw "Unknown attestation placeholder for $($variantId): $declared"
                 }

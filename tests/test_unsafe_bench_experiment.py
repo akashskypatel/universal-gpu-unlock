@@ -57,7 +57,9 @@ class UnsafeBenchVariantContract(unittest.TestCase):
     def test_builder_uses_runtime_inventory_and_marks_image(self):
         self.assertIn("[switch]$StopReleaseOnlyBench", self.builder)
         self.assertIn("-StopReleaseOnlyBench requires -AcceptUnverifiedActuation", self.builder)
-        self.assertIn("runtime selection of the GPUs detected on this boot", self.builder)
+        self.assertIn("No explicit BDFs means the default live-inventory select-all policy", self.builder)
+        self.assertIn("at least two BDFs", self.builder)
+        self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-' + $selection.Label", self.builder)
         self.assertIn("/DGU_UNVERIFIED_BENCH_CONDITIONS /DGU_DXE_FILE_ONLY_OUTPUT /DGU_STOP_RELEASE_ONLY_BENCH", self.builder)
         self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi", self.builder)
         self.assertIn("Where-Object { $_ -ne", self.builder)
@@ -69,7 +71,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
     def test_mandatory_warning_and_three_second_gate_precede_mutation(self):
         self.assertIn("EFI_STATUS GuBootBenchCountdown(VOID)", self.boot)
         for phrase in ("Live NVIDIA Stop/release and reattach test starts in 3 seconds",
-                       "detected on this boot", "PCI=", "go black", "disconnect, or flicker",
+                       "selected for this test", "PCI=", "go black", "disconnect, or flicker",
                        "reattachment is attempted, not guaranteed", "independent display"):
             self.assertIn(phrase, self.boot)
         self.assertIn("Table->BootServices->Stall(3000000U)", self.boot)
@@ -95,8 +97,10 @@ class UnsafeBenchVariantContract(unittest.TestCase):
 
     def test_bootable_application_variant_excludes_unlock_and_stages_as_application(self):
         self.assertIn("[switch]$StopReleaseOnlyBench", self.app_builder)
-        self.assertIn("-StopReleaseOnlyBench requires runtime selection", self.app_builder)
+        self.assertIn("No explicit BDFs means the default live-inventory select-all policy", self.app_builder)
+        self.assertIn("at least two BDFs", self.app_builder)
         self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI", self.app_builder)
+        self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-' + $selection.Label", self.app_builder)
         self.assertIn("/subsystem:efi_application", self.app_builder)
         self.assertIn(r"Where-Object { $_ -ne 'vendor\unlock_610.c' }", self.app_builder)
         self.assertIn("/DGU_STOP_RELEASE_ONLY_BENCH", self.app_builder)
@@ -130,6 +134,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         v = matches[0]
         self.assertIn("image_variants.json", self.sign_deploy)
         self.assertIn("function Select-Variants", self.sign_deploy)
+        self.assertIn("NEEDS_TWO_OR_MORE_BDFS", self.sign_deploy)
+        self.assertIn("Remove('RuntimeSelection')", self.sign_deploy)
         self.assertEqual(v["safety"], "actuates")
         self.assertEqual(v["binary"], "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi")
         self.assertTrue(v["switches"]["StopReleaseOnlyBench"])

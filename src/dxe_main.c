@@ -64,7 +64,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   }
 
   const char *stage = "dxe-discover";
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) && defined(GU_RUNTIME_SELECTION)
   s=GuRuntimeSelectionSelectAll();
   if(s!=EFI_SUCCESS)goto finish;
 #endif

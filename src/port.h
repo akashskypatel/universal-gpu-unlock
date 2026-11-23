@@ -110,9 +110,6 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
 #error Stop/release-only mode requires explicit ordered stop/release consent
 #endif
-#if !defined(GU_RUNTIME_SELECTION)
-#error Stop/release-only mode requires runtime discovery, not compiled BDF targets
-#endif
 #endif
 
 /* GU_RUNTIME_SELECTION moves the target list out of the build: the image reads

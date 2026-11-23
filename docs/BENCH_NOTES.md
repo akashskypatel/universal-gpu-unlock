@@ -386,7 +386,11 @@ For a bootable USB test image, use the separate application variant
 The catalogue stages it as `EFI\\BOOT\\BOOTX64.EFI` with
 `-Only app-stop-release-sequence-bench -StageDrive G
 -AcceptActuatingDeploy`
-(after verifying G: is the intended USB). It follows the same Stop/release-only flow, preloads
+(after verifying G: is the intended USB). With no BDF arguments, the application
+selects every supported NVIDIA GPU discovered at boot. To restrict it to a
+specific ordered subset, supply `-SelectionBdfs '<BDF1>,<BDF2>'` with two or more
+BDFs from that machine's read-only inventory; the image embeds and reports that
+exact sequence. Either mode follows the same Stop/release-only flow, preloads
 and retains the pinned Windows handoff, then starts Windows only after the
 sequence verifies. This application has also not been built, signed, staged,
 or exercised on hardware here.
