@@ -288,6 +288,52 @@ actuation image. Even an AMD GOP or altered console-variable paths would not by
 itself establish that display-active 3080 release is safe; the ASPM blocker
 remains unresolved.
 
+## PEG with attached iGPU and 3080 displays: run 0022
+
+The operator reports `PEG` selected and the RTX 4090 headless. Run `0022`
+finds GOPs for the RTX 3080 (`0000:04:00.0`) and AMD iGPU (`0000:0f:00.0`);
+the 4090 (`0000:01:00.0`) is enumerated with no GOP. Each configured `ConOut`
+and `ErrOut` variable contains both the NVIDIA and independent AMD paths.
+Accordingly, the diagnostic reports `INDEPENDENT_CONSOLE_ASSOCIATION=0`,
+`ERROR_CONSOLE_ISOLATION=CONFLICT`, and
+`TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1`. This is consistent with
+run `0017` under IGD with an iGPU display attached: changing IGD to PEG did not
+isolate the configured console paths when both GOPs are present. GOP/EDID
+records describe firmware interfaces, not a physical monitor count or proof of
+which panel received console text. The 3080 remains at `ASPM=2`, Gen4 x4.
+
+### A screen is not the same thing as a log file or a safe release console
+
+The installed DXE path can write its log without rendering those log lines on a
+screen. In `src/boot_io.c`, `GuBootOpen` opens/creates
+`\\AD102-UNLOCK\\RUNxxxx.TXT` on the volume containing the loaded image;
+`GuLog` sends bytes through `EFI_FILE_PROTOCOL.Write` and flushes the file.
+These operations are separate from `GuBootSay`/trace screen output through
+`ConOut`. The installed DXE entry in `src/dxe_main.c` runs automatically at
+ReadyToBoot and does not ask for the interactive app's U/P/I/R/S choice. Thus,
+a writable file can hold the log for later inspection even if the screen is not
+showing those messages; this still depends on the DXE image volume being
+writable and the file writes succeeding.
+
+That does **not** remove the release safety gate. `src/msi_release.c` requires
+firmware console, error, and input handles/protocols, then verifies that
+configured `ConOut` and `ErrOut` and the live TextOut relationship are owned by
+independent AMD survivor GOPs before releasing the selected NVIDIA driver. A
+log file is not a substitute for that ownership check. Run `0022` has both
+NVIDIA and AMD in the configured variables, so the current fail-closed preflight
+must refuse release even though an independent AMD GOP exists. The source does
+not establish that a physical monitor must visibly illuminate for every such
+protocol check; nor does the read-only diagnostic prove that text appeared on a
+particular monitor. Do not bypass these console checks to make the screen-free
+case run. No source change was indicated.
+
+**Next read-only capture:** restore the preferred fixed layout—leave PEG
+selected, disconnect the iGPU display, keep the 4090 headless, and connect the
+intended displays to the 3080—then cold-boot and rerun the topology log. This
+records the intended operating layout after the attached-iGPU comparison; it is
+not an actuation approval. No ASPM changes, Stop, preparation, or actuation
+image for this check.
+
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 
 The uploaded topology capture `GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` puts the
