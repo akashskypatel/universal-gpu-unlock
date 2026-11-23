@@ -30,6 +30,9 @@
 #include <Protocol/LoadedImage.h>
 
 #include <Protocol/SimpleFileSystem.h>
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#include <Protocol/SimpleTextOut.h>
+#endif
 
 #include <Guid/FileInfo.h>
 
@@ -176,72 +179,71 @@ static EFI_STATUS BenchBuildTargetText(CHAR16 *out,UINTN capacity) {
   }
   return EFI_SUCCESS;
 }
-EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required) {
-  static CHAR16 prefix[]=L"\r\n*** WARNING: Live NVIDIA Stop/release and reattach test starts in 3 seconds. ***\r\n"
-    L"These supported NVIDIA cards selected for this test will be processed in order:\r\n";
-  static CHAR16 suffix[]=L"\r\n\r\nFirmware reattachment is attempted, not guaranteed. Displays on these cards may go black, disconnect, or flicker.\r\n"
-    L"Disconnect those displays; use an independent display. Stop may hang; recovery is not verified.\r\n\r\n";
-  static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
+/* A display warning is optional. Only a confirmed live firmware text
+ * interface may be called; the file log is the primary evidence. Do not
+ * call stale console function pointers after a GPU's driver was stopped. */
+static EFI_STATUS BenchWriteConsole(const CHAR16 *prefix,
+                                    const CHAR16 *targets,
+                                    const CHAR16 *suffix) {
+  EFI_SYSTEM_TABLE *t=Table;
+  static EFI_GUID text_guid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
+  if(!t||!t->BootServices||!t->BootServices->HandleProtocol)
+    return EFI_UNSUPPORTED;
+  EFI_HANDLE handles[2]={t->ConsoleOutHandle,t->StandardErrorHandle};
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *expected[2]={t->ConOut,t->StdErr};
+  for(UINTN i=0;i<2;i++) {
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *live=NULL;
+    if(!handles[i]||!expected[i])continue;
+    if(i==1 && handles[i]==handles[0])continue;
+    EFI_STATUS s=t->BootServices->HandleProtocol(handles[i],&text_guid,(VOID **)&live);
+    if(s!=EFI_SUCCESS||live!=expected[i]||!live->OutputString)continue;
+    s=live->OutputString(live,(CHAR16 *)prefix);
+    if(s==EFI_SUCCESS)s=live->OutputString(live,(CHAR16 *)targets);
+    if(s==EFI_SUCCESS)s=live->OutputString(live,(CHAR16 *)suffix);
+    if(s==EFI_SUCCESS)return EFI_SUCCESS;
+  }
+  return EFI_NOT_READY;
+}
+EFI_STATUS GuBootBenchCountdown(VOID) {
+  static CHAR16 prefix[]=L"\r\n*** WARNING: NVIDIA driver Stop/release and reattach test starts in 3 seconds. ***\r\n"
+    L"The following detected NVIDIA GPUs will be processed in order:\r\n";
+  static CHAR16 suffix[]=L"\r\n\r\nA display may go black, disconnect, or flicker during the test.\r\n"
+    L"Do not rearrange display cables. Reattachment may fail or the firmware may hang.\r\n"
+    L"Recovery has not been verified. Full power-off may be required.\r\n\r\n";
+  static CHAR16 targets[GU_STOP_BENCH_TARGET_TEXT_CHARS];
   size_t count=GuSelectedGpuCount();
-  if(!Table||!Table->BootServices||!Table->BootServices->Stall) {
-    GuLog("BENCH_WARNING=REFUSED REASON=STALL_UNAVAILABLE GPU_ACTION=0 CONSOLE_IO=%u\n",
-          (unsigned)console_output);
+  if(!GuBootLogOpen()||!Table||!Table->BootServices||!Table->BootServices->Stall) {
+    GuLog("BENCH_WARNING=REFUSED REASON=LOG_OR_STALL_UNAVAILABLE GPU_ACTION=0\\n");
     return EFI_UNSUPPORTED;
   }
-  if(!console_output) {
-    GuLog("BENCH_WARNING=FILE_ONLY CONSOLE_IO=0 TARGET_COUNT=%zu DELAY_US=3000000 GPU_ACTION=GATED\n",count);
-    EFI_STATUS delay=Table->BootServices->Stall(3000000U);
-    if(delay!=EFI_SUCCESS)
-      GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED CONSOLE_IO=0\n",
-            (unsigned long long)delay);
-    return delay;
-  }
-
-  /* A sole-GOP target still owns the active display before Stop. Its warning
-   * is best-effort: the file log remains authoritative and console failure
-   * must not turn an otherwise eligible Stop into a preflight refusal. */
-  EFI_STATUS display=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
-  if(display==EFI_SUCCESS&&Table->ConOut&&Table->ConOut->OutputString) {
-    display=Table->ConOut->OutputString(Table->ConOut,prefix);
-    if(display==EFI_SUCCESS)display=Table->ConOut->OutputString(Table->ConOut,target_text);
-    if(display==EFI_SUCCESS)display=Table->ConOut->OutputString(Table->ConOut,suffix);
-  } else if(display==EFI_SUCCESS)display=EFI_NOT_READY;
-  if(display==EFI_SUCCESS) {
-    GuLog("BENCH_WARNING=DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT TARGET_COUNT=%zu "
-          "DELAY_US=3000000 GPU_ACTION=GATED DISPLAY_TOPOLOGY=UNVERIFIED\n",count);
-  } else {
-    GuLog("BENCH_WARNING=CONSOLE_NOT_SHOWN STATUS=%#llx CONSOLE_REQUIRED=%u "
-          "FILE_LOG=AUTHORITATIVE GPU_ACTION=%s\n",
-          (unsigned long long)display,(unsigned)console_required,
-          console_required?"REFUSED":"GATED");
-    if(console_required)return display;
-  }
+  EFI_STATUS text_status=BenchBuildTargetText(targets,GU_STOP_BENCH_TARGET_TEXT_CHARS);
+  EFI_STATUS display=text_status==EFI_SUCCESS?
+    BenchWriteConsole(prefix,targets,suffix):text_status;
+  GuLog("BENCH_WARNING=%s CONSOLE=BEST_EFFORT TARGET_COUNT=%zu "
+        "DISPLAY_STATUS=%#llx FILE_LOG=AUTHORITATIVE DELAY_US=3000000 "
+        "GPU_ACTION=GATED\\n",
+        display==EFI_SUCCESS?"DISPLAYED":"CONSOLE_NOT_SHOWN",count,
+        (unsigned long long)display);
+  /* Even when no firmware console is available, the delay is mandatory. */
   EFI_STATUS delay=Table->BootServices->Stall(3000000U);
   if(delay!=EFI_SUCCESS)
-    GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED CONSOLE_IO=%u\n",
-          (unsigned long long)delay,(unsigned)console_output);
+    GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED\\n",
+          (unsigned long long)delay);
   return delay;
 }
-EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output) {
-  static CHAR16 prefix[]=L"\r\nStop/release and reattachment checks passed for these live devices:\r\n";
-  static CHAR16 suffix[]=L"\r\nNo firmware unlock transaction was run. Returning to firmware.\r\n";
-  static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
-  if(!console_output) {
-    GuLog("BENCH_COMPLETION=FILE_ONLY CONSOLE_IO=0 GPU_SEQUENCE=COMPLETE\n");
-    return EFI_SUCCESS;
-  }
-  EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
-  if(s==EFI_SUCCESS&&(!Table||!Table->ConOut||!Table->ConOut->OutputString))
-    s=EFI_UNSUPPORTED;
-  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,prefix);
-  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,target_text);
-  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,suffix);
-  if(s==EFI_SUCCESS)
-    GuLog("BENCH_COMPLETION=CONSOLE_DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT "
-          "GPU_SEQUENCE=COMPLETE FILE_LOG=AUTHORITATIVE\n");
-  else
-    GuLog("BENCH_COMPLETION=CONSOLE_NOT_SHOWN STATUS=%#llx "
-          "GPU_SEQUENCE=COMPLETE FILE_LOG=AUTHORITATIVE\n",(unsigned long long)s);
+EFI_STATUS GuBootBenchReportCompletion(VOID) {
+  static CHAR16 prefix[]=L"\r\nNVIDIA driver Stop/release and verified reattachment completed for:\r\n";
+  static CHAR16 suffix[]=L"\r\nNo firmware unlock transaction ran. See the file log for verified results.\r\n";
+  static CHAR16 targets[GU_STOP_BENCH_TARGET_TEXT_CHARS];
+  if(!GuBootLogOpen())return EFI_NOT_READY;
+  EFI_STATUS text_status=BenchBuildTargetText(targets,GU_STOP_BENCH_TARGET_TEXT_CHARS);
+  EFI_STATUS display=text_status==EFI_SUCCESS?
+    BenchWriteConsole(prefix,targets,suffix):text_status;
+  GuLog("BENCH_COMPLETION=%s CONSOLE=BEST_EFFORT STATUS=%#llx "
+        "GPU_SEQUENCE=COMPLETE FILE_LOG=AUTHORITATIVE\\n",
+        display==EFI_SUCCESS?"CONSOLE_DISPLAYED":"CONSOLE_NOT_SHOWN",
+        (unsigned long long)display);
+  /* Console output is never used as evidence of reattachment or a gate. */
   return EFI_SUCCESS;
 }
 #endif
