@@ -3,9 +3,10 @@
  * graph came from MSI Z790/AD102 CAP0001 (2026-10-25); other boards still
  * require independent Stop/console/peer/recovery evidence before live use.
  * Snapshot/delta checks derive controller paths and driver agents at runtime.
- * No firmware variables or reset fallback are used. Normal transaction builds
- * do not reconnect controllers; the explicitly named stop/release-only bench
- * build adds a separate ConnectController + graph-verification path.
+ * No firmware variables are written by this adapter. Normal transaction
+ * builds do not reconnect controllers; the explicitly scoped Stop-only bench
+ * adds ConnectController and graph checks. Its app-level failure handler may
+ * request a warm reboot only after a verified peer-GOP failure notice.
  */
 #include "msi_release.h"
 #include "stop_contract.h"
