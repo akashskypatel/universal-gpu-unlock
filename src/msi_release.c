@@ -2180,6 +2180,83 @@ EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
   return s;
 }
 
+/* After the target-owned ConOut GPU has released its driver, try the
+ * surviving GPU's own SimpleTextOut, not the possibly stale system ConOut.
+ * A GOP by itself is NOT a UEFI text console. If no peer TextOut is bound,
+ * draw a short status directly through the same verified GOP instead.
+ * This intentionally does not change the firmware-owned system table. */
+EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
+  if(!ReleaseOwnerMatches()||!Plan.target_console_experiment||
+     !Plan.ready||!Plan.mutated||Plan.stage!=3||!Plan.claimed||
+     !Plan.warning_peer_gop||!GuBootLogOpen())
+    return EFI_NOT_READY;
+  EFI_STATUS s=Gops(FALSE);
+  if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
+  if(s!=EFI_SUCCESS)return s;
+  SURVIVOR_GOP *survivor=NULL;
+  for(UINTN k=0;k<Plan.survivor_count;k++)
+    if(Plan.survivors[k].handle==Plan.warning_peer_gop) {
+      if(survivor)return EFI_COMPROMISED_DATA;
+      survivor=&Plan.survivors[k];
+    }
+  if(!survivor||!survivor->interface||!survivor->path_bytes)
+    return EFI_NOT_READY;
+  EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;
+  s=Interface(survivor->handle,&PathGuid,(VOID **)&path);
+  if(s==EFI_SUCCESS)s=Interface(survivor->handle,&GopGuid,(VOID **)&g);
+  if(s!=EFI_SUCCESS||!path||g!=survivor->interface||!g||!g->Mode||
+     !g->Mode->Info||!g->Blt||
+     !GuDevicePathUnchanged(survivor->path,survivor->path_bytes,
+                            (const unsigned char *)path,4096U)||
+     !Equal(g->Mode,&survivor->mode,sizeof(survivor->mode))||
+     !Equal(g->Mode->Info,&survivor->info,sizeof(survivor->info)))
+    return EFI_NOT_READY;
+  BOOLEAN original_text_driver=FALSE,current_text_driver=FALSE;
+  for(UINTN i=0;i<Original.count;i++) {
+    const EDGE *e=&Original.edges[i];
+    if(e->handle==survivor->handle&&e->controller==survivor->handle&&
+       Guid(&e->protocol,&TextGuid)&&
+       e->attributes==EFI_OPEN_PROTOCOL_BY_DRIVER&&e->count==1)
+      original_text_driver=TRUE;
+  }
+  for(UINTN i=0;i<Current.count;i++) {
+    const EDGE *e=&Current.edges[i];
+    if(e->handle==survivor->handle&&e->controller==survivor->handle&&
+       Guid(&e->protocol,&TextGuid)&&
+       e->attributes==EFI_OPEN_PROTOCOL_BY_DRIVER&&e->count==1)
+      current_text_driver=TRUE;
+  }
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *peer_text=NULL;
+  EFI_STATUS text_status=EFI_NOT_FOUND;
+  if(original_text_driver&&current_text_driver) {
+    text_status=Interface(survivor->handle,&TextGuid,(VOID **)&peer_text);
+    if(text_status==EFI_SUCCESS&&peer_text&&peer_text->OutputString) {
+      static CHAR16 notice[]=L"\\r\\nTarget driver released. Peer GPU text output is active. Reattaching target.\\r\\n";
+      text_status=peer_text->OutputString(peer_text,notice);
+      if(text_status==EFI_SUCCESS) {
+        GuLog("STOP_RELEASE_PEER_CONOUT=ACQUIRED "
+              "CHANNEL=PEER_SIMPLE_TEXTOUT DIRECT_HANDLE=1 "
+              "GLOBAL_CONOUT_CHANGED=0 PHYSICAL_PIXELS_VERIFIED=0\\n");
+        return GuVerifyActivePeers(Plan.table);
+      }
+    }
+  }
+  const UINTN width=g->Mode->Info->HorizontalResolution;
+  const UINTN height=g->Mode->Info->VerticalResolution;
+  EFI_STATUS draw=width>=600U&&height>=210U?
+    BenchGopLine(g,24U,183U,width>=1000U?3U:2U,
+                 "TARGET RELEASED REATTACH NEXT"):EFI_UNSUPPORTED;
+  GuLog("STOP_RELEASE_PEER_CONOUT=TEXT_UNAVAILABLE "
+        "TEXT_STATUS=%#llx GRAPH_TEXT_OWNER=%u "
+        "CHANNEL=PEER_GOP_BLT BLT_STATUS=%#llx "
+        "GLOBAL_CONOUT_CHANGED=0 PHYSICAL_PIXELS_VERIFIED=0\\n",
+        (unsigned long long)text_status,
+        (unsigned)(original_text_driver&&current_text_driver),
+        (unsigned long long)draw);
+  if(draw!=EFI_SUCCESS)return draw;
+  return GuVerifyActivePeers(Plan.table);
+}
 /* Used only after a failed reattachment. Its caller never uses ConOut:
  * firmware text output can still be owned by the stopped GPU. Keep the
  * independent peer's original identity and mode checks even on failure.
@@ -2258,6 +2335,7 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
   if(s==EFI_SUCCESS)s=ReattachedDriversVerified();
   if(s==EFI_SUCCESS)s=ReattachedTargetPciRecognized();
   if(s==EFI_SUCCESS)s=Alive();
+  if(s==EFI_SUCCESS)s=BenchTargetConsoleRestored();
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
   if(s!=EFI_SUCCESS||Gu.fault) {
@@ -2405,6 +2483,7 @@ BOOLEAN GuMsiVerifyFinalGraph(VOID) {
   if(s==EFI_SUCCESS)s=ReattachedDriversVerified();
   if(s==EFI_SUCCESS)s=ReattachedTargetPciRecognized();
   if(s==EFI_SUCCESS)s=Alive();
+  if(s==EFI_SUCCESS)s=BenchTargetConsoleRestored();
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
   if(s!=EFI_SUCCESS) {
