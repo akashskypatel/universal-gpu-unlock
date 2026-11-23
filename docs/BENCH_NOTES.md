@@ -214,19 +214,26 @@ Gaming Plus WiFi (MS-7E56), BIOS `E7E56AMSI.1AA3`, build date 2026-09-03.
 The manual cautions that available options can vary by BIOS version, so confirm
 that exact item is present before changing it.
 
-This is a documented candidate for the **next read-only console-routing test**,
-not proof that IGD selection removes NVIDIA from configured `ConOut`/`ErrOut`
-or works without an iGPU monitor. Physical run `0015` (three reported displays
-on the 3080; none on AMD/4090) captured only the 3080 GOP/console path. Run
-`0016` (one reported display on AMD and two on the 3080; none on the 4090)
-captured both GOPs and both console paths and remained `CONFLICT`. If the BIOS
-item is present, change only `Initiate Graphic Adapter` to `IGD`, keep the
-current connected-display test arrangement, cold boot, and run the saved-log
-read-only topology image. The candidate result is AMD-only `ConOut` and
-`ErrOut` with no NVIDIA matches. Do not alter ASPM or attempt a GPU action in
-this test. Only if the attached-display test shows exclusive AMD routing should
-a subsequent read-only run disconnect the iGPU monitor to test whether that
-route persists headless.
+This is a documented candidate for console-routing tests, not proof that IGD
+selection removes NVIDIA from configured `ConOut`/`ErrOut` or works without an
+iGPU monitor. Physical run `0015` (three reported displays on the 3080; none on
+AMD/4090) captured only the 3080 GOP/console path. Run `0016` (one reported
+display on AMD and two on the 3080; none on the 4090) captured both GOPs and
+both console paths and remained `CONFLICT`.
+
+In run `0017`, the operator set `Initiate Graphic Adapter=IGD` and kept one
+display on AMD and two on the 3080, with the 4090 headless. The AMD GOP is now
+listed first and reports 1920x1080; the 3080 GOP is still present. Both GPUs
+remain in `ConOut` and `ErrOut`, so the verdict is still `CONFLICT`. The BIOS
+setting may affect primary selection/order, but this capture does not show an
+exclusive AMD console or prove the AMD GOP works headless.
+
+**Next read-only case:** keep IGD selected, remove the monitor from AMD (move
+it to the 3080 if needed to preserve the three-display day-to-day layout), keep
+the 4090 headless, cold boot, and run the saved-log topology image. This tests
+whether the AMD GOP/console path persists without an attached display. The
+candidate console result remains AMD-only `ConOut` and `ErrOut` with no NVIDIA
+matches. Do not alter ASPM or attempt a GPU action.
 
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 

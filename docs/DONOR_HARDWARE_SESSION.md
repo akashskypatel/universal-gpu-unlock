@@ -522,6 +522,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-readonly-0014` | `diag-topology-log` | `readonly` | 241 | `cd5fa956816016380c93aa6e4c87fe9c1ab2c4932774ac02bf1c3f92dd232eea` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 | `physical-readonly-0015` | `diag-topology-log` | `readonly` | 193 | `34bdb0494bf2895274020addafd60cd44271d412ae9d7fad80a784fc59a93741` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 | `physical-readonly-0016` | `diag-topology-log` | `readonly` | 224 | `de5f4203212249d284b64be28e47618ff895bb8543dbc9ed80e0cc8a6528b509` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0017` | `diag-topology-log` | `readonly` | 224 | `5475f5e005ab89d30219f08716ca191b9cc542b3865d1ef6f2ba12e2730b9a1f` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -1172,6 +1173,36 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FA
 *History:* Read-only comparison after the 3080-only display boot. With one reported display on AMD and two on the 3080 (4090 headless), the firmware exposes GOPs on both AMD 0000:0f:00.0 and NVIDIA 0000:04:00.0. Configured ConOut and ErrOut include both graphics paths, so the console-isolation result remains CONFLICT; this does not show that AMD owns the console independently. The 4090 remains enumerated with GOP_COUNT=0. The 3080 endpoint still reports ASPM=2. The log reports one EDID per GOP handle, not every physical monitor/connector. No device was stopped or changed.
 
 *What it does not show:* that the AMD GOP or framebuffer can operate without a monitor attached; that the console can be moved exclusively to AMD; that the three operator-reported displays are all individually enumerated; that the 3080 driver can be safely released; or that a firmware transaction, Windows acceptance, or recovery succeeds.
+
+### `physical-readonly-0017`
+
+*File:* `tests/data/hardware_session/physical-readonly-0017.txt` — 21780 bytes stored, 22004 as captured, 224 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-18. *Bench:* Operator reports Initiate Graphic Adapter set to IGD, one display on the AMD iGPU, two displays on the RTX 3080, and none on the RTX 4090; read-only diagnostic booted from USB..
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0017.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `DIAGNOSTIC_OUTPUT SCREEN=AVAILABLE DURABLE_LOG=1` — the saved-log topology diagnostic completed with screen output available
+* `GOP_DISPLAY[0] HANDLE=0x751a4898 OWNER_CLASS=INDEPENDENT_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:0f:00.0 OWNER_ID=1002:13c0 MODE_DESCRIPTOR=VALID MODE=0 MAX_MODE=10 INFO_SIZE=36 RESOLUTION=1920x1080 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=1920 FB_BASE=0xf810000000 FB_SIZE=0x7e9000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1` — the AMD GOP is listed first and reports a 1920 by 1080 mode descriptor
+* `GOP_DISPLAY[1] HANDLE=0x74eb6998 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:04:00.0 OWNER_ID=10de:220a MODE_DESCRIPTOR=VALID MODE=2 MAX_MODE=14 INFO_SIZE=36 RESOLUTION=800x600 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=1024 FB_BASE=0xf400000000 FB_SIZE=0x258000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1` — the 3080 GOP remains present and reports an 800 by 600 UEFI mode descriptor
+* `ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1 NVIDIA=1 INDEPENDENT=1 UNMATCHED=0 AMBIGUOUS=0 INDEPENDENT_WITHOUT_GOP=0 NOT_DETACH_EVIDENCE=1` — ErrOut includes both an NVIDIA and an independent graphics path; it is not isolated to AMD
+* `ERROR_CONSOLE_ISOLATION=CONFLICT` — the console remains mixed after the operator set Initiate Graphic Adapter to IGD
+* `NVIDIA_GPU_COUNT=2 INDEPENDENT_GOP_COUNT=1 INDEPENDENT_CONOUT_MATCH=1 NVIDIA_CONOUT_MATCH=1 GOP_UNMATCHED=0 INDEPENDENT_CONSOLE_ASSOCIATION=0 CONOUT_WITHOUT_GOP=0 CONOUT_UNMATCHED=0 CONOUT_AMBIGUOUS=0` — both the AMD and 3080 paths match configured ConOut; the independent-only console criterion is not met
+* `TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1` — the diagnostic continues to block the topology as a conflict
+* `PCI_LINK_NODE BDF=0000:04:00.0 OBS=VALID SIDE_LOCAL=1 READ_ONLY=1 PCIE_CAP=0x78 TYPE=1 ASPM=2 SPEED=4 WIDTH=4 MAX_SPEED=4 MAX_WIDTH=16 TRAINING=0 DLL_ACTIVE=0 DEVICE_ERRORS=9` — the 3080 endpoint still reports ASPM L1 and Gen4 x4 negotiated
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — the capture reports no dropped or overflowing lines
+
+*History:* Read-only topology run after the operator set the documented MSI Initiate Graphic Adapter option to IGD. The AMD GOP is listed before the 3080 GOP, but both remain present and both AMD and NVIDIA appear in configured ConOut and ErrOut. The console-isolation and final topology verdicts therefore remain CONFLICT; list order is not proof of exclusive active console ownership. The run had a display attached to the iGPU, so it does not test whether the AMD GOP persists headless. The 4090 is enumerated with no GOP. The 3080 endpoint still reports ASPM=2. No controller was stopped and no GPU was changed.
+
+*What it does not show:* that IGD selection moved the console exclusively to AMD; that an AMD GOP exists without a display attached; which physical monitor received the last text output; that all displays on the 3080 were individually enumerated; or that the 3080 can be safely released or mutated.
 
 ## Runs that stopped without terminating
 
