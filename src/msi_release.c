@@ -2055,7 +2055,7 @@ EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
   if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,"RECOVERY MAY NEED POWER OFF");
   GuLog("STOP_RELEASE_WARNING_GOP=%s TARGET=%04x:%02x:%02x.%x "
         "PEER=%04x:%02x:%02x.%x DISPLAY_API_STATUS=%#llx "
-        "PHYSICAL_PIXELS_VERIFIED=0 CONSOLE_IO=0\\n",
+        "PHYSICAL_PIXELS_VERIFIED=0 CONSOLE_IO=0\n",
         s==EFI_SUCCESS?"BLT_SUCCESS":"BLT_FAILED",
         (unsigned)Gu.discovery_identity.segment,
         (unsigned)Gu.discovery_identity.bus,
