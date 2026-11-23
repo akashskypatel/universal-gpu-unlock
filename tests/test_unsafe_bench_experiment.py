@@ -70,6 +70,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("/DGU_UNVERIFIED_BENCH_CONDITIONS /DGU_STOP_RELEASE_ONLY_BENCH", self.builder)
         self.assertIn("[switch]$FileOnlyBootLog", self.builder)
         self.assertIn("if ($FileOnlyBootLog)", self.builder)
+        self.assertIn("-StopReleaseOnlyBench requires -FileOnlyBootLog", self.builder)
+        self.assertIn("-StopReleaseOnlyBench requires -FileOnlyBootLog", self.app_builder)
         self.assertIn("/DGU_DXE_FILE_ONLY_OUTPUT", self.builder)
         self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi", self.builder)
         self.assertIn("Where-Object { $_ -ne", self.builder)
