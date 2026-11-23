@@ -13,6 +13,10 @@ on:
       - 'README.md'
       - 'sim/**'
       - 'docs/HOST_SIMULATOR.md'
+      - 'docs/image_variants.json'
+      - 'docs/BUILD_SIGN_DEPLOY.md'
+      - 'docs/hardware_session.json'
+      - 'docs/DONOR_HARDWARE_SESSION.md'
       - '.github/workflows/gpu-topology-diagnostic.yml'
   pull_request:
     paths:
@@ -26,6 +30,10 @@ on:
       - 'README.md'
       - 'sim/**'
       - 'docs/HOST_SIMULATOR.md'
+      - 'docs/image_variants.json'
+      - 'docs/BUILD_SIGN_DEPLOY.md'
+      - 'docs/hardware_session.json'
+      - 'docs/DONOR_HARDWARE_SESSION.md'
       - '.github/workflows/gpu-topology-diagnostic.yml'
   workflow_dispatch:
 permissions:
