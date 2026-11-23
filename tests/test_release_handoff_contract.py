@@ -707,6 +707,150 @@ int main(void) {
                     result = subprocess.run([str(binary)], capture_output=True, text=True)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_reconnected_target_child_handles_match_full_device_path_not_addresses(self):
+        """Run the actual remapping code against new handles, lost children and duplicates."""
+        start = SOURCE.index("static EFI_HANDLE ReattachedChild(")
+        stop = SOURCE.index("static BOOLEAN KnownReattachedEdge(", start)
+        identity = SOURCE[start:stop]  # ReattachedChild and SameReattachedEdge
+        reconcile = ("static EFI_STATUS ReconcileTargetChildren(VOID) {" +
+                     function_body("ReconcileTargetChildren") + "}\n")
+        program = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdio.h>
+#include "gpu_device_path.h"
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef uint32_t UINT32;
+typedef int EFI_STATUS;
+typedef int BOOLEAN;
+typedef struct { unsigned char bytes[16]; } EFI_GUID;
+typedef struct { unsigned char bytes[16]; } EFI_DEVICE_PATH_PROTOCOL;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_ACCESS_DENIED 1
+#define EFI_NOT_READY 2
+#define EFI_COMPROMISED_DATA 3
+#define EFI_DEVICE_PATH_PROTOCOL_GUID {0}
+#define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 8
+#define MAX_SURVIVOR_PATH_BYTES 1024
+typedef struct {
+  EFI_HANDLE old_handle,live_handle;
+  unsigned char path[MAX_SURVIVOR_PATH_BYTES];
+  UINTN path_bytes;
+  BOOLEAN is_gop;
+} TARGET_CHILD;
+typedef struct {
+  EFI_HANDLE handle,agent,controller;
+  EFI_GUID protocol;
+  UINT32 attributes,count;
+  BOOLEAN usb_baseline,idle_output;
+} EDGE;
+typedef struct {UINTN count,capacity;EDGE *edges;} GRAPH;
+typedef struct {
+  EFI_HANDLE pci,nv_agent;
+  TARGET_CHILD *target_children;
+  UINTN target_child_count,target_child_capacity;
+  BOOLEAN reconnecting;
+  UINTN stage;
+} PLAN;
+static PLAN Plan;
+static GRAPH Current;
+static EFI_GUID PathGuid={{1}};
+static int pci,nvagent,foreign_agent,oldgop,newgop,oldedid,newedid,duplicate;
+static unsigned char gop_path[]={1,1,4,0,2,1,5,0,7,0x7f,0xff,4,0};
+static unsigned char edid_path[]={1,1,4,0,2,2,5,0,8,0x7f,0xff,4,0};
+static unsigned char unknown_path[]={1,1,4,0,2,3,5,0,8,0x7f,0xff,4,0};
+static int Guid(const EFI_GUID *a,const EFI_GUID *b){
+  return memcmp(a,b,sizeof(*a))==0;
+}
+static int GopOnTarget(EFI_HANDLE handle,BOOLEAN *target){
+  *target=handle==&newgop||handle==&newedid||handle==&duplicate;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Interface(EFI_HANDLE handle,EFI_GUID *guid,VOID **out){
+  if(!Guid(guid,&PathGuid))return EFI_NOT_READY;
+  if(handle==&newgop){*out=gop_path;return EFI_SUCCESS;}
+  if(handle==&newedid){*out=edid_path;return EFI_SUCCESS;}
+  if(handle==&duplicate){*out=gop_path;return EFI_SUCCESS;}
+  *out=NULL;return EFI_NOT_READY;
+}
+static void GuLog(const char *text,...){(void)text;}
+""" + identity + reconcile + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  TARGET_CHILD children[2]={0};
+  EDGE current[3]={0};
+  Plan.pci=&pci;Plan.nv_agent=&nvagent;
+  Plan.reconnecting=TRUE;Plan.stage=0;
+  Plan.target_children=children;
+  Plan.target_child_count=2;Plan.target_child_capacity=2;
+  children[0].old_handle=&oldgop;
+  children[0].path_bytes=sizeof(gop_path);
+  memcpy(children[0].path,gop_path,sizeof(gop_path));
+  children[0].is_gop=TRUE;
+  children[1].old_handle=&oldedid;
+  children[1].path_bytes=sizeof(edid_path);
+  memcpy(children[1].path,edid_path,sizeof(edid_path));
+  /* Enumeration order is irrelevant; full paths determine mapping. */
+  current[0]=(EDGE){.handle=&pci,.agent=&nvagent,.controller=&newedid,
+                  .protocol=PathGuid,.attributes=8,.count=1};
+  current[1]=(EDGE){.handle=&pci,.agent=&nvagent,.controller=&newgop,
+                  .protocol=PathGuid,.attributes=8,.count=1};
+  Current.edges=current;Current.count=2;
+  CHECK(ReconcileTargetChildren()==EFI_SUCCESS);
+  CHECK(ReattachedChild(&oldgop)==&newgop);
+  CHECK(ReattachedChild(&oldedid)==&newedid);
+  CHECK(ReattachedChild(&pci)==&pci);
+  EDGE before={.handle=&pci,.agent=&nvagent,.controller=&oldedid,
+               .protocol=PathGuid,.attributes=8,.count=1};
+  CHECK(SameReattachedEdge(&before,&current[0]));
+  CHECK(!SameReattachedEdge(&before,&current[1]));
+  /* A missing child is not successful reattachment. */
+  Current.count=1;
+  CHECK(ReconcileTargetChildren()==EFI_NOT_READY);
+  Current.count=2;
+  /* The original parent driver must still own the reattached child. */
+  current[0].agent=&foreign_agent;
+  CHECK(ReconcileTargetChildren()==EFI_ACCESS_DENIED);
+  current[0].agent=&nvagent;
+  /* An unexpected same-GPU full path is not sufficient to grant identity. */
+  current[0].controller=&duplicate;
+  CHECK(ReconcileTargetChildren()==EFI_ACCESS_DENIED);
+  current[0].controller=&newedid;
+  /* Duplicate current bindings are rejected rather than counted twice. */
+  current[2]=current[1];
+  Current.count=3;
+  CHECK(ReconcileTargetChildren()==EFI_ACCESS_DENIED);
+  Current.count=2;
+  CHECK(ReconcileTargetChildren()==EFI_SUCCESS);
+  /* A valid target child path cannot alias a sibling's full path. */
+  memcpy(children[1].path,gop_path,sizeof(gop_path));
+  children[1].path_bytes=sizeof(gop_path);
+  CHECK(ReconcileTargetChildren()==EFI_COMPROMISED_DATA);
+  (void)unknown_path;
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "reattach_handles.c"
+            source.write_text(program, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(directory) / compiler
+                    built = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", "-I",
+                         str(Path(__file__).resolve().parents[1] / "src"),
+                         str(source), "-o", str(binary)],
+                        capture_output=True, text=True)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    checked = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
     def test_amd_owner_validation_is_read_only(self):
         owner = function_body("ReadOnlyAmdConsoleOwnership")
         paths = function_body("AmdConsoleVariable")
