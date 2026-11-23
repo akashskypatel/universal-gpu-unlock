@@ -40,6 +40,76 @@ class DiagnosticContract(unittest.TestCase):
         self.assertNotIn("Mem.Write(",report)
         self.assertIn("SERIAL_OMITTED=1",report)
 
+    def test_passive_gop_text_probe_reports_exact_handle_and_driver_candidate(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        report=source.split("static void ReportGopTextEndpoints(",1)[1].split(
+            "/* Capture one complete boot-local GOP inventory.",1)[0]
+        self.assertIn("ReportGopTextEndpoints(bs);",source)
+        self.assertIn("bs->HandleProtocol(r->handle,&GopGuid",report)
+        self.assertIn("bs->HandleProtocol(r->handle,&TextOutGuid",report)
+        self.assertIn("bs->HandleProtocol(r->handle,&PathGuid",report)
+        self.assertIn("GuTopoPathOnController(&p->path,&r->path)",report)
+        self.assertIn("owner_count!=1U",report)
+        self.assertIn("ObservationOpeners(bs,r->handle,&GopGuid",report)
+        self.assertIn("e->Attributes!=EFI_OPEN_PROTOCOL_BY_DRIVER",report)
+        self.assertIn("driver_count==1U&&agent",report)
+        self.assertIn("binding->ImageHandle,&LoadedGuid",report)
+        self.assertIn("GOP_TEXT_DRIVER_PATH",report)
+        self.assertIn("TEXTOUT_INSTALLER_UNPROVEN=1",report)
+        self.assertIn("ObservationPoolRelease(bs,opens",report)
+        self.assertNotIn("ConnectController(",report)
+        self.assertNotIn("DisconnectController(",report)
+        self.assertNotIn("SetVariable(",report)
+        self.assertNotIn("->SetMode(",report)
+        self.assertNotIn("->Blt(",report)
+
+    def test_direct_gop_text_cycle_requires_independent_stable_peer_protocol(self):
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        report=source.split("static void ReportGopTextEndpoints(",1)[1].split(
+            "/* Capture one complete boot-local GOP inventory.",1)[0]
+        self.assertIn("#ifdef GU_TOPO_GOP_TEXT_CYCLE",report)
+        self.assertIn("Snapshot.gop_count>GU_TEXT_CYCLE_LIMIT",report)
+        self.assertIn("ObservationPoolFault||!bs->Stall",report)
+        self.assertIn("candidate->text==con&&r->handle!=con_handle",report)
+        self.assertIn("candidate->text==err&&r->handle!=err_handle",report)
+        self.assertIn("i!=j&&candidates[j].text==candidate->text",report)
+        for check in ("System->ConsoleOutHandle!=con_handle",
+                      "System->StandardErrorHandle!=err_handle",
+                      "System->ConOut!=con", "System->StdErr!=err",
+                      "current_path.length!=r->path.length",
+                      "memcmp(current_path.bytes,r->path.bytes,current_path.length)",
+                      "gop!=candidate->gop", "text!=candidate->text"):
+            self.assertIn(check,report)
+        self.assertLess(report.index("if(duplicates||"),
+                        report.index("call=text->OutputString(text,message)"))
+        self.assertLess(report.index("System->ConOut!=con"),
+                        report.index("call=text->OutputString(text,message)"))
+        self.assertLess(report.index("ps=bs->HandleProtocol(r->handle,&PathGuid"),
+                        report.index("call=text->OutputString(text,message)"))
+        self.assertLess(report.index("call=text->OutputString(text,message)"),
+                        report.index("stalled=bs->Stall(2000000U)"))
+        self.assertIn("PHYSICAL_PIXELS_VERIFIED=0",report)
+        self.assertIn("GOP_TEXT_CYCLE_END",report)
+        self.assertNotIn("System->ConOut=",report)
+        self.assertNotIn("System->StdErr=",report)
+        self.assertNotIn("StartImage(",report)
+        self.assertNotIn("Stop(",report)
+
+    def test_direct_text_cycle_is_a_distinct_opt_in_logged_diagnostic(self):
+        builder=(P/"Build-Gpu-Topology-Diagnostic.ps1").read_text(encoding="utf-8")
+        self.assertIn("[switch]$CycleGopText",builder)
+        self.assertIn("if ($CycleGopText -and -not $SaveLog)",builder)
+        self.assertIn("if ($CycleGopText -and $WindowsEspGuid)",builder)
+        self.assertIn("/DGU_TOPO_GOP_TEXT_CYCLE",builder)
+        self.assertIn("GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI",builder)
+        self.assertIn("DISPLAY_TEXT_WRITE=$([int]$CycleGopText.IsPresent)",builder)
+        self.assertIn("GOP_TEXT_CYCLE=$([int]$CycleGopText.IsPresent)",builder)
+        source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
+        self.assertIn("static void ReportGopTextEndpoints(",source)
+        self.assertIn("#ifdef GU_TOPO_GOP_TEXT_CYCLE",source)
+        self.assertNotIn("GU_TOPO_GOP_TEXT_CYCLE",builder.split(
+            "if ($SaveLog) { $flags += ' /DGU_TOPO_SAVE_LOG' }",1)[0])
+
     def test_headless_diagnostic_requires_durable_logging(self):
         source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
         entry=source.split("EFI_STATUS EFIAPI UefiMain(",1)[1]
