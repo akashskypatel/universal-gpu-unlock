@@ -960,7 +960,9 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
           (unsigned)(h==Plan.pci),(unsigned)GuIsPreparedPeerHandle(h));
     return EFI_ACCESS_DENIED;
   }
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
   UINTN edid_index=Original.count;
+#endif
   for(UINTN k=0;k<Original.count;k++) {
     const EDGE *other=&Original.edges[k];
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
