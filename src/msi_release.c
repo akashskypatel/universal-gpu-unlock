@@ -918,7 +918,7 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
    * handle, shared protocol consumer, or unrelated output. Describe the
    * exact rejected original relationship, but do not waive its protection. */
   if(!e) {
-    GuLog("STOP_RELEASE_IDLE_REFUSED REASON=NULL_EDGE\\n");
+    GuLog("STOP_RELEASE_IDLE_REFUSED REASON=NULL_EDGE\n");
     return EFI_ACCESS_DENIED;
   }
   EFI_HANDLE h=e->controller;
@@ -926,7 +926,7 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
      e->attributes!=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER||
      !Plan.nv_agent||e->agent!=Plan.nv_agent||e->count!=1||!h) {
     GuLog("STOP_RELEASE_IDLE_REFUSED REASON=NOT_EXACT_TARGET_CHILD CHILD=%#llx "
-          "PARENT=%#llx AGENT=%#llx NVIDIA_AGENT=%#llx ATTR=%#x COUNT=%u\\n",
+          "PARENT=%#llx AGENT=%#llx NVIDIA_AGENT=%#llx ATTR=%#x COUNT=%u\n",
           (unsigned long long)(UINTN)h,(unsigned long long)(UINTN)e->handle,
           (unsigned long long)(UINTN)e->agent,(unsigned long long)(UINTN)Plan.nv_agent,
           e->attributes,e->count);
@@ -934,7 +934,7 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
   }
   if(ProtectedHandle(h)) {
     GuLog("STOP_RELEASE_IDLE_REFUSED REASON=PROTECTED_HANDLE CHILD=%#llx "
-          "CONSOLE=%u ERROR=%u TARGET_GOP=%u PCI=%u PEER=%u\\n",
+          "CONSOLE=%u ERROR=%u TARGET_GOP=%u PCI=%u PEER=%u\n",
           (unsigned long long)(UINTN)h,(unsigned)(h==Plan.console),
           (unsigned)(h==Plan.error),(unsigned)(h==Plan.gop),
           (unsigned)(h==Plan.pci),(unsigned)GuIsPreparedPeerHandle(h));
@@ -945,7 +945,7 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
     if(other!=e&&(other->handle==h||other->agent==h||other->controller==h)) {
       GuLog("STOP_RELEASE_IDLE_REFUSED REASON=SHARED_OR_CONSUMED_CHILD CHILD=%#llx "
             "EDGE=%zu HANDLE=%#llx AGENT=%#llx CONTROLLER=%#llx "
-            "GUID=%#x ATTR=%#x COUNT=%u REL_HANDLE=%u REL_AGENT=%u REL_CONTROLLER=%u\\n",
+            "GUID=%#x ATTR=%#x COUNT=%u REL_HANDLE=%u REL_AGENT=%u REL_CONTROLLER=%u\n",
             (unsigned long long)(UINTN)h,(size_t)k,
             (unsigned long long)(UINTN)other->handle,
             (unsigned long long)(UINTN)other->agent,
@@ -960,11 +960,11 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
   EFI_STATUS s=GopOnTarget(h,&on_target);
   if(s!=EFI_SUCCESS||!on_target) {
     GuLog("STOP_RELEASE_IDLE_REFUSED REASON=TARGET_PATH_NOT_PROVEN "
-          "CHILD=%#llx STATUS=%#llx ON_TARGET=%u\\n",
+          "CHILD=%#llx STATUS=%#llx ON_TARGET=%u\n",
           (unsigned long long)(UINTN)h,(unsigned long long)s,(unsigned)on_target);
     return s==EFI_SUCCESS?EFI_ACCESS_DENIED:s;
   }
-  GuLog("STOP_RELEASE_IDLE_ACCEPTED CHILD=%#llx RELATIONSHIP=UNIQUE_TARGET_ONLY\\n",
+  GuLog("STOP_RELEASE_IDLE_ACCEPTED CHILD=%#llx RELATIONSHIP=UNIQUE_TARGET_ONLY\n",
         (unsigned long long)(UINTN)h);
   e->idle_output=TRUE;
   return EFI_SUCCESS;
