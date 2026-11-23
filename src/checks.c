@@ -202,7 +202,15 @@ GU_LINK_VERDICT GuCheckLinkState(const UINT32 Config[64], UINT16 Pcie, GU_LINK *
   return GU_LINK_OK;
 }
 
-BOOLEAN GuLinkAccepted(GU_LINK_VERDICT Verdict) { return Verdict == GU_LINK_OK; }
+BOOLEAN GuLinkAccepted(GU_LINK_VERDICT Verdict) {
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+  /* Narrow, image-local bench waiver: ASPM is still observed and reported,
+   * but this experimental DXE sequence does not refuse solely on ASPM state. */
+  return Verdict == GU_LINK_OK || Verdict == GU_LINK_ASPM_ENABLED;
+#else
+  return Verdict == GU_LINK_OK;
+#endif
+}
 
 const char *GuLinkReason(GU_LINK_VERDICT Verdict) {
   switch (Verdict) {

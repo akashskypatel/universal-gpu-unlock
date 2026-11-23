@@ -102,6 +102,8 @@ def expected_binary(variant: dict) -> str:
     if family in ("prepare", "prepare-dxe"):
         dxe = "-DXE" if family == "prepare-dxe" else ""
         ext = ".efi" if family == "prepare-dxe" else ".EFI"
+        if switches.get("UnsafeBenchExperiment"):
+            return f"GPU-SEQUENCE-UNVERIFIED-BENCH{dxe}-<label>{ext}"
         if switches.get("RuntimeSelection") and switches.get("AcceptUnverifiedActuation"):
             return f"GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION{dxe}{ext}"
         if switches.get("RuntimeSelection"):
@@ -223,6 +225,7 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
         accept = 1 if switches.get("AcceptUnverifiedActuation") else 0
         runtime = 1 if switches.get("RuntimeSelection") else 0
         runtime_esp = 1 if switches.get("RuntimeEsp") else 0
+        unsafe_bench = 1 if switches.get("UnsafeBenchExperiment") else 0
         count = {"single": 1, "sequence": 2, "any": 1}.get(variant.get("requires_selection") or "", 0)
         return count, {
             "SELECTED_COUNT": count,
@@ -232,6 +235,11 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "SINGLE_TARGET_ACTIVE": int((synthetic or accept) and (runtime or count == 1)),
             "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
             "ORDERED_SEQUENCE": int(accept and count > 1),
+            "ASPM_ADMISSION_BYPASSED": unsafe_bench,
+            "AMD_CONSOLE_OWNERSHIP_BYPASSED": unsafe_bench,
+            "FILE_ONLY_OUTPUT": unsafe_bench,
+            "UNVERIFIED_BENCH_EXPERIMENT": unsafe_bench,
+            "TARGET_ORDER": "0000:01:00.0,0000:04:00.0" if unsafe_bench else "",
             "MULTI_GPU_MUTATION_ALLOWED": accept,
             "SYNTHETIC_PROFILE": synthetic,
             "UNVERIFIED_ACTUATION": accept,

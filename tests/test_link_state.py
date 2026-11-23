@@ -169,6 +169,11 @@ int main(void) {
   Card(c, 0x50, card);
   EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_ASPM_ENABLED);
   EXPECT(link.aspm == 3 && link.errors == 0);
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+  EXPECT(GuLinkAccepted(GU_LINK_ASPM_ENABLED));
+#else
+  EXPECT(!GuLinkAccepted(GU_LINK_ASPM_ENABLED));
+#endif
   EXPECT(strcmp(GuLinkReason(GU_LINK_ASPM_ENABLED), "ASPM_ENABLED") == 0);
 
   /* 5. An untrained link is refused. A trained link whose DLLLA bit reads 0 is
@@ -246,7 +251,11 @@ int main(void) {
                                    GU_LINK_DOWN, GU_LINK_UNUSABLE};
     for (UINTN i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
       EXPECT(GuLinkReason(all[i]) != NULL && GuLinkReason(all[i])[0]);
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+      EXPECT(GuLinkAccepted(all[i]) == (all[i] == GU_LINK_OK || all[i] == GU_LINK_ASPM_ENABLED));
+#else
       EXPECT(GuLinkAccepted(all[i]) == (all[i] == GU_LINK_OK));
+#endif
       for (UINTN j = i + 1; j < sizeof(all) / sizeof(all[0]); ++j)
         EXPECT(strcmp(GuLinkReason(all[i]), GuLinkReason(all[j])) != 0);
     }
@@ -328,6 +337,24 @@ class PciLinkState(unittest.TestCase):
                               executed.stdout)
             self.assertIsNotNone(match, executed.stdout)
             self.assertGreaterEqual(int(match.group(1)), declared)
+
+    def test_explicit_bench_override_admits_aspm_only(self):
+        compiler = os.environ.get("CC", "gcc")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "link.c"
+            binary = Path(directory) / "link"
+            source.write_text(harness(), encoding="utf-8")
+            built = subprocess.run(
+                [compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                 "-DGU_UNVERIFIED_BENCH_CONDITIONS", "-I", str(ROOT / "src"),
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            self.assertEqual(built.returncode, 0, built.stderr[-3000:])
+            executed = subprocess.run([str(binary)], capture_output=True, text=True,
+                                      timeout=30, check=False)
+            self.assertEqual(executed.returncode, 0, executed.stderr[-3000:])
+            self.assertRegex(executed.stdout, r"STATUS=COMPLETE PASS=\d+ PCI_LINK_STATE_CASES")
 
     def test_the_active_path_observes_and_refuses(self):
         discovery = (ROOT / "src" / "gpu_discovery.c").read_text(encoding="utf-8")

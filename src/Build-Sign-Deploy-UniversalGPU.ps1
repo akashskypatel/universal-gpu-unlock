@@ -6,7 +6,7 @@ produce, using a personal Secure Boot certificate that is already enrolled in
 the BIOS db and signed inside a WSL instance.
 
 .DESCRIPTION
-The catalogue is docs/image_variants.json: 29 variants across four builders
+The catalogue is docs/image_variants.json: 32 variants across four builders
 (diagnostic, active preparation, DXE preparation, original vendor Stop). This
 script executes that catalogue, so "all possible combinations" is data, not a
 hand-maintained list, and tests/test_image_variants.py keeps the catalogue

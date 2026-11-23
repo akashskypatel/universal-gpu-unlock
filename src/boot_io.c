@@ -112,11 +112,14 @@ static BOOLEAN Inspect(const EFI_DEVICE_PATH_PROTOCOL *p,UINTN *size,BOOLEAN *us
 }
 
 VOID GuBootSay(const CHAR16 *text) {
-
+#ifdef GU_DXE_FILE_ONLY_OUTPUT
+  /* The installed experimental DXE has no menu. Its status remains in GuLog;
+   * screen output is intentionally suppressed for this named build only. */
+  (void)text;
+#else
   if(!Silent&&Table&&Table->ConOut&&Table->ConOut->OutputString)
-
     Table->ConOut->OutputString(Table->ConOut,(CHAR16 *)text);
-
+#endif
 }
 
 VOID GuBootSilence(VOID){Silent=TRUE;}
@@ -195,15 +198,18 @@ static const char *TraceElapsedText(char *buffer,UINTN size) {
 }
 
 static VOID TraceSay(const char *text) {
+#ifdef GU_DXE_FILE_ONLY_OUTPUT
+  /* GuTracePhase/Detail/Progress also call GuLog, which writes the DXE file. */
+  (void)text;
+#else
   CHAR16 wide[96];
   UINTN i=0;
   if(!Table||!Table->ConOut||!Table->ConOut->OutputString||!text)return;
   for(;i+1U<sizeof(wide)/sizeof(wide[0])&&text[i];i++)
     wide[i]=(CHAR16)(unsigned char)text[i];
   wide[i]=0;
-  /* Straight to ConOut: this is the line that must appear even when the rest of
-   * the screen is deliberately silent. */
   Table->ConOut->OutputString(Table->ConOut,wide);
+#endif
 }
 
 VOID GuTraceScreen(const char *text){TraceSay(text);}

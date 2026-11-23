@@ -304,7 +304,7 @@ These are verified from source, not inferred.
 
 | # | Gap | Evidence | Pri |
 | --- | --- | --- | --- |
-| D1 | Artifacts are unsigned; Secure Boot must be off or a certificate enrolled by hand | **partial (§11.19)** — `src/Build-Sign-Deploy-UniversalGPU.ps1` signs every one of the 31 variants with a personal certificate inside WSL and refuses to sign unless the certificate is already in the BIOS `db`; that is one machine's trust, not a distributable chain (no CA, no timestamp, no release key, no reproducibility claim) | P0 |
+| D1 | Artifacts are unsigned; Secure Boot must be off or a certificate enrolled by hand | **partial (§11.19)** — `src/Build-Sign-Deploy-UniversalGPU.ps1` signs every one of the 32 variants with a personal certificate inside WSL and refuses to sign unless the certificate is already in the BIOS `db`; that is one machine's trust, not a distributable chain (no CA, no timestamp, no release key, no reproducibility claim) | P0 |
 | D2 | The only actuating build has no CI coverage | **Closed (§11.14):** the Windows job compiles the admitted image (app and DXE, one and two targets) with `-RuntimeEsp`, and the host job diffs it. The build is not uploaded. | P0 |
 | D3 | Payload provenance | every payload the firmware can load now has a record (role, 610.43.03 lineage, external reference, digest, length) checked against `src/profile.c` itself, and the tool refuses a missing, mismatched, orphaned or signature-claiming record (§11.27); authenticity is still unverified and says so | `docs/asset_provenance.json`, `tools/verify_provenance.py`, `tests/test_provenance_records.py` | P1 |
 | D4 | MSVC-only toolchain, no EDK II build, installer disabled | `Setup-AdaUnlock.ps1` refuses by design (`Setup.bat`, CI asserts `STATUS=REFUSED`) | P2 |
@@ -2936,7 +2936,7 @@ D1 listed "artifacts are unsigned; Secure Boot must be off or a certificate
 enrolled by hand". The second half is now a script instead of a manual step, and
 the first half is answered only for one machine.
 
-`docs/image_variants.json` is every image this repository can build - 31 variants
+`docs/image_variants.json` is every image this repository can build - 32 variants
 across the four builders (three runtime-selection preparation images are recorded
 as not buildable, with the source rule that refuses them) - as data. `src/Build-Sign-Deploy-UniversalGPU.ps1`
 executes that catalogue: build, prove the reported flags, sign inside WSL with a

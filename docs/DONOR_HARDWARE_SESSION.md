@@ -454,6 +454,7 @@ The same preparation as a boot-service driver, loaded from a `Driver####` entry 
 * `dxe-compile-sequence` — compile-only DXE, as above.
 * `actuate-one-target` — writes the GPU: this is the `actuate` stage, needs `-AcceptActuatingDeploy`, and is outside a read-only session by definition.
 * `actuate-sequence` — writes the GPU, ordered over several cards: `actuate` stage, and it needs the selection to be exactly what the catalogue says.
+* `dxe-actuate-sequence-bench-override` — writes two GPUs sequentially and deliberately waives ASPM and independent-AMD-console admission for the user's accepted bench experiment; it is unscoreable as read-only evidence and has not been hardware-verified.
 * `actuate-one-target-resident` — writes the GPU from the ESP: `actuate` stage, and it is the only image that could observe B9's ESP-resident half.
 * `actuate-runtime-selection` — writes the GPU with the target chosen at boot: `actuate` stage.
 * `actuate-runtime-selection-resident` — writes the GPU, resident, target at boot: `actuate` stage.

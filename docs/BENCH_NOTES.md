@@ -357,12 +357,20 @@ image or hardware mutation was produced from this capture.
 
 For logging, the installed DXE implementation already separates `GuLog`
 (`EFI_FILE_PROTOCOL.Write`/flush to the image volume's numbered run file) from
-screen output. DXE has no interactive menu. That means log text need not be
-rendered to be written; it does **not** mean the file substitutes for the
-independent-console gate or that quieting safety/status output is harmless. No
-screen-suppression option was added to an active transaction build. The
-read-only topology image used for this run saved its durable log; its existing
-capture reported `SCREEN=AVAILABLE`.
+screen output. DXE has no interactive menu. The read-only topology image used
+for this run saved its durable log; its capture reported `SCREEN=AVAILABLE`.
+
+After the operator explicitly accepted the unverified bench risk, a separate
+catalogued variant `dxe-actuate-sequence-bench-override` was added for exactly
+the `0000:01:00.0` then `0000:04:00.0` order. Only that opt-in DXE build accepts
+nonzero ASPM and bypasses the independent-AMD-console ownership checks; it
+still checks link errors/training/width/speed, target identity, peer state,
+transaction ownership, and containment/recovery logic. It writes `GuLog` to
+the image volume and suppresses this image's screen text; it is not a general
+console-free release guarantee. All normal variants retain their prior gates.
+This variant has **not** been built, signed, staged, or hardware-tested in this
+Linux workspace. Its catalogue attests the bypasses explicitly and keeps
+`ACTUATION_VERIFIED=0` / `RECOVERY_VERIFIED=0`.
 
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 

@@ -95,6 +95,14 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #error Unverified actuation requires the reviewed local boot profile, not the synthetic ESP GUID
 #endif
 #endif
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS)
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
+#error The unverified ASPM/console bench override requires an explicit ordered actuation build
+#endif
+#if !defined(GU_DXE_FILE_ONLY_OUTPUT)
+#error The unverified bench DXE must preserve its log while suppressing screen output
+#endif
+#endif
 
 /* GU_RUNTIME_SELECTION moves the target list out of the build: the image reads
  * the operator's "GuTargets" variable at boot instead of a generated

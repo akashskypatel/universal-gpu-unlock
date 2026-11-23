@@ -28,6 +28,7 @@ HARNESS = r"""
 #include <string.h>
 typedef unsigned short CHAR16;
 typedef void VOID;
+typedef struct _EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 typedef struct {
   int (*OutputString)(VOID *self,const CHAR16 *text);
 } EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
@@ -61,6 +62,7 @@ static size_t GuFormatV(char *out,size_t capacity,const char *format,va_list ap)
 /* ---- extracted source: no edits, no generated substitutions ---- */
 %s
 /* ---- end extracted source ---- */
+static void ReportGopDisplayState(EFI_BOOT_SERVICES *bs) {(void)bs;}
 
 static unsigned checks;
 #define CHECK(x) do {checks++;if(!(x)){fprintf(stderr,"FAIL:%%d: %%s\n",__LINE__,#x);return 1;}}while(0)
@@ -73,6 +75,7 @@ static void Reset(void) {
 }
 int main(void) {
   char long_line[500];
+  ReportGopDisplayState(NULL);
   Reset();
   Say("LINE one\r\n");
   Say("LINE two %%u\r\n",7U);

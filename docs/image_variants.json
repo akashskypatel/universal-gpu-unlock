@@ -584,6 +584,31 @@
       "requires_local_boot_profile": true
     },
     {
+      "id": "dxe-actuate-sequence-bench-override",
+      "family": "prepare-dxe",
+      "title": "DXE waived sequence with explicit ASPM/console bench overrides",
+      "switches": {
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "UnsafeBenchExperiment": true
+      },
+      "binary": "GPU-SEQUENCE-UNVERIFIED-BENCH-DXE-<label>.efi",
+      "safety": "actuates",
+      "attestations": [
+        "ORDERED_SEQUENCE=1",
+        "TARGET_ORDER=0000:01:00.0,0000:04:00.0",
+        "ASPM_ADMISSION_BYPASSED=1",
+        "AMD_CONSOLE_OWNERSHIP_BYPASSED=1",
+        "FILE_ONLY_OUTPUT=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "requires_selection": "sequence",
+      "note": "Opt-in bench-only DXE build for the explicit 4090 then 3080 order. It bypasses ASPM and independent-AMD-console admission only; other transaction, peer, reset, and recovery logic remains active. Logs to the image volume without screen output. Not hardware-verified.",
+      "requires_local_boot_profile": true
+    },
+    {
       "id": "dxe-actuate-runtime-selection",
       "family": "prepare-dxe",
       "title": "DXE waived transaction, target chosen at boot",

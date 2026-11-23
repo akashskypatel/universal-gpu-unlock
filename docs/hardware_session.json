@@ -617,6 +617,10 @@
         "why": "writes the GPU, ordered over several cards: `actuate` stage, and it needs the selection to be exactly what the catalogue says."
       },
       {
+        "id": "dxe-actuate-sequence-bench-override",
+        "why": "writes two GPUs sequentially and deliberately waives ASPM and independent-AMD-console admission for the user's accepted bench experiment; it is unscoreable as read-only evidence and has not been hardware-verified."
+      },
+      {
         "id": "actuate-one-target-resident",
         "why": "writes the GPU from the ESP: `actuate` stage, and it is the only image that could observe B9's ESP-resident half."
       },

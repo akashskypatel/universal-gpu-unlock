@@ -32,6 +32,11 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   EFI_STATUS s = GuBootOpen(image, t);
   if (s != EFI_SUCCESS) return s;
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+  GuLog("UNVERIFIED_BENCH_IMAGE=1 ORDER=4090_THEN_3080 ASPM_ADMISSION=BYPASSED "
+        "AMD_CONSOLE_OWNERSHIP=BYPASSED SCREEN_OUTPUT=SUPPRESSED "
+        "LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
+#endif
 
   /* boot_io reports the previous record. This read carries its contents into
    * the recovery check below; only failed/interrupted transactions can select

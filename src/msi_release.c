@@ -652,6 +652,10 @@ static EFI_STATUS AmdConsoleVariable(
 }
 static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
 {
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+  GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=INDEPENDENT_AMD_CONSOLE RESULT=BYPASSED\n");
+  return EFI_SUCCESS;
+#else
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   EFI_HANDLE *handles=NULL;UINTN count=0,display_count=0,amd_count=0;
   GU_DEVICE_PATH_DISPLAY_OWNER *owners=NULL;
@@ -708,12 +712,18 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   s=ReleaseObservation(b,owners,s);
   s=ReleaseObservation(b,handles,s);
   return s;
+#endif
 }
 /* Require graph evidence that the currently bound text console actually
  * consumes only verified AMD survivor GOPs. A configured path alone does
  * not establish that the live ConsoleOutHandle uses that path. */
 static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
 {
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+  (void)graph;
+  GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=LIVE_AMD_TEXTOUT_GRAPH RESULT=BYPASSED\n");
+  return EFI_SUCCESS;
+#else
   BOOLEAN out=FALSE,err=FALSE;
   if(!graph||!Plan.console||!Plan.error)return EFI_NOT_READY;
   for(UINTN i=0;i<graph->count;i++) {
@@ -730,6 +740,7 @@ static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
     if(e->controller==Plan.error)err=TRUE;
   }
   return out&&err?EFI_SUCCESS:EFI_NOT_READY;
+#endif
 }
 
 static EFI_STATUS ReadConfigMode(UINT32 c[64],BOOLEAN permit_initial_master) {
@@ -1193,6 +1204,10 @@ static EFI_STATUS ClaimRestore(VOID) {
  * line cannot imply a check that never happened. */
 static void StopContractLog(UINTN Stage, BOOLEAN Owner, BOOLEAN Cold,
                             BOOLEAN Console, BOOLEAN Peers) {
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+  /* Do not log a bypassed AMD-console check as verified evidence. */
+  Console=FALSE;
+#endif
   GU_STOP_OBSERVATION observation = {0};
   observation.DeviceId=(GU_SC_UINT32)Gu.device_id;
   observation.Owner=Owner?GU_SC_TRUE:GU_SC_FALSE;
