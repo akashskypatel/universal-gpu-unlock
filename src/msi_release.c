@@ -2232,12 +2232,12 @@ EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
   if(original_text_driver&&current_text_driver) {
     text_status=Interface(survivor->handle,&TextGuid,(VOID **)&peer_text);
     if(text_status==EFI_SUCCESS&&peer_text&&peer_text->OutputString) {
-      static CHAR16 notice[]=L"\\r\\nTarget driver released. Peer GPU text output is active. Reattaching target.\\r\\n";
+      static CHAR16 notice[]=L"\r\nTarget driver released. Peer GPU text output is active. Reattaching target.\r\n";
       text_status=peer_text->OutputString(peer_text,notice);
       if(text_status==EFI_SUCCESS) {
         GuLog("STOP_RELEASE_PEER_CONOUT=ACQUIRED "
               "CHANNEL=PEER_SIMPLE_TEXTOUT DIRECT_HANDLE=1 "
-              "GLOBAL_CONOUT_CHANGED=0 PHYSICAL_PIXELS_VERIFIED=0\\n");
+              "GLOBAL_CONOUT_CHANGED=0 PHYSICAL_PIXELS_VERIFIED=0\n");
         return GuVerifyActivePeers(Plan.table);
       }
     }
@@ -2250,7 +2250,7 @@ EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
   GuLog("STOP_RELEASE_PEER_CONOUT=TEXT_UNAVAILABLE "
         "TEXT_STATUS=%#llx GRAPH_TEXT_OWNER=%u "
         "CHANNEL=PEER_GOP_BLT BLT_STATUS=%#llx "
-        "GLOBAL_CONOUT_CHANGED=0 PHYSICAL_PIXELS_VERIFIED=0\\n",
+        "GLOBAL_CONOUT_CHANGED=0 PHYSICAL_PIXELS_VERIFIED=0\n",
         (unsigned long long)text_status,
         (unsigned)(original_text_driver&&current_text_driver),
         (unsigned long long)draw);
