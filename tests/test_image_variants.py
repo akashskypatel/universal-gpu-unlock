@@ -94,6 +94,8 @@ def expected_binary(variant: dict) -> str:
             stem = None
         if stem:
             return f"{stem}{'-WINDOWS-HANDOFF' if guid else ''}-DIAGNOSTIC.EFI"
+        if switches.get("CycleGopText"):
+            return "GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI"
         if count:
             return f"GPU-SELECTION-<label>-DIAGNOSTIC.EFI"
         if guid:
