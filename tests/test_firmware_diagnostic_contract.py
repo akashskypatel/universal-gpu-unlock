@@ -90,8 +90,8 @@ class DiagnosticContract(unittest.TestCase):
                         report.index("stalled=bs->Stall(2000000U)"))
         self.assertIn("PHYSICAL_PIXELS_VERIFIED=0",report)
         self.assertIn("GOP_TEXT_CYCLE_END",report)
-        self.assertNotIn("System->ConOut=",report)
-        self.assertNotIn("System->StdErr=",report)
+        self.assertIsNone(re.search(r"System->ConOut\\s*=(?!=)",report))
+        self.assertIsNone(re.search(r"System->StdErr\\s*=(?!=)",report))
         self.assertNotIn("StartImage(",report)
         self.assertNotIn("Stop(",report)
 
