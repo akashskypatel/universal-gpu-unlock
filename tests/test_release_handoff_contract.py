@@ -464,7 +464,7 @@ typedef struct {
 } PLAN;
 static PLAN Plan;
 static GRAPH Original;
-static EFI_GUID TextGuid={1},GopGuid={2},PathGuid={3};
+static EFI_GUID TextGuid={.Data1=1},GopGuid={.Data1=2},PathGuid={.Data1=3};
 static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,
                                    {0xa0,0x49,0x8a,0xd0,0x6c,0x1a,0x66,0xaa}};
 static void GuLog(const char *format,...){(void)format;}
