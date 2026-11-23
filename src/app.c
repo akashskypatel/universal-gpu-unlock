@@ -477,11 +477,38 @@ failed:
 
     if((Gu.started&&Gu.owned)||Gu.master_attributes_pending)(VOID)GuClearMaster(&Gu);
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-    /* A half-stopped firmware driver or a failed reattach must not return
-     * control to a boot manager that could launch Windows or retry the image.
-     * Without a persistent one-shot boot guard an automatic warm reset could
-     * invoke this USB image repeatedly. Retain the existing no-NVRAM bench
-     * contract and stop for an operator-controlled reboot instead. */
+    if(GuStopReleaseReattachFailed()) {
+      /* The application has already stopped the sequence. Never use
+       * ConOut: it can still belong to the failed GPU. A validated peer GOP
+       * must show the reboot and USB boot-loop notice before any reset.
+       * A missing notice, log, delay or reset service must fail closed. */
+      EFI_STATUS notice=GuMsiStopReleaseShowReattachFailureNotice();
+      GuLog("STOP_RELEASE_REATTACH_FAILED_REBOOT_NOTICE STATUS=%#llx "
+            "NEXT_GPU=BLOCKED REBOOT_DELAY_SECONDS=30 "
+            "USB_FIRST_BOOT_MAY_LOOP=1 ENTER_BIOS_SELECT_OTHER_DRIVE=1\\n",
+            (unsigned long long)notice);
+      if(notice!=EFI_SUCCESS||!t||!t->BootServices||
+         !t->BootServices->Stall||!t->RuntimeServices||
+         !t->RuntimeServices->ResetSystem) {
+        GuLog("STOP_RELEASE_REBOOT=REFUSED "
+              "REASON=NOTICE_OR_REBOOT_SERVICE_UNAVAILABLE "
+              "CONTAINMENT=HALT\\n");
+        (VOID)GuBootClose();GuBootHalt();return EFI_ABORTED;
+      }
+      GuLog("STOP_RELEASE_REBOOT=ARMED TYPE=WARM AFTER_SECONDS=30 "
+            "USB_BOOT_LOOP_RISK=1 BIOS_SELECT_OTHER_BOOT_DRIVE=1 "
+            "FIRMWARE_TRANSACTION=0\\n");
+      /* Flush and close the USB evidence before firmware resets control. */
+      EFI_STATUS closed=GuBootClose();
+      if(closed!=EFI_SUCCESS){GuBootHalt();return EFI_ABORTED;}
+      EFI_STATUS delay=t->BootServices->Stall(30000000U);
+      if(delay!=EFI_SUCCESS){GuBootHalt();return EFI_ABORTED;}
+      t->RuntimeServices->ResetSystem(EfiResetWarm,EFI_ABORTED,0,NULL);
+      /* ResetSystem is not guaranteed to complete on damaged firmware. */
+      GuBootHalt();return EFI_ABORTED;
+    }
+    /* An incomplete release without an attempted reattachment is not proof
+     * that a warm reboot can safely restore the original GPU driver. */
     GuLog("STOP_RELEASE_CONTAINMENT=HALT NEXT_GPU=BLOCKED "
           "RESET=OPERATOR_CONTROLLED AUTO_WARM_RESET=0 "
           "REASON=UNVERIFIED_GPU_OR_CONSOLE_STATE\\n");
