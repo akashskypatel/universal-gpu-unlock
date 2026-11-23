@@ -176,6 +176,7 @@ Every image in the catalogue whose safety class writes nothing to the GPU. One c
 
 | Candidate | Safety | Stage | Log | Facts it puts on paper |
 | --- | --- | --- | --- | --- |
+| `diag-topology-gop-text-cycle` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the USB root | `B1` `B2` |
 | `diag-topology-log` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `B1` `B2` `B9` `E8` |
 | `diag-topology-handoff` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A2` `B9` |
 | `diag-selection` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A1` `C9` |
@@ -189,6 +190,24 @@ Every image in the catalogue whose safety class writes nothing to the GPU. One c
 | `diag-vram-blocks-handoff` | read-only | `readonly` | \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself | `A2` `B9` |
 | `prep-selected` | refuses-before-mutation | `prepare` | \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten | `D5` `B9` `A7` `A4` `E8` `M4` `C9` `B10` |
 | `dxe-prep-selected` | refuses-before-mutation | `prepare` | \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten | `D5` |
+
+#### `diag-topology-gop-text-cycle` — Device-specific GOP text output cycle with a USB log
+
+Records the exact text interface on each captured GOP and its GOP-consuming driver image. It then sends a label through each distinct available device text interface for two seconds. The owner must confirm which monitor showed each label. No GPU driver Stop or console route change occurs.
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-gop-text-cycle -StageDrive G
+```
+
+*Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the USB root
+
+*Score:* `python3 tools/verify_run_log.py <log> --stage readonly`
+
+* `B1` — `GOP_TEXT_ENDPOINT[%zu] HANDLE=%p GOP_STATUS=%#llx` (`src/gpu_topology_efi.c`): Identifies the exact GOP handle where SimpleTextOut is available and whether it matches the captured graphics endpoint.
+* `B2` — `GOP_TEXT_DRIVER[%zu] GOP_DRIVER_EDGES=%zu AGENT=%p` (`src/gpu_topology_efi.c`): Records the separate graphics-console driver candidate, its agent and image resolution. The UEFI opener graph does not prove which driver installed SimpleTextOut.
+* `B1` — `GOP_TEXT_CYCLE_END ATTEMPTED=%zu API_SUCCEEDED=%zu` (`src/gpu_topology_efi.c`): Shows how many direct device-specific text calls returned success; the owner must observe each physical screen before treating the result as a usable display route.
+
+*Does not prove:* that a successful OutputString call produced visible pixels, that an identified GOP consumer installed the text protocol, or that any GPU can be safely stopped or reattached. Screen contents change; GPU configuration and firmware console ownership do not.
 
 #### `diag-topology-log` — topology with a numbered USB log
 
