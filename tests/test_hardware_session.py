@@ -215,10 +215,12 @@ class TheReadOnlyPathReportsTheSameLinkPolicy(unittest.TestCase):
         checks = (ROOT / "src" / "checks.c").read_text(encoding="utf-8")
         body = checks[checks.index("GU_LINK_VERDICT GuCheckLinkState("):]
         body = body[:body.index("BOOLEAN GuLinkAccepted")]
+        # Reject bad link health before returning the ASPM verdict. A bench
+        # that waives ASPM must still reject an untrained or unusable link.
         order = [body.index(marker) for marker in
-                 ("(Link.errors & 0x06U) != 0", "Link.aspm != 0", "!Link.trained",
-                  "Link.width == 0")]
-        self.assertEqual(order, sorted(order), "the policy order is what the log explains")
+                 ("(Link.errors & 0x06U) != 0", "!Link.trained",
+                  "Link.width == 0", "Link.aspm != 0")]
+        self.assertEqual(order, sorted(order), "ASPM waiver must not skip link-health checks")
 
     def test_the_observation_does_not_refuse_anything(self):
         link = self.source.index("ACTIVE_LINK[%zu]")
