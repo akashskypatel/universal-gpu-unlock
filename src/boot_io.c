@@ -10,6 +10,10 @@
 #include "launch_source.h"
 #include "version.h"
 #include "gpu_windows_path.h"
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#include "gpu_discovery.h"
+#include "gpu_selection.h"
+#endif
 
 #include "boot_profile.h"
 #include "boot_state.h"
@@ -123,33 +127,102 @@ VOID GuBootSay(const CHAR16 *text) {
 }
 
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
+#define GU_STOP_BENCH_TARGET_TEXT_CHARS (GU_SELECTION_MAX*80U+1U)
+static BOOLEAN BenchAppendChar(CHAR16 *out,UINTN capacity,UINTN *used,CHAR16 ch) {
+  if(!out||!used||*used+1U>=capacity)return FALSE;
+  out[(*used)++]=ch;out[*used]=0;
+  return TRUE;
+}
+static BOOLEAN BenchAppendText(CHAR16 *out,UINTN capacity,UINTN *used,
+                               const CHAR16 *text) {
+  if(!text)return FALSE;
+  while(*text)if(!BenchAppendChar(out,capacity,used,*text++))return FALSE;
+  return TRUE;
+}
+static BOOLEAN BenchAppendHex(CHAR16 *out,UINTN capacity,UINTN *used,
+                              UINT32 value,UINTN digits) {
+  static const CHAR16 hex[]=L"0123456789abcdef";
+  if(digits>8U)return FALSE;
+  for(UINTN i=digits;i>0;i--)
+    if(!BenchAppendChar(out,capacity,used,hex[(value>>((i-1U)*4U))&0xfU]))
+      return FALSE;
+  return TRUE;
+}
+static EFI_STATUS BenchBuildTargetText(CHAR16 *out,UINTN capacity) {
+  if(!out||capacity<2U)return EFI_INVALID_PARAMETER;
+  out[0]=0;UINTN used=0;size_t count=GuSelectedGpuCount();
+  if(!count||count>GU_SELECTION_MAX)return EFI_NOT_READY;
+  for(size_t i=0;i<count;i++) {
+    GU_GPU_RECORD record;
+    EFI_STATUS s=GuSelectedGpuRecordAt(i,&record);
+    if(s!=EFI_SUCCESS)return s;
+    if(i&&!BenchAppendText(out,capacity,&used,L"\r\n"))return EFI_BUFFER_TOO_SMALL;
+    if(!BenchAppendHex(out,capacity,&used,record.segment,4U)||
+       !BenchAppendChar(out,capacity,&used,L':')||
+       !BenchAppendHex(out,capacity,&used,record.bus,2U)||
+       !BenchAppendChar(out,capacity,&used,L':')||
+       !BenchAppendHex(out,capacity,&used,record.device,2U)||
+       !BenchAppendChar(out,capacity,&used,L'.')||
+       !BenchAppendHex(out,capacity,&used,record.function,1U)||
+       !BenchAppendText(out,capacity,&used,L" NVIDIA PCI=")||
+       !BenchAppendHex(out,capacity,&used,record.pci_id&0xffffU,4U)||
+       !BenchAppendChar(out,capacity,&used,L':')||
+       !BenchAppendHex(out,capacity,&used,record.pci_id>>16,4U)||
+       !BenchAppendText(out,capacity,&used,L" SUB=")||
+       !BenchAppendHex(out,capacity,&used,record.subsystem_id&0xffffU,4U)||
+       !BenchAppendChar(out,capacity,&used,L':')||
+       !BenchAppendHex(out,capacity,&used,record.subsystem_id>>16,4U))
+      return EFI_BUFFER_TOO_SMALL;
+  }
+  return EFI_SUCCESS;
+}
 EFI_STATUS GuBootBenchCountdown(VOID) {
-  static CHAR16 warning[]=L"\r\n*** WARNING: Sequential GPU Stop/release starts in 3 seconds. ***\r\n"
-    L"RTX 4090 then RTX 3080 will be Stop/released. Firmware reattachment will be\r\n"
-    L"attempted, but is not guaranteed. Displays on either NVIDIA GPU may go black,\r\n"
-    L"disconnect, or flicker. Disconnect those displays; use an independent display.\r\n"
-    L"Stop may hang; recovery is not verified.\r\n\r\n";
+  static CHAR16 prefix[]=L"\r\n*** WARNING: Live NVIDIA Stop/release and reattach test starts in 3 seconds. ***\r\n"
+    L"These supported NVIDIA cards, detected on this boot, will be processed in order:\r\n";
+  static CHAR16 suffix[]=L"\r\n\r\nFirmware reattachment is attempted, not guaranteed. Displays on these cards may go black, disconnect, or flicker.\r\n"
+    L"Disconnect those displays; use an independent display. Stop may hang; recovery is not verified.\r\n\r\n";
+  static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
+  EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
+  if(s!=EFI_SUCCESS) {
+    GuLog("BENCH_WARNING=NOT_SHOWN REASON=LIVE_TARGET_LIST_UNAVAILABLE STATUS=%#llx GPU_ACTION=REFUSED\n",
+          (unsigned long long)s);
+    return s;
+  }
   if(!Table||!Table->ConOut||!Table->ConOut->OutputString||
      !Table->BootServices||!Table->BootServices->Stall) {
     GuLog("BENCH_WARNING=NOT_SHOWN REASON=CONFIGURED_CONOUT_OR_STALL_UNAVAILABLE "
           "GPU_ACTION=REFUSED\n");
     return EFI_NOT_READY;
   }
-  /* Use the firmware's configured ConOut, bypassing only the normal file-only
-   * screen suppression for this mandatory warning. This may be a console
-   * splitter, so firmware can mirror it to more than one output. */
-  EFI_STATUS s=Table->ConOut->OutputString(Table->ConOut,warning);
+  /* Use configured ConOut, bypassing routine file-only suppression. The list
+   * comes from this boot's selected PCI identities, not compiled-in hardware. */
+  s=Table->ConOut->OutputString(Table->ConOut,prefix);
+  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,target_text);
+  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,suffix);
   if(s!=EFI_SUCCESS) {
     GuLog("BENCH_WARNING=OUTPUT_FAILED STATUS=%#llx GPU_ACTION=REFUSED\n",
           (unsigned long long)s);
     return s;
   }
-  GuLog("BENCH_WARNING=DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT DELAY_US=3000000 "
-        "GPU_ACTION=GATED DISPLAY_TOPOLOGY=UNVERIFIED\n");
+  GuLog("BENCH_WARNING=DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT TARGET_COUNT=%zu "
+        "DELAY_US=3000000 GPU_ACTION=GATED DISPLAY_TOPOLOGY=UNVERIFIED\n",
+        count);
   s=Table->BootServices->Stall(3000000U);
   if(s!=EFI_SUCCESS)
     GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED\n",
           (unsigned long long)s);
+  return s;
+}
+EFI_STATUS GuBootBenchReportCompletion(VOID) {
+  static CHAR16 prefix[]=L"\r\nStop/release and reattachment checks passed for these live devices:\r\n";
+  static CHAR16 suffix[]=L"\r\nNo firmware unlock transaction was run. Starting Windows.\r\n";
+  static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
+  EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
+  if(s!=EFI_SUCCESS)return s;
+  if(!Table||!Table->ConOut||!Table->ConOut->OutputString)return EFI_UNSUPPORTED;
+  s=Table->ConOut->OutputString(Table->ConOut,prefix);
+  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,target_text);
+  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,suffix);
   return s;
 }
 #endif

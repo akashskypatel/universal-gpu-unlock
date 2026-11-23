@@ -19,8 +19,8 @@ $ErrorActionPreference = 'Stop'
 # Default behaviour is unchanged: compile-only images, or preparation-only
 # artifacts that never touch the GPU. -AcceptUnverifiedActuation is the single
 # explicit operator waiver. The StopReleaseOnlyBench profile is narrower: it
-# accepts the explicit two-card Stop/release test, waives ASPM admission only,
-# and compiles out vendor/unlock_610.c. Nothing here verifies the result:
+# selects all supported NVIDIA GPUs found at runtime, waives ASPM admission
+# only, and compiles out vendor/unlock_610.c. Nothing here verifies the result:
 # CAN_DETACH/CAN_UNLOCK/CAN_FLASH/RECOVERY_VERIFIED stay false.
 if ($AcceptUnverifiedActuation -and -not $EnableSingleTargetExecution) {
     throw '-AcceptUnverifiedActuation requires -EnableSingleTargetExecution: the waiver only applies to ordered active execution builds'
@@ -31,8 +31,8 @@ if ($AcceptUnverifiedActuation -and $SyntheticCompileProfile) {
 if ($StopReleaseOnlyBench -and -not $AcceptUnverifiedActuation) {
     throw '-StopReleaseOnlyBench requires -AcceptUnverifiedActuation.'
 }
-if ($StopReleaseOnlyBench -and $RuntimeSelection) {
-    throw '-StopReleaseOnlyBench requires the explicit compiled 4090 then 3080 target sequence.'
+if ($StopReleaseOnlyBench -and -not $RuntimeSelection) {
+    throw '-StopReleaseOnlyBench requires runtime selection of the GPUs detected on this boot.'
 }
 if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation) {
     throw 'Live GPU execution build refused: production hardware ownership and signed firmware acceptance remain unverified. Use -AcceptUnverifiedActuation for an explicitly unverified image, or -SyntheticCompileProfile only for compile validation.'
@@ -86,10 +86,6 @@ try {
     New-Item -ItemType Directory -Path $buildDir -Force | Out-Null
     . (Join-Path $PSScriptRoot 'Gpu-Selection-Build.ps1')
     $selection = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs -OutputDirectory $buildDir
-    if ($StopReleaseOnlyBench -and ($selection.Count -ne 2 -or
-        (($selection.Locations -join ',') -cne '0000:01:00.0,0000:04:00.0'))) {
-        throw '-StopReleaseOnlyBench is restricted to -SelectionBdfs 0000:01:00.0,0000:04:00.0.'
-    }
     if (-not $RuntimeSelection -and $EnableSingleTargetExecution -and $selection.Count -ne 1 -and -not $AcceptUnverifiedActuation) {
         throw "Single-target execution requires exactly one explicit -SelectionBdf"
     }
@@ -204,7 +200,7 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $binaryName = if ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-' + $selection.Label + '.EFI' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP.EFI' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
+    $binaryName = if ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP.EFI' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
     $compileCmds += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
@@ -217,7 +213,10 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$([int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1))) ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int]($AcceptUnverifiedActuation -and $selection.Count -gt 1)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) AMD_CONSOLE_OWNERSHIP_REQUIRED=$([int][bool]$StopReleaseOnlyBench) FILE_ONLY_OUTPUT=$([int][bool]$StopReleaseOnlyBench) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) FIRMWARE_TRANSACTION=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) UNLOCK=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) REATTACH_ATTEMPTED=$([int][bool]$StopReleaseOnlyBench) REATTACH_VERIFIED=0 TARGET_ORDER=$($selection.Locations -join ',') NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
+    $targetOrder = if ($StopReleaseOnlyBench) { 'RUNTIME_SUPPORTED_NVIDIA_ENUMERATION' } else { $selection.Locations -join ',' }
+    $reportedSelectedCount = if ($StopReleaseOnlyBench) { 'RUNTIME' } else { [string]$selection.Count }
+    $singleTargetActive = if ($StopReleaseOnlyBench) { 0 } else { [int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1)) }
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) AMD_CONSOLE_OWNERSHIP_REQUIRED=$([int][bool]$StopReleaseOnlyBench) FILE_ONLY_OUTPUT=$([int][bool]$StopReleaseOnlyBench) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) FIRMWARE_TRANSACTION=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) UNLOCK=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) REATTACH_ATTEMPTED=$([int][bool]$StopReleaseOnlyBench) REATTACH_VERIFIED=0 TARGET_ORDER=$targetOrder NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
 } finally {
     Pop-Location
 }

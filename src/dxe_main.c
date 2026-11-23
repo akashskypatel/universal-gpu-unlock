@@ -35,7 +35,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   EFI_STATUS s = GuBootOpen(image, t);
   if (s != EFI_SUCCESS) return s;
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=4090_THEN_3080 ASPM_ADMISSION=BYPASSED "
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=LIVE_SUPPORTED_NVIDIA_ENUMERATION ASPM_ADMISSION=BYPASSED "
         "AMD_CONSOLE_OWNERSHIP=REQUIRED FIRMWARE_TRANSACTION=0 UNLOCK=0 "
         "SCREEN_OUTPUT=SUPPRESSED LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
 #endif
@@ -64,6 +64,10 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   }
 
   const char *stage = "dxe-discover";
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  s=GuRuntimeSelectionSelectAll();
+  if(s!=EFI_SUCCESS)goto finish;
+#endif
   s = GuDiscoverSingleGpu(image, t);
   if (s != EFI_SUCCESS) goto finish;
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
@@ -122,6 +126,11 @@ finish:
     stage="dxe-close-USB-log";
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
     GuLog("DXE-DRIVER: Stop/release and reattach sequence verified; closing boot resources.\n");
+    s=GuBootBenchReportCompletion();
+    if(s!=EFI_SUCCESS)
+      GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
+            (unsigned long long)s);
+    s=EFI_SUCCESS;
 #else
     GuLog("DXE-DRIVER: final transaction checks passed; closing boot resources.\n");
 #endif

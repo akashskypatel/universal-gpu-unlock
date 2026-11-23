@@ -61,7 +61,16 @@ int GuIsPreparedPeerHandle(EFI_HANDLE handle);
 /* One selected active card. Binds a genuine ordered-state record around
  * the existing shared GuExecuteUnlock sequence, without permitting a
  * second active card or authorizing firmware work. */
+#ifdef GU_RUNTIME_SELECTION
+/* Stop/release bench policy: select every currently detected supported NVIDIA
+ * function in memory, without persisting GuTargets to NVRAM. */
+EFI_STATUS GuRuntimeSelectionSelectAll(VOID);
+#endif
+
 #ifdef GU_ACTIVE_SINGLE_TARGET
+/* Runtime identity list for the warning shown before an ordered actuation. */
+size_t GuSelectedGpuCount(VOID);
+EFI_STATUS GuSelectedGpuRecordAt(size_t index,GU_GPU_RECORD *out);
 EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                   const void *platform,
                                   const void *release_plan,

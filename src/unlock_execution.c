@@ -253,7 +253,7 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
   if(GuVerifySelectedSequence(table)!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault) {
     s=EFI_NOT_READY;goto failed;
   }
-  GuLog("STOP_RELEASE_SEQUENCE=COMPLETE ORDER=COMPILED_SELECTION "
+  GuLog("STOP_RELEASE_SEQUENCE=COMPLETE ORDER=LIVE_SUPPORTED_NVIDIA_ENUMERATION "
         "FIRMWARE_TRANSACTION=0 UNLOCK=0\n");
   return EFI_SUCCESS;
 failed:

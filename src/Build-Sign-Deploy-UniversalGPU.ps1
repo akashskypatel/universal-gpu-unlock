@@ -118,7 +118,7 @@ Print the catalogue and exit. Nothing is built, signed or staged.
 # Bootable Stop/release-only test application; stages as EFI\BOOT\BOOTX64.EFI.
 # Confirm G: is the intended USB. Requires the private boot profile and signing setup.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
-    -SelectionBdfs '0000:01:00.0,0000:04:00.0' -StageDrive G -AcceptActuatingDeploy
+    -StageDrive G -AcceptActuatingDeploy
 
 .EXAMPLE
 # The waived one-target image, staged deliberately, on a donor card.

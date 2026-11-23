@@ -271,6 +271,14 @@ static EFI_STATUS ReadGpuRecords(EFI_SYSTEM_TABLE *table,GU_GPU_RECORD *records,
  * call into the prepared view. */
 static GU_SELECTION g_runtime_selection;
 static BOOLEAN g_runtime_selection_loaded;
+EFI_STATUS GuRuntimeSelectionSelectAll(VOID) {
+  if(g_runtime_selection_loaded)return EFI_ALREADY_STARTED;
+  memset(&g_runtime_selection,0,sizeof(g_runtime_selection));
+  g_runtime_selection.all=TRUE;
+  g_runtime_selection_loaded=TRUE;
+  GuLog("ACTIVE_SELECTION=POLICY_ALL SOURCE=LIVE_BOOT_INVENTORY NVRAM=UNCHANGED\n");
+  return EFI_SUCCESS;
+}
 static EFI_STATUS ResolveRuntimeSelection(EFI_SYSTEM_TABLE *table,
                                           const GU_GPU_LOCATION **requested,
                                           size_t *requested_count,BOOLEAN *all) {
@@ -878,6 +886,21 @@ EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
   }
   GuLog("SELECTED_GPU_STEP=BOUND ORDER=%zu TARGET=%zu\n",ActiveSequence.next_step,next);
   return EFI_SUCCESS;
+}
+
+size_t GuSelectedGpuCount(VOID) {
+  return ActiveInventoryValid&&ActiveSequenceValid?
+    ActiveSequence.selected_count:0;
+}
+EFI_STATUS GuSelectedGpuRecordAt(size_t index,GU_GPU_RECORD *out) {
+  if(!out||!ActiveInventoryValid||!ActiveSequenceValid||
+     !ActiveInventory.inventory.nvidia||!ActiveInventory.selected_indices||
+     index>=ActiveSequence.selected_count||
+     index>=ActiveInventory.selected_count)return EFI_NOT_READY;
+  size_t record=ActiveInventory.selected_indices[index];
+  if(record>=ActiveInventory.inventory.count)return EFI_DEVICE_ERROR;
+  *out=ActiveInventory.inventory.nvidia[record];
+  return GuIsSupportedPciId(out->pci_id)?EFI_SUCCESS:EFI_DEVICE_ERROR;
 }
 
 /* Allocate one execution record per observed device. Keep the old sequence

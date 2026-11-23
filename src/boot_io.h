@@ -27,6 +27,7 @@ VOID GuBootSay(const CHAR16 *);
 /* Emit the one pre-actuation warning directly to the firmware's configured
  * ConOut and require a successful three-second stall before any GPU access. */
 EFI_STATUS GuBootBenchCountdown(VOID);
+EFI_STATUS GuBootBenchReportCompletion(VOID);
 #endif
 VOID GuBootSilence(VOID);
 VOID GuBootUnsilence(VOID);

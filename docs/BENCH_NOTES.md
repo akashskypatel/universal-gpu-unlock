@@ -361,10 +361,10 @@ screen output. DXE has no interactive menu. The read-only topology image used
 for this run saved its durable log; its capture reported `SCREEN=AVAILABLE`.
 
 After the operator explicitly accepted the unverified bench risk, a separate
-catalogued variant `dxe-stop-release-sequence-bench` was added for exactly
-the `0000:01:00.0` then `0000:04:00.0` order. This opt-in DXE image waives
-ASPM admission only; independent-AMD-console ownership and live text-output
-checks remain mandatory. It then runs
+catalogued variant `dxe-stop-release-sequence-bench` was added. It selects all
+currently detected supported NVIDIA GPUs at boot in firmware enumeration order.
+This opt-in DXE image waives ASPM admission only; independent-AMD-console
+ownership and live text-output checks remain mandatory. It then runs
 `GuMsiPreflight` / `GuMsiRelease` for each selected GPU and uses
 `ConnectController` plus protocol/GOP graph checks to attempt and verify driver
 reattachment. It does **not** link `vendor/unlock_610.c`, does not call
@@ -384,8 +384,8 @@ staged, or hardware-tested in this Linux workspace. The catalogue attests
 For a bootable USB test image, use the separate application variant
 `app-stop-release-sequence-bench` (PE subsystem 10), not the DXE driver above.
 The catalogue stages it as `EFI\\BOOT\\BOOTX64.EFI` with
-`-Only app-stop-release-sequence-bench -SelectionBdfs
-'0000:01:00.0,0000:04:00.0' -StageDrive G -AcceptActuatingDeploy`
+`-Only app-stop-release-sequence-bench -StageDrive G
+-AcceptActuatingDeploy`
 (after verifying G: is the intended USB). It follows the same Stop/release-only flow, preloads
 and retains the pinned Windows handoff, then starts Windows only after the
 sequence verifies. This application has also not been built, signed, staged,

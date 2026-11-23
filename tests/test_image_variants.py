@@ -103,7 +103,7 @@ def expected_binary(variant: dict) -> str:
         dxe = "-DXE" if family == "prepare-dxe" else ""
         ext = ".efi" if family == "prepare-dxe" else ".EFI"
         if switches.get("StopReleaseOnlyBench"):
-            return f"GPU-SEQUENCE-STOP-RELEASE-BENCH{dxe}-<label>{ext}"
+            return f"GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME{dxe}{ext}"
         if switches.get("RuntimeSelection") and switches.get("AcceptUnverifiedActuation"):
             return f"GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION{dxe}{ext}"
         if switches.get("RuntimeSelection"):
@@ -234,7 +234,7 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "PREPARATION_ONLY": int(count > 0 and not synthetic and not accept),
             "SINGLE_TARGET_ACTIVE": int((synthetic or accept) and (runtime or count == 1)),
             "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
-            "ORDERED_SEQUENCE": int(accept and count > 1),
+            "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench),
             "ASPM_ADMISSION_BYPASSED": unsafe_bench,
             "AMD_CONSOLE_OWNERSHIP_REQUIRED": unsafe_bench,
             "FILE_ONLY_OUTPUT": unsafe_bench,
@@ -243,7 +243,7 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "UNLOCK": int(accept and not unsafe_bench),
             "REATTACH_ATTEMPTED": unsafe_bench,
             "REATTACH_VERIFIED": 0,
-            "TARGET_ORDER": "0000:01:00.0,0000:04:00.0" if unsafe_bench else "",
+            "TARGET_ORDER": "RUNTIME_SUPPORTED_NVIDIA_ENUMERATION" if unsafe_bench else "",
             "MULTI_GPU_MUTATION_ALLOWED": accept,
             "SYNTHETIC_PROFILE": synthetic,
             "UNVERIFIED_ACTUATION": accept,

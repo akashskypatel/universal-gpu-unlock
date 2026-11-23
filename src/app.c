@@ -31,13 +31,16 @@
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 
 #ifdef GU_RUNTIME_SELECTION
-/* The image carries no compiled target list, so it has to acquire the
- * operator's policy on a machine it has never seen. One card is recorded
- * automatically; several are listed and chosen here; no answer leaves the
- * policy unset and discovery refuses instead of guessing. Writing the variable
- * is the only NVRAM side effect, and it happens before any device is bound. */
+/* The image carries no compiled target list. The Stop/release-only profile
+ * sets an in-memory select-all policy before discovery; ordinary runtime
+ * selection profiles continue to acquire operator policy through GuTargets. */
 static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
   if(!t||!t->BootServices)return EFI_INVALID_PARAMETER;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  /* Select the supported NVIDIA devices found by the discovery pass that
+   * follows. This is an in-memory policy; do not persist a stale BDF or ALL. */
+  return GuRuntimeSelectionSelectAll();
+#else
   GU_SELECTION selection;
   EFI_STATUS s=GuSelectionRead(t,&selection);
   if(s==EFI_SUCCESS) {
@@ -125,6 +128,7 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
   }
   GuLog("ACTIVE_SELECTION=NO_ANSWER TIMEOUT=1\n");
   return EFI_NOT_FOUND;
+#endif /* !GU_STOP_RELEASE_ONLY_BENCH */
 }
 #endif
 
@@ -276,7 +280,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
                 (unsigned)owner->prom_verified);
 
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=4090_THEN_3080 ASPM_ADMISSION=BYPASSED "
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=LIVE_SUPPORTED_NVIDIA_ENUMERATION ASPM_ADMISSION=BYPASSED "
         "AMD_CONSOLE_OWNERSHIP=REQUIRED FIRMWARE_TRANSACTION=0 UNLOCK=0 "
         "SCREEN_OUTPUT=SUPPRESSED LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
   /* Load the pinned Windows handoff before mutation so failure to locate the
@@ -296,8 +300,11 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GuLog("STOP_RELEASE_ONLY=COMPLETE FIRMWARE_TRANSACTION=0 UNLOCK=0 "
         "REATTACH_VERIFIED=1 WINDOWS_HANDOFF=READY\n");
   GuBootUnsilence();
-  GuBootSay(L"\r\nStop/release and reattachment checks passed.\r\n"
-            L"No firmware unlock transaction was run. Starting Windows.\r\n");
+  s=GuBootBenchReportCompletion();
+  if(s!=EFI_SUCCESS)
+    GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
+          (unsigned long long)s);
+  s=EFI_SUCCESS;
   stage="close-USB-log";GuTracePhase(stage);
   s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
   stage="start-Windows";GuTracePhase(stage);s=GuBootWindows();

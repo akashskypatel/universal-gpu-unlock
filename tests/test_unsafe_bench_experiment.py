@@ -54,12 +54,12 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("Log->Flush(Log)", self.boot)
         self.assertIn("SCREEN_OUTPUT=SUPPRESSED", self.dxe)
 
-    def test_builder_restricts_override_to_4090_then_3080_and_marks_image(self):
+    def test_builder_uses_runtime_inventory_and_marks_image(self):
         self.assertIn("[switch]$StopReleaseOnlyBench", self.builder)
         self.assertIn("-StopReleaseOnlyBench requires -AcceptUnverifiedActuation", self.builder)
-        self.assertIn("0000:01:00.0,0000:04:00.0", self.builder)
+        self.assertIn("runtime selection of the GPUs detected on this boot", self.builder)
         self.assertIn("/DGU_UNVERIFIED_BENCH_CONDITIONS /DGU_DXE_FILE_ONLY_OUTPUT /DGU_STOP_RELEASE_ONLY_BENCH", self.builder)
-        self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-", self.builder)
+        self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi", self.builder)
         self.assertIn("Where-Object { $_ -ne", self.builder)
         self.assertIn(r"vendor\unlock_610.c", self.builder)
         for field in ("ASPM_ADMISSION_BYPASSED", "AMD_CONSOLE_OWNERSHIP_REQUIRED", "FILE_ONLY_OUTPUT",
@@ -68,8 +68,9 @@ class UnsafeBenchVariantContract(unittest.TestCase):
 
     def test_mandatory_warning_and_three_second_gate_precede_mutation(self):
         self.assertIn("EFI_STATUS GuBootBenchCountdown(VOID)", self.boot)
-        for phrase in ("Stop/release starts in 3 seconds", "go black", "disconnect, or flicker",
-                       "reattachment will be", "not guaranteed", "independent display"):
+        for phrase in ("Live NVIDIA Stop/release and reattach test starts in 3 seconds",
+                       "detected on this boot", "PCI=", "go black", "disconnect, or flicker",
+                       "reattachment is attempted, not guaranteed", "independent display"):
             self.assertIn(phrase, self.boot)
         self.assertIn("Table->BootServices->Stall(3000000U)", self.boot)
         self.assertIn("GPU_ACTION=REFUSED", self.boot)
@@ -94,7 +95,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
 
     def test_bootable_application_variant_excludes_unlock_and_stages_as_application(self):
         self.assertIn("[switch]$StopReleaseOnlyBench", self.app_builder)
-        self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-' + $selection.Label + '.EFI'", self.app_builder)
+        self.assertIn("-StopReleaseOnlyBench requires runtime selection", self.app_builder)
+        self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI", self.app_builder)
         self.assertIn("/subsystem:efi_application", self.app_builder)
         self.assertIn(r"Where-Object { $_ -ne 'vendor\unlock_610.c' }", self.app_builder)
         self.assertIn("/DGU_STOP_RELEASE_ONLY_BENCH", self.app_builder)
@@ -104,6 +106,9 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("GuBootBenchCountdown()", stop_branch)
         self.assertIn("GuExecuteStopReleaseSequence(", stop_branch)
         self.assertIn("GuBootWindows()", stop_branch)
+        self.assertIn("GuRuntimeSelectionSelectAll()", self.app)
+        self.assertIn("GuSelectedGpuRecordAt", self.boot)
+        self.assertNotIn("RTX 4090 then RTX 3080", self.boot)
         self.assertNotIn("GuExecutePreparedSequence(", stop_branch)
         self.assertNotIn("GuBootChoose(", stop_branch)
         variant = next(v for v in self.catalog["variants"]
@@ -111,7 +116,10 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertEqual(variant["family"], "prepare")
         self.assertNotIn("DXE", variant["binary"])
         self.assertTrue(variant["requires_local_boot_profile"])
-        self.assertEqual(variant["requires_selection"], "sequence")
+        self.assertNotIn("requires_selection", variant)
+        self.assertTrue(variant["switches"]["RuntimeSelection"])
+        self.assertEqual(variant["attestations"][2],
+                         "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION")
         for token in ("FIRMWARE_TRANSACTION=0", "UNLOCK=0", "STOP_RELEASE_ONLY=1",
                       "ASPM_ADMISSION_BYPASSED=1", "REATTACH_ATTEMPTED=1"):
             self.assertIn(token, variant["attestations"])
@@ -123,9 +131,12 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("image_variants.json", self.sign_deploy)
         self.assertIn("function Select-Variants", self.sign_deploy)
         self.assertEqual(v["safety"], "actuates")
-        self.assertEqual(v["binary"], "GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-<label>.efi")
+        self.assertEqual(v["binary"], "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi")
         self.assertTrue(v["switches"]["StopReleaseOnlyBench"])
-        self.assertEqual(v["requires_selection"], "sequence")
+        self.assertTrue(v["switches"]["RuntimeSelection"])
+        self.assertNotIn("requires_selection", v)
+        self.assertEqual(v["attestations"][2],
+                         "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION")
         for token in ("ASPM_ADMISSION_BYPASSED=1", "AMD_CONSOLE_OWNERSHIP_REQUIRED=1",
                       "FILE_ONLY_OUTPUT=1", "STOP_RELEASE_ONLY=1", "FIRMWARE_TRANSACTION=0",
                       "UNLOCK=0", "REATTACH_ATTEMPTED=1", "REATTACH_VERIFIED=0",

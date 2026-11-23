@@ -82,9 +82,8 @@ try {
         if (-not $AcceptUnverifiedActuation) {
             throw '-StopReleaseOnlyBench requires -AcceptUnverifiedActuation.'
         }
-        if ($RuntimeSelection -or $selection.Count -ne 2 -or
-            (($selection.Locations -join ',') -cne '0000:01:00.0,0000:04:00.0')) {
-            throw '-StopReleaseOnlyBench is restricted to the explicit 4090 then 3080 sequence: -SelectionBdfs 0000:01:00.0,0000:04:00.0.'
+        if (-not $RuntimeSelection) {
+            throw '-StopReleaseOnlyBench requires runtime selection of the GPUs detected on this boot.'
         }
     }
 
@@ -184,7 +183,7 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $binaryName = if ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-' + $selection.Label + '.efi' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP-DXE.efi' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
+    $binaryName = if ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP-DXE.efi' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
     $compileCmds += "link /nologo /subsystem:efi_boot_service_driver /entry:AdaUnlockDriverEntryPoint /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_dxe\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
@@ -197,7 +196,10 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'DXE EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$([int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1))) ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int]($AcceptUnverifiedActuation -and $selection.Count -gt 1)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) AMD_CONSOLE_OWNERSHIP_REQUIRED=$([int][bool]$StopReleaseOnlyBench) FILE_ONLY_OUTPUT=$([int][bool]$StopReleaseOnlyBench) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) FIRMWARE_TRANSACTION=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) UNLOCK=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) REATTACH_ATTEMPTED=$([int][bool]$StopReleaseOnlyBench) REATTACH_VERIFIED=0 TARGET_ORDER=$($selection.Locations -join ',') NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
+    $targetOrder = if ($StopReleaseOnlyBench) { 'RUNTIME_SUPPORTED_NVIDIA_ENUMERATION' } else { $selection.Locations -join ',' }
+    $reportedSelectedCount = if ($StopReleaseOnlyBench) { 'RUNTIME' } else { [string]$selection.Count }
+    $singleTargetActive = if ($StopReleaseOnlyBench) { 0 } else { [int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1)) }
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) AMD_CONSOLE_OWNERSHIP_REQUIRED=$([int][bool]$StopReleaseOnlyBench) FILE_ONLY_OUTPUT=$([int][bool]$StopReleaseOnlyBench) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) FIRMWARE_TRANSACTION=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) UNLOCK=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) REATTACH_ATTEMPTED=$([int][bool]$StopReleaseOnlyBench) REATTACH_VERIFIED=0 TARGET_ORDER=$targetOrder NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
 } finally {
     Pop-Location
 }
