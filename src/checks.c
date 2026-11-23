@@ -189,7 +189,8 @@ GU_LINK_VERDICT GuCheckLinkState(const UINT32 Config[64], UINT16 Pcie, GU_LINK *
   *Out = Link;
 
   if ((Link.errors & 0x06U) != 0) return GU_LINK_ERROR_LOGGED;
-  if (Link.aspm != 0) return GU_LINK_ASPM_ENABLED;
+  /* The experimental ASPM waiver is not a link-health waiver: classify
+   * untrained and unusable links first, even when ASPM is enabled. */
   if (!Link.trained) return GU_LINK_NOT_TRAINED;
   /* Link Status DLLLA is reported, not weighed. It reads 0 on this bench on a
    * link that is trained, negotiating x16 gen4, and answering these very config
@@ -199,6 +200,7 @@ GU_LINK_VERDICT GuCheckLinkState(const UINT32 Config[64], UINT16 Pcie, GU_LINK *
    * this machine (RUN0007 to RUN0009). GU_LINK_DOWN stays in the vocabulary so
    * logs and receipts from earlier builds still decode. */
   if (Link.width == 0 || Link.speed == 0 || Link.speed == 0x0fU) return GU_LINK_UNUSABLE;
+  if (Link.aspm != 0) return GU_LINK_ASPM_ENABLED;
   return GU_LINK_OK;
 }
 
