@@ -16,6 +16,9 @@ VOID GuMsiStopReleaseRequireFileOnly(VOID);
 /* Use the validated surviving NVIDIA GOP before each multi-GPU Stop.
  * No system text-console output and no change to display mode. */
 EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID);
+/* On failed reattach, show restart and boot-loop instructions only through
+ * the still-valid original non-target GOP; never use a stale ConOut. */
+EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID);
 #endif
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);
