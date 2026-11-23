@@ -1883,6 +1883,7 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
     return s;
   }
   Plan.claimed=FALSE;Gu.owned=FALSE;Plan.stage=0;
+  Plan.reconnecting=TRUE;
   /* Reconnect only after releasing our exclusive PCI I/O claim. Recursive
    * connection lets the firmware bind the original graphics stack and its
    * children. It is an attempt, not a guarantee; verify the observed graph. */
@@ -1890,12 +1891,11 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
   NOTE("MSI controller reconnect status=%#llx recursive=1\n",
        (unsigned long long)s);
   if(s==EFI_SUCCESS)s=Snapshot(&Current);
-  if(s==EFI_SUCCESS&&!Expected(0,FALSE)) {
-    GraphDiff(0,FALSE);
-    s=EFI_NOT_READY;
-  }
+  if(s==EFI_SUCCESS)s=ReconcileTargetChildren();
+  if(s==EFI_SUCCESS&&!ReattachedGraphExpected())s=EFI_NOT_READY;
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
   if(s==EFI_SUCCESS)s=Gops(FALSE);
+  if(s==EFI_SUCCESS)s=ReattachedDriversVerified();
   if(s==EFI_SUCCESS)s=Alive();
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
@@ -1910,9 +1910,11 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
    * monitor is electrically connected or displaying pixels. A selected GOP
    * is restored only when the target was not headless before the Stop. */
   NOTE("MSI reattach verification passed GRAPH_RESTORED=1 "
-       "TARGET_GOP_IDENTITY_MATCHED=%u SURVIVOR_GOPS_MATCHED=%zu "
+       "TARGET_GOP_RECOGNIZED=%u TARGET_CHILD_PATHS_MATCHED=%zu "
+       "DRIVERS_VERIFIED=1 SURVIVOR_GOPS_MATCHED=%zu "
        "DISPLAY_OUTPUT_TESTED=0 FIRMWARE_TRANSACTION=0\n",
-       (unsigned)!Plan.headless,(size_t)Plan.survivor_count);
+       (unsigned)!Plan.headless,(size_t)Plan.target_child_count,
+       (size_t)Plan.survivor_count);
   return EFI_SUCCESS;
 }
 #endif
@@ -2035,9 +2037,11 @@ BOOLEAN GuMsiVerifyFinalGraph(VOID) {
   if(!ReleaseOwnerMatches()||!Plan.reattach_verified||Plan.stage!=0||
      Plan.claimed||Gu.owned||Gu.fault)return FALSE;
   EFI_STATUS s=Snapshot(&Current);
-  if(s==EFI_SUCCESS&&!Expected(0,FALSE)){GraphDiff(0,FALSE);s=EFI_NOT_READY;}
+  if(s==EFI_SUCCESS)s=ReconcileTargetChildren();
+  if(s==EFI_SUCCESS&&!ReattachedGraphExpected())s=EFI_NOT_READY;
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
   if(s==EFI_SUCCESS)s=Gops(FALSE);
+  if(s==EFI_SUCCESS)s=ReattachedDriversVerified();
   if(s==EFI_SUCCESS)s=Alive();
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
