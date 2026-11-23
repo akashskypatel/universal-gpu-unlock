@@ -58,6 +58,7 @@ typedef struct {
   UINTN survivor_count,survivor_capacity;
   BOOLEAN survivor_baseline_valid;
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized,reattach_verified;
+  BOOLEAN consoleless_target_gop;
 } PLAN;
 /* Keep the release plan and its protocol graphs in one ownership context.
  * Never free a context that may describe a partially stopped driver or a
@@ -74,6 +75,11 @@ typedef struct GU_MSI_OWNED_STATE {
 #define Plan (CurrentMsi->plan)
 #define Original (CurrentMsi->original)
 #define Current (CurrentMsi->current)
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+static BOOLEAN StopFileOnlyOutput;
+BOOLEAN GuMsiStopReleaseFileOnly(VOID) {return StopFileOnlyOutput;}
+VOID GuMsiStopReleaseRequireFileOnly(VOID) {StopFileOnlyOutput=TRUE;}
+#endif
 
 /* A graph buffer is part of this owner's CPU pool, not a shared resource.
  * The caller has already validated the enclosing release record. */
@@ -461,6 +467,9 @@ static EFI_STATUS Driver(UINTN which) {
   return EFI_SUCCESS;
 }
 static EFI_STATUS Alive(VOID) {
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(Plan.consoleless_target_gop)return EFI_SUCCESS;
+#endif
   EFI_SYSTEM_TABLE *t=Plan.table;VOID *in=NULL,*out=NULL,*err=NULL;
   if(t->ConsoleOutHandle!=Plan.console||t->ConsoleInHandle!=Plan.input||t->StandardErrorHandle!=Plan.error||
      t->ConIn!=Plan.keys||t->ConOut!=Plan.text||t->StdErr!=Plan.err||!t->ConIn||
@@ -673,6 +682,12 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=INDEPENDENT_AMD_CONSOLE RESULT=BYPASSED\n");
   return EFI_SUCCESS;
 #else
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(Plan.consoleless_target_gop) {
+    GuLog("STOP_RELEASE_CONSOLE=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 CONSOLE_IO=0\n");
+    return EFI_SUCCESS;
+  }
+#endif
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   EFI_HANDLE *handles=NULL;UINTN count=0,display_count=0;
 #ifndef GU_STOP_RELEASE_ONLY_BENCH
@@ -767,6 +782,13 @@ static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
   GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=LIVE_AMD_TEXTOUT_GRAPH RESULT=BYPASSED\n");
   return EFI_SUCCESS;
 #else
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(Plan.consoleless_target_gop) {
+    (void)graph;
+    GuLog("STOP_RELEASE_TEXT_GRAPH=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 CONSOLE_IO=0\n");
+    return EFI_SUCCESS;
+  }
+#endif
   BOOLEAN out=FALSE,err=FALSE;
   if(!graph||!Plan.console||!Plan.error)return EFI_NOT_READY;
   for(UINTN i=0;i<graph->count;i++) {
@@ -999,20 +1021,46 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   if(!b->ConnectController)return EFI_UNSUPPORTED;
 #endif
-  Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
-  Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
-  if(!Plan.console||!Plan.input||!Plan.error||!Plan.text||!Plan.err||!Plan.keys||
-     !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)return EFI_UNSUPPORTED;
-  Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;Plan.key_wait=Plan.keys->WaitForKey;
+  EFI_STATUS s=EFI_SUCCESS;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  /* Observe GOP topology before deciding whether this target's own output is
+   * the only console route. That mode must never touch UEFI console protocols. */
+  s=GuVerifyActivePeers(t);
+  if(s==EFI_SUCCESS)s=Gops(TRUE);
+  if(s!=EFI_SUCCESS) {
+    GuLog("Preflight failed at peer/GOP observation: %#llx\n",(unsigned long long)s);
+    return s;
+  }
+  if(Plan.gop&&!Plan.survivor_count) {
+    Plan.consoleless_target_gop=TRUE;
+    StopFileOnlyOutput=TRUE;
+    GuLog("STOP_RELEASE_CONSOLE=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 "
+          "TARGET_GOP=1 SURVIVOR_GOPS=0 CONSOLE_IO=0 FILE_LOG=1\n");
+  }
+#endif
+  if(!Plan.consoleless_target_gop) {
+    Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
+    Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
+    if(!Plan.console||!Plan.input||!Plan.error||!Plan.text||!Plan.err||!Plan.keys||
+       !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)
+      return EFI_UNSUPPORTED;
+    Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;
+    Plan.key_wait=Plan.keys->WaitForKey;
+  }
 #ifndef GU_STOP_RELEASE_ONLY_BENCH
   if(!pci||!GuAd104ColdEntry())return EFI_NOT_READY;
 #else
   if(!pci||!Gu.stop_release_ready)return EFI_NOT_READY;
 #endif
-  EFI_STATUS s=GuVerifyActivePeers(t);
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
+  s=GuVerifyActivePeers(t);
   if(s==EFI_SUCCESS)s=Gops(TRUE);
-  if(s!=EFI_SUCCESS) GuLog("Preflight failed at Gops(): %#llx\n", (unsigned long long)s);
-  if(s==EFI_SUCCESS) { s=Alive(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Alive(): %#llx\n", (unsigned long long)s); }
+  if(s!=EFI_SUCCESS)GuLog("Preflight failed at peer/GOP observation: %#llx\n",(unsigned long long)s);
+#endif
+  if(s==EFI_SUCCESS&&!Plan.consoleless_target_gop) {
+    s=Alive();
+    if(s!=EFI_SUCCESS)GuLog("Preflight failed at Alive(): %#llx\n",(unsigned long long)s);
+  }
   if(s==EFI_SUCCESS) { s=Bar(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Bar(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=ReadConfigMode(Plan.config,TRUE); if(s!=EFI_SUCCESS) GuLog("Preflight failed at ReadConfig(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) {
@@ -1265,6 +1313,9 @@ static void StopContractLog(UINTN Stage, BOOLEAN Owner, BOOLEAN Cold,
   /* Do not log a bypassed AMD-console check as verified evidence. */
   Console=FALSE;
 #endif
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(Plan.consoleless_target_gop)Console=FALSE;
+#endif
   GU_STOP_OBSERVATION observation = {0};
   observation.DeviceId=(GU_SC_UINT32)Gu.device_id;
   observation.Owner=Owner?GU_SC_TRUE:GU_SC_FALSE;
@@ -1347,7 +1398,8 @@ EFI_STATUS GuMsiRelease(VOID) {
     /* Everything above just held: owner, cold selectors, console ownership and
      * the peer graph. That is the pre-Stop capture, taken before the callback
      * that can write BAR0 and poll. */
-    if(s==EFI_SUCCESS)StopContractLog(stage-1,TRUE,TRUE,TRUE,TRUE);
+    if(s==EFI_SUCCESS)StopContractLog(stage-1,TRUE,TRUE,
+                                       !Plan.consoleless_target_gop,TRUE);
     if(s==EFI_SUCCESS)s=Driver(stage-1);
     b->RestoreTPL(old);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
@@ -1412,7 +1464,7 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
   if(!b||!b->CloseProtocol||!b->ConnectController)return EFI_UNSUPPORTED;
   EFI_STATUS s=b->CloseProtocol(Plan.pci,&PciGuid,Plan.self,NULL);
   if(s!=EFI_SUCCESS) {
-    NOTE("MSI reattach close-exclusive failed status=%#llx GPU_ACTION=HALT\\n",
+    NOTE("MSI reattach close-exclusive failed status=%#llx GPU_ACTION=HALT\n",
          (unsigned long long)s);
     Gu.fault=TRUE;Gu.retained=TRUE;
     return s;
@@ -1422,7 +1474,7 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
    * connection lets the firmware bind the original graphics stack and its
    * children. It is an attempt, not a guarantee; verify the observed graph. */
   s=b->ConnectController(Plan.pci,NULL,NULL,TRUE);
-  NOTE("MSI controller reconnect status=%#llx recursive=1\\n",
+  NOTE("MSI controller reconnect status=%#llx recursive=1\n",
        (unsigned long long)s);
   if(s==EFI_SUCCESS)s=Snapshot(&Current);
   if(s==EFI_SUCCESS&&!Expected(0,FALSE)) {
@@ -1435,13 +1487,13 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
   if(s!=EFI_SUCCESS||Gu.fault) {
-    NOTE("MSI reattach verification failed status=%#llx GRAPH_RESTORED=0\\n",
+    NOTE("MSI reattach verification failed status=%#llx GRAPH_RESTORED=0\n",
          (unsigned long long)(s==EFI_SUCCESS?EFI_DEVICE_ERROR:s));
     Gu.fault=TRUE;Gu.retained=TRUE;
     return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
   }
   Plan.reattach_verified=TRUE;
-  NOTE("MSI reattach verification passed GRAPH_RESTORED=1 FIRMWARE_TRANSACTION=0\\n");
+  NOTE("MSI reattach verification passed GRAPH_RESTORED=1 FIRMWARE_TRANSACTION=0\n");
   return EFI_SUCCESS;
 }
 #endif

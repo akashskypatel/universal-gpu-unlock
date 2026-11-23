@@ -176,13 +176,25 @@ static EFI_STATUS BenchBuildTargetText(CHAR16 *out,UINTN capacity) {
   }
   return EFI_SUCCESS;
 }
-EFI_STATUS GuBootBenchCountdown(VOID) {
+EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output) {
   static CHAR16 prefix[]=L"\r\n*** WARNING: Live NVIDIA Stop/release and reattach test starts in 3 seconds. ***\r\n"
     L"These supported NVIDIA cards selected for this test will be processed in order:\r\n";
   static CHAR16 suffix[]=L"\r\n\r\nFirmware reattachment is attempted, not guaranteed. Displays on these cards may go black, disconnect, or flicker.\r\n"
     L"Disconnect those displays; use an independent display. Stop may hang; recovery is not verified.\r\n\r\n";
   static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
   size_t count=GuSelectedGpuCount();
+  if(!console_output) {
+    if(!Table||!Table->BootServices||!Table->BootServices->Stall) {
+      GuLog("BENCH_WARNING=FILE_ONLY_REFUSED REASON=STALL_UNAVAILABLE GPU_ACTION=0 CONSOLE_IO=0\n");
+      return EFI_UNSUPPORTED;
+    }
+    GuLog("BENCH_WARNING=FILE_ONLY CONSOLE_IO=0 TARGET_COUNT=%zu DELAY_US=3000000 GPU_ACTION=GATED\n",count);
+    EFI_STATUS delay=Table->BootServices->Stall(3000000U);
+    if(delay!=EFI_SUCCESS)
+      GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED CONSOLE_IO=0\n",
+            (unsigned long long)delay);
+    return delay;
+  }
   EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
   if(s!=EFI_SUCCESS) {
     GuLog("BENCH_WARNING=NOT_SHOWN REASON=LIVE_TARGET_LIST_UNAVAILABLE STATUS=%#llx GPU_ACTION=REFUSED\n",
@@ -214,10 +226,14 @@ EFI_STATUS GuBootBenchCountdown(VOID) {
           (unsigned long long)s);
   return s;
 }
-EFI_STATUS GuBootBenchReportCompletion(VOID) {
+EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output) {
   static CHAR16 prefix[]=L"\r\nStop/release and reattachment checks passed for these live devices:\r\n";
   static CHAR16 suffix[]=L"\r\nNo firmware unlock transaction was run. Returning to firmware.\r\n";
   static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
+  if(!console_output) {
+    GuLog("BENCH_COMPLETION=FILE_ONLY CONSOLE_IO=0 GPU_SEQUENCE=COMPLETE\n");
+    return EFI_SUCCESS;
+  }
   EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
   if(s!=EFI_SUCCESS)return s;
   if(!Table||!Table->ConOut||!Table->ConOut->OutputString)return EFI_UNSUPPORTED;

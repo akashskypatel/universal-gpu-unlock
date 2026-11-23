@@ -589,6 +589,20 @@ int GuIsPreparedPeerHandle(EFI_HANDLE handle) {
 #endif
   return 0;
 }
+int GuIsUnselectedGpuHandle(EFI_HANDLE handle) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  size_t step,target;
+  if(!ActiveInventoryValid||!ActiveSequenceValid||!handle||
+     !ResolveSelectedBinding(&step,&target))return 0;
+  for(size_t i=0;i<ActiveInventory.inventory.count;i++) {
+    if(i==target)continue;
+    if(ActiveInventory.inventory.nvidia[i].handle==handle)return 1;
+  }
+#else
+  (VOID)handle;
+#endif
+  return 0;
+}
 
 EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
 #ifndef GU_ACTIVE_SINGLE_TARGET

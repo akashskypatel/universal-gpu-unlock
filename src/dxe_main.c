@@ -40,7 +40,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 #else
   GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=COMPILED_BDF_SEQUENCE ");
 #endif
-  GuLog("ASPM_ADMISSION=BYPASSED INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1 "
+  GuLog("ASPM_ADMISSION=BYPASSED INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=CONDITIONAL "
         "FIRMWARE_TRANSACTION=0 UNLOCK=0 FIRMWARE_ASSET_FILES_READ=0 "
         "PROM_READ=0 OS_HANDOFF=NONE SCREEN_OUTPUT=SUPPRESSED "
         "LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
@@ -102,17 +102,6 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   s=GuPrepareBoundGpu(owner,&stage);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto finish;
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-  /* Warn only after read-only preparation has passed, before the first Stop.
-   * Missing console/countdown capability refuses this named experiment. */
-  s=GuBootBenchCountdown();
-  if(s!=EFI_SUCCESS) {
-    GuLog("BENCH_COUNTDOWN=FAILED STATUS=%#llx NO_GPU_ACTION=1\n",
-          (unsigned long long)s);
-    EFI_STATUS close=GuBootClose();
-    return close==EFI_SUCCESS?s:close;
-  }
-#endif
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
   s=GuExecuteStopReleaseSequence(owner,t,image,&stage);
 #else
   /* Name the card before the first mutation so a power loss leaves evidence. */
@@ -139,7 +128,7 @@ finish:
     stage="dxe-close-USB-log";
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
     GuLog("DXE-DRIVER: Stop/release and reattach sequence verified; closing boot resources.\n");
-    s=GuBootBenchReportCompletion();
+    s=GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly());
     if(s!=EFI_SUCCESS)
       GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
             (unsigned long long)s);

@@ -8,6 +8,9 @@ BOOLEAN GuMsiReleased(VOID);
 /* Close the exclusive PCI claim, reconnect firmware drivers, and verify the
  * original controller/GOP graph is restored. Never performs a GPU firmware transaction. */
 EFI_STATUS GuMsiReattachAfterStop(VOID);
+/* True when this Stop-only run must avoid all system-console output. */
+BOOLEAN GuMsiStopReleaseFileOnly(VOID);
+VOID GuMsiStopReleaseRequireFileOnly(VOID);
 #endif
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);

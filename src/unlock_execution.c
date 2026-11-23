@@ -228,6 +228,11 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
   if(!table||!table->BootServices||!image||!stage||
      !owner||owner!=GuPlatformActive)return EFI_INVALID_PARAMETER;
   EFI_STATUS s;
+  BOOLEAN warning_done=FALSE;
+  if(GuSelectedGpuCount()>1U) {
+    GuMsiStopReleaseRequireFileOnly();
+    GuLog("STOP_RELEASE_OUTPUT=FILE_ONLY REASON=ORDERED_MULTI_TARGET CONSOLE_IO=0\n");
+  }
   for(;;) {
     GU_PHASE("stop-release-state-reserve");
     s=GuMsiReserveSelectedState(table->BootServices);
@@ -237,6 +242,11 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     GU_PHASE("stop-release-preflight");
     s=GuMsiPreflight(table,image,owner->handle);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+    if(!warning_done) {
+      s=GuBootBenchCountdown(!GuMsiStopReleaseFileOnly());
+      if(s!=EFI_SUCCESS)goto failed;
+      warning_done=TRUE;
+    }
     GU_PHASE("stop-release");
     s=GuMsiRelease();
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;

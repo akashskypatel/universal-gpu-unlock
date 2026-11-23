@@ -75,7 +75,8 @@ class OnlyObservedFactsAreClaimed(unittest.TestCase):
         # The stage-loop capture passes TRUE for owner/cold/console/peers only
         # after those checks returned success; the earlier capture passes FALSE
         # for the two the loop establishes.
-        self.assertIn("StopContractLog(stage-1,TRUE,TRUE,TRUE,TRUE)", MSI)
+        self.assertIn("StopContractLog(stage-1,TRUE,TRUE,", MSI)
+        self.assertIn("!Plan.consoleless_target_gop,TRUE)", MSI)
         self.assertIn("StopContractLog(0,TRUE,FALSE,FALSE,FALSE)", MSI)
 
     def test_the_module_cannot_log_and_has_no_uefi_dependency_on_the_host(self):

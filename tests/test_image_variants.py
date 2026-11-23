@@ -236,7 +236,7 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
             "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench),
             "ASPM_ADMISSION_BYPASSED": unsafe_bench,
-            "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": unsafe_bench,
+            "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": "CONDITIONAL" if unsafe_bench else 0,
             "FILE_ONLY_OUTPUT": unsafe_bench,
             "STOP_RELEASE_ONLY": unsafe_bench,
             "FIRMWARE_TRANSACTION": int(accept and not unsafe_bench),

@@ -296,15 +296,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 #else
   GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=COMPILED_BDF_SEQUENCE ");
 #endif
-  GuLog("ASPM_ADMISSION=BYPASSED INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1 "
+  GuLog("ASPM_ADMISSION=BYPASSED INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=CONDITIONAL "
         "FIRMWARE_TRANSACTION=0 UNLOCK=0 FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 "
         "OS_HANDOFF=NONE HARDWARE_VERIFIED=0\n");
-  s=GuBootBenchCountdown();
-  if(s!=EFI_SUCCESS) {
-    GuLog("BENCH_COUNTDOWN=FAILED STATUS=%#llx NO_GPU_ACTION=1\n",
-          (unsigned long long)s);
-    goto failed;
-  }
   GuBootSilence();
   s=GuExecuteStopReleaseSequence(owner,t,image,&stage);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
@@ -312,7 +306,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GuLog("STOP_RELEASE_ONLY=COMPLETE FIRMWARE_TRANSACTION=0 UNLOCK=0 "
         "REATTACH_VERIFIED=1 OS_HANDOFF=NONE\n");
   GuBootUnsilence();
-  s=GuBootBenchReportCompletion();
+  s=GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly());
   if(s!=EFI_SUCCESS)
     GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
           (unsigned long long)s);

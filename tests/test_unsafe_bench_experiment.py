@@ -76,20 +76,36 @@ class UnsafeBenchVariantContract(unittest.TestCase):
             self.assertIn(field + "=", self.builder)
 
     def test_mandatory_warning_and_three_second_gate_precede_mutation(self):
-        self.assertIn("EFI_STATUS GuBootBenchCountdown(VOID)", self.boot)
-        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(VOID)", 1)[1].split("EFI_STATUS GuBootBenchReportCompletion", 1)[0]
+        self.assertIn("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output)", self.boot)
+        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output)", 1)[1].split("EFI_STATUS GuBootBenchReportCompletion", 1)[0]
         self.assertIn("size_t count=GuSelectedGpuCount();", countdown)
+        file_only = countdown.split("if(!console_output)", 1)[1].split("EFI_STATUS s=BenchBuildTargetText", 1)[0]
+        self.assertIn("CONSOLE_IO=0", file_only)
+        self.assertNotIn("Table->ConOut", file_only)
+        completion = self.boot.split("EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output)", 1)[1].split("#endif", 1)[0]
+        self.assertIn("BENCH_COMPLETION=FILE_ONLY CONSOLE_IO=0", completion)
+        self.assertLess(countdown.index("if(!console_output)"), countdown.index("Table->ConOut->OutputString"))
         for phrase in ("Live NVIDIA Stop/release and reattach test starts in 3 seconds",
                        "selected for this test", "PCI=", "go black", "disconnect, or flicker",
                        "reattachment is attempted, not guaranteed", "independent display"):
             self.assertIn(phrase, self.boot)
         self.assertIn("Table->BootServices->Stall(3000000U)", self.boot)
         self.assertIn("GPU_ACTION=REFUSED", self.boot)
-        run = self.dxe.split("static EFI_STATUS GuDxeRun", 1)[1].split("/* Signal once", 1)[0]
-        self.assertGreater(run.index("GuBootBenchCountdown()"), run.index("GuPrepareBoundGpu(owner"))
-        self.assertLess(run.index("GuBootBenchCountdown()"), run.index("GuExecuteStopReleaseSequence("))
-        self.assertIn("NO_GPU_ACTION=1", run)
+        sequence = self.execution.split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[1].split("#endif", 1)[0]
+        self.assertGreater(sequence.index("GuBootBenchCountdown("), sequence.index("GuMsiPreflight("))
+        self.assertLess(sequence.index("GuBootBenchCountdown("), sequence.index("GuMsiRelease("))
+        self.assertIn("GuMsiStopReleaseFileOnly()", sequence)
         self.assertIn("SYSTEM_TABLE_CONOUT", self.boot)
+        preflight = self.release.split("EFI_STATUS GuMsiPreflight", 1)[1].split("static BOOLEAN DecodeMask", 1)[0]
+        topology = preflight.index("s=Gops(TRUE)")
+        consoleless = preflight.index("Plan.consoleless_target_gop=TRUE")
+        console_init = preflight.index("if(!Plan.consoleless_target_gop) {")
+        self.assertLess(topology, consoleless)
+        self.assertLess(consoleless, console_init)
+        self.assertLess(console_init, preflight.index("Plan.console=t->ConsoleOutHandle"))
+        self.assertIn("STOP_RELEASE_CONSOLE=NOT_REQUIRED TARGET_IS_ONLY_GOP=1", self.release)
+        self.assertIn("if(Plan.consoleless_target_gop)return EFI_SUCCESS;", self.release)
+        self.assertIn("if(Plan.consoleless_target_gop) {", self.release)
 
     def test_stop_only_console_gate_accepts_non_target_nvidia_survivor_but_requires_it(self):
         check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
@@ -150,7 +166,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
         stop_branch = self.app[branch_start:branch_end]
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
-        self.assertIn("GuBootBenchCountdown()", stop_branch)
+        self.assertNotIn("GuBootBenchCountdown(", stop_branch)
+        self.assertIn("GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly())", stop_branch)
         self.assertIn("GuExecuteStopReleaseSequence(", stop_branch)
         self.assertNotIn("GuBootWindows()", stop_branch)
         self.assertIn("OS_HANDOFF=NONE", stop_branch)
@@ -187,7 +204,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertNotIn("requires_selection", v)
         self.assertEqual(v["attestations"][2],
                          "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION")
-        for token in ("ASPM_ADMISSION_BYPASSED=1", "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
+        for token in ("ASPM_ADMISSION_BYPASSED=1", "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=CONDITIONAL",
                       "FILE_ONLY_OUTPUT=1", "STOP_RELEASE_ONLY=1", "FIRMWARE_TRANSACTION=0",
                       "UNLOCK=0", "REATTACH_ATTEMPTED=1", "REATTACH_VERIFIED=0",
                       "RECOVERY_VERIFIED=0"):

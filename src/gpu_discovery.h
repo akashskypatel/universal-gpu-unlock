@@ -57,6 +57,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table);
  * In default firmware modes this is a no-op. */
 EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table);
 int GuIsPreparedPeerHandle(EFI_HANDLE handle);
+/* True only for a verified, currently unselected record in the active inventory. */
+int GuIsUnselectedGpuHandle(EFI_HANDLE handle);
 
 /* One selected active card. Binds a genuine ordered-state record around
  * the existing shared GuExecuteUnlock sequence, without permitting a
