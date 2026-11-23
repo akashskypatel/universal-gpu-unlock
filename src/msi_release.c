@@ -728,7 +728,7 @@ static EFI_GUID GlobalVarGuid={
   0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}
 };
 static EFI_STATUS AmdConsoleVariable(
-    const CHAR16 *name,
+    const CHAR16 *name,const char *variable_label,
     const GU_DEVICE_PATH_DISPLAY_OWNER *owners,UINTN owner_count)
 {
   UINT8 data[8u*192u];
@@ -765,11 +765,26 @@ static EFI_STATUS AmdConsoleVariable(
         if(match<0)return EFI_COMPROMISED_DATA;
         if(match)matching_gops++;
       }
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+      /* Read-only diagnosis: a selected GPU can be the console owner even
+       * when a second GOP is present. Observe that condition without
+       * weakening the independent-survivor admission rule. */
+      int target_pci_match=-1;
+      if(owner!=1||matching_gops!=1) {
+        EFI_DEVICE_PATH_PROTOCOL *target_path=NULL;
+        if(Interface(Plan.pci,&PathGuid,(VOID **)&target_path)==EFI_SUCCESS&&target_path)
+          target_pci_match=GuDevicePathHasPrefix(
+              (const unsigned char *)target_path,4096u,
+              data+start,(size_t)(at+n-start));
+      }
+#else
+      (void)variable_label;
+#endif
       data[at+1]=subtype;
       if(owner!=1||matching_gops!=1) {
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-        GuLog("STOP_RELEASE_CONSOLE=REFUSED VARIABLE=%s REASON=NOT_UNIQUE_NON_TARGET_SURVIVOR OWNER=%d GOP_MATCHES=%u\n",
-              name,owner,(unsigned)matching_gops);
+        GuLog("STOP_RELEASE_CONSOLE=REFUSED VARIABLE=%s REASON=NOT_UNIQUE_NON_TARGET_SURVIVOR OWNER=%d GOP_MATCHES=%u TARGET_PCI_MATCH=%d\n",
+              variable_label,owner,(unsigned)matching_gops,target_pci_match);
 #endif
         return EFI_ACCESS_DENIED;
       }
@@ -863,8 +878,8 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
 #endif
       s=EFI_ACCESS_DENIED;
   }
-  if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ConOut",owners,display_count);
-  if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ErrOut",owners,display_count);
+  if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ConOut","ConOut",owners,display_count);
+  if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ErrOut","ErrOut",owners,display_count);
   s=ReleaseObservation(b,owners,s);
   s=ReleaseObservation(b,handles,s);
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
