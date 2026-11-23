@@ -213,7 +213,7 @@ EFI_STATUS GuBootBenchCountdown(VOID) {
   static CHAR16 targets[GU_STOP_BENCH_TARGET_TEXT_CHARS];
   size_t count=GuSelectedGpuCount();
   if(!GuBootLogOpen()||!Table||!Table->BootServices||!Table->BootServices->Stall) {
-    GuLog("BENCH_WARNING=REFUSED REASON=LOG_OR_STALL_UNAVAILABLE GPU_ACTION=0\\n");
+    GuLog("BENCH_WARNING=REFUSED REASON=LOG_OR_STALL_UNAVAILABLE GPU_ACTION=0\n");
     return EFI_UNSUPPORTED;
   }
   EFI_STATUS text_status=BenchBuildTargetText(targets,GU_STOP_BENCH_TARGET_TEXT_CHARS);
@@ -221,13 +221,13 @@ EFI_STATUS GuBootBenchCountdown(VOID) {
     BenchWriteConsole(prefix,targets,suffix):text_status;
   GuLog("BENCH_WARNING=%s CONSOLE=BEST_EFFORT TARGET_COUNT=%zu "
         "DISPLAY_STATUS=%#llx FILE_LOG=AUTHORITATIVE DELAY_US=3000000 "
-        "GPU_ACTION=GATED\\n",
+        "GPU_ACTION=GATED\n",
         display==EFI_SUCCESS?"DISPLAYED":"CONSOLE_NOT_SHOWN",count,
         (unsigned long long)display);
   /* Even when no firmware console is available, the delay is mandatory. */
   EFI_STATUS delay=Table->BootServices->Stall(3000000U);
   if(delay!=EFI_SUCCESS)
-    GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED\\n",
+    GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED\n",
           (unsigned long long)delay);
   return delay;
 }
@@ -240,7 +240,7 @@ EFI_STATUS GuBootBenchReportCompletion(VOID) {
   EFI_STATUS display=text_status==EFI_SUCCESS?
     BenchWriteConsole(prefix,targets,suffix):text_status;
   GuLog("BENCH_COMPLETION=%s CONSOLE=BEST_EFFORT STATUS=%#llx "
-        "GPU_SEQUENCE=COMPLETE FILE_LOG=AUTHORITATIVE\\n",
+        "GPU_SEQUENCE=COMPLETE FILE_LOG=AUTHORITATIVE\n",
         display==EFI_SUCCESS?"CONSOLE_DISPLAYED":"CONSOLE_NOT_SHOWN",
         (unsigned long long)display);
   /* Console output is never used as evidence of reattachment or a gate. */
