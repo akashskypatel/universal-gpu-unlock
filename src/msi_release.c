@@ -155,6 +155,12 @@ EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs) {
 static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID,PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID,TextGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID InputGuid=EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+/* Standard UEFI EDID Discovered interface on a video-output child. Check
+ * all 128 GUID bits, not the Data1 value printed by a diagnostic. */
+static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,
+                                   {0xa0,0x49,0x8a,0xd0,0x6c,0x1a,0x66,0xaa}};
+#endif
 static EFI_GUID PointerGuid={0x31878c87,0x0b75,0x11d5,{0x9a,0x4f,0,0x90,0x27,0x3f,0xc1,0x4d}};
 /* CAP0001: the Z790 pointer splitter also consumes an absolute pointer on the same USB device. */
 static EFI_GUID AbsPointerGuid={0x8d59d32b,0xc655,0x4ae9,{0x9b,0x15,0xf2,0x59,0x04,0x99,0x2a,0x43}};
@@ -259,8 +265,16 @@ static BOOLEAN Removed(const EDGE *e,UINTN stage) {
   if(stage>=2&&Plan.gop&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.gfx_agent||Guid(&e->protocol,&GopGuid)))return TRUE;
   if(stage>=3&&(e->handle==Plan.pci||(Plan.gop&&e->handle==Plan.gop)||e->controller==Plan.pci||(Plan.gop&&e->controller==Plan.gop))&&e->agent==Plan.nv_agent)return TRUE;
   if(stage>=3&&Plan.gop&&e->handle==Plan.gop)return TRUE;
-  /* An idle child may lose only its verified parent relationship above.
-   * A matching child handle alone cannot authorize removal of other edges. */
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  /* A driver-bound EDID Discovered interface is a dependent of its verified
+   * target video-output child. UEFI destroys children before removing the
+   * parent driver. Allow this exact captured dependent to disappear only
+   * at stage 3, not from a sibling, peer or unrelated protocol. */
+  if(stage>=3&&e->idle_output&&e->handle==e->controller&&
+     e->attributes==EFI_OPEN_PROTOCOL_BY_DRIVER&&e->count==1&&
+     Guid(&e->protocol,&EdidDiscoveredGuid))return TRUE;
+#endif
+  /* Other idle-child protocol edges are never assumed removable. */
   return FALSE;
 }
 /* Original unrelated relationships must remain present. New relationships can
@@ -946,8 +960,24 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
           (unsigned)(h==Plan.pci),(unsigned)GuIsPreparedPeerHandle(h));
     return EFI_ACCESS_DENIED;
   }
+  UINTN edid_index=Original.count;
   for(UINTN k=0;k<Original.count;k++) {
     const EDGE *other=&Original.edges[k];
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    /* RUN0040: child 0x74ed2918 had an EDID Discovered BY_DRIVER open
+     * with handle==controller==child and count 1. This is a normal UEFI
+     * video-output dependent, not a second parent or GPU owner. Require
+     * the exact standard GUID, a distinct agent, and no second consumer.
+     * The complete device path and driver image are validated below. */
+    if(other!=e&&other->handle==h&&other->controller==h&&
+       Guid(&other->protocol,&EdidDiscoveredGuid)&&
+       other->attributes==EFI_OPEN_PROTOCOL_BY_DRIVER&&other->count==1&&
+       other->agent&&other->agent!=h&&other->agent!=Plan.self&&
+       !ProtectedHandle(other->agent)&&edid_index==Original.count) {
+      edid_index=k;
+      continue;
+    }
+#endif
     if(other!=e&&(other->handle==h||other->agent==h||other->controller==h)) {
       GuLog("STOP_RELEASE_IDLE_REFUSED REASON=SHARED_OR_CONSUMED_CHILD CHILD=%#llx "
             "EDGE=%zu HANDLE=%#llx AGENT=%#llx CONTROLLER=%#llx "
@@ -970,8 +1000,50 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
           (unsigned long long)(UINTN)h,(unsigned long long)s,(unsigned)on_target);
     return s==EFI_SUCCESS?EFI_ACCESS_DENIED:s;
   }
-  GuLog("STOP_RELEASE_IDLE_ACCEPTED CHILD=%#llx RELATIONSHIP=UNIQUE_TARGET_ONLY\n",
-        (unsigned long long)(UINTN)h);
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(edid_index<Original.count) {
+    EDGE *dependent=&Original.edges[edid_index];
+    /* Even a standard EDID driver must have a real Stop() implementation.
+     * Reject an agent that also manages a prepared peer PCI controller. */
+    for(UINTN k=0;k<Original.count;k++) {
+      const EDGE *peer=&Original.edges[k];
+      if(peer->agent==dependent->agent&&
+         (GuIsPreparedPeerHandle(peer->handle)||
+          GuIsPreparedPeerHandle(peer->controller))) {
+        GuLog("STOP_RELEASE_IDLE_REFUSED REASON=EDID_AGENT_OWNS_PEER "
+              "CHILD=%#llx AGENT=%#llx EDGE=%zu\n",
+              (unsigned long long)(UINTN)h,
+              (unsigned long long)(UINTN)dependent->agent,(size_t)k);
+        return EFI_ACCESS_DENIED;
+      }
+    }
+    s=ValidateDriverAgent(dependent->agent,3U);
+    if(s!=EFI_SUCCESS) {
+      GuLog("STOP_RELEASE_IDLE_REFUSED REASON=EDID_DRIVER_NOT_VERIFIED "
+            "CHILD=%#llx AGENT=%#llx STATUS=%#llx\n",
+            (unsigned long long)(UINTN)h,
+            (unsigned long long)(UINTN)dependent->agent,
+            (unsigned long long)s);
+      return s;
+    }
+    /* Mark both exact baseline edges only after every ownership check.
+     * Stage-0 reattachment still requires the same original relationships. */
+    dependent->idle_output=TRUE;
+    GuLog("STOP_RELEASE_IDLE_EDID=ACCEPTED CHILD=%#llx AGENT=%#llx "
+          "EDGE=%zu GUID=EDID_DISCOVERED ATTR=BY_DRIVER "
+          "ON_TARGET=1 PEER_AGENT=0\n",
+          (unsigned long long)(UINTN)h,
+          (unsigned long long)(UINTN)dependent->agent,(size_t)edid_index);
+  }
+#endif
+  GuLog("STOP_RELEASE_IDLE_ACCEPTED CHILD=%#llx RELATIONSHIP=%s\n",
+        (unsigned long long)(UINTN)h,
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+        edid_index<Original.count?"EXACT_TARGET_EDID_DRIVER":"UNIQUE_TARGET_ONLY"
+#else
+        "UNIQUE_TARGET_ONLY"
+#endif
+       );
   e->idle_output=TRUE;
   return EFI_SUCCESS;
 }
