@@ -2585,6 +2585,7 @@ typedef struct {
   size_t gop_index,pci_index;
   EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
   EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text;
+  EFI_HANDLE driver_agent;
 } GU_DIRECT_TEXT_CANDIDATE;
 static void GopTextHex(CHAR16 *out,size_t offset,size_t digits,UINTN value) {
   static const CHAR16 digits_hex[]=L"0123456789ABCDEF";
@@ -2703,14 +2704,14 @@ static void ReportGopTextEndpoints(EFI_BOOT_SERVICES *bs) {
         (unsigned)driver_image_known);
     if(gs!=EFI_SUCCESS||gop!=r->protocol||!same_path||
        owner_count!=1U||ts!=EFI_SUCCESS||!text||
-       !text->OutputString||!driver_image_known||
+       !text->Mode||!text->OutputString||!driver_image_known||
        os!=EFI_SUCCESS||count>256U||freed!=EFI_SUCCESS||
        ObservationPoolFault)continue;
     interfaces++;
 #ifdef GU_TOPO_GOP_TEXT_CYCLE
     if(Snapshot.gop_count<=GU_TEXT_CYCLE_LIMIT&&
        candidate_count<GU_TEXT_CYCLE_LIMIT)
-      candidates[candidate_count++]=(GU_DIRECT_TEXT_CANDIDATE){i,owner,gop,text};
+      candidates[candidate_count++]=(GU_DIRECT_TEXT_CANDIDATE){i,owner,gop,text,agent};
 #endif
   }
   Say("GOP_TEXT_INVENTORY_END GOP_COUNT=%zu VERIFIED_INTERFACES=%zu "
@@ -2763,7 +2764,7 @@ static void ReportGopTextEndpoints(EFI_BOOT_SERVICES *bs) {
     ps=bs->HandleProtocol(r->handle,&PathGuid,(VOID **)&path);
     if(gs!=EFI_SUCCESS||ts!=EFI_SUCCESS||ps!=EFI_SUCCESS||
        gop!=candidate->gop||text!=candidate->text||!text||
-       !text->OutputString||!path||!PathCopy(path,&current_path)||
+       !text->Mode||!text->OutputString||!path||!PathCopy(path,&current_path)||
        current_path.length!=r->path.length||
        memcmp(current_path.bytes,r->path.bytes,current_path.length)) {
       Say("GOP_TEXT_CYCLE[%zu] STATUS=SKIPPED "
@@ -2772,6 +2773,37 @@ static void ReportGopTextEndpoints(EFI_BOOT_SERVICES *bs) {
           candidate->gop_index,(unsigned long long)gs,
           (unsigned long long)ts,(unsigned long long)ps);
       continue;
+    }
+    /* Re-read the open graph immediately before a firmware text callback.
+     * A replacement console driver invalidates the saved admission. */
+    {
+      EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *live_opens=NULL;
+      EFI_STATUS open_status,free_status;
+      UINTN open_count=0,k,driver_count=0;
+      EFI_HANDLE driver_agent=NULL;
+      open_status=ObservationOpeners(bs,r->handle,&GopGuid,&live_opens,
+                                    &open_count,NULL,"gop-text-cycle-recheck");
+      if(open_status==EFI_SUCCESS&&open_count<=256U&&
+         (!open_count||live_opens)) {
+        for(k=0;k<open_count;k++) {
+          const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&live_opens[k];
+          if(e->Attributes!=EFI_OPEN_PROTOCOL_BY_DRIVER)continue;
+          driver_count++;
+          if(driver_count==1U&&e->OpenCount==1U)
+            driver_agent=e->AgentHandle;
+        }
+      }
+      free_status=ObservationPoolRelease(bs,live_opens,
+                                         "gop-text-cycle-recheck");
+      if(open_status!=EFI_SUCCESS||open_count>256U||
+         driver_count!=1U||driver_agent!=candidate->driver_agent||
+         free_status!=EFI_SUCCESS||ObservationPoolFault) {
+        Say("GOP_TEXT_CYCLE[%zu] STATUS=SKIPPED REASON=DRIVER_GRAPH_DRIFT "
+            "OPEN_STATUS=%#llx OPEN_COUNT=%zu FREE_STATUS=%#llx\r\n",
+            candidate->gop_index,(unsigned long long)open_status,
+            (size_t)open_count,(unsigned long long)free_status);
+        continue;
+      }
     }
     GopTextHex(message,6U,3U,candidate->gop_index);
     GopTextHex(message,14U,4U,id->segment);
@@ -2783,10 +2815,16 @@ static void ReportGopTextEndpoints(EFI_BOOT_SERVICES *bs) {
     if(call==EFI_SUCCESS)api_success++;
     Say("GOP_TEXT_CYCLE[%zu] PCI=%04x:%02x:%02x.%u "
         "DIRECT_TEXTOUT_STATUS=%#llx SUCCESS=%u "
-        "PHYSICAL_PIXELS_VERIFIED=0 GLOBAL_CONOUT_CHANGED=0\r\n",
+        "PHYSICAL_PIXELS_VERIFIED=0 GLOBAL_CONOUT_UNCHANGED=%u\r\n",
         candidate->gop_index,(unsigned)id->segment,(unsigned)id->bus,
         (unsigned)id->device,(unsigned)id->function,
-        (unsigned long long)call,(unsigned)(call==EFI_SUCCESS));
+        (unsigned long long)call,(unsigned)(call==EFI_SUCCESS),
+        (unsigned)(System->ConsoleOutHandle==con_handle&&
+                   System->StandardErrorHandle==err_handle&&
+                   System->ConOut==con&&System->StdErr==err));
+    if(System->ConsoleOutHandle!=con_handle||
+       System->StandardErrorHandle!=err_handle||
+       System->ConOut!=con||System->StdErr!=err)break;
     stalled=bs->Stall(2000000U);
     if(stalled!=EFI_SUCCESS) {
       Say("GOP_TEXT_CYCLE[%zu] STALL_STATUS=%#llx NEXT_GOP_SKIPPED=1\r\n",
