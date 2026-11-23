@@ -35,9 +35,15 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   EFI_STATUS s = GuBootOpen(image, t);
   if (s != EFI_SUCCESS) return s;
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=LIVE_SUPPORTED_NVIDIA_ENUMERATION ASPM_ADMISSION=BYPASSED "
-        "AMD_CONSOLE_OWNERSHIP=REQUIRED FIRMWARE_TRANSACTION=0 UNLOCK=0 "
-        "SCREEN_OUTPUT=SUPPRESSED LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
+#ifdef GU_RUNTIME_SELECTION
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=LIVE_SUPPORTED_NVIDIA_ENUMERATION ");
+#else
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=COMPILED_BDF_SEQUENCE ");
+#endif
+  GuLog("ASPM_ADMISSION=BYPASSED AMD_CONSOLE_OWNERSHIP=REQUIRED "
+        "FIRMWARE_TRANSACTION=0 UNLOCK=0 FIRMWARE_ASSET_FILES_READ=0 "
+        "PROM_READ=0 OS_HANDOFF=NONE SCREEN_OUTPUT=SUPPRESSED "
+        "LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
 #endif
 
   /* boot_io reports the previous record. This read carries its contents into
@@ -54,6 +60,12 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   if (boot_state_present &&
       (boot_state.Phase == GU_BOOT_STATE_INTENT ||
        (boot_state.Phase == GU_BOOT_STATE_OUTCOME && boot_state.Status != EFI_SUCCESS))) {
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete; no GPU action was taken.\r\n");
+    EFI_STATUS closed=GuBootClose();
+    return closed==EFI_SUCCESS?EFI_ABORTED:closed;
+#else
     EFI_STATUS disabled = GuDisableDriverOption(t);
     GuLog("DXE_RECOVERY=FAILED_OR_INTERRUPTED DRIVER_ORDER_DISABLE=%#llx ACTION=SKIP_GPU\n",
           (unsigned long long)disabled);
@@ -61,6 +73,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
               L"The GPU transaction is disabled for this boot; continuing normally.\r\n");
     EFI_STATUS closed = GuBootClose();
     return closed == EFI_SUCCESS ? EFI_SUCCESS : closed;
+#endif
   }
 
   const char *stage = "dxe-discover";

@@ -111,15 +111,18 @@ class WatchdogContract(unittest.TestCase):
         self.assertLess(cancel, windows,
                         "nothing may stay armed across the handover")
 
-    def test_stop_release_application_cancels_timer_after_checks_before_windows(self):
+    def test_stop_release_application_cancels_timer_and_returns_to_firmware(self):
         marker = APP.index("STOP_RELEASE_ONLY_IMAGE=1")
-        branch = APP[APP.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, marker):
-                     APP.index("#else", marker)]
+        start = APP.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, marker)
+        end = APP.index('#else\n  stage="stage-windows-image"', marker)
+        branch = APP[start:end]
         execution = branch.index("GuExecuteStopReleaseSequence(")
         cancel = branch.index("GuBootWatchdogCancel()")
-        windows = branch.index('stage="start-Windows"')
+        close = branch.index("GuBootClose()", cancel)
         self.assertLess(execution, cancel)
-        self.assertLess(cancel, windows)
+        self.assertLess(cancel, close)
+        self.assertNotIn("GuBootWindows()", branch)
+        self.assertIn("OS_HANDOFF=NONE", branch)
 
     def test_the_run_says_whether_a_bound_was_in_force(self):
         self.assertIn('GuLog("WATCHDOG BOUND=%u SECONDS ACTIVE=1\\n"', APP)

@@ -91,6 +91,17 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("NO_GPU_ACTION=1", run)
         self.assertIn("SYSTEM_TABLE_CONOUT", self.boot)
 
+    def test_stop_release_preparation_skips_assets_diagnostics_and_profile(self):
+        body = self.execution.split("EFI_STATUS GuPrepareBoundGpu", 1)[1].split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[0]
+        self.assertIn("STOP_RELEASE_PREPARED=1 FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0", body)
+        self.assertIn("#ifdef GU_STOP_RELEASE_ONLY_BENCH", body)
+        self.assertIn("stop_release_ready=TRUE", body)
+        self.assertIn("#else", body)
+        stop_path = body.split("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 1)[1].split("#else", 1)[0]
+        self.assertNotIn("GuBootLoadAssets()", stop_path)
+        self.assertNotIn("GuDiagnosticScan(", stop_path)
+        self.assertNotIn("GuAd104Prepare()", stop_path)
+
     def test_release_profile_has_no_vendor_unlock_call_and_reconnects(self):
         release = self.execution.split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[1].split("#endif", 1)[0]
         for symbol in ("GuMsiPreflight(", "GuMsiRelease(", "GuMsiReattachAfterStop(",
@@ -104,6 +115,15 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("FIRMWARE_TRANSACTION=0", self.release)
         self.assertIn("GuMsiVerifyFinalGraph()", self.port_source)
 
+    def test_stop_only_app_does_not_load_windows_image_or_handoff(self):
+        branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
+        branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
+        stop_branch = self.app[branch_start:branch_end]
+        self.assertNotIn("GuBootLoadWindows()", stop_branch)
+        self.assertNotIn("GuBootWindows()", stop_branch)
+        self.assertIn("OS_HANDOFF=NONE", stop_branch)
+        self.assertIn("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE", self.app)
+
     def test_bootable_application_variant_excludes_unlock_and_stages_as_application(self):
         self.assertIn("[switch]$StopReleaseOnlyBench", self.app_builder)
         self.assertIn("No explicit BDFs means the default live-inventory select-all policy", self.app_builder)
@@ -115,11 +135,13 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn(r"Where-Object { $_ -ne 'vendor\unlock_610.c' }", self.app_builder)
         self.assertIn("/DGU_STOP_RELEASE_ONLY_BENCH", self.app_builder)
         branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
-        stop_branch = self.app[branch_start:self.app.index("#else", branch_start)]
-        self.assertIn("GuBootLoadWindows()", stop_branch)
+        branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
+        stop_branch = self.app[branch_start:branch_end]
+        self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertIn("GuBootBenchCountdown()", stop_branch)
         self.assertIn("GuExecuteStopReleaseSequence(", stop_branch)
-        self.assertIn("GuBootWindows()", stop_branch)
+        self.assertNotIn("GuBootWindows()", stop_branch)
+        self.assertIn("OS_HANDOFF=NONE", stop_branch)
         self.assertIn("GuRuntimeSelectionSelectAll()", self.app)
         self.assertIn("GuSelectedGpuRecordAt", self.boot)
         self.assertNotIn("RTX 4090 then RTX 3080", self.boot)

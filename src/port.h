@@ -252,6 +252,8 @@ typedef struct {
   BOOLEAN release_state_reserved, release_owner_invalid;
   GU_ASSET asset_entries[GU_ASSET_COUNT];
   BOOLEAN asset_entries_reserved, asset_load_attempted;
+  /* Stop/release-only readiness is independent of firmware/PROM qualification. */
+  BOOLEAN stop_release_ready;
   BOOLEAN (*display_check)(VOID);
 #ifdef GU_ENTRY_LATCHED
   /* Per-physical-GPU selector values, never shared with another adapter. */

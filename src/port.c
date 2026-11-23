@@ -232,12 +232,17 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
        platform->image!=Gu.image||
        !GuGpuRecordMatches(&platform->discovery_identity,&record->identity)||
        platform->device_id!=(UINT16)(record->identity.pci_id>>16)||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+       !platform->stop_release_ready||
+       record->owners.firmware_assets!=&platform->stop_release_ready||
+#else
        !platform->profile_verified||!platform->prom_verified||
-       !platform->release_state_reserved||platform->release_owner_invalid||
-       !platform->release_state||platform->release_state!=record->owners.release_plan||
        !platform->asset_entries_reserved||!platform->asset_load_attempted||
        platform->asset_entries!=record->owners.firmware_assets||
        !GuPlatformAssetsOwned(platform)||
+#endif
+       !platform->release_state_reserved||platform->release_owner_invalid||
+       !platform->release_state||platform->release_state!=record->owners.release_plan||
        platform->fault||platform->retained||platform->owned||
        platform->allocations||platform->dma_count||platform->master_attributes_pending||
 #ifdef GU_STOP_RELEASE_ONLY_BENCH

@@ -132,6 +132,18 @@ EFI_STATUS GuExecuteUnlock(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
 EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage) {
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
   if(!stage||!owner->handle||!owner->pci)return EFI_INVALID_PARAMETER;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(owner->stop_release_ready||owner->started||owner->owned||owner->fault||
+     owner->retained||owner->asset_entries_reserved||owner->asset_load_attempted)
+    return EFI_NOT_READY;
+  /* The release-only path needs a bound live PCI identity, not the firmware
+   * payloads or PROM qualification used by the unlock transaction. */
+  owner->stop_release_ready=TRUE;
+  GU_PHASE("stop-release-ready");
+  GuLog("STOP_RELEASE_PREPARED=1 FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 "
+        "DIAGNOSTIC_SCAN=0 FIRMWARE_TRANSACTION=0\n");
+  return EFI_SUCCESS;
+#else
   GU_TRACE_BEGIN();
   GU_PHASE("assets");
   EFI_STATUS s=GuBootLoadAssets();
@@ -142,6 +154,7 @@ EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage) {
   GU_PHASE("read-only-cold-profile");
   s=GuAd104Prepare();
   return s!=EFI_SUCCESS?s:(owner!=GuPlatformActive||owner->fault)?EFI_DEVICE_ERROR:EFI_SUCCESS;
+#endif
 }
 
 #ifndef GU_STOP_RELEASE_ONLY_BENCH
@@ -219,7 +232,7 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     GU_PHASE("stop-release-state-reserve");
     s=GuMsiReserveSelectedState(table->BootServices);
     if(s!=EFI_SUCCESS)goto failed;
-    s=GuBeginSelectedGpuStep(table,owner,GuMsiPlanOwnerToken(),owner->asset_entries);
+    s=GuBeginSelectedGpuStep(table,owner,GuMsiPlanOwnerToken(),&owner->stop_release_ready);
     if(s!=EFI_SUCCESS)goto failed;
     GU_PHASE("stop-release-preflight");
     s=GuMsiPreflight(table,image,owner->handle);
@@ -230,7 +243,7 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     GU_PHASE("reattach-firmware-drivers");
     s=GuMsiReattachAfterStop();
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
-    s=GuFinishSelectedGpuStep(table,1,owner,GuMsiPlanOwnerToken(),owner->asset_entries);
+    s=GuFinishSelectedGpuStep(table,1,owner,GuMsiPlanOwnerToken(),&owner->stop_release_ready);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     GuLog("STOP_RELEASE_STEP=COMPLETE BDF=%04x:%02x:%02x.%x "
           "FIRMWARE_TRANSACTION=0 REATTACH_VERIFIED=1\n",

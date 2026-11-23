@@ -391,10 +391,10 @@ selects every supported NVIDIA GPU discovered at boot. To restrict it to a
 specific target or ordered subset, supply `-SelectionBdf '<BDF>'` or the
 single-entry `-SelectionBdfs '<BDF>'` for one BDF, or a comma-separated
 `-SelectionBdfs '<BDF1>,<BDF2>'` list for multiple BDFs from that machine's
-read-only inventory; the image embeds and reports that exact selection. Either
-mode follows the same Stop/release-only flow, preloads
-and retains the pinned Windows handoff, then starts Windows only after the
-sequence verifies. This application has also not been built, signed, staged,
+read-only inventory; the image embeds and reports that exact selection. Either mode follows the same Stop/release-only flow and
+returns to firmware after the sequence verifies; it does not preload or launch
+Windows. No firmware asset files are loaded and PROM/signature checks are not
+run. This application has also not been built, signed, staged,
 or exercised on hardware here.
 
 ## The chipset-connected RTX 3080: what the attached topology does and does not say

@@ -216,7 +216,7 @@ EFI_STATUS GuBootBenchCountdown(VOID) {
 }
 EFI_STATUS GuBootBenchReportCompletion(VOID) {
   static CHAR16 prefix[]=L"\r\nStop/release and reattachment checks passed for these live devices:\r\n";
-  static CHAR16 suffix[]=L"\r\nNo firmware unlock transaction was run. Starting Windows.\r\n";
+  static CHAR16 suffix[]=L"\r\nNo firmware unlock transaction was run. Returning to firmware.\r\n";
   static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
   EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
   if(s!=EFI_SUCCESS)return s;

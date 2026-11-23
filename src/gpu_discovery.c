@@ -604,8 +604,13 @@ EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table) {
   if(bound->phase!=GU_GPU_EXEC_PENDING &&
      (bound->owners.platform!=&Gu ||
       bound->owners.release_plan!=Gu.release_state ||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+      !Gu.stop_release_ready ||
+      bound->owners.firmware_assets!=&Gu.stop_release_ready))
+#else
       !Gu.asset_entries_reserved ||
       bound->owners.firmware_assets!=Gu.asset_entries))
+#endif
     return EFI_UNSUPPORTED;
   s=VerifyLiveGpuRecords(table,&ActiveInventory,ActiveDiscovery.live,ActiveDiscovery.capacity);
   if(s!=EFI_SUCCESS)return EFI_UNSUPPORTED;
@@ -714,8 +719,13 @@ void GuAbortSelectedGpuStep(void) {
 /* Verify the backing objects, not only the caller's claim about them. */
 static int SelectedOwnersMatch(const void *platform,const void *release_plan,
                                const void *firmware_assets) {
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  return platform==&Gu && Gu.release_state && release_plan==Gu.release_state &&
+         Gu.stop_release_ready && firmware_assets==&Gu.stop_release_ready;
+#else
   return platform==&Gu && Gu.release_state && release_plan==Gu.release_state &&
          Gu.asset_entries_reserved && firmware_assets==Gu.asset_entries;
+#endif
 }
 EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                   const void *platform,
@@ -724,7 +734,11 @@ EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
   if(!ActiveSequenceValid || !ActiveInventoryValid ||
      !table || !table->BootServices ||
      Gu.bs!=table->BootServices || !Gu.handle || !Gu.pci ||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+     !Gu.stop_release_ready ||
+#else
      !Gu.profile_verified || !Gu.prom_verified ||
+#endif
      !SelectedOwnersMatch(platform,release_plan,firmware_assets) ||
      Gu.started || Gu.fault || Gu.retained || Gu.owned || Gu.armed)
     return EFI_NOT_READY;

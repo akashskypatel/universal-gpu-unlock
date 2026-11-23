@@ -618,11 +618,11 @@
       },
       {
         "id": "dxe-stop-release-sequence-bench",
-        "why": "Dynamically selects all currently detected supported NVIDIA GPUs and attempts ordered Stop/release plus firmware-driver reattachment while waiving ASPM admission only; independent AMD-console ownership and live text-output graph checks remain mandatory. It contains no GPU unlock firmware transaction, is unscoreable as read-only evidence, and has not been hardware-verified."
+        "why": "DXE Stop/release-only test, dynamically selecting supported NVIDIA GPUs by default with optional fixed BDF selection. No firmware asset files, PROM reads, or firmware unlock transaction; it returns to firmware after attempting reattachment. Display routing, recovery, reattachment, and hardware behavior are unverified."
       },
       {
         "id": "app-stop-release-sequence-bench",
-        "why": "Bootable EFI application that enumerates all currently detected supported NVIDIA GPUs at boot and performs ordered Stop/release and reattachment checks, then hands off to the pinned Windows Boot Manager; ASPM admission is waived, console ownership checks remain mandatory, and no firmware unlock transaction is linked or called. It is unscoreable as read-only evidence and has not been hardware-verified."
+        "why": "Bootable EFI application that selects supported NVIDIA GPUs dynamically by default, with optional fixed BDF selection. It performs driver Stop/release and reattachment only: no firmware asset files, PROM reads, or firmware unlock transaction. It returns to firmware without launching Windows. Display routing, recovery, reattachment, and hardware behavior are unverified."
       },
       {
         "id": "actuate-one-target-resident",

@@ -167,6 +167,18 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
   boot_state_present=(GuBootStateRead(t,&boot_state)==EFI_SUCCESS);
 
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  /* This image must not repair another image's state, change NVRAM, or launch
+   * another EFI program. A prior failed transaction makes this test refuse. */
+  if(boot_state_present&&
+     (boot_state.Phase==GU_BOOT_STATE_INTENT||
+      (boot_state.Phase==GU_BOOT_STATE_OUTCOME&&boot_state.Status!=EFI_SUCCESS))) {
+    GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete; no GPU action was taken.\r\n");
+    EFI_STATUS closed=GuBootClose();
+    return closed==EFI_SUCCESS?EFI_ABORTED:closed;
+  }
+#else
   /* USB recovery is intentionally before GPU discovery/preparation: those
    * stages may be exactly what failed on the previous boot. An unfinished
    * INTENT or failed OUTCOME means the prior transaction did not complete
@@ -199,15 +211,22 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     return GuBootWindows();
   }
 
-  /* Name the reference table this image was built with before any stage can
-   * refuse. Nothing below this line is reached by a preparation-only build, so
-   * without this the log of an image carrying the captured table and the log of
-   * one carrying none are the same bytes. Authentication is still zero: the
-   * table holds digests of what was read, not signatures of what will run. */
+#endif /* GU_STOP_RELEASE_ONLY_BENCH */
+
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  GuLog("STOP_ONLY_SCOPE=DRIVER_STOP_REATTACH FIRMWARE_ASSET_FILES_READ=0 "
+        "PROM_READ=0 PROM_SIGNATURE_CHECK=0 FIRMWARE_TRANSACTION=0\n");
+#else
+  /* Reference-table metadata only; normal preparation performs the actual
+   * PROM and asset qualification below. */
   GuLog("PROM_REFERENCE=%s ROWS=%u AUTHENTICATION=0\n",
         GuPromReferenceMode(),(unsigned)GuPromReferenceCount());
+#endif
 
-  const char *stage="discover";CHAR16 choice=L'S';
+  const char *stage="discover";
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
+  CHAR16 choice=L'S';
+#endif
 
 #ifdef GU_RUNTIME_SELECTION
   /* A selection that cannot be resolved is not fatal here: discovery refuses
@@ -240,32 +259,24 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GU_PLATFORM *owner=GuPlatformActive;
   if(!owner){s=EFI_NOT_READY;goto failed;}
   if (owner->is_ampere) {
-
     GuLog("Ampere GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
-
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
     GuLog("%s: GA102, volatile RAM-only attempt, no VBIOS flash\n",GU_FORK_VERSION);
-
+#endif
   } else if (owner->is_turing) {
-
     GuLog("Turing GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
-
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
     GuLog("%s: TU10X assets not authenticated for this owner\n",GU_FORK_VERSION);
-
+#endif
   } else {
-
     GuLog("Ada Lovelace GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
-
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
     GuLog("%s: AD10X, volatile RAM-only attempt, no VBIOS flash\n",GU_FORK_VERSION);
-
+#endif
   }
 
-  /* The preparation is the longest silent band in this application: it loads
-   * five firmware files, reads the PROM and hashes both. RUN0011 stopped inside
-   * it with nothing on screen and nothing more in the log.
-   *
-   * The timer is reported here as well as after the operator choice, because the
-   * bound is the only thing that ends a hung preparation on its own. A run that
-   * stalls before the menu has to be able to say whether this boot was bounded. */
+  /* Keep the watchdog state visible before the next stage. Stop/release-only
+   * builds do not load firmware assets or read the PROM here. */
   {
     UINTN bound=0;
     if(GuBootWatchdogArmed(&bound))
@@ -280,13 +291,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
                 (unsigned)owner->prom_verified);
 
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=LIVE_SUPPORTED_NVIDIA_ENUMERATION ASPM_ADMISSION=BYPASSED "
-        "AMD_CONSOLE_OWNERSHIP=REQUIRED FIRMWARE_TRANSACTION=0 UNLOCK=0 "
-        "SCREEN_OUTPUT=SUPPRESSED LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
-  /* Load the pinned Windows handoff before mutation so failure to locate the
-   * handoff target can never strand the machine after Stop/release. */
-  stage="stage-windows-image";GuTracePhase(stage);
-  s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+#ifdef GU_RUNTIME_SELECTION
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=LIVE_SUPPORTED_NVIDIA_ENUMERATION ");
+#else
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=COMPILED_BDF_SEQUENCE ");
+#endif
+  GuLog("ASPM_ADMISSION=BYPASSED AMD_CONSOLE_OWNERSHIP=REQUIRED "
+        "FIRMWARE_TRANSACTION=0 UNLOCK=0 FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 "
+        "OS_HANDOFF=NONE HARDWARE_VERIFIED=0\n");
   s=GuBootBenchCountdown();
   if(s!=EFI_SUCCESS) {
     GuLog("BENCH_COUNTDOWN=FAILED STATUS=%#llx NO_GPU_ACTION=1\n",
@@ -298,17 +310,15 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
   s=GuBootWatchdogCancel();if(s!=EFI_SUCCESS)goto failed;
   GuLog("STOP_RELEASE_ONLY=COMPLETE FIRMWARE_TRANSACTION=0 UNLOCK=0 "
-        "REATTACH_VERIFIED=1 WINDOWS_HANDOFF=READY\n");
+        "REATTACH_VERIFIED=1 OS_HANDOFF=NONE\n");
   GuBootUnsilence();
   s=GuBootBenchReportCompletion();
   if(s!=EFI_SUCCESS)
     GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
           (unsigned long long)s);
-  s=EFI_SUCCESS;
   stage="close-USB-log";GuTracePhase(stage);
   s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
-  stage="start-Windows";GuTracePhase(stage);s=GuBootWindows();
-  GuBootHalt();return s==EFI_SUCCESS?EFI_ABORTED:s;
+  return EFI_SUCCESS;
 #else
   stage="stage-windows-image";GuTracePhase(stage);s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 

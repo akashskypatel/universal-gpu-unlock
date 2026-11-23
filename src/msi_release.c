@@ -126,8 +126,12 @@ EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs) {
   if((Gu.release_state_reserved || Gu.release_state) && !ReleaseOwnerMatches())
     return EFI_NOT_READY;
   if(!bs||!bs->AllocatePool||!bs->FreePool||!Gu.handle||!Gu.pci||!Gu.image||Gu.bs!=bs ||
-     !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||
-     Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+     !Gu.stop_release_ready||
+#else
+     !Gu.profile_verified||!Gu.prom_verified||
+#endif
+     Gu.started||Gu.owned||Gu.armed||Gu.fault||Gu.retained)return EFI_NOT_READY;
   if(Gu.release_state_reserved)return EFI_ALREADY_STARTED;
   GU_MSI_OWNED_STATE *state=GuAlloc(sizeof(*state));
   if(!state)return Gu.cpu_pool_failure_status!=EFI_SUCCESS?
@@ -945,7 +949,12 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(Plan.table||Plan.mutated||Plan.ready||Plan.claimed)return EFI_ALREADY_STARTED;
   memset(&Plan,0,sizeof(Plan));Plan.table=t;Plan.self=self;Plan.pci=pci;
   if(!t||!t->BootServices||!self||!pci||Gu.handle!=pci||Gu.image!=self||Gu.bs!=t->BootServices||
-     !Gu.profile_verified||!Gu.prom_verified||Gu.started||Gu.owned||Gu.armed)return EFI_INVALID_PARAMETER;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+     !Gu.stop_release_ready||
+#else
+     !Gu.profile_verified||!Gu.prom_verified||
+#endif
+     Gu.started||Gu.owned||Gu.armed)return EFI_INVALID_PARAMETER;
   EFI_BOOT_SERVICES *b=t->BootServices;
   if(!b->DisconnectController||!b->OpenProtocol||!b->CloseProtocol||!b->RaiseTPL||!b->RestoreTPL||
      !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol||
@@ -958,7 +967,11 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(!Plan.console||!Plan.input||!Plan.error||!Plan.text||!Plan.err||!Plan.keys||
      !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)return EFI_UNSUPPORTED;
   Plan.key_reset=(UINTN)Plan.keys->Reset;Plan.key_read=(UINTN)Plan.keys->ReadKeyStroke;Plan.key_wait=Plan.keys->WaitForKey;
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
   if(!pci||!GuAd104ColdEntry())return EFI_NOT_READY;
+#else
+  if(!pci||!Gu.stop_release_ready)return EFI_NOT_READY;
+#endif
   EFI_STATUS s=GuVerifyActivePeers(t);
   if(s==EFI_SUCCESS)s=Gops(TRUE);
   if(s!=EFI_SUCCESS) GuLog("Preflight failed at Gops(): %#llx\n", (unsigned long long)s);
@@ -1194,10 +1207,12 @@ static EFI_STATUS ClaimRestore(VOID) {
     s=Bar();
     if(s!=EFI_SUCCESS) GuLog("ClaimRestore failed at Bar(): %#llx\n", (unsigned long long)s);
   }
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
   if(s==EFI_SUCCESS&&!GuAd104ColdEntry()) {
     GuLog("ClaimRestore failed at GuAd104ColdEntry\n");
     s=EFI_NOT_READY;
   }
+#endif
   GuLog("MSI exclusive claim/decode result: status=%#llx\n",(unsigned long long)s);return s;
 }
 /* Pre-Stop state capture.
@@ -1278,7 +1293,9 @@ EFI_STATUS GuMsiRelease(VOID) {
     EFI_STATUS s=Alive();UINT32 c[64];
     if(s==EFI_SUCCESS)s=ReadConfigMode(c,TRUE);
     if(s==EFI_SUCCESS&&!Equal(c,Plan.config,sizeof(c)))s=EFI_NOT_READY;
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
     if(s==EFI_SUCCESS&&!GuAd104ColdEntry())s=EFI_NOT_READY;
+#endif
     if(s==EFI_SUCCESS)s=Gops(FALSE);
     if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
     if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
