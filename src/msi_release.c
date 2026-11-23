@@ -79,7 +79,7 @@ typedef struct {
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized,reattach_verified;
   BOOLEAN consoleless_target_gop;
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-  /* The initial selected GPU owns ConOut; a separate GOP survives. */
+  /* The current selected GPU owns ConOut; a separate GOP survives. */
   BOOLEAN target_console_experiment;
 #endif
 } PLAN;
@@ -735,7 +735,7 @@ static EFI_GUID GlobalVarGuid={
   0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}
 };
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-/* The initial target must own at least one configured ConOut path. Other
+/* The current target must own at least one configured ConOut path. Other
  * configured paths may use an existing captured peer GOP. Every ConOut and
  * ErrOut path must identify that target or one survivor, never unknown GPU
  * ownership. No NVRAM or UEFI system-console pointers are modified. */
@@ -785,19 +785,30 @@ static EFI_STATUS BenchConfiguredConsolePaths(const CHAR16 *name,
   }
   return EFI_COMPROMISED_DATA;
 }
-static EFI_STATUS BenchInitialTargetConsole(VOID) {
-  GU_GPU_RECORD first={0};
-  if(!Plan.gop||!Plan.survivor_count||GuSelectedGpuCount()<2U||
-     GuSelectedGpuRecordAt(0U,&first)!=EFI_SUCCESS||
-     (EFI_HANDLE)first.handle!=Plan.pci||first.pci!=Gu.pci)
+static EFI_STATUS BenchSelectedTargetConsole(VOID) {
+  if(!Plan.gop||!Plan.survivor_count||GuSelectedGpuCount()<2U)
     return EFI_NOT_READY;
+  size_t matches=0,selected_index=0;
+  for(size_t i=0;i<GuSelectedGpuCount();i++) {
+    GU_GPU_RECORD candidate={0};
+    EFI_STATUS status=GuSelectedGpuRecordAt(i,&candidate);
+    if(status!=EFI_SUCCESS)return status;
+    /* The current step must be one of the live selected NVIDIA records.
+     * A stale or duplicate match does not authorize a console exception. */
+    if((EFI_HANDLE)candidate.handle==Plan.pci&&candidate.pci==Gu.pci) {
+      selected_index=i;
+      if(++matches>1U)return EFI_COMPROMISED_DATA;
+    }
+  }
+  if(matches!=1U)return EFI_NOT_READY;
   EFI_STATUS s=BenchConfiguredConsolePaths(L"ConOut",TRUE);
   if(s==EFI_SUCCESS)s=BenchConfiguredConsolePaths(L"ErrOut",FALSE);
   if(s==EFI_SUCCESS)
-    GuLog("STOP_RELEASE_TARGET_CONSOLE=EXPERIMENTAL_INITIAL "
-          "CONOUT=TARGET_PRESENT_WITH_OPTIONAL_PEER ERR_OUT=TARGET_OR_PEER "
-          "SURVIVOR_GOPS=%zu GLOBAL_CONOUT_CHANGED=0\n",
-          (size_t)Plan.survivor_count);
+    GuLog("STOP_RELEASE_TARGET_CONSOLE=EXPERIMENTAL_SELECTED "
+          "STEP=%zu CONOUT=TARGET_PRESENT_WITH_OPTIONAL_PEER "
+          "ERR_OUT=TARGET_OR_PEER SURVIVOR_GOPS=%zu "
+          "GLOBAL_CONOUT_CHANGED=0\n",
+          selected_index,(size_t)Plan.survivor_count);
   return s;
 }
 /* After reconnect, read only registered protocol interfaces and configured
@@ -1571,10 +1582,11 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
     GuLog("Preflight failed at peer/GOP observation: %#llx\n",(unsigned long long)s);
     return s;
   }
-  /* Experimental consoleless release applies to the initial target only.
-   * The peer warning still requires an independently verified NVIDIA GOP. */
+  /* Each selected GPU is checked when it becomes the current target.
+   * Only a target-owned ConOut with an independent surviving GOP permits
+   * this file-only Stop path. The peer warning is still mandatory. */
   if(Plan.gop&&Plan.survivor_count&&GuSelectedGpuCount()>1U) {
-    EFI_STATUS console_owner=BenchInitialTargetConsole();
+    EFI_STATUS console_owner=BenchSelectedTargetConsole();
     if(console_owner==EFI_SUCCESS) {
       Plan.target_console_experiment=TRUE;
       Plan.consoleless_target_gop=TRUE;
