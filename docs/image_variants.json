@@ -437,13 +437,15 @@
         "AcceptUnverifiedActuation": true,
         "StopReleaseOnlyBench": true,
         "FileOnlyBootLog": true,
-        "RuntimeSelection": true
+        "RuntimeSelection": true,
+        "RuntimeEsp": true
       },
       "binary": "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI",
       "safety": "actuates",
       "attestations": [
         "ORDERED_SEQUENCE=1",
         "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
         "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION",
         "ASPM_ADMISSION_BYPASSED=1",
         "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=CONDITIONAL",
@@ -462,8 +464,7 @@
         "PROM_READ=0",
         "OS_HANDOFF=NONE"
       ],
-      "note": "Bootable EFI application. At each boot it enumerates current PCI devices and selects every currently detected supported NVIDIA GPU in firmware enumeration order, without a compiled BDF list or persistent GuTargets write. Waives ASPM admission. Console policy is topology-dependent: before Stop, the image makes a best-effort attempt to display the warning through configured ConOut, including when the target is the only GOP; this attempt is not a console admission requirement. If that target is the only GOP, release diagnostics use the authoritative file log, then after ConnectController and reattachment graph verification the image makes a best-effort completion display through current ConOut; console-output failure does not invalidate the verified sequence. Otherwise ConOut, ErrOut and the live TextOut graph must resolve to a verified non-target survivor GOP, including an unselected NVIDIA peer. It runs msi_release.c Stop/release, ConnectController reattachment and protocol/GOP graph checks for the live selection, then returns to firmware without launching another EFI program. The pre-Stop warning lists each selected device's live BDF, PCI ID and subsystem ID; successful or unavailable console display is recorded in the file log. vendor/unlock_610.c is excluded and no firmware unlock transaction is called. Displays on listed GPUs may go dark, disconnect or flicker; physical display routing, reattachment, recovery and hardware behavior are unverified. No firmware asset files are loaded and PROM/signature checks are not run. File logging and the live device warning are retained; routine screen output is suppressed. For a fixed ordered subset instead, pass -SelectionBdfs with one or more BDFs when building this stop-only variant; the build embeds and reports that exact order.",
-      "requires_local_boot_profile": true
+      "note": "Bootable EFI application. At each boot it enumerates current PCI devices and selects every currently detected supported NVIDIA GPU in firmware enumeration order, without a compiled BDF list or persistent GuTargets write. Waives ASPM admission. Console policy is topology-dependent: before Stop, the image makes a best-effort attempt to display the warning through configured ConOut, including when the target is the only GOP; this attempt is not a console admission requirement. If that target is the only GOP, release diagnostics use the authoritative file log, then after ConnectController and reattachment graph verification the image makes a best-effort completion display through current ConOut; console-output failure does not invalidate the verified sequence. Otherwise ConOut, ErrOut and the live TextOut graph must resolve to a verified non-target survivor GOP, including an unselected NVIDIA peer. It runs msi_release.c Stop/release, ConnectController reattachment and protocol/GOP graph checks for the live selection, then returns to firmware without launching another EFI program. The pre-Stop warning lists each selected device's live BDF, PCI ID and subsystem ID; successful or unavailable console display is recorded in the file log. vendor/unlock_610.c is excluded and no firmware unlock transaction is called. Displays on listed GPUs may go dark, disconnect or flicker; physical display routing, reattachment, recovery and hardware behavior are unverified. No firmware asset files are loaded and PROM/signature checks are not run. File logging and the live device warning are retained; routine screen output is suppressed. For a fixed ordered subset instead, pass -SelectionBdfs with one or more BDFs when building this stop-only variant; the build embeds and reports that exact order."
     },
     {
       "id": "actuate-one-target-resident",
