@@ -1675,7 +1675,13 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
     return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
   }
   Plan.reattach_verified=TRUE;
-  NOTE("MSI reattach verification passed GRAPH_RESTORED=1 FIRMWARE_TRANSACTION=0\n");
+  /* The graph and GOP identity have been checked. This is not proof that a
+   * monitor is electrically connected or displaying pixels. A selected GOP
+   * is restored only when the target was not headless before the Stop. */
+  NOTE("MSI reattach verification passed GRAPH_RESTORED=1 "
+       "TARGET_GOP_IDENTITY_MATCHED=%u SURVIVOR_GOPS_MATCHED=%zu "
+       "DISPLAY_OUTPUT_TESTED=0 FIRMWARE_TRANSACTION=0\n",
+       (unsigned)!Plan.headless,(size_t)Plan.survivor_count);
   return EFI_SUCCESS;
 }
 #endif
