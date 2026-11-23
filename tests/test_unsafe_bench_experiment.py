@@ -251,6 +251,68 @@ class UnsafeBenchVariantContract(unittest.TestCase):
                      "BREAK BOOT LOOP IN BIOS"):
             self.assertIn(line, notice)
 
+    def test_initial_target_console_experiment_requires_exact_pci_and_peer(self):
+        start = self.release.index("static EFI_STATUS BenchConfiguredConsolePaths(")
+        end = self.release.index("static EFI_STATUS AmdConsoleVariable(", start)
+        paths = self.release[start:end]
+        preflight = self.release.split("EFI_STATUS GuMsiPreflight(", 1)[1].split(
+            "static BOOLEAN DecodeMask", 1)[0]
+        self.assertIn("GuSelectedGpuRecordAt(0U,&first)", paths)
+        self.assertIn("(EFI_HANDLE)first.handle!=Plan.pci", paths)
+        self.assertIn("first.pci!=Gu.pci", paths)
+        self.assertIn("!Plan.survivor_count", paths)
+        self.assertIn('BenchConfiguredConsolePaths(L"ConOut",FALSE)', paths)
+        self.assertIn('BenchConfiguredConsolePaths(L"ErrOut",TRUE)', paths)
+        self.assertIn("GuDevicePathHasPrefix(", paths)
+        self.assertIn("target!=1 && !(permit_survivor&&target==0&&peers==1U)", paths)
+        self.assertIn("if(target==1&&peers)return EFI_ACCESS_DENIED", paths)
+        self.assertIn("if(target<0||peers>1U)return EFI_COMPROMISED_DATA", paths)
+        self.assertNotIn("SetVariable(", paths)
+        self.assertNotIn("DisconnectController(", paths)
+        self.assertIn("EFI_STATUS console_owner=BenchInitialTargetConsole();", preflight)
+        self.assertIn("if(console_owner==EFI_SUCCESS)", preflight)
+        self.assertIn("Plan.target_console_experiment=TRUE;", preflight)
+        self.assertIn("Plan.consoleless_target_gop=TRUE;", preflight)
+        self.assertIn("StopFileOnlyOutput=TRUE;", preflight)
+        self.assertLess(preflight.index("s=Gops(TRUE)"),
+                        preflight.index("BenchInitialTargetConsole()"))
+        self.assertLess(preflight.index("BenchInitialTargetConsole()"),
+                        preflight.index("ReadOnlyAmdConsoleOwnership()"))
+        self.assertIn("TARGET_CONSOLE_EXPERIMENT=%u", self.release)
+        self.assertIn("STOP_RELEASE_CONSOLE=REFUSED", self.release)
+
+    def test_stopped_target_uses_peer_direct_text_or_gop_but_never_global_conout(self):
+        acquire = self.release.split(
+            "EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID)", 1)[1].split(
+            "/* Used only after a failed reattachment.", 1)[0]
+        sequence = self.execution.split(
+            "EFI_STATUS GuExecuteStopReleaseSequence", 1)[1].split("#endif", 1)[0]
+        reattach = self.release.split(
+            "EFI_STATUS GuMsiReattachAfterStop(VOID)", 1)[1].split("#endif", 1)[0]
+        final = self.release.split("BOOLEAN GuMsiVerifyFinalGraph(VOID)", 1)[1].split(
+            "#else", 1)[0]
+        for proof in ("Plan.target_console_experiment", "Plan.stage!=3",
+                      "Plan.warning_peer_gop", "GuDevicePathUnchanged(",
+                      "g!=survivor->interface", "Gops(FALSE)",
+                      "GuVerifyActivePeers(Plan.table)",
+                      "original_text_driver&&current_text_driver",
+                      "Interface(survivor->handle,&TextGuid,(VOID **)&peer_text)",
+                      "peer_text->OutputString(peer_text,notice)",
+                      "BenchGopLine(g,", "GLOBAL_CONOUT_CHANGED=0"):
+            self.assertIn(proof, acquire)
+        self.assertNotIn("->ConOut=", acquire)
+        self.assertNotIn("->ConsoleOutHandle=", acquire)
+        self.assertNotIn("SetVariable(", acquire)
+        self.assertLess(sequence.index("GuMsiRelease()"),
+                        sequence.index("GuMsiStopReleaseTryPeerConsole()"))
+        self.assertLess(sequence.index("GuMsiStopReleaseTryPeerConsole()"),
+                        sequence.index("GuMsiReattachAfterStop()"))
+        self.assertIn("REATTACH_CONTINUES=1", sequence)
+        self.assertIn("if(s==EFI_SUCCESS)s=BenchTargetConsoleRestored();", reattach)
+        self.assertIn("if(s==EFI_SUCCESS)s=BenchTargetConsoleRestored();", final)
+        self.assertIn("Interface(Plan.console,&TextGuid,&out)", self.release)
+        self.assertIn("Interface(Plan.error,&TextGuid,&err)", self.release)
+
     def test_stop_only_console_gate_accepts_non_target_nvidia_survivor_but_requires_it(self):
         check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
         variable = self.release.split("static EFI_STATUS AmdConsoleVariable", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[0]
