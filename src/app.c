@@ -306,8 +306,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GuLog("STOP_RELEASE_ONLY=COMPLETE FIRMWARE_TRANSACTION=0 UNLOCK=0 "
         "REATTACH_VERIFIED=1 OS_HANDOFF=NONE\n");
   GuBootUnsilence();
-  s=GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly()||
-                                 GuMsiStopReleaseConsoleRestored());
+  s=GuBootBenchReportCompletion();
   if(s!=EFI_SUCCESS)
     GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
           (unsigned long long)s);
