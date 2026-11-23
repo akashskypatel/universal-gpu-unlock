@@ -24,9 +24,10 @@ BOOLEAN GuBootWatchdogArmed(UINTN *seconds);
 EFI_STATUS GuBootWatchdogCancel(VOID);
 VOID GuBootSay(const CHAR16 *);
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-/* The file log is mandatory. Only the one warning and post-verified
- * completion notice attempt live console output. Neither requires a monitor.
- * A failed or absent text console does not waive the three-second delay. */
+/* The file log is mandatory. Each selected GPU has its own warning and
+ * delay. Multi-GPU warnings use a separately verified surviving NVIDIA GOP,
+ * never system ConOut. A failed peer GOP warning prevents the next Stop.
+ * The one-GPU warning and final notice remain best-effort text output. */
 EFI_STATUS GuBootBenchCountdown(VOID);
 EFI_STATUS GuBootBenchReportCompletion(VOID);
 #endif
