@@ -735,13 +735,14 @@ static EFI_GUID GlobalVarGuid={
   0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}
 };
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-/* In this explicit first-card experiment, configured ConOut paths must belong
- * to the selected PCI device. ErrOut can belong to that GPU or one recorded
- * survivor. No NVRAM or UEFI system-table console pointers are modified. */
+/* The initial target must own at least one configured ConOut path. Other
+ * configured paths may use an existing captured peer GOP. Every ConOut and
+ * ErrOut path must identify that target or one survivor, never unknown GPU
+ * ownership. No NVRAM or UEFI system-console pointers are modified. */
 static EFI_STATUS BenchConfiguredConsolePaths(const CHAR16 *name,
-                                               BOOLEAN permit_survivor) {
+                                               BOOLEAN require_target) {
   UINT8 data[8U*192U];
-  UINTN used=sizeof(data),at=0,start=0,paths=0,nodes=0;
+  UINTN used=sizeof(data),at=0,start=0,paths=0,nodes=0,targets=0;
   UINT32 attributes=0;
   EFI_DEVICE_PATH_PROTOCOL *target_path=NULL;
   EFI_STATUS s=Interface(Plan.pci,&PathGuid,(VOID **)&target_path);
@@ -771,12 +772,14 @@ static EFI_STATUS BenchConfiguredConsolePaths(const CHAR16 *name,
       }
       data[at+1]=kind;
       if(target<0||peers>1U)return EFI_COMPROMISED_DATA;
-      if(target!=1 && !(permit_survivor&&target==0&&peers==1U))
+      if(!(target==1&&peers==0U) && !(target==0&&peers==1U))
         return EFI_ACCESS_DENIED;
-      if(target==1&&peers)return EFI_ACCESS_DENIED;
+      if(target==1)targets++;
       paths++;start=at+bytes;
-      if(kind==0xffU)
-        return start==used&&paths?EFI_SUCCESS:EFI_COMPROMISED_DATA;
+      if(kind==0xffU) {
+        if(start!=used||!paths)return EFI_COMPROMISED_DATA;
+        return !require_target||targets?EFI_SUCCESS:EFI_ACCESS_DENIED;
+      }
     }
     at+=bytes;
   }
@@ -788,11 +791,11 @@ static EFI_STATUS BenchInitialTargetConsole(VOID) {
      GuSelectedGpuRecordAt(0U,&first)!=EFI_SUCCESS||
      (EFI_HANDLE)first.handle!=Plan.pci||first.pci!=Gu.pci)
     return EFI_NOT_READY;
-  EFI_STATUS s=BenchConfiguredConsolePaths(L"ConOut",FALSE);
-  if(s==EFI_SUCCESS)s=BenchConfiguredConsolePaths(L"ErrOut",TRUE);
+  EFI_STATUS s=BenchConfiguredConsolePaths(L"ConOut",TRUE);
+  if(s==EFI_SUCCESS)s=BenchConfiguredConsolePaths(L"ErrOut",FALSE);
   if(s==EFI_SUCCESS)
     GuLog("STOP_RELEASE_TARGET_CONSOLE=EXPERIMENTAL_INITIAL "
-          "CONOUT=TARGET ERR_OUT=TARGET_OR_PEER "
+          "CONOUT=TARGET_PRESENT_WITH_OPTIONAL_PEER ERR_OUT=TARGET_OR_PEER "
           "SURVIVOR_GOPS=%zu GLOBAL_CONOUT_CHANGED=0\n",
           (size_t)Plan.survivor_count);
   return s;
@@ -811,8 +814,8 @@ static EFI_STATUS BenchTargetConsoleRestored(VOID) {
   EFI_STATUS s=Interface(Plan.console,&TextGuid,&out);
   if(s==EFI_SUCCESS)s=Interface(Plan.error,&TextGuid,&err);
   if(s!=EFI_SUCCESS||out!=Plan.text||err!=Plan.err)return EFI_NOT_READY;
-  s=BenchConfiguredConsolePaths(L"ConOut",FALSE);
-  if(s==EFI_SUCCESS)s=BenchConfiguredConsolePaths(L"ErrOut",TRUE);
+  s=BenchConfiguredConsolePaths(L"ConOut",TRUE);
+  if(s==EFI_SUCCESS)s=BenchConfiguredConsolePaths(L"ErrOut",FALSE);
   GuLog("STOP_RELEASE_TARGET_CONSOLE_RESTORED=%u "
         "STATUS=%#llx GLOBAL_CONOUT_CHANGED=0\n",
         (unsigned)(s==EFI_SUCCESS),(unsigned long long)s);
