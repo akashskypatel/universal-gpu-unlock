@@ -237,8 +237,12 @@ class UnsafeBenchVariantContract(unittest.TestCase):
                        if v["id"] == "app-stop-release-sequence-bench")
         self.assertEqual(variant["family"], "prepare")
         self.assertNotIn("DXE", variant["binary"])
-        self.assertTrue(variant["requires_local_boot_profile"])
+        # The USB signing catalogue must build the same runtime-ESP profile
+        # that the Windows CI compiles, without requiring a private ESP GUID.
+        self.assertNotIn("requires_local_boot_profile", variant)
         self.assertNotIn("requires_selection", variant)
+        self.assertTrue(variant["switches"]["RuntimeEsp"])
+        self.assertIn("RUNTIME_ESP=1", variant["attestations"])
         self.assertTrue(variant["switches"]["RuntimeSelection"])
         self.assertTrue(variant["switches"]["FileOnlyBootLog"])
         self.assertEqual(variant["attestations"][2],
