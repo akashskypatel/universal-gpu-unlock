@@ -12,6 +12,8 @@ EFI_STATUS GuExecuteUnlock(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
 EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
                            EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
                            const char **stage);
+/* True only after an actual reattachment attempt failed. */
+BOOLEAN GuStopReleaseReattachFailed(VOID);
 #endif
 typedef enum { GU_S3_DISABLED, GU_S3_REQUIRED, GU_S3_OPTIONAL } GU_S3_POLICY;
 /* Prepare the active context before its transaction. */
