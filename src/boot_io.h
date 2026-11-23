@@ -24,11 +24,11 @@ BOOLEAN GuBootWatchdogArmed(UINTN *seconds);
 EFI_STATUS GuBootWatchdogCancel(VOID);
 VOID GuBootSay(const CHAR16 *);
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-/* Emit the pre-actuation warning through configured ConOut when requested.
- * Optional console output falls back to the file log; the three-second stall
- * remains required before any GPU access. */
-EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required);
-EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output);
+/* The file log is mandatory. Only the one warning and post-verified
+ * completion notice attempt live console output. Neither requires a monitor.
+ * A failed or absent text console does not waive the three-second delay. */
+EFI_STATUS GuBootBenchCountdown(VOID);
+EFI_STATUS GuBootBenchReportCompletion(VOID);
 #endif
 VOID GuBootSilence(VOID);
 VOID GuBootUnsilence(VOID);
