@@ -2589,6 +2589,84 @@
         ],
         "history": "Read-only topology run with IGD selected, iGPU and RTX 4090 reported headless, and the 3080 display path attached. AMD iGPU PCI function is enumerated but has no GOP. Sole GOP belongs to the 3080; configured ConOut and ErrOut contain its path. The console isolation classifier and final topology verdict remain CONFLICT due to lack of an independent GOP/console association. The 3080 reports ASPM=2, Gen4 x4; iGPU root function reports ASPM=0. No GPU was changed and no controller was stopped.",
         "does_not_show": "the physical monitor receiving console text with certainty; a usable AMD headless GOP; safe release or mutation of the display-active 3080; or resolution of the 3080 ASPM blocker."
+      },
+      {
+        "id": "physical-readonly-0021",
+        "captured": "2026-11-18",
+        "image": "diag-topology-log",
+        "stage": "readonly",
+        "file": "tests/data/hardware_session/physical-readonly-0021.txt",
+        "sha256": "94ad43e6de375b409faee12358eb0b87f5d0fb361ef3b0fde2f1b89462e63bf2",
+        "bytes": 18952,
+        "captured_bytes": 19145,
+        "lines": 193,
+        "line_endings": "CRLF as captured; the recorded digest is over the LF-normalised file",
+        "bench": "Operator reports cold boot after changing Initiate Graphic Adapter from IGD to PEG; iGPU and RTX 4090 headless; read-only diagnostic booted from USB.",
+        "verdict": "RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0",
+        "observations": [
+          {
+            "token": "DIAGNOSTIC_OUTPUT SCREEN=AVAILABLE DURABLE_LOG=1",
+            "why": "the read-only diagnostic completed and wrote a durable log"
+          },
+          {
+            "token": "CONOUT_VARIABLE STATUS=0 BYTES=48 ATTRS=0x7 CONFIGURED_ONLY=1",
+            "why": "configured ConOut contains one path"
+          },
+          {
+            "token": "ERROUT_VARIABLE STATUS=0 BYTES=48 ATTRS=0x7 CONFIGURED_ONLY=1",
+            "why": "configured ErrOut contains one path"
+          },
+          {
+            "token": "GOP_CAPTURE_RECHECK STABLE=1 ORIGINAL=1 CURRENT=1 NON_ATOMIC=1 NO_STOP_EVIDENCE=1 CAPTURE_OK=1",
+            "why": "the single GOP capture was stable across recheck; this is not Stop evidence"
+          },
+          {
+            "token": "GOP_DISPLAY[0] HANDLE=0x74ed2418 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:04:00.0 OWNER_ID=10de:220a MODE_DESCRIPTOR=VALID MODE=0 MAX_MODE=14 INFO_SIZE=36 RESOLUTION=2560x1440 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=4096 FB_BASE=0xf400000000 FB_SIZE=0x1680000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1",
+            "why": "the sole GOP belongs to the 3080 and reports a 2560 by 1440 mode descriptor"
+          },
+          {
+            "token": "ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1 NVIDIA=1 INDEPENDENT=0 UNMATCHED=0 AMBIGUOUS=0 INDEPENDENT_WITHOUT_GOP=0 NOT_DETACH_EVIDENCE=1",
+            "why": "the console classifier matches NVIDIA only and finds no independent GOP path"
+          },
+          {
+            "token": "ERROR_CONSOLE_ISOLATION=CONFLICT",
+            "why": "console isolation remains classified as conflict"
+          },
+          {
+            "token": "PCI[17] 0000:0f:00.0 1002:13c0 SUB=1462:7e56 CLASS=0300 ROOTPORT=0 PRIMARY=00 BUSWINDOW=00-00 BY_DRIVER=1 KNOWN=1 AGENT=0x75227d98 PATH=28",
+            "why": "the AMD iGPU remains enumerated as a PCI display function"
+          },
+          {
+            "token": "GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 PCI_INDEX=1 PARENT=0 ROOT_PORT=0 DEPTH=1 ANCESTRY=1 ROOT_VALID=1 GOP_COUNT=0",
+            "why": "the 4090 remains enumerated without a GOP"
+          },
+          {
+            "token": "GPU[1] BDF=0000:04:00.0 ID=10de:220a SUB=19da:b612 PCI_INDEX=5 PARENT=4 ROOT_PORT=2 DEPTH=3 ANCESTRY=1 ROOT_VALID=1 GOP_COUNT=1",
+            "why": "the 3080 is associated with the sole GOP"
+          },
+          {
+            "token": "NVIDIA_GPU_COUNT=2 INDEPENDENT_GOP_COUNT=0 INDEPENDENT_CONOUT_MATCH=0 NVIDIA_CONOUT_MATCH=1 GOP_UNMATCHED=0 INDEPENDENT_CONSOLE_ASSOCIATION=0 CONOUT_WITHOUT_GOP=0 CONOUT_UNMATCHED=0 CONOUT_AMBIGUOUS=0",
+            "why": "no independent GOP/console association is present and ConOut matches NVIDIA"
+          },
+          {
+            "token": "TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1",
+            "why": "the final topology verdict retains the NVIDIA ConOut blocker"
+          },
+          {
+            "token": "PCI_LINK_NODE BDF=0000:04:00.0 OBS=VALID SIDE_LOCAL=1 READ_ONLY=1 PCIE_CAP=0x78 TYPE=1 ASPM=2 SPEED=4 WIDTH=4 MAX_SPEED=4 MAX_WIDTH=16 TRAINING=0 DLL_ACTIVE=0 DEVICE_ERRORS=9",
+            "why": "the 3080 still reports ASPM=2 and Gen4 x4 negotiated"
+          },
+          {
+            "token": "NVIDIA_TEXTOUT_SUMMARY[5,0,1] DRIVER_EDGES=1 UNRESOLVED=0 FREE_STATUS=0 STATUS=OBSERVED_ONLY NO_STOP_EVIDENCE=1",
+            "why": "the observed GOP TextOut ownership graph is explicitly not Stop evidence"
+          },
+          {
+            "token": "DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0",
+            "why": "the capture is complete with no dropped or overflowing lines"
+          }
+        ],
+        "history": "Read-only topology run after cold boot with PEG selected and iGPU/4090 reported headless. AMD iGPU PCI function is enumerated but has no GOP; the 4090 is enumerated with GOP_COUNT=0. The 3080 has the sole GOP and is the only configured ConOut and ErrOut path. Compared with run 0018 (IGD with both GPUs headless), observed GOP and configured-console path membership are unchanged. Console isolation and final topology verdict remain CONFLICT. The 3080 reports ASPM=2, Gen4 x4. GOP/TextOut opener information is observed-only and not Stop evidence. No GPU was changed and no controller was stopped.",
+        "does_not_show": "the physical display receiving console text with certainty; a usable AMD headless GOP; safe release or mutation of the display-active 3080; or resolution of the 3080 ASPM blocker."
       }
     ]
   },

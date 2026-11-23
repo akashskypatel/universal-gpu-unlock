@@ -256,14 +256,37 @@ text to the 3080 under every boot condition, nor does it make a display-active
 function reports ASPM=0. No firmware source change is indicated by this
 read-only capture.
 
-**Next discriminating read-only test:** use the documented BIOS primary-adapter
-control as an A/B check. Keep the iGPU and 4090 headless and retain the same
-monitor connections on the 3080; change only `Initiate Graphic Adapter` from
-`IGD` to `PEG`, cold boot, and rerun the saved-log topology diagnostic. Compare
-GOP ownership and `ConOut`/`ErrOut` path membership with run `0018`. Do not
-change ASPM or run any Stop, preparation, or actuation image. Regardless of
-whether PEG changes the log, the active-3080 console and ASPM conditions remain
-unresolved safety gates.
+The planned headless A/B check was run as `0021`: with only the BIOS selector
+changed to `PEG`, and iGPU/4090 still headless, the GOP and configured console
+paths remain 3080-only. See the next section for the result and next test.
+
+## Headless iGPU with PEG selected: run 0021
+
+The operator cold-booted after changing `Initiate Graphic Adapter` from `IGD`
+to `PEG`, keeping the iGPU and RTX 4090 headless. As in `0018`, the AMD iGPU
+(`0000:0f:00.0`) is still enumerated in PCI topology but has no GOP. The only GOP
+and the sole configured `ConOut` and `ErrOut` path belong to the RTX 3080
+(`0000:04:00.0`). The 4090 (`0000:01:00.0`) is still enumerated with no GOP.
+Thus, in this headless-iGPU arrangement, changing IGD to PEG did not change the
+observed GOP or configured console-path membership. The diagnostic retains
+`ERROR_CONSOLE_ISOLATION=CONFLICT` and
+`TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1`; this is not proof of the
+physical display receiving output or of exclusive firmware-console ownership.
+
+The 3080 still reports `ASPM=2`, Gen4 x4. The read-only diagnostic also records
+NVIDIA GOP/TextOut opener/driver information as observed-only; that is not
+Stop-safety evidence and does not resolve the console blocker. No source change
+was warranted.
+
+**Next discriminating read-only case:** keep `PEG` selected and the 4090
+headless, temporarily attach one display to the iGPU while leaving a display
+on the 3080, then cold-boot and rerun the saved-log topology diagnostic. This
+checks whether an attached iGPU display exposes an AMD GOP under PEG, and whether
+it changes configured `ConOut`/`ErrOut`, compared with run `0017` (IGD with an
+iGPU display attached). Do not change ASPM or run any Stop, preparation, or
+actuation image. Even an AMD GOP or altered console-variable paths would not by
+itself establish that display-active 3080 release is safe; the ASPM blocker
+remains unresolved.
 
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 
