@@ -1,7 +1,7 @@
 name: GPU discovery and gated active preparation verification
 on:
   push:
-    branches: [main]
+    branches: [main, 'arena/**']
     paths:
       - 'src/**'
       - 'tests/**'
@@ -651,6 +651,24 @@ jobs:
             'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=128 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'SELECTION_EFI_COMPILE_EXIT=0 ACTIVE_ENTRYPOINTS_COMPILED=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Compile the explicitly owner-authorized Stop/reconnect-only EFI.
+            # No firmware transaction is linked. The runtime build selects live
+            # NVIDIA PCI devices and requires the mandatory USB file log.
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime app compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI)){throw 'Stop-only runtime EFI missing'}
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp -SelectionBdf '0000:09:02.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only one-card app compilation failed'}
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only two-card app compilation failed'}
+            # Only the runtime-select-all build is packaged as an experimental
+            # USB boot image. The synthetic BDF builds remain compile checks.
+            $bootDir = '.\src\build\stop-release-usb\EFI\BOOT'
+            New-Item -ItemType Directory -Path $bootDir -Force | Out-Null
+            Copy-Item -LiteralPath .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI -Destination (Join-Path $bootDir 'BOOTX64.EFI')
+            $bootHash = (Get-FileHash -LiteralPath (Join-Path $bootDir 'BOOTX64.EFI') -Algorithm SHA256).Hash
+            "UNSIGNED=1 NOT_PRODUCTION_VERIFIED=1 STOP_RELEASE_ONLY=1 FIRMWARE_TRANSACTION=0 ASPM_ADMISSION_BYPASSED=1 FILE_ONLY_OUTPUT=1 SHA256=$bootHash" | Out-File -Encoding ascii -FilePath '.\src\build\stop-release-usb\IMAGE-STATUS.txt'
+            'STOP_ONLY_RUNTIME_EFI=COMPILED UNSIGNED=1 NOT_PRODUCTION_VERIFIED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
           } catch {
             "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
@@ -712,4 +730,12 @@ jobs:
           path: |
             src/build/GPU-ACTIVE-PREP-*.EFI
             src/build_dxe/GPU-ACTIVE-PREP-DXE-*.efi
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: success() && startsWith(github.ref, 'refs/heads/arena/')
+        with:
+          name: experimental-stop-release-reattach-unsigned-${{ github.sha }}
+          path: src/build/stop-release-usb/**
+          retention-days: 3
           if-no-files-found: error
