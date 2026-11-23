@@ -388,9 +388,10 @@ The catalogue stages it as `EFI\\BOOT\\BOOTX64.EFI` with
 -AcceptActuatingDeploy`
 (after verifying G: is the intended USB). With no BDF arguments, the application
 selects every supported NVIDIA GPU discovered at boot. To restrict it to a
-specific ordered subset, supply `-SelectionBdfs '<BDF1>,<BDF2>'` with two or more
-BDFs from that machine's read-only inventory; the image embeds and reports that
-exact sequence. Either mode follows the same Stop/release-only flow, preloads
+specific target or ordered subset, supply `-SelectionBdf '<BDF>'` for one
+BDF or `-SelectionBdfs '<BDF1>,<BDF2>'` for multiple BDFs from that machine's
+read-only inventory; the image embeds and reports that exact selection. Either
+mode follows the same Stop/release-only flow, preloads
 and retains the pinned Windows handoff, then starts Windows only after the
 sequence verifies. This application has also not been built, signed, staged,
 or exercised on hardware here.

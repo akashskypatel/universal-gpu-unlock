@@ -122,8 +122,13 @@ Print the catalogue and exit. Nothing is built, signed or staged.
     -StageDrive G -AcceptActuatingDeploy
 
 .EXAMPLE
-# Optional fixed ordered subset: replace these placeholders with two or more
-# BDFs from the target machine's current read-only inventory.
+# Optional fixed target: one BDF or an ordered list from the target machine's
+# current read-only inventory. Replace these placeholders before running.
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
+    -SelectionBdf '<BDF>' -StageDrive G -AcceptActuatingDeploy
+
+.EXAMPLE
+# Optional fixed ordered sequence of multiple targets.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
     -SelectionBdfs '<BDF1>,<BDF2>' -StageDrive G -AcceptActuatingDeploy
 
@@ -643,9 +648,6 @@ function Test-VariantSelection($Variant) {
     # image under a name this catalogue gives to a different variant.
     $count = Get-SelectionCount
     $needs = $null
-    if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and $count -eq 1) {
-        return 'NEEDS_TWO_OR_MORE_BDFS'
-    }
     if ($Variant.PSObject.Properties.Name -contains 'requires_selection') { $needs = $Variant.requires_selection }
     if ($needs -eq 'single' -and $count -ne 1) {
         if ($count -eq 0) { return 'NEEDS_SELECTION' }
@@ -669,7 +671,7 @@ function Test-VariantSelection($Variant) {
 
 function Get-VariantBinary($Variant) {
     if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
-        (Get-SelectionCount) -ge 2) {
+        (Get-SelectionCount) -ge 1) {
         $label = [string]$script:SelectionSpec.Label
         if ($Variant.family -eq 'prepare-dxe') {
             return "GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-$label.efi"
@@ -698,7 +700,7 @@ function Build-VariantArguments($Variant) {
         }
     }
     if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
-        (Get-SelectionCount) -ge 2) {
+        (Get-SelectionCount) -ge 1) {
         [void]$arguments.Remove('RuntimeSelection')
         if ($SelectionBdf) { $arguments['SelectionBdf'] = $SelectionBdf }
         else { $arguments['SelectionBdfs'] = $SelectionBdfs }
@@ -1089,7 +1091,7 @@ try {
                 # and is refused instead of being matched literally.
                 $attestation = $declared.Replace('<selection-count>', [string](Get-SelectionCount))
                 if ($variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
-                    (Get-SelectionCount) -ge 2) {
+                    (Get-SelectionCount) -ge 1) {
                     $attestation = $attestation.Replace('RUNTIME_SELECTION=1', 'RUNTIME_SELECTION=0')
                     $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION',
                         ('TARGET_ORDER=' + ($script:SelectionSpec.Locations -join ',')))

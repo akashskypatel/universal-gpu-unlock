@@ -88,8 +88,8 @@ try {
         if (-not $AcceptUnverifiedActuation) {
             throw '-StopReleaseOnlyBench requires -AcceptUnverifiedActuation.'
         }
-        if (-not $RuntimeSelection -and $selection.Count -lt 2) {
-            throw '-StopReleaseOnlyBench with compiled targets requires at least two BDFs; omit BDFs for live inventory selection.'
+        if (-not $RuntimeSelection -and $selection.Count -lt 1) {
+            throw '-StopReleaseOnlyBench with compiled targets requires at least one BDF; omit BDFs for live inventory selection.'
         }
     }
 
