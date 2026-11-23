@@ -924,6 +924,33 @@ static EFI_STATUS ReadConfigMode(UINT32 c[64],BOOLEAN permit_initial_master) {
   return s;
 }
 static EFI_STATUS ReadConfig(UINT32 c[64]) {return ReadConfigMode(c,FALSE);}
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+/* A successful ConnectController is not proof that the same PCI function
+ * was recognized. Read the current BDF and immutable device/class/subsystem
+ * identity without a new exclusive claim. PCI command/status is dynamic. */
+static EFI_STATUS ReattachedTargetPciRecognized(VOID) {
+  UINT32 c[64]={0};
+  EFI_STATUS s=ReadConfigMode(c,TRUE);
+  if(s!=EFI_SUCCESS) {
+    GuLog("MSI reattach PCI identity refused: READ_STATUS=%#llx\n",
+          (unsigned long long)s);
+    return s;
+  }
+  if(c[0]!=Plan.config[0]||
+     (c[2]&0xffffff00U)!=(Plan.config[2]&0xffffff00U)||
+     c[0x2cU/4U]!=Plan.config[0x2cU/4U]) {
+    GuLog("MSI reattach PCI identity refused: BEFORE=%#x AFTER=%#x "
+          "CLASS_BEFORE=%#x CLASS_AFTER=%#x SUB_BEFORE=%#x SUB_AFTER=%#x\n",
+          Plan.config[0],c[0],Plan.config[2],c[2],
+          Plan.config[0x2cU/4U],c[0x2cU/4U]);
+    return EFI_COMPROMISED_DATA;
+  }
+  GuLog("MSI reattach target PCI recognized: DEVICE=%#x "
+        "CLASS=%#x SUB=%#x SAME_FUNCTION=1\n",
+        c[0],c[2],c[0x2cU/4U]);
+  return EFI_SUCCESS;
+}
+#endif
 /* RUN0002 did not identify PCI drift: do not assume it caused the stop.
  * Retain v0.5.0's narrow rule: only preexisting CED/URD may clear after FLR. */
 static BOOLEAN ConfigStable(const UINT32 c[64]) {
@@ -1896,6 +1923,7 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
   if(s==EFI_SUCCESS)s=Gops(FALSE);
   if(s==EFI_SUCCESS)s=ReattachedDriversVerified();
+  if(s==EFI_SUCCESS)s=ReattachedTargetPciRecognized();
   if(s==EFI_SUCCESS)s=Alive();
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
@@ -2042,6 +2070,7 @@ BOOLEAN GuMsiVerifyFinalGraph(VOID) {
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
   if(s==EFI_SUCCESS)s=Gops(FALSE);
   if(s==EFI_SUCCESS)s=ReattachedDriversVerified();
+  if(s==EFI_SUCCESS)s=ReattachedTargetPciRecognized();
   if(s==EFI_SUCCESS)s=Alive();
   if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
