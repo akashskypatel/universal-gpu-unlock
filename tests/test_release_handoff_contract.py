@@ -457,10 +457,13 @@ typedef struct { uint32_t Data1; uint16_t Data2,Data3; uint8_t Data4[8]; } EFI_G
 #define GU_STOP_RELEASE_ONLY_BENCH 1
 """ + records + r"""
 typedef struct { EFI_HANDLE handle; } SURVIVOR_GOP;
+typedef struct { EFI_HANDLE live_handle; } TARGET_CHILD;
 typedef struct {
   EFI_HANDLE pci,gop,self,console,input,error,nv_agent,out_agent,gfx_agent;
   SURVIVOR_GOP *survivors;
   UINTN survivor_count;
+  TARGET_CHILD *target_children;
+  UINTN target_child_count;
 } PLAN;
 static PLAN Plan;
 static GRAPH Original;
@@ -489,7 +492,7 @@ int main(void) {
   SURVIVOR_GOP survivors[]={{&survivor}};
   EDGE edges[14]={0};
   Plan=(PLAN){&pci,&gop,&self,&console,&input,&error,&agent,
-              &out_agent,&gfx_agent,survivors,1};
+              &out_agent,&gfx_agent,survivors,1,NULL,0};
   Original=(GRAPH){12,14,edges};
   for(UINTN i=0;i<12;i++){
     edges[i]=(EDGE){.handle=&pci,.agent=&agent,.controller=&child[i],
@@ -711,9 +714,8 @@ int main(void) {
         """Run the actual remapping code against new handles, lost children and duplicates."""
         start = SOURCE.index("static EFI_HANDLE ReattachedChild(")
         stop = SOURCE.index("static BOOLEAN KnownReattachedEdge(", start)
-        identity = SOURCE[start:stop]  # ReattachedChild and SameReattachedEdge
-        reconcile = ("static EFI_STATUS ReconcileTargetChildren(VOID) {" +
-                     function_body("ReconcileTargetChildren") + "}\n")
+        identity = SOURCE[start:stop]  # ReattachedChild, ReconcileTargetChildren, SameReattachedEdge
+        reconcile = ""  # The preceding source slice already contains the real function.
         program = r"""
 #include <stdint.h>
 #include <stddef.h>
