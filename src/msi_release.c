@@ -1232,6 +1232,176 @@ static EFI_STATUS Consumers(VOID) {
   }
   return EFI_SUCCESS;
 }
+/* Stop-only reattachment identity: stable full PCI child paths, not the
+ * firmware's allocation addresses. All GPU binding roles remain protected. */
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+static EFI_STATUS TargetChildBaseline(VOID) {
+  if(Plan.target_children||Plan.target_child_count||Plan.target_child_capacity)
+    return EFI_ALREADY_STARTED;
+  UINTN count=0;
+  for(UINTN i=0;i<Original.count;i++) {
+    const EDGE *e=&Original.edges[i];
+    if(e->handle==Plan.pci&&e->agent==Plan.nv_agent&&
+       Guid(&e->protocol,&PathGuid)&&
+       e->attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER&&e->count==1&&
+       e->controller&&e->controller!=Plan.console&&e->controller!=Plan.error)
+      count++;
+  }
+  if(count>TARGET_CHILD_LIMIT)return EFI_BAD_BUFFER_SIZE;
+  if(!count)return Plan.headless?EFI_SUCCESS:EFI_NOT_READY;
+  TARGET_CHILD *saved=GuAlloc(count*sizeof(*saved));
+  if(!saved)return Gu.cpu_pool_failure_status!=EFI_SUCCESS?
+    Gu.cpu_pool_failure_status:EFI_OUT_OF_RESOURCES;
+  memset(saved,0,count*sizeof(*saved));
+  Plan.target_children=saved;Plan.target_child_capacity=count;
+  UINTN gops=0;
+  for(UINTN i=0;i<Original.count;i++) {
+    const EDGE *e=&Original.edges[i];
+    if(e->handle!=Plan.pci||e->agent!=Plan.nv_agent||
+       !Guid(&e->protocol,&PathGuid)||
+       e->attributes!=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER||e->count!=1||
+       !e->controller||e->controller==Plan.console||
+       e->controller==Plan.error)continue;
+    EFI_DEVICE_PATH_PROTOCOL *p=NULL;BOOLEAN on_target=FALSE;
+    EFI_STATUS s=GopOnTarget(e->controller,&on_target);
+    if(s!=EFI_SUCCESS||!on_target)return s==EFI_SUCCESS?EFI_ACCESS_DENIED:s;
+    s=Interface(e->controller,&PathGuid,(VOID **)&p);
+    if(s!=EFI_SUCCESS||!p)return s==EFI_SUCCESS?EFI_NOT_READY:s;
+    UINTN n=(UINTN)GuDevicePathLength((const unsigned char *)p,4096u);
+    if(!n||n>MAX_SURVIVOR_PATH_BYTES)return EFI_BAD_BUFFER_SIZE;
+    for(UINTN k=0;k<Plan.target_child_count;k++)
+      if(saved[k].old_handle==e->controller||
+         (saved[k].path_bytes==n&&Equal(saved[k].path,p,n)))
+        return EFI_COMPROMISED_DATA;
+    TARGET_CHILD *entry=&saved[Plan.target_child_count++];
+    entry->old_handle=e->controller;entry->path_bytes=n;
+    entry->is_gop=e->controller==Plan.gop;
+    memcpy(entry->path,p,n);
+    if(entry->is_gop)gops++;
+  }
+  if(Plan.target_child_count!=count||
+     (!!gops!=!!Plan.gop)||gops>1)return EFI_NOT_READY;
+  GuLog("MSI target child baseline: count=%zu target_gops=%zu paths=COMPLETE\n",
+        (size_t)count,(size_t)gops);
+  return EFI_SUCCESS;
+}
+static EFI_HANDLE ReattachedChild(EFI_HANDLE previous) {
+  for(UINTN i=0;i<Plan.target_child_count;i++)
+    if(Plan.target_children[i].old_handle==previous)
+      return Plan.target_children[i].live_handle;
+  return previous;
+}
+static EFI_STATUS ReconcileTargetChildren(VOID) {
+  if(!Plan.reconnecting||Plan.stage!=0)return EFI_NOT_READY;
+  for(UINTN i=0;i<Plan.target_child_count;i++)
+    Plan.target_children[i].live_handle=NULL;
+  for(UINTN i=0;i<Current.count;i++) {
+    const EDGE *e=&Current.edges[i];
+    if(e->handle!=Plan.pci||!Guid(&e->protocol,&PathGuid)||
+       e->attributes!=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER||
+       e->count!=1||!e->controller)continue;
+    EFI_DEVICE_PATH_PROTOCOL *p=NULL;BOOLEAN on_target=FALSE;
+    EFI_STATUS s=GopOnTarget(e->controller,&on_target);
+    if(s!=EFI_SUCCESS)return s;
+    if(!on_target)continue;
+    s=Interface(e->controller,&PathGuid,(VOID **)&p);
+    if(s!=EFI_SUCCESS||!p)return s==EFI_SUCCESS?EFI_NOT_READY:s;
+    UINTN found=Plan.target_child_count;
+    for(UINTN k=0;k<Plan.target_child_count;k++) {
+      const TARGET_CHILD *r=&Plan.target_children[k];
+      if(GuDevicePathUnchanged(r->path,(size_t)r->path_bytes,
+             (const unsigned char *)p,4096u)) {
+        if(found!=Plan.target_child_count)return EFI_COMPROMISED_DATA;
+        found=k;
+      }
+    }
+    if(found==Plan.target_child_count) {
+      GuLog("MSI reattach child refused: REASON=UNKNOWN_TARGET_PATH "
+            "LIVE=%#llx AGENT=%#llx\n",
+            (unsigned long long)(UINTN)e->controller,
+            (unsigned long long)(UINTN)e->agent);
+      return EFI_ACCESS_DENIED;
+    }
+    TARGET_CHILD *r=&Plan.target_children[found];
+    if(e->agent!=Plan.nv_agent||r->live_handle) {
+      GuLog("MSI reattach child refused: REASON=AGENT_OR_DUPLICATE "
+            "OLD=%#llx LIVE=%#llx OLD_AGENT=%#llx NEW_AGENT=%#llx\n",
+            (unsigned long long)(UINTN)r->old_handle,
+            (unsigned long long)(UINTN)e->controller,
+            (unsigned long long)(UINTN)Plan.nv_agent,
+            (unsigned long long)(UINTN)e->agent);
+      return EFI_ACCESS_DENIED;
+    }
+    for(UINTN k=0;k<Plan.target_child_count;k++)
+      if(Plan.target_children[k].live_handle==e->controller)
+        return EFI_COMPROMISED_DATA;
+    r->live_handle=e->controller;
+  }
+  for(UINTN k=0;k<Plan.target_child_count;k++) {
+    const TARGET_CHILD *r=&Plan.target_children[k];
+    if(!r->live_handle) {
+      GuLog("MSI reattach child missing: OLD=%#llx GOP=%u PATH_BYTES=%zu\n",
+            (unsigned long long)(UINTN)r->old_handle,
+            (unsigned)r->is_gop,(size_t)r->path_bytes);
+      return EFI_NOT_READY;
+    }
+    GuLog("MSI reattach child path matched: OLD=%#llx LIVE=%#llx "
+          "GOP=%u FULL_PATH=1 SAME_HANDLE=%u\n",
+          (unsigned long long)(UINTN)r->old_handle,
+          (unsigned long long)(UINTN)r->live_handle,
+          (unsigned)r->is_gop,(unsigned)(r->old_handle==r->live_handle));
+  }
+  return EFI_SUCCESS;
+}
+static BOOLEAN SameReattachedEdge(const EDGE *a,const EDGE *b) {
+  return b->handle==ReattachedChild(a->handle)&&
+    b->controller==ReattachedChild(a->controller)&&
+    a->agent==b->agent&&a->attributes==b->attributes&&
+    a->count==b->count&&Guid(&a->protocol,&b->protocol);
+}
+static BOOLEAN KnownReattachedEdge(const EDGE *e) {
+  for(UINTN i=0;i<Original.count;i++)
+    if(SameReattachedEdge(&Original.edges[i],e))return TRUE;
+  return FALSE;
+}
+static BOOLEAN ReattachedGraphExpected(VOID) {
+  if(!Plan.reconnecting||Plan.stage!=0)return FALSE;
+  for(UINTN i=0;i<Original.count;i++) {
+    const EDGE *o=&Original.edges[i];
+    if(!ProtectedEdge(o))continue;
+    UINTN matches=0;
+    for(UINTN j=0;j<Current.count;j++)
+      if(SameReattachedEdge(o,&Current.edges[j]))matches++;
+    if(matches!=1&&!(matches==0&&UsbRemoved(i))) {
+      NoteEdge("reattach-missing-or-duplicate",o);
+      return FALSE;
+    }
+  }
+  for(UINTN j=0;j<Current.count;j++) {
+    const EDGE *e=&Current.edges[j];
+    if(!KnownReattachedEdge(e)&&ProtectedEdge(e)&&!PointerAddition(e)){
+      NoteEdge("reattach-foreign",e);return FALSE;
+    }
+    for(UINTN k=j+1;k<Current.count;k++)
+      if(SameEdge(e,&Current.edges[k])){NoteEdge("reattach-duplicate",e);return FALSE;}
+  }
+  return TRUE;
+}
+static EFI_STATUS ReattachedDriversVerified(VOID) {
+  for(UINTN role=0;role<3;role++) {
+    EFI_STATUS s=Driver(role);
+    if(s!=EFI_SUCCESS)return s;
+  }
+  for(UINTN i=0;i<Original.count;i++) {
+    const EDGE *e=&Original.edges[i];
+    if(!e->idle_output||!Guid(&e->protocol,&EdidDiscoveredGuid))continue;
+    EFI_STATUS s=ValidateDriverAgent(e->agent,3U);
+    if(s!=EFI_SUCCESS)return s;
+  }
+  GuLog("MSI reattach drivers verified: NVIDIA=1 GRAPHICS=1 TEXT=1 EDID=1\n");
+  return EFI_SUCCESS;
+}
+#endif
 EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(!ReleaseOwnerMatches())return EFI_NOT_READY;
   /* A failed preflight may have observed or modified driver context.
@@ -1326,6 +1496,10 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
     if(s!=EFI_SUCCESS)GuLog("Preflight refused active survivor console graph: %#llx\n",(unsigned long long)s);
   }
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(s==EFI_SUCCESS) { s=TargetChildBaseline(); if(s!=EFI_SUCCESS)
+    GuLog("Preflight failed at TargetChildBaseline(): %#llx\n",(unsigned long long)s); }
+#endif
   if(s==EFI_SUCCESS) { s=PointerBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at PointerBaseline(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=UsbBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at UsbBaseline(): %#llx\n", (unsigned long long)s); }
   GuLog("MSI preflight: status=%#llx graph=%zu code_profiles=3\n",(unsigned long long)s,(size_t)Original.count);
