@@ -21,7 +21,13 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         cls.execution = (SRC / "unlock_execution.c").read_text(encoding="utf-8")
         cls.port_source = (SRC / "port.c").read_text(encoding="utf-8")
         cls.sign_deploy = (SRC / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
+        cls.selection_builder = (SRC / "Gpu-Selection-Build.ps1").read_text(encoding="utf-8")
         cls.catalog = json.loads((ROOT / "docs/image_variants.json").read_text(encoding="utf-8"))
+
+    def test_plural_selection_argument_accepts_a_single_bdf(self):
+        self.assertIn("[ValidateRange(1,128)][int]$MaximumTargets", self.selection_builder)
+        self.assertIn("$requested.Count -lt 1", self.selection_builder)
+        self.assertIn("requires 1-$MaximumTargets comma-separated PCI locations", self.selection_builder)
 
     def test_override_requires_explicit_ordered_unverified_actuation_and_file_only(self):
         block = self.port.split("#if defined(GU_UNVERIFIED_BENCH_CONDITIONS)", 1)[1].split("#endif", 1)[0]

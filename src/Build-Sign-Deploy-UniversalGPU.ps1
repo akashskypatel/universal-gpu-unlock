@@ -122,8 +122,8 @@ Print the catalogue and exit. Nothing is built, signed or staged.
     -StageDrive G -AcceptActuatingDeploy
 
 .EXAMPLE
-# Optional fixed target: one BDF or an ordered list from the target machine's
-# current read-only inventory. Replace these placeholders before running.
+# Optional fixed target: one BDF via -SelectionBdf or -SelectionBdfs, or an
+# ordered list via -SelectionBdfs. Replace these placeholders before running.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
     -SelectionBdf '<BDF>' -StageDrive G -AcceptActuatingDeploy
 
@@ -1261,7 +1261,7 @@ try {
 
     if ($skippedCount) {
         $hint = ('SKIPPED_HINT {0} variants needed different arguments: -SelectionBdf builds the ' +
-                 'single-target images, -SelectionBdfs with two or more builds the sequence ones, ' +
+                 'single-target images, -SelectionBdfs accepts one or more and two or more builds the sequence ones, ' +
                  '-WindowsEspGuid builds the handoff ones. Run -All again with the other selection.')
         Say ($hint -f $skippedCount)
     }
