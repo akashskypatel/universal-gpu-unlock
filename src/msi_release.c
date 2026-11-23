@@ -36,6 +36,17 @@ typedef struct {
   UINTN path_bytes;
   BOOLEAN seen;
 } SURVIVOR_GOP;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+/* Saved before Stop. Never read the old child handle after firmware removes it.
+ * A new handle is accepted only with the same full PCI child device path. */
+#define TARGET_CHILD_LIMIT 128U
+typedef struct {
+  EFI_HANDLE old_handle,live_handle;
+  UINT8 path[MAX_SURVIVOR_PATH_BYTES];
+  UINTN path_bytes;
+  BOOLEAN is_gop;
+} TARGET_CHILD;
+#endif
 
 #define GRAPH_EDGE_LIMIT 16384
 #define GRAPH_INITIAL_CAPACITY 64
@@ -57,6 +68,11 @@ typedef struct {
   SURVIVOR_GOP *survivors;
   UINTN survivor_count,survivor_capacity;
   BOOLEAN survivor_baseline_valid;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  TARGET_CHILD *target_children;
+  UINTN target_child_count,target_child_capacity;
+  BOOLEAN reconnecting;
+#endif
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized,reattach_verified;
   BOOLEAN consoleless_target_gop;
 } PLAN;
@@ -102,6 +118,16 @@ static BOOLEAN SurvivorStorageOwned(const GU_PLATFORM *platform,const PLAN *plan
 }
 /* Prove pool membership before dereferencing a retained release record.
  * This also works on a completed inactive platform without rebinding it. */
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+static BOOLEAN TargetChildStorageOwned(const GU_PLATFORM *platform,const PLAN *plan) {
+  if(plan->target_child_count>plan->target_child_capacity||
+     plan->target_child_capacity>TARGET_CHILD_LIMIT||
+     !!plan->target_children!=!!plan->target_child_capacity)return FALSE;
+  return !plan->target_child_capacity||
+    GuCpuPoolOwns(platform,plan->target_children,
+                  plan->target_child_capacity*sizeof(*plan->target_children));
+}
+#endif
 static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
   if(!platform||platform->release_owner_invalid||!platform->release_state_reserved||
      !platform->bs||!platform->pci||!platform->handle||!platform->image)return FALSE;
@@ -112,6 +138,14 @@ static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
     state->owner_image==platform->image&&
     GraphStorageOwned(platform,&state->original)&&GraphStorageOwned(platform,&state->current)&&
     SurvivorStorageOwned(platform,&state->plan)&&
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    TargetChildStorageOwned(platform,&state->plan)&&
+    (const VOID *)state->plan.target_children!=state&&
+    (!state->plan.target_children||
+      ((const VOID *)state->plan.target_children!=state->original.edges&&
+       (const VOID *)state->plan.target_children!=state->current.edges&&
+       (const VOID *)state->plan.target_children!=state->plan.survivors))&&
+#endif
     (const VOID *)state->original.edges!=state&&(const VOID *)state->current.edges!=state&&
     (const VOID *)state->plan.survivors!=state&&
     (!state->original.edges||state->original.edges!=state->current.edges)&&
@@ -282,6 +316,10 @@ static BOOLEAN Removed(const EDGE *e,UINTN stage) {
  * A protocol GUID alone never authorizes access to the GPU or its owners. */
 static BOOLEAN ProtectedHandle(EFI_HANDLE h) {
   if(!h)return FALSE;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  for(UINTN k=0;k<Plan.target_child_count;k++)
+    if(Plan.target_children[k].live_handle==h)return TRUE;
+#endif
   if(h==Plan.pci||h==Plan.gop||h==Plan.self||
      GuIsPreparedPeerHandle(h)||
      h==Plan.console||h==Plan.input||h==Plan.error)return TRUE;
@@ -599,11 +637,30 @@ static EFI_STATUS Gops(BOOLEAN first) {
         Plan.gop_interface=g;
         Plan.mode=*g->Mode;
         Plan.info=*g->Mode->Info;
-      } else if(Plan.stage>=3 || Plan.headless || handles[i]!=Plan.gop ||
-                g!=Plan.gop_interface||
-                !Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||
-                !Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))) {
-        s=EFI_NOT_READY;break;
+      } else {
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+        BOOLEAN remapped=FALSE;
+        if(Plan.reconnecting&&Plan.stage==0) {
+          for(UINTN k=0;k<Plan.target_child_count;k++)
+            if(Plan.target_children[k].is_gop&&
+               Plan.target_children[k].live_handle==handles[i])
+              remapped=TRUE;
+          if(!remapped||!g->Mode->MaxMode||
+             g->Mode->Mode>=g->Mode->MaxMode||
+             !g->Mode->Info->HorizontalResolution||
+             !g->Mode->Info->VerticalResolution||
+             g->Mode->Info->PixelsPerScanLine<
+               g->Mode->Info->HorizontalResolution) {
+            s=EFI_NOT_READY;break;
+          }
+        } else
+#endif
+        if(Plan.stage>=3 || Plan.headless || handles[i]!=Plan.gop ||
+           g!=Plan.gop_interface||
+           !Equal(g->Mode,&Plan.mode,sizeof(Plan.mode))||
+           !Equal(g->Mode->Info,&Plan.info,sizeof(Plan.info))) {
+          s=EFI_NOT_READY;break;
+        }
       }
     } else {
       EFI_DEVICE_PATH_PROTOCOL *live_path=NULL;
