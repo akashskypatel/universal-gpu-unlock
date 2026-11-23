@@ -13,6 +13,7 @@
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
 #include "gpu_discovery.h"
 #include "gpu_selection.h"
+#include "msi_release.h"
 #endif
 
 #include "boot_profile.h"
@@ -217,14 +218,21 @@ EFI_STATUS GuBootBenchCountdown(VOID) {
     return EFI_UNSUPPORTED;
   }
   EFI_STATUS text_status=BenchBuildTargetText(targets,GU_STOP_BENCH_TARGET_TEXT_CHARS);
-  EFI_STATUS display=text_status==EFI_SUCCESS?
-    BenchWriteConsole(prefix,targets,suffix):text_status;
-  GuLog("BENCH_WARNING=%s CONSOLE=BEST_EFFORT TARGET_COUNT=%zu "
+  if(text_status!=EFI_SUCCESS)return text_status;
+  /* Multi-target warnings use a non-target NVIDIA GOP directly.
+   * System text output may be bound to the GPU that will be stopped. */
+  EFI_STATUS display=count>1U?
+    GuMsiStopReleaseWarnSurvivor():
+    BenchWriteConsole(prefix,targets,suffix);
+  GuLog("BENCH_WARNING=%s CONSOLE=%s TARGET_COUNT=%zu "
         "DISPLAY_STATUS=%#llx FILE_LOG=AUTHORITATIVE DELAY_US=3000000 "
-        "GPU_ACTION=GATED\n",
-        display==EFI_SUCCESS?"DISPLAYED":"CONSOLE_NOT_SHOWN",count,
-        (unsigned long long)display);
+        "GPU_ACTION=%s\n",
+        display==EFI_SUCCESS?"DISPLAYED":"CONSOLE_NOT_SHOWN",
+        count>1U?"NON_TARGET_NVIDIA_GOP":"BEST_EFFORT",count,
+        (unsigned long long)display,
+        count>1U&&display!=EFI_SUCCESS?"REFUSED":"GATED");
   if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
+  if(count>1U&&display!=EFI_SUCCESS)return display;
   /* Even when no firmware console is available, the delay is mandatory. */
   EFI_STATUS delay=Table->BootServices->Stall(3000000U);
   if(delay!=EFI_SUCCESS)
