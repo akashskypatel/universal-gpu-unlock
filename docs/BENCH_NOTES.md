@@ -203,6 +203,31 @@ choice for `04:00.0`: PCH-side ASPM control, a documented chipset-link Link
 Control write, or single-target-only operation. No BIOS setting or link write
 was changed based on these captures.
 
+## Primary graphics adapter selection: documented BIOS control
+
+The attached AMD 800-series BIOS user guide (p. 31) documents
+`Advanced -> Integrated Graphics Configuration -> Initiate Graphic Adapter`,
+with `IGD` (Integrated Graphics Display) and `PEG` (PCI-Express Graphics
+Device) choices; it says this selects the primary boot graphics device. The
+attached System Status screenshot identifies the bench board as MSI B850
+Gaming Plus WiFi (MS-7E56), BIOS `E7E56AMSI.1AA3`, build date 2026-09-03.
+The manual cautions that available options can vary by BIOS version, so confirm
+that exact item is present before changing it.
+
+This is a documented candidate for the **next read-only console-routing test**,
+not proof that IGD selection removes NVIDIA from configured `ConOut`/`ErrOut`
+or works without an iGPU monitor. Physical run `0015` (three reported displays
+on the 3080; none on AMD/4090) captured only the 3080 GOP/console path. Run
+`0016` (one reported display on AMD and two on the 3080; none on the 4090)
+captured both GOPs and both console paths and remained `CONFLICT`. If the BIOS
+item is present, change only `Initiate Graphic Adapter` to `IGD`, keep the
+current connected-display test arrangement, cold boot, and run the saved-log
+read-only topology image. The candidate result is AMD-only `ConOut` and
+`ErrOut` with no NVIDIA matches. Do not alter ASPM or attempt a GPU action in
+this test. Only if the attached-display test shows exclusive AMD routing should
+a subsequent read-only run disconnect the iGPU monitor to test whether that
+route persists headless.
+
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 
 The uploaded topology capture `GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` puts the
