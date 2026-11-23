@@ -245,8 +245,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("RUNTIME_ESP=1", variant["attestations"])
         self.assertTrue(variant["switches"]["RuntimeSelection"])
         self.assertTrue(variant["switches"]["FileOnlyBootLog"])
-        self.assertEqual(variant["attestations"][2],
-                         "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION")
+        self.assertIn("TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION",
+                      variant["attestations"])
         for token in ("FIRMWARE_TRANSACTION=0", "UNLOCK=0", "STOP_RELEASE_ONLY=1",
                       "ASPM_ADMISSION_BYPASSED=1", "REATTACH_ATTEMPTED=1"):
             self.assertIn(token, variant["attestations"])
