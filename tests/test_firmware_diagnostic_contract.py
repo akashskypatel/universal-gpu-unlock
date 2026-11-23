@@ -119,6 +119,26 @@ class DiagnosticContract(unittest.TestCase):
         self.assertNotIn("GU_TOPO_GOP_TEXT_CYCLE",builder.split(
             "if ($SaveLog) { $flags += ' /DGU_TOPO_SAVE_LOG' }",1)[0])
 
+    def test_gop_cycle_session_guide_has_matching_manifest_and_rendered_steps(self):
+        import json
+        root=P.parent
+        manifest=json.loads((root/"docs/hardware_session.json").read_text(encoding="utf-8"))
+        catalogue=json.loads((root/"docs/image_variants.json").read_text(encoding="utf-8"))
+        candidate=next(x for x in manifest["readonly_guide"]["candidates"]
+                       if x["id"]=="diag-topology-gop-text-cycle")
+        variant=next(x for x in catalogue["variants"]
+                     if x["id"]=="diag-topology-gop-text-cycle")
+        doc=(root/"docs/DONOR_HARDWARE_SESSION.md").read_text(encoding="utf-8")
+        self.assertEqual(variant["switches"],{"SaveLog":True,"CycleGopText":True})
+        self.assertEqual(variant["binary"],
+                         "GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI")
+        self.assertIn("-Only diag-topology-gop-text-cycle",candidate["command"])
+        self.assertIn(candidate["command"],doc)
+        self.assertIn("GOP_TEXT_CYCLE_END ATTEMPTED=%zu API_SUCCEEDED=%zu",
+                      candidate["evidence"][-1]["token"])
+        self.assertIn("VISIBLE_PIXELS_VERIFIED=0",
+                      (P/"gpu_topology_efi.c").read_text(encoding="utf-8"))
+
     def test_headless_diagnostic_requires_durable_logging(self):
         source=(P/"gpu_topology_efi.c").read_text(encoding="utf-8")
         entry=source.split("EFI_STATUS EFIAPI UefiMain(",1)[1]
