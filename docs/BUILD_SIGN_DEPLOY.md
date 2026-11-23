@@ -55,8 +55,8 @@ Secure Boot off, and the signature is then only an integrity record - say so: us
 | `-Only` id | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
 | `diag-topology` | `GPU-TOPOLOGY-DIAGNOSTIC.EFI` | `read-only` | nothing | the smallest read-only image: it prints to the console and writes nothing |
-| `diag-topology-gop-text-cycle` | `GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI` | `read-only` | nothing | Explicit visual diagnostic: logs per-GOP SimpleTextOut and GOP driver image; writes only through already installed text interfaces and pauses two seconds each. Does not Stop, reconnect, set display modes, change global ConOut, or write NVRAM. Successful text API return is not proof of visible pixels. |
 | `diag-topology-log` | `GPU-TOPOLOGY-DIAGNOSTIC.EFI` | `read-only` | nothing | stage 1 of the donor session: the log this build writes is what tools/verify_run_log.py scores |
+| `diag-topology-gop-text-cycle` | `GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI` | `read-only` | nothing | Explicit visual diagnostic: logs per-GOP SimpleTextOut and GOP driver image; writes only through already installed text interfaces and pauses two seconds each. Does not Stop, reconnect, set display modes, change global ConOut, or write NVRAM. Successful text API return is not proof of visible pixels. |
 | `diag-topology-handoff` | `GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI` | `read-only` | reviewed ESP GUID | starts the pinned Windows Boot Manager after the log is saved; needs a reviewed ESP GUID |
 | `diag-selection` | `GPU-SELECTION-<label>-DIAGNOSTIC.EFI` | `read-only` | one or more BDFs | the builder refuses a selected diagnostic with Windows handoff, so this one always returns to the launch environment |
 | `diag-msi-rom` | `MSI-B850-ROM-VARIABLES-DIAGNOSTIC.EFI` | `read-only` | nothing | reads the MS-7E56 UEFI variables; cannot be combined with a GPU selection |
