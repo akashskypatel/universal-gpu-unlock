@@ -6,6 +6,15 @@
     defined(GU_ENTRY_LATCHED_SS1_FULL) || defined(GU_FULL_UNLOCK)
 #error This file may only be built as a standalone read-only diagnostic
 #endif
+/* The visible text cycle is a display-write diagnostic, not a pure
+ * descriptor read. Require a durable log and forbid firmware handoff or
+ * independent MSI hardware probes in the same image. */
+#if defined(GU_TOPO_GOP_TEXT_CYCLE) && \
+    (!defined(GU_TOPO_SAVE_LOG) || defined(GU_TOPO_WINDOWS_HANDOFF) || \
+     defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || \
+     defined(GU_MSI_B850_SEC2_UCODE1) || defined(GU_VRAM_BLOCK_PROBE))
+#error GOP text cycling requires its standalone logged diagnostic variant
+#endif
 #include <Uefi.h>
 #include <Protocol/PciIo.h>
 #include <Protocol/DevicePath.h>
