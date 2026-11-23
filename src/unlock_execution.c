@@ -228,7 +228,6 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
   if(!table||!table->BootServices||!image||!stage||
      !owner||owner!=GuPlatformActive)return EFI_INVALID_PARAMETER;
   EFI_STATUS s;
-  BOOLEAN warning_done=FALSE;
   if(GuSelectedGpuCount()>1U) {
     GuMsiStopReleaseRequireFileOnly();
     GuLog("STOP_RELEASE_OUTPUT=FILE_ONLY REASON=ORDERED_MULTI_TARGET CONSOLE_IO=0\n");
@@ -242,14 +241,9 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     GU_PHASE("stop-release-preflight");
     s=GuMsiPreflight(table,image,owner->handle);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
-    if(!warning_done) {
-      /* A selected device may be the sole live firmware display, or there may
-       * be none. The warning is best-effort; only a confirmed file log and
-       * the mandatory three-second delay authorize moving to the Stop call. */
-      s=GuBootBenchCountdown();
-      if(s!=EFI_SUCCESS)goto failed;
-      warning_done=TRUE;
-    }
+    /* Every selected GPU needs a new survivor warning and delay. */
+    s=GuBootBenchCountdown();
+    if(s!=EFI_SUCCESS)goto failed;
     GU_PHASE("stop-release");
     s=GuMsiRelease();
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
