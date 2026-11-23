@@ -77,6 +77,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
 
     def test_mandatory_warning_and_three_second_gate_precede_mutation(self):
         self.assertIn("EFI_STATUS GuBootBenchCountdown(VOID)", self.boot)
+        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(VOID)", 1)[1].split("EFI_STATUS GuBootBenchReportCompletion", 1)[0]
+        self.assertIn("size_t count=GuSelectedGpuCount();", countdown)
         for phrase in ("Live NVIDIA Stop/release and reattach test starts in 3 seconds",
                        "selected for this test", "PCI=", "go black", "disconnect, or flicker",
                        "reattachment is attempted, not guaranteed", "independent display"):

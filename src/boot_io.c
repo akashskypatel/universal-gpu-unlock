@@ -182,6 +182,7 @@ EFI_STATUS GuBootBenchCountdown(VOID) {
   static CHAR16 suffix[]=L"\r\n\r\nFirmware reattachment is attempted, not guaranteed. Displays on these cards may go black, disconnect, or flicker.\r\n"
     L"Disconnect those displays; use an independent display. Stop may hang; recovery is not verified.\r\n\r\n";
   static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
+  size_t count=GuSelectedGpuCount();
   EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
   if(s!=EFI_SUCCESS) {
     GuLog("BENCH_WARNING=NOT_SHOWN REASON=LIVE_TARGET_LIST_UNAVAILABLE STATUS=%#llx GPU_ACTION=REFUSED\n",
