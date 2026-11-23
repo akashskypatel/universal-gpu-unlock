@@ -1910,6 +1910,166 @@ BOOLEAN GuMsiReleased(VOID) {
   if(!failed)ReportAdditions();
   return !failed;
 }
+
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+/* Draw the warning through the surviving, selected NVIDIA peer's GOP.
+ * This does not call ConOut, connect any driver or write a display mode.
+ * A successful Blt confirms only a firmware API return, not visible pixels. */
+typedef struct {char symbol;UINT8 row[7];} GU_BENCH_GLYPH;
+static const GU_BENCH_GLYPH BenchGlyphs[]={
+  {'0',{0xe,0x11,0x13,0x15,0x19,0x11,0xe}},
+  {'1',{0x4,0xc,0x4,0x4,0x4,0x4,0xe}},
+  {'2',{0xe,0x11,0x1,0x2,0x4,0x8,0x1f}},
+  {'3',{0x1e,0x1,0x1,0xe,0x1,0x1,0x1e}},
+  {'4',{0x2,0x6,0xa,0x12,0x1f,0x2,0x2}},
+  {'5',{0x1f,0x10,0x10,0x1e,0x1,0x1,0x1e}},
+  {'6',{0xf,0x10,0x10,0x1e,0x11,0x11,0xe}},
+  {'7',{0x1f,0x1,0x2,0x4,0x8,0x8,0x8}},
+  {'8',{0xe,0x11,0x11,0xe,0x11,0x11,0xe}},
+  {'9',{0xe,0x11,0x11,0xf,0x1,0x1,0x1e}},
+  {'A',{0xe,0x11,0x11,0x1f,0x11,0x11,0x11}},
+  {'B',{0x1e,0x11,0x11,0x1e,0x11,0x11,0x1e}},
+  {'C',{0xf,0x10,0x10,0x10,0x10,0x10,0xf}},
+  {'D',{0x1e,0x11,0x11,0x11,0x11,0x11,0x1e}},
+  {'E',{0x1f,0x10,0x10,0x1e,0x10,0x10,0x1f}},
+  {'F',{0x1f,0x10,0x10,0x1e,0x10,0x10,0x10}},
+  {'G',{0xf,0x10,0x10,0x17,0x11,0x11,0xe}},
+  {'H',{0x11,0x11,0x11,0x1f,0x11,0x11,0x11}},
+  {'I',{0x1f,0x4,0x4,0x4,0x4,0x4,0x1f}},
+  {'J',{0x7,0x2,0x2,0x2,0x12,0x12,0xc}},
+  {'K',{0x11,0x12,0x14,0x18,0x14,0x12,0x11}},
+  {'L',{0x10,0x10,0x10,0x10,0x10,0x10,0x1f}},
+  {'M',{0x11,0x1b,0x15,0x15,0x11,0x11,0x11}},
+  {'N',{0x11,0x19,0x15,0x13,0x11,0x11,0x11}},
+  {'O',{0xe,0x11,0x11,0x11,0x11,0x11,0xe}},
+  {'P',{0x1e,0x11,0x11,0x1e,0x10,0x10,0x10}},
+  {'Q',{0xe,0x11,0x11,0x11,0x15,0x12,0xd}},
+  {'R',{0x1e,0x11,0x11,0x1e,0x14,0x12,0x11}},
+  {'S',{0xf,0x10,0x10,0xe,0x1,0x1,0x1e}},
+  {'T',{0x1f,0x4,0x4,0x4,0x4,0x4,0x4}},
+  {'U',{0x11,0x11,0x11,0x11,0x11,0x11,0xe}},
+  {'V',{0x11,0x11,0x11,0x11,0x11,0xa,0x4}},
+  {'W',{0x11,0x11,0x11,0x15,0x15,0x15,0xa}},
+  {'X',{0x11,0x11,0xa,0x4,0xa,0x11,0x11}},
+  {'Y',{0x11,0x11,0xa,0x4,0x4,0x4,0x4}},
+  {'Z',{0x1f,0x1,0x2,0x4,0x8,0x10,0x1f}},
+  {':',{0x0,0x4,0x4,0x0,0x4,0x4,0x0}},
+  {'.',{0x0,0x0,0x0,0x0,0x0,0xc,0xc}},
+  {'-',{0x0,0x0,0x0,0x1f,0x0,0x0,0x0}}
+};
+static const UINT8 *BenchGlyph(char symbol) {
+  for(UINTN i=0;i<sizeof(BenchGlyphs)/sizeof(BenchGlyphs[0]);i++)
+    if(BenchGlyphs[i].symbol==symbol)return BenchGlyphs[i].row;
+  return NULL;
+}
+static EFI_STATUS BenchGopLine(EFI_GRAPHICS_OUTPUT_PROTOCOL *g,
+                               UINTN x,UINTN y,UINTN scale,
+                               const char *line) {
+  EFI_GRAPHICS_OUTPUT_BLT_PIXEL pixels[15U*21U];
+  const EFI_GRAPHICS_OUTPUT_BLT_PIXEL white={255,255,255,0};
+  const EFI_GRAPHICS_OUTPUT_BLT_PIXEL dark={24,16,80,0};
+  if(!g||!g->Blt||!g->Mode||!g->Mode->Info||!line||
+     scale<1U||scale>3U)return EFI_INVALID_PARAMETER;
+  UINTN width=5U*scale,height=7U*scale,advance=6U*scale;
+  for(UINTN index=0;line[index];index++) {
+    if(index>80U||x+advance>g->Mode->Info->HorizontalResolution)
+      return EFI_BAD_BUFFER_SIZE;
+    if(line[index]==' ') {x+=advance;continue;}
+    const UINT8 *rows=BenchGlyph(line[index]);
+    if(!rows)return EFI_UNSUPPORTED;
+    for(UINTN dy=0;dy<height;dy++)
+      for(UINTN dx=0;dx<width;dx++)
+        pixels[dy*width+dx]=(rows[dy/scale]&(1u<<(4U-dx/scale)))?
+                             white:dark;
+    EFI_STATUS s=g->Blt(g,pixels,EfiBltBufferToVideo,0,0,x,y,
+                        width,height,width*sizeof(*pixels));
+    if(s!=EFI_SUCCESS)return s;
+    x+=advance;
+  }
+  return EFI_SUCCESS;
+}
+static char BenchHex(UINTN v) {
+  return "0123456789ABCDEF"[v&15U];
+}
+static VOID BenchHexAt(char *text,UINTN at,UINTN digits,UINTN value) {
+  for(UINTN i=0;i<digits;i++)
+    text[at+i]=BenchHex(value>>((digits-1U-i)*4U));
+}
+EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
+  if(!ReleaseOwnerMatches()||!Plan.ready||Plan.mutated||Plan.stage||
+     !Plan.survivor_baseline_valid||!GuBootLogOpen()||
+     GuSelectedGpuCount()<2U)return EFI_NOT_READY;
+  EFI_STATUS s=Gops(FALSE);
+  if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
+  if(s!=EFI_SUCCESS)return s;
+  SURVIVOR_GOP *chosen=NULL;
+  GU_GPU_RECORD selected={0};
+  for(size_t i=0;i<GuSelectedGpuCount();i++) {
+    s=GuSelectedGpuRecordAt(i,&selected);
+    if(s!=EFI_SUCCESS)return s;
+    if(selected.handle==Plan.pci)continue;
+    if((selected.pci_id&0xffffU)!=0x10deU||!selected.handle||
+       selected.pci==Gu.pci)return EFI_ACCESS_DENIED;
+    EFI_DEVICE_PATH_PROTOCOL *peer_path=NULL;
+    s=Interface((EFI_HANDLE)selected.handle,&PathGuid,(VOID **)&peer_path);
+    if(s!=EFI_SUCCESS||!peer_path)return EFI_NOT_READY;
+    UINTN matched=0;
+    for(UINTN k=0;k<Plan.survivor_count;k++) {
+      int owner=GuDevicePathHasPrefix(
+          (const unsigned char *)peer_path,4096U,
+          Plan.survivors[k].path,Plan.survivors[k].path_bytes);
+      if(owner<0)return EFI_COMPROMISED_DATA;
+      if(owner) {matched++;if(!chosen)chosen=&Plan.survivors[k];}
+    }
+    if(matched && chosen)break;
+  }
+  if(!chosen||!chosen->interface||!chosen->interface->Blt||
+     !chosen->interface->Mode||!chosen->interface->Mode->Info)
+    return EFI_NOT_READY;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;
+  s=Interface(chosen->handle,&GopGuid,(VOID **)&g);
+  if(s!=EFI_SUCCESS||g!=chosen->interface||!g->Mode||
+     !Equal(g->Mode,&chosen->mode,sizeof(chosen->mode))||
+     !Equal(g->Mode->Info,&chosen->info,sizeof(chosen->info)))
+    return EFI_NOT_READY;
+  const UINTN width=g->Mode->Info->HorizontalResolution;
+  const UINTN height=g->Mode->Info->VerticalResolution;
+  if(width<600U||height<210U)return EFI_UNSUPPORTED;
+  const UINTN scale=width>=1000U?3U:2U;
+  EFI_GRAPHICS_OUTPUT_BLT_PIXEL dark={24,16,80,0};
+  s=g->Blt(g,&dark,EfiBltVideoFill,0,0,12,12,580,180,0);
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,"WARNING GPU DRIVER STOP TEST");
+  char target[]="TARGET 0000:00:00.0";
+  if(s==EFI_SUCCESS) {
+    if(Gu.discovery_identity.segment>0xffffU||
+       Gu.discovery_identity.bus>255U||
+       Gu.discovery_identity.device>31U||
+       Gu.discovery_identity.function>7U)return EFI_NOT_READY;
+    BenchHexAt(target,7U,4U,Gu.discovery_identity.segment);
+    BenchHexAt(target,12U,2U,Gu.discovery_identity.bus);
+    BenchHexAt(target,15U,2U,Gu.discovery_identity.device);
+    BenchHexAt(target,18U,1U,Gu.discovery_identity.function);
+    s=BenchGopLine(g,24,67,scale,target);
+  }
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,"DISPLAY MAY GO DARK");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,"RECOVERY MAY NEED POWER OFF");
+  GuLog("STOP_RELEASE_WARNING_GOP=%s TARGET=%04x:%02x:%02x.%x "
+        "PEER=%04x:%02x:%02x.%x DISPLAY_API_STATUS=%#llx "
+        "PHYSICAL_PIXELS_VERIFIED=0 CONSOLE_IO=0\\n",
+        s==EFI_SUCCESS?"BLT_SUCCESS":"BLT_FAILED",
+        (unsigned)Gu.discovery_identity.segment,
+        (unsigned)Gu.discovery_identity.bus,
+        (unsigned)Gu.discovery_identity.device,
+        (unsigned)Gu.discovery_identity.function,
+        (unsigned)selected.segment,(unsigned)selected.bus,
+        (unsigned)selected.device,(unsigned)selected.function,
+        (unsigned long long)s);
+  if(s!=EFI_SUCCESS)return s;
+  /* Rendering is not an exception to any Stop or survivor validation. */
+  return GuVerifyActivePeers(Plan.table);
+}
+#endif
+
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
 EFI_STATUS GuMsiReattachAfterStop(VOID) {
   if(!ReleaseOwnerMatches()||!Plan.ready||Plan.stage!=3||
