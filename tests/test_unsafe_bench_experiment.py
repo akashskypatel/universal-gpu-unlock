@@ -199,6 +199,18 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         reattach = self.release.split("EFI_STATUS GuMsiReattachAfterStop(VOID)", 1)[1].split("#endif", 1)[0]
         self.assertIn("TARGET_GOP_IDENTITY_MATCHED=%u SURVIVOR_GOPS_MATCHED=%zu", reattach)
         self.assertIn("DISPLAY_OUTPUT_TESTED=0", reattach)
+        self.assertIn("ReconcileTargetChildren()", reattach)
+        self.assertIn("ReattachedGraphExpected()", reattach)
+        self.assertIn("ReattachedDriversVerified()", reattach)
+        self.assertIn("ReattachedTargetPciRecognized()", reattach)
+        self.assertLess(reattach.index("ReconcileTargetChildren()"),
+                        reattach.index("ReattachedGraphExpected()"))
+        self.assertLess(reattach.index("ReattachedTargetPciRecognized()"),
+                        reattach.index("Plan.reattach_verified=TRUE"))
+        final = self.release.split("BOOLEAN GuMsiVerifyFinalGraph(VOID)", 1)[1].split("#else", 1)[0]
+        for check in ("ReconcileTargetChildren()", "ReattachedGraphExpected()",
+                      "ReattachedDriversVerified()", "ReattachedTargetPciRecognized()"):
+            self.assertIn(check, final)
         self.assertLess(reattach.index("s=Gops(FALSE)"),
                         reattach.index("Plan.reattach_verified=TRUE"))
         self.assertLess(reattach.index("s=ReadOnlyAmdConsoleOwnership()"),
