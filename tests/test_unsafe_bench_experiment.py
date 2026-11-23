@@ -174,6 +174,24 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         graph = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[1].split("static EFI_STATUS ReadConfigMode", 1)[0]
         self.assertIn("if(!survivor||e->count!=1)return EFI_ACCESS_DENIED;", graph)
 
+    def test_console_refusal_names_variable_and_reports_selected_owner_without_waiver(self):
+        check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split(
+            "static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
+        variable = self.release.split("static EFI_STATUS AmdConsoleVariable", 1)[1].split(
+            "static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[0]
+        for name in ("ConOut", "ErrOut"):
+            self.assertIn(f'AmdConsoleVariable(L"{name}","{name}",owners,display_count)', check)
+        self.assertIn("const char *variable_label", variable)
+        self.assertIn("TARGET_PCI_MATCH=%d", variable)
+        self.assertIn("variable_label,owner,(unsigned)matching_gops,target_pci_match", variable)
+        self.assertIn("Interface(Plan.pci,&PathGuid,(VOID **)&target_path)", variable)
+        self.assertIn("target_pci_match=GuDevicePathHasPrefix(", variable)
+        self.assertLess(variable.index("target_pci_match=GuDevicePathHasPrefix("),
+                        variable.index("data[at+1]=subtype;"))
+        self.assertIn("if(owner!=1||matching_gops!=1)", variable)
+        self.assertIn("return EFI_ACCESS_DENIED;", variable)
+        self.assertNotIn("name,owner,(unsigned)matching_gops", variable)
+
     def test_stop_release_preparation_skips_assets_diagnostics_and_profile(self):
         body = self.execution.split("EFI_STATUS GuPrepareBoundGpu", 1)[1].split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[0]
         self.assertIn("STOP_RELEASE_PREPARED=1 FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0", body)
