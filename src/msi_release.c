@@ -72,6 +72,8 @@ typedef struct {
   TARGET_CHILD *target_children;
   UINTN target_child_count,target_child_capacity;
   BOOLEAN reconnecting;
+  /* The peer GOP that displayed this step's warning before any Stop. */
+  EFI_HANDLE warning_peer_gop;
 #endif
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized,reattach_verified;
   BOOLEAN consoleless_target_gop;
@@ -2065,8 +2067,58 @@ EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
         (unsigned)selected.device,(unsigned)selected.function,
         (unsigned long long)s);
   if(s!=EFI_SUCCESS)return s;
-  /* Rendering is not an exception to any Stop or survivor validation. */
-  return GuVerifyActivePeers(Plan.table);
+  /* Only record the warning output after the live peer and PCI inventory
+   * remain stable. Never use a failed/uncertain peer for recovery output. */
+  s=GuVerifyActivePeers(Plan.table);
+  if(s==EFI_SUCCESS)Plan.warning_peer_gop=chosen->handle;
+  return s;
+}
+
+/* Used only after a failed reattachment. Its caller never uses ConOut:
+ * firmware text output can still be owned by the stopped GPU. Keep the
+ * independent peer's original identity and mode checks even on failure.
+ * A successful Blt is an API result, not evidence of visible monitor pixels. */
+EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID) {
+  if(!ReleaseOwnerMatches()||!Plan.mutated||!Plan.warning_peer_gop||
+     !Plan.survivor_baseline_valid||!GuBootLogOpen())
+    return EFI_NOT_READY;
+  SURVIVOR_GOP *survivor=NULL;
+  for(UINTN i=0;i<Plan.survivor_count;i++)
+    if(Plan.survivors[i].handle==Plan.warning_peer_gop) {
+      if(survivor)return EFI_COMPROMISED_DATA;
+      survivor=&Plan.survivors[i];
+    }
+  if(!survivor||!survivor->interface||!survivor->path_bytes)
+    return EFI_NOT_READY;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;
+  EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+  EFI_STATUS s=Interface(survivor->handle,&GopGuid,(VOID **)&g);
+  if(s==EFI_SUCCESS)s=Interface(survivor->handle,&PathGuid,(VOID **)&path);
+  if(s!=EFI_SUCCESS||g!=survivor->interface||!g||!g->Mode||
+     !g->Mode->Info||!g->Blt||!path||
+     !GuDevicePathUnchanged(survivor->path,survivor->path_bytes,
+                            (const unsigned char *)path,4096U)||
+     !Equal(g->Mode,&survivor->mode,sizeof(survivor->mode))||
+     !Equal(g->Mode->Info,&survivor->info,sizeof(survivor->info)))
+    return EFI_NOT_READY;
+  const UINTN width=g->Mode->Info->HorizontalResolution;
+  const UINTN height=g->Mode->Info->VerticalResolution;
+  if(width<600U||height<210U)return EFI_UNSUPPORTED;
+  const UINTN scale=width>=1000U?3U:2U;
+  EFI_GRAPHICS_OUTPUT_BLT_PIXEL background={16,16,128,0};
+  s=g->Blt(g,&background,EfiBltVideoFill,0,0,12,12,580,190,0);
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,22,scale,"REATTACHMENT FAILED");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,52,scale,"SYSTEM WILL REBOOT");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,82,scale,"IN 30 SECONDS");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,112,scale,"USB BOOT MAY REPEAT THE TEST");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,142,scale,"ENTER BIOS SELECT OTHER DRIVE");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,172,scale,"BREAK BOOT LOOP IN BIOS");
+  GuLog("STOP_RELEASE_REATTACH_FAILURE_NOTICE STATUS=%#llx "
+        "CHANNEL=ORIGINAL_NON_TARGET_GOP SYSTEM_REBOOT=REQUESTED "
+        "DELAY_SECONDS=30 USB_BOOT_LOOP_RISK=1 "
+        "BIOS_SELECT_OTHER_BOOT_DRIVE=1 PHYSICAL_PIXELS_VERIFIED=0\\n",
+        (unsigned long long)s);
+  return s;
 }
 #endif
 
