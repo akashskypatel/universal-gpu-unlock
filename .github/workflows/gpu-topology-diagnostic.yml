@@ -248,9 +248,10 @@ jobs:
             # builds, including the durable-log variant of the diagnostic.
             # vram_block is the build that reads the ROM window and writes it
             # to a file: its capture path is compiled here, not only on Windows.
-            for variant in plain save_log vram_block; do
+            for variant in plain save_log gop_text_cycle vram_block; do
               define=""
               if [ "$variant" = save_log ]; then define="-DGU_TOPO_SAVE_LOG"; fi
+              if [ "$variant" = gop_text_cycle ]; then define="-DGU_TOPO_SAVE_LOG -DGU_TOPO_GOP_TEXT_CYCLE"; fi
               if [ "$variant" = vram_block ]; then define="-DGU_TOPO_SAVE_LOG -DGU_VRAM_BLOCK_PROBE"; fi
               for src in src/gpu_topology_efi.c src/gpu_pci_observation.c; do
                 gcc -std=c11 -fshort-wchar -fsyntax-only -Wall -Wextra \
@@ -258,7 +259,7 @@ jobs:
                   -Isrc/vendor/edk2/Include -Isrc/vendor/edk2/Include/X64 "$src"
               done
             done
-            echo 'EFI_PASSIVE_SYNTAX=PASS VARIANTS=plain,save_log,vram_block'
+            echo 'EFI_DIAGNOSTIC_SYNTAX=PASS VARIANTS=plain,save_log,gop_text_cycle,vram_block'
             # The real discovery entrypoint must reject selected active EFI
             # builds before GuInit even on one or three GPUs.
             mkdir -p "$RUNNER_TEMP/active-selected"
@@ -421,6 +422,10 @@ jobs:
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI)){throw 'EFI missing'}
+            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -CycleGopText *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC GOP text cycle diagnostic failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_diagnostic\GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI)){throw 'GOP text cycle EFI missing'}
+            'GOP_TEXT_CYCLE_COMPILE_EXIT=0 DISPLAY_OUTPUT_NOT_EXECUTED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdf '0000:09:02.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC synthetic BDF A diagnostic failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_diagnostic\GPU-SELECTION-0000-09-02-0-DIAGNOSTIC.EFI)){throw 'PCI BDF A selection EFI missing'}
