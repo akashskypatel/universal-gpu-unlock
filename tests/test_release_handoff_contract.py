@@ -445,7 +445,7 @@ typedef size_t UINTN;
 typedef uint32_t UINT32;
 typedef int BOOLEAN;
 typedef int EFI_STATUS;
-typedef int EFI_GUID;
+typedef struct { uint32_t Data1; } EFI_GUID;
 #define TRUE 1
 #define FALSE 0
 #define EFI_SUCCESS 0
@@ -461,10 +461,11 @@ typedef struct {
 } PLAN;
 static PLAN Plan;
 static GRAPH Original;
-static EFI_GUID TextGuid=1,GopGuid=2,PathGuid=3;
+static EFI_GUID TextGuid={1},GopGuid={2},PathGuid={3};
+static void GuLog(const char *format,...){(void)format;}
 static int peer,foreign;
 static EFI_HANDLE bad_path;
-static int Guid(const EFI_GUID *a,const EFI_GUID *b){return *a==*b;}
+static int Guid(const EFI_GUID *a,const EFI_GUID *b){return a->Data1==b->Data1;}
 static int GuIsPreparedPeerHandle(EFI_HANDLE h){return h==&peer;}
 static EFI_STATUS GopOnTarget(EFI_HANDLE h,BOOLEAN *on_target){
   if(h==bad_path)return EFI_DEVICE_ERROR;
