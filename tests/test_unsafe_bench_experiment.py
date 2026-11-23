@@ -128,6 +128,31 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertLess(classifier.index("REASON=SHARED_OR_CONSUMED_CHILD"),
                         classifier.index("e->idle_output=TRUE;"))
 
+    def test_verified_edid_child_is_a_stage_three_only_dependent(self):
+        # RUN0040: standard EDID Discovered on the selected output child.
+        # Only the exact 128-bit UEFI identity may be classified.
+        self.assertIn("static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,", self.release)
+        self.assertIn("{0xa0,0x49,0x8a,0xd0,0x6c,0x1a,0x66,0xaa}", self.release)
+        removed = self.release.split("static BOOLEAN Removed(const EDGE *e,UINTN stage)", 1)[1].split(
+            "static BOOLEAN ProtectedHandle", 1)[0]
+        self.assertIn("if(stage>=3&&e->idle_output&&e->handle==e->controller&&", removed)
+        self.assertIn("e->attributes==EFI_OPEN_PROTOCOL_BY_DRIVER&&e->count==1&&", removed)
+        self.assertIn("Guid(&e->protocol,&EdidDiscoveredGuid)", removed)
+        classifier = self.release.split("static EFI_STATUS ClassifyIdleOutput", 1)[1].split(
+            "static EFI_STATUS Consumers", 1)[0]
+        self.assertIn("other->handle==h&&other->controller==h", classifier)
+        self.assertIn("Guid(&other->protocol,&EdidDiscoveredGuid)", classifier)
+        self.assertIn("edid_index==Original.count", classifier)
+        self.assertIn("GuIsPreparedPeerHandle(peer->handle)", classifier)
+        self.assertIn("GuIsPreparedPeerHandle(peer->controller)", classifier)
+        self.assertIn("ValidateDriverAgent(dependent->agent,3U)", classifier)
+        self.assertIn("dependent->idle_output=TRUE;", classifier)
+        self.assertLess(classifier.index("ValidateDriverAgent(dependent->agent,3U)"),
+                        classifier.index("dependent->idle_output=TRUE;"))
+        self.assertIn("STOP_RELEASE_IDLE_EDID=ACCEPTED", classifier)
+        self.assertIn("REASON=EDID_DRIVER_NOT_VERIFIED", classifier)
+        self.assertIn("REASON=SHARED_OR_CONSUMED_CHILD", classifier)
+
     def test_stop_only_file_write_or_flush_failure_remains_sticky(self):
         logging = self.boot.split("VOID GuLog(const char *format,...)", 1)[1].split("VOID GuLogText", 1)[0]
         for token in ("#ifdef GU_STOP_RELEASE_ONLY_BENCH", "Log->Write?", "Log->Flush?",
