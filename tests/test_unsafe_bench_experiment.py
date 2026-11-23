@@ -198,7 +198,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
             "EFI_STATUS GuMsiReattachAfterStop", 1)[0]
         glyph_table = warning.split("static const GU_BENCH_GLYPH BenchGlyphs[]={", 1)[1].split("};", 1)[0]
         import re
-        glyphs = set(re.findall(r"\\{'(.)',\\{", glyph_table))
+        glyphs = set(re.findall(r"\{'(.)',\{", glyph_table))
         phrases = ["WARNING GPU DRIVER STOP TEST", "TARGET 0000:00:00.0",
                    "DISPLAY MAY GO DARK", "RECOVERY MAY NEED POWER OFF"]
         for char in "".join(phrases):
