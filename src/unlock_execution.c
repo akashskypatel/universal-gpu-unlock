@@ -243,10 +243,10 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     s=GuMsiPreflight(table,image,owner->handle);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     if(!warning_done) {
-      BOOLEAN file_only=GuMsiStopReleaseFileOnly();
-      BOOLEAN only_gop=GuMsiStopReleaseOnlyGopTarget();
-      BOOLEAN console_output=!file_only||only_gop;
-      s=GuBootBenchCountdown(console_output,!file_only&&!only_gop);
+      /* A selected device may be the sole live firmware display, or there may
+       * be none. The warning is best-effort; only a confirmed file log and
+       * the mandatory three-second delay authorize moving to the Stop call. */
+      s=GuBootBenchCountdown();
       if(s!=EFI_SUCCESS)goto failed;
       warning_done=TRUE;
     }
