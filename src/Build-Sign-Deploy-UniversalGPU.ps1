@@ -13,7 +13,7 @@ hand-maintained list, and tests/test_image_variants.py keeps the catalogue
 honest against the builders.
 
 Signing never leaves WSL: the private key stays in the selected WSL user's home
-(~/.secureboot-signing/uefi-db.key) and sbsign runs there. Windows only ever
+(~/secureboot-signing/uefi-db.key) and sbsign runs there. Windows only ever
 hands WSL base64-encoded paths inside a base64-encoded bash payload, because
 path-shaped arguments across the Windows/WSL boundary corrupt backslashes on
 some setups. The script proves four things before it will sign: the WSL cert's
