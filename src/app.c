@@ -476,6 +476,16 @@ failed:
     /* Fault-independent containment, no freeing of unverified live mappings. */
 
     if((Gu.started&&Gu.owned)||Gu.master_attributes_pending)(VOID)GuClearMaster(&Gu);
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    /* A half-stopped firmware driver or a failed reattach must not return
+     * control to a boot manager that could launch Windows or retry the image.
+     * Without a persistent one-shot boot guard an automatic warm reset could
+     * invoke this USB image repeatedly. Retain the existing no-NVRAM bench
+     * contract and stop for an operator-controlled reboot instead. */
+    GuLog("STOP_RELEASE_CONTAINMENT=HALT NEXT_GPU=BLOCKED "
+          "RESET=OPERATOR_CONTROLLED AUTO_WARM_RESET=0 "
+          "REASON=UNVERIFIED_GPU_OR_CONSOLE_STATE\\n");
+#endif
 
     (VOID)GuBootClose();GuBootHalt();return EFI_ABORTED;
 
