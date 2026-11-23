@@ -219,6 +219,12 @@ failed:
   return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 }
 #else
+/* This is scoped to the attempted reattachment, not a refused preflight
+ * or a release stage that never reached reconnect. */
+static BOOLEAN StopReleaseReattachFailed;
+BOOLEAN GuStopReleaseReattachFailed(VOID) {
+  return StopReleaseReattachFailed;
+}
 /* The explicitly scoped bench image stops/releases each selected card,
  * reconnects its firmware drivers, verifies the reattached graph, then moves
  * to the next target. It has no call edge into the vendor unlock transaction. */
@@ -228,6 +234,7 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
   if(!table||!table->BootServices||!image||!stage||
      !owner||owner!=GuPlatformActive)return EFI_INVALID_PARAMETER;
   EFI_STATUS s;
+  StopReleaseReattachFailed=FALSE;
   if(GuSelectedGpuCount()>1U) {
     GuMsiStopReleaseRequireFileOnly();
     GuLog("STOP_RELEASE_OUTPUT=FILE_ONLY REASON=ORDERED_MULTI_TARGET CONSOLE_IO=0\n");
@@ -253,6 +260,7 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     GU_PHASE("reattach-firmware-drivers");
     s=GuMsiReattachAfterStop();
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault) {
+      StopReleaseReattachFailed=TRUE;
       GuLog("STOP_RELEASE_REATTACH=FAILED STATUS=%#llx NEXT_GPU=BLOCKED "
             "WARM_RESET=MANUAL_AFTER_CONTAINMENT AUTO_RETRY=0\n",
             (unsigned long long)(s==EFI_SUCCESS?EFI_DEVICE_ERROR:s));
