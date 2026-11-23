@@ -16,6 +16,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         cls.boot = (SRC / "boot_io.c").read_text(encoding="utf-8")
         cls.dxe = (SRC / "dxe_main.c").read_text(encoding="utf-8")
         cls.builder = (SRC / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
+        cls.sign_deploy = (SRC / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
         cls.catalog = json.loads((ROOT / "docs/image_variants.json").read_text(encoding="utf-8"))
 
     def test_override_requires_explicit_ordered_unverified_actuation_and_file_only(self):
@@ -58,10 +59,26 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         for field in ("ASPM_ADMISSION_BYPASSED", "AMD_CONSOLE_OWNERSHIP_BYPASSED", "FILE_ONLY_OUTPUT"):
             self.assertIn(field + "=", self.builder)
 
+    def test_mandatory_warning_and_three_second_gate_precede_mutation(self):
+        self.assertIn("EFI_STATUS GuBootBenchCountdown(VOID)", self.boot)
+        for phrase in ("Stop/release starts in 3 seconds", "go black", "disconnect, or flicker",
+                       "reattachment will be", "not guaranteed", "independent display"):
+            self.assertIn(phrase, self.boot)
+        self.assertIn("Table->BootServices->Stall(3000000U)", self.boot)
+        self.assertIn("GPU_ACTION=REFUSED", self.boot)
+        run = self.dxe.split("static EFI_STATUS GuDxeRun", 1)[1].split("/* Signal once", 1)[0]
+        self.assertGreater(run.index("GuBootBenchCountdown()"), run.index("GuPrepareBoundGpu(owner"))
+        self.assertLess(run.index("GuBootBenchCountdown()"), run.index("GuBootStateRecord("))
+        self.assertLess(run.index("GuBootBenchCountdown()"), run.index("GuExecutePreparedSequence("))
+        self.assertIn("NO_GPU_ACTION=1", run)
+        self.assertIn("SYSTEM_TABLE_CONOUT", self.boot)
+
     def test_catalogue_keeps_override_as_a_separate_actuating_variant(self):
         matches = [v for v in self.catalog["variants"] if v["id"] == "dxe-actuate-sequence-bench-override"]
         self.assertEqual(len(matches), 1)
         v = matches[0]
+        self.assertIn("image_variants.json", self.sign_deploy)
+        self.assertIn("function Select-Variants", self.sign_deploy)
         self.assertEqual(v["safety"], "actuates")
         self.assertEqual(v["binary"], "GPU-SEQUENCE-UNVERIFIED-BENCH-DXE-<label>.efi")
         self.assertTrue(v["switches"]["UnsafeBenchExperiment"])

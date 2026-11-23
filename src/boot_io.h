@@ -23,6 +23,11 @@ EFI_STATUS GuBootClose(VOID);
 BOOLEAN GuBootWatchdogArmed(UINTN *seconds);
 EFI_STATUS GuBootWatchdogCancel(VOID);
 VOID GuBootSay(const CHAR16 *);
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+/* Emit the one pre-actuation warning directly to the firmware's configured
+ * ConOut and require a successful three-second stall before any GPU access. */
+EFI_STATUS GuBootBenchCountdown(VOID);
+#endif
 VOID GuBootSilence(VOID);
 VOID GuBootUnsilence(VOID);
 VOID GuBootHalt(VOID);

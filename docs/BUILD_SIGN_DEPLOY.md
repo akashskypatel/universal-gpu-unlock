@@ -89,7 +89,7 @@ Secure Boot off, and the signature is then only an integrity record - say so: us
 | `dxe-compile-sequence` | `GPU-SEQUENCE-COMPILE-ONLY-DXE-<label>.efi` | `compile-only` | two or more BDFs | two or more targets, compile-checked only |
 | `dxe-actuate-one-target` | `GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-<label>.efi` | `actuates` | one BDF, private `src/local/boot_profile.h` | NVRAM-installed driver form; -StageDxeCompanion stages this exact paired build at EFI\Drivers\AdaUnlockDxe.efi, never as BOOTX64.EFI |
 | `dxe-actuate-sequence` | `GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-<label>.efi` | `actuates` | two or more BDFs, private `src/local/boot_profile.h` | NVRAM-installed driver form, ordered |
-| `dxe-actuate-sequence-bench-override` | `GPU-SEQUENCE-UNVERIFIED-BENCH-DXE-<label>.efi` | `actuates` | two or more BDFs, private `src/local/boot_profile.h` | Opt-in bench-only DXE build for the explicit 4090 then 3080 order. It bypasses ASPM and independent-AMD-console admission only; other transaction, peer, reset, and recovery logic remains active. Logs to the image volume without screen output. Not hardware-verified. |
+| `dxe-actuate-sequence-bench-override` | `GPU-SEQUENCE-UNVERIFIED-BENCH-DXE-<label>.efi` | `actuates` | two or more BDFs, private `src/local/boot_profile.h` | Opt-in bench-only DXE build for the explicit 4090 then 3080 order. It bypasses ASPM and independent-AMD-console admission only; other transaction, peer, reset, and recovery logic remains active. After read-only preparation and before any mutating transaction, it requires firmware ConOut warning output plus a three-second stall; if either is unavailable, actuation is refused. The warning cautions that NVIDIA-connected displays may go black, disconnect, or flicker and that reattachment is not guaranteed. The warning uses configured ConOut, which is not proof of a physical display. File logging remains enabled; other screen output is suppressed. Not hardware-verified. |
 | `dxe-actuate-runtime-selection` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi` | `actuates` | private `src/local/boot_profile.h` | NVRAM-installed driver, target at boot |
 
 ### Original vendor Stop experiment — `src/Build-Msi-Stop-Observation.ps1` (PE subsystem 10, `STATUS=BUILT`)
@@ -237,9 +237,13 @@ value in the session log next to `M1_RECOVERY_TOOLKIT_READY`.
     -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -StageDrive G
 
 # The explicitly waived sequential DXE bench experiment (4090 first, then 3080).
-# This signs only; a DXE driver is not BOOTX64.EFI and cannot use -StageDrive.
+# Requires the private local boot profile, Windows/MSVC, WSL signing tools/key,
+# and the enrolled certificate. Signs only; do not use -StageDrive for a DXE driver.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only dxe-actuate-sequence-bench-override `
     -SelectionBdfs '0000:01:00.0,0000:04:00.0' -SignOnly
+
+# Local source/contract tests (not a firmware build or hardware test).
+python -m unittest tests.test_unsafe_bench_experiment tests.test_image_variants -v
 
 # The waived application transaction, staged deliberately on a donor card.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target `

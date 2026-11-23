@@ -122,6 +122,38 @@ VOID GuBootSay(const CHAR16 *text) {
 #endif
 }
 
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+EFI_STATUS GuBootBenchCountdown(VOID) {
+  static CHAR16 warning[]=L"\r\n*** WARNING: Sequential GPU Stop/release starts in 3 seconds. ***\r\n"
+    L"RTX 4090 then RTX 3080 will be Stop/released. Firmware reattachment will be\r\n"
+    L"attempted, but is not guaranteed. Displays on either NVIDIA GPU may go black,\r\n"
+    L"disconnect, or flicker. Disconnect those displays; use an independent display.\r\n"
+    L"Stop may hang; recovery is not verified.\r\n\r\n";
+  if(!Table||!Table->ConOut||!Table->ConOut->OutputString||
+     !Table->BootServices||!Table->BootServices->Stall) {
+    GuLog("BENCH_WARNING=NOT_SHOWN REASON=CONFIGURED_CONOUT_OR_STALL_UNAVAILABLE "
+          "GPU_ACTION=REFUSED\n");
+    return EFI_NOT_READY;
+  }
+  /* Use the firmware's configured ConOut, bypassing only the normal file-only
+   * screen suppression for this mandatory warning. This may be a console
+   * splitter, so firmware can mirror it to more than one output. */
+  EFI_STATUS s=Table->ConOut->OutputString(Table->ConOut,warning);
+  if(s!=EFI_SUCCESS) {
+    GuLog("BENCH_WARNING=OUTPUT_FAILED STATUS=%#llx GPU_ACTION=REFUSED\n",
+          (unsigned long long)s);
+    return s;
+  }
+  GuLog("BENCH_WARNING=DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT DELAY_US=3000000 "
+        "GPU_ACTION=GATED DISPLAY_TOPOLOGY=UNVERIFIED\n");
+  s=Table->BootServices->Stall(3000000U);
+  if(s!=EFI_SUCCESS)
+    GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED\n",
+          (unsigned long long)s);
+  return s;
+}
+#endif
+
 VOID GuBootSilence(VOID){Silent=TRUE;}
 
 VOID GuBootUnsilence(VOID){Silent=FALSE;}

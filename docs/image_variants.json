@@ -605,7 +605,7 @@
         "RECOVERY_VERIFIED=0"
       ],
       "requires_selection": "sequence",
-      "note": "Opt-in bench-only DXE build for the explicit 4090 then 3080 order. It bypasses ASPM and independent-AMD-console admission only; other transaction, peer, reset, and recovery logic remains active. Logs to the image volume without screen output. Not hardware-verified.",
+      "note": "Opt-in bench-only DXE build for the explicit 4090 then 3080 order. It bypasses ASPM and independent-AMD-console admission only; other transaction, peer, reset, and recovery logic remains active. After read-only preparation and before any mutating transaction, it requires firmware ConOut warning output plus a three-second stall; if either is unavailable, actuation is refused. The warning cautions that NVIDIA-connected displays may go black, disconnect, or flicker and that reattachment is not guaranteed. The warning uses configured ConOut, which is not proof of a physical display. File logging remains enabled; other screen output is suppressed. Not hardware-verified.",
       "requires_local_boot_profile": true
     },
     {

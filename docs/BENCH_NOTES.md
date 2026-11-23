@@ -366,10 +366,16 @@ the `0000:01:00.0` then `0000:04:00.0` order. Only that opt-in DXE build accepts
 nonzero ASPM and bypasses the independent-AMD-console ownership checks; it
 still checks link errors/training/width/speed, target identity, peer state,
 transaction ownership, and containment/recovery logic. It writes `GuLog` to
-the image volume and suppresses this image's screen text; it is not a general
-console-free release guarantee. All normal variants retain their prior gates.
-This variant has **not** been built, signed, staged, or hardware-tested in this
-Linux workspace. Its catalogue attests the bypasses explicitly and keeps
+the image volume and suppresses ordinary screen output. After read-only
+preparation and immediately before mutation, it emits a mandatory warning
+through firmware `SystemTable->ConOut` and requires a three-second stall; if the configured
+console or stall service is unavailable, the image refuses GPU work. The
+warning says NVIDIA-connected displays may go black, disconnect, or flicker,
+and that reattachment is only attempted, not guaranteed. `ConOut` may be a
+splitter or non-display console; the image cannot prove which physical screen
+receives the warning. All normal variants retain their prior gates. This
+variant has **not** been built, signed, staged, or hardware-tested in this Linux
+workspace. Its catalogue attests the bypasses explicitly and keeps
 `ACTUATION_VERIFIED=0` / `RECOVERY_VERIFIED=0`.
 
 ## The chipset-connected RTX 3080: what the attached topology does and does not say

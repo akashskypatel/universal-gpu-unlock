@@ -82,6 +82,18 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   s=GuPrepareBoundGpu(owner,&stage);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto finish;
+#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+  /* Warn only after read-only preparation has passed, but before the intent
+   * record and any sequential Stop/release mutation. Missing console/countdown
+   * capability is an actuation refusal for this named image. */
+  s=GuBootBenchCountdown();
+  if(s!=EFI_SUCCESS) {
+    GuLog("BENCH_COUNTDOWN=FAILED STATUS=%#llx NO_GPU_ACTION=1\n",
+          (unsigned long long)s);
+    EFI_STATUS close=GuBootClose();
+    return close==EFI_SUCCESS?s:close;
+  }
+#endif
   /* Name the card before the first mutation so a power loss leaves evidence. */
   (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_INTENT,0,owner->device_id,
