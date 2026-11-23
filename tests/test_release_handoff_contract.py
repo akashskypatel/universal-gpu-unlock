@@ -590,6 +590,119 @@ int main(void) {
                     checked = subprocess.run([str(binary)], capture_output=True, text=True)
                     self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
 
+    def test_edid_driver_runtime_image_type_is_checked_without_weakening_gpu_driver(self):
+        """Compile actual image validation and exercise code/data pairs and address bounds."""
+        checked = ("static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which) {" +
+                   function_body("ValidateDriverAgent") + "}\n")
+        program = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef uint64_t UINT64;
+typedef unsigned int UINT32;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+typedef struct { unsigned int value; } EFI_GUID;
+typedef struct {
+  VOID *Stop;
+  EFI_HANDLE DriverBindingHandle,ImageHandle;
+  UINT32 Version;
+} EFI_DRIVER_BINDING_PROTOCOL;
+typedef struct {
+  VOID *ImageBase;
+  UINT64 ImageSize;
+  UINT32 ImageCodeType,ImageDataType;
+} EFI_LOADED_IMAGE_PROTOCOL;
+#define EFI_SUCCESS 0
+#define EFI_UNSUPPORTED 3
+#define EfiLoaderCode 1
+#define EfiLoaderData 2
+#define EfiBootServicesCode 3
+#define EfiBootServicesData 4
+#define EfiRuntimeServicesCode 5
+#define EfiRuntimeServicesData 6
+#define GU_STOP_RELEASE_ONLY_BENCH 1
+static EFI_GUID BindingGuid={1},ImageGuid={2};
+static int agent_storage,image_storage;
+static EFI_DRIVER_BINDING_PROTOCOL driver;
+static EFI_LOADED_IMAGE_PROTOCOL image;
+static void GuLog(const char *text,...){(void)text;}
+static EFI_STATUS Interface(EFI_HANDLE handle,EFI_GUID *guid,VOID **out){
+  if(handle==&agent_storage&&guid==&BindingGuid){
+    *out=&driver;return EFI_SUCCESS;
+  }
+  if(handle==&image_storage&&guid==&ImageGuid){
+    *out=&image;return EFI_SUCCESS;
+  }
+  *out=NULL;return EFI_UNSUPPORTED;
+}
+""" + checked + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  const uintptr_t base=(uintptr_t)0x7b08a000U;
+  driver.Stop=(VOID *)(base+0x1504U);
+  driver.DriverBindingHandle=&agent_storage;
+  driver.ImageHandle=&image_storage;
+  driver.Version=1;
+  image.ImageBase=(VOID *)base;
+  image.ImageSize=36864U;
+  image.ImageCodeType=EfiBootServicesCode;
+  image.ImageDataType=EfiBootServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,0)==EFI_SUCCESS);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  /* A valid runtime UEFI driver can own a child display protocol.
+   * Do not admit this image type for the selected NVIDIA driver itself. */
+  image.ImageCodeType=EfiRuntimeServicesCode;
+  image.ImageDataType=EfiRuntimeServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  CHECK(ValidateDriverAgent(&agent_storage,2)==EFI_UNSUPPORTED);
+  /* A loader application, unknown code class, or an invalid code/data pair
+   * must still be rejected, even when Stop lies within the image. */
+  image.ImageCodeType=EfiLoaderCode;
+  image.ImageDataType=EfiLoaderData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageCodeType=17;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageCodeType=EfiRuntimeServicesCode;
+  image.ImageDataType=EfiBootServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageCodeType=EfiBootServicesCode;
+  image.ImageDataType=EfiRuntimeServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageDataType=EfiBootServicesData;
+  /* Offset checks must reject either boundary, including overflowing base
+   * arithmetic, without an unsigned wraparound admission. */
+  driver.Stop=(VOID *)(base-1U);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  driver.Stop=(VOID *)(base+36864U);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  driver.Stop=(VOID *)(base+36863U);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  image.ImageSize=4095U;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageSize=36864U;
+  driver.DriverBindingHandle=&image_storage;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "loaded_image_type.c"
+            source.write_text(program, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(directory) / compiler
+                    build = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                        capture_output=True, text=True)
+                    self.assertEqual(build.returncode, 0, build.stderr)
+                    result = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_amd_owner_validation_is_read_only(self):
         owner = function_body("ReadOnlyAmdConsoleOwnership")
         paths = function_body("AmdConsoleVariable")
