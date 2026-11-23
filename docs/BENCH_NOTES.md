@@ -235,6 +235,36 @@ whether the AMD GOP/console path persists without an attached display. The
 candidate console result remains AMD-only `ConOut` and `ErrOut` with no NVIDIA
 matches. Do not alter ASPM or attempt a GPU action.
 
+## Headless iGPU with IGD selected: run 0018
+
+The operator kept `Initiate Graphic Adapter=IGD` and reported both the iGPU and
+RTX 4090 headless. Run `0018` enumerates the AMD iGPU at `0000:0f:00.0` in PCI
+topology, but discovers no AMD GOP. The sole GOP belongs to the 3080 at
+`0000:04:00.0`; its active EDID identifies an attached LG display, while the
+4090 remains enumerated with `GOP_COUNT=0`. Configured `ConOut` and `ErrOut`
+contain the 3080 path only. The active firmware console interface matches the
+system console, but the diagnostic cannot identify which physical display
+received output. Its isolation classifier remains `CONFLICT` because no
+independent GOP/console association exists, and the final verdict is
+`CONFLICT NVIDIA_CONOUT_BLOCKER=1`.
+
+Together with run `0017` (iGPU display attached, both AMD and 3080 GOP/console
+paths present), this shows that IGD selection does not expose an AMD GOP in the
+reported headless-iGPU layout. It does not prove whether firmware would route
+text to the 3080 under every boot condition, nor does it make a display-active
+3080 safe to release. The 3080 still reports `ASPM=2` at Gen4 x4; the iGPU root
+function reports ASPM=0. No firmware source change is indicated by this
+read-only capture.
+
+**Next discriminating read-only test:** use the documented BIOS primary-adapter
+control as an A/B check. Keep the iGPU and 4090 headless and retain the same
+monitor connections on the 3080; change only `Initiate Graphic Adapter` from
+`IGD` to `PEG`, cold boot, and rerun the saved-log topology diagnostic. Compare
+GOP ownership and `ConOut`/`ErrOut` path membership with run `0018`. Do not
+change ASPM or run any Stop, preparation, or actuation image. Regardless of
+whether PEG changes the log, the active-3080 console and ASPM conditions remain
+unresolved safety gates.
+
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 
 The uploaded topology capture `GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` puts the
