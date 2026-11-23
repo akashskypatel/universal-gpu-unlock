@@ -477,13 +477,36 @@ static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which) {
     GuLog("Driver(%zu) ImageGuid failed: %#llx\n", (size_t)which, (unsigned long long)s);
     return s;
   }
-  if(!im->ImageBase||im->ImageSize<4096||im->ImageCodeType!=EfiBootServicesCode||
-     (UINTN)d->Stop < (UINTN)im->ImageBase||(UINTN)d->Stop >= (UINTN)im->ImageBase + im->ImageSize) {
-    GuLog("Driver(%zu) image check failed: base=%#llx size=%zu stop=%#llx\n",
-      (size_t)which, (unsigned long long)(UINTN)im->ImageBase, (size_t)im->ImageSize, (unsigned long long)(UINTN)d->Stop);
+  /* Ordinary selected driver agents retain the original Boot Services code
+   * requirement. A display-child EDID consumer can itself be a UEFI Runtime
+   * Services driver. Accept only a spec-defined code/data memory-type pair
+   * for that dependent, never an application, data or unknown image type. */
+  BOOLEAN code_type_ok=im->ImageCodeType==EfiBootServicesCode;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(which==3U) {
+    code_type_ok=
+      (im->ImageCodeType==EfiBootServicesCode&&
+       im->ImageDataType==EfiBootServicesData)||
+      (im->ImageCodeType==EfiRuntimeServicesCode&&
+       im->ImageDataType==EfiRuntimeServicesData);
+  }
+#endif
+  UINTN image_base=(UINTN)im->ImageBase;
+  UINTN stop=(UINTN)d->Stop;
+  BOOLEAN stop_in_image=image_base&&stop>=image_base&&
+                        (UINT64)(stop-image_base)<im->ImageSize;
+  if(im->ImageSize<4096||!code_type_ok||!stop_in_image) {
+    GuLog("Driver(%zu) image check failed: base=%#llx size=%zu stop=%#llx "
+          "code_type=%u data_type=%u code_type_ok=%u stop_in_image=%u\n",
+      (size_t)which,(unsigned long long)image_base,(size_t)im->ImageSize,
+      (unsigned long long)stop,(unsigned)im->ImageCodeType,
+      (unsigned)im->ImageDataType,(unsigned)code_type_ok,
+      (unsigned)stop_in_image);
     return EFI_UNSUPPORTED;
   }
-  GuLog("Driver(%zu) verified OK: ver=%#x size=%zu\n", (size_t)which, d->Version, (size_t)im->ImageSize);
+  GuLog("Driver(%zu) verified OK: ver=%#x size=%zu code_type=%u data_type=%u "
+        "stop_in_image=1\n",(size_t)which,d->Version,(size_t)im->ImageSize,
+        (unsigned)im->ImageCodeType,(unsigned)im->ImageDataType);
   return EFI_SUCCESS;
 }
 static EFI_STATUS Driver(UINTN which) {
