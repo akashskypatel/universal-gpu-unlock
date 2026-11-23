@@ -16,6 +16,9 @@ $ErrorActionPreference = 'Stop'
 if ($FileOnlyBootLog -and -not $StopReleaseOnlyBench) {
     throw '-FileOnlyBootLog requires -StopReleaseOnlyBench; ordinary menu images need console output.'
 }
+if ($StopReleaseOnlyBench -and -not $FileOnlyBootLog) {
+    throw '-StopReleaseOnlyBench requires -FileOnlyBootLog to preserve the mandatory file-first no-menu contract.'
+}
 if ($StopReleaseOnlyBench -and -not $SelectionBdf -and -not $SelectionBdfs) {
     # No explicit BDFs means the default live-inventory select-all policy.
     $RuntimeSelection = $true
