@@ -196,6 +196,13 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("Expected(0,FALSE)", self.release)
         self.assertIn("Gops(FALSE)", self.release)
         self.assertIn("FIRMWARE_TRANSACTION=0", self.release)
+        reattach = self.release.split("EFI_STATUS GuMsiReattachAfterStop(VOID)", 1)[1].split("#endif", 1)[0]
+        self.assertIn("TARGET_GOP_IDENTITY_MATCHED=%u SURVIVOR_GOPS_MATCHED=%zu", reattach)
+        self.assertIn("DISPLAY_OUTPUT_TESTED=0", reattach)
+        self.assertLess(reattach.index("s=Gops(FALSE)"),
+                        reattach.index("Plan.reattach_verified=TRUE"))
+        self.assertLess(reattach.index("s=ReadOnlyAmdConsoleOwnership()"),
+                        reattach.index("Plan.reattach_verified=TRUE"))
         self.assertIn("GuMsiVerifyFinalGraph()", self.port_source)
 
     def test_stop_only_app_does_not_load_windows_image_or_handoff(self):
