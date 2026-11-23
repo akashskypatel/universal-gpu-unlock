@@ -445,8 +445,10 @@ static VOID ReportAdditions(VOID) {
     Plan.reported_additions=added;
   }
 }
-static EFI_STATUS Driver(UINTN which) {
-  EFI_HANDLE a=which==0?Plan.out_agent:which==1?Plan.gfx_agent:Plan.nv_agent;
+/* Validate a driver before its Stop can be invoked by firmware. A child
+ * display consumer has the same binding/image requirements as the three
+ * controllers already present in this release plan. */
+static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which) {
   EFI_DRIVER_BINDING_PROTOCOL *d=NULL;EFI_LOADED_IMAGE_PROTOCOL *im=NULL;
   EFI_STATUS s=Interface(a,&BindingGuid,(VOID **)&d);
   if(s!=EFI_SUCCESS||!d->Stop||d->DriverBindingHandle!=a||!d->ImageHandle) {
@@ -469,6 +471,10 @@ static EFI_STATUS Driver(UINTN which) {
   }
   GuLog("Driver(%zu) verified OK: ver=%#x size=%zu\n", (size_t)which, d->Version, (size_t)im->ImageSize);
   return EFI_SUCCESS;
+}
+static EFI_STATUS Driver(UINTN which) {
+  return ValidateDriverAgent(
+    which==0?Plan.out_agent:which==1?Plan.gfx_agent:Plan.nv_agent,which);
 }
 static EFI_STATUS Alive(VOID) {
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
