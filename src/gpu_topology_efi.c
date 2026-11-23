@@ -2566,6 +2566,235 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
       unresolved?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
 }
 
+/* A GOP handle may also expose device-local SimpleTextOut.
+ * OpenProtocolInformation identifies consumers, not a protocol installer.
+ * A single GOP BY_DRIVER agent is a candidate graphics-console provider,
+ * not proof it installed SimpleTextOut. These observations never bind drivers. */
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+#define GU_TEXT_CYCLE_LIMIT 16U
+typedef struct {
+  size_t gop_index,pci_index;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text;
+} GU_DIRECT_TEXT_CANDIDATE;
+static void GopTextHex(CHAR16 *out,size_t offset,size_t digits,UINTN value) {
+  static const CHAR16 digits_hex[]=L"0123456789ABCDEF";
+  size_t k;
+  for(k=0;k<digits;k++)
+    out[offset+k]=digits_hex[(value>>((digits-1U-k)*4U))&15U];
+}
+#endif
+
+static void ReportGopTextEndpoints(EFI_BOOT_SERVICES *bs) {
+  size_t i,interfaces=0,driver_images=0;
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+  GU_DIRECT_TEXT_CANDIDATE candidates[GU_TEXT_CYCLE_LIMIT];
+  size_t candidate_count=0,attempted=0,api_success=0;
+  EFI_HANDLE con_handle=System->ConsoleOutHandle;
+  EFI_HANDLE err_handle=System->StandardErrorHandle;
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con=System->ConOut,*err=System->StdErr;
+  memset(candidates,0,sizeof(candidates));
+#endif
+  Say("GOP_TEXT_INVENTORY_BEGIN GOP_COUNT=%zu SOURCE=GOP_HANDLE "
+      "PROTOCOL_INSTALLER_NOT_EXPOSED=1 NO_STOP=1\r\n",Snapshot.gop_count);
+  if(!bs||!bs->HandleProtocol||!bs->OpenProtocolInformation||
+     !bs->FreePool||ObservationPoolFault) {
+    Say("GOP_TEXT_INVENTORY=UNAVAILABLE SERVICES_OR_POOL_UNCERTAIN=1\r\n");
+    return;
+  }
+  for(i=0;i<Snapshot.gop_count&&!ObservationPoolFault;i++) {
+    const GU_TOPO_GOP *r=&Snapshot.gop[i];
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text=NULL;
+    EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
+    EFI_STATUS gs,ts,ps,os,freed;
+    EFI_HANDLE agent=NULL,image=NULL;
+    UINTN count=0,j;
+    size_t owner_count=0,owner=0,driver_count=0;
+    int same_path=0,driver_image_known=0;
+    gs=bs->HandleProtocol(r->handle,&GopGuid,(VOID **)&gop);
+    ts=bs->HandleProtocol(r->handle,&TextOutGuid,(VOID **)&text);
+    ps=bs->HandleProtocol(r->handle,&PathGuid,(VOID **)&path);
+    if(ps==EFI_SUCCESS&&path) {
+      GU_TOPO_PATH current;
+      same_path=PathCopy(path,&current)&&
+          current.length==r->path.length&&
+          !memcmp(current.bytes,r->path.bytes,current.length);
+    }
+    for(j=0;j<Snapshot.pci_count;j++) {
+      const GU_TOPO_PCI *p=&Snapshot.pci[j];
+      if((p->identity.class_code&0xff00U)!=0x0300U||
+         !GuTopoPathOnController(&p->path,&r->path))continue;
+      owner=j;owner_count++;
+    }
+    Say("GOP_TEXT_ENDPOINT[%zu] HANDLE=%p GOP_STATUS=%#llx "
+        "GOP_SAME=%u PATH_STATUS=%#llx PATH_SAME=%u "
+        "TEXT_STATUS=%#llx TEXT_PRESENT=%u TEXT_IFACE=%p "
+        "DISPLAY_OWNERS=%zu SYSTEM_CONOUT_ALIAS=%u\r\n",
+        i,r->handle,(unsigned long long)gs,
+        (unsigned)(gs==EFI_SUCCESS&&gop==r->protocol),
+        (unsigned long long)ps,(unsigned)same_path,
+        (unsigned long long)ts,(unsigned)(ts==EFI_SUCCESS&&!!text),
+        text,owner_count,(unsigned)(text&&text==System->ConOut));
+    if(owner_count==1U) {
+      const GU_GPU_RECORD *id=&Snapshot.pci[owner].identity;
+      Say("GOP_TEXT_OWNER[%zu] PCI_INDEX=%zu BDF=%04x:%02x:%02x.%u "
+          "VENDOR=%04x DEVICE=%04x\r\n",i,owner,
+          (unsigned)id->segment,(unsigned)id->bus,
+          (unsigned)id->device,(unsigned)id->function,
+          (unsigned)(id->pci_id&0xffffU),(unsigned)(id->pci_id>>16));
+    }
+    os=ObservationOpeners(bs,r->handle,&GopGuid,&opens,&count,NULL,
+                          "gop-text-driver");
+    if(os==EFI_SUCCESS&&count<=256U&&(!count||opens)) {
+      for(j=0;j<count;j++) {
+        const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[j];
+        if(e->Attributes!=EFI_OPEN_PROTOCOL_BY_DRIVER)continue;
+        driver_count++;
+        if(driver_count==1U&&e->OpenCount==1U)agent=e->AgentHandle;
+      }
+      if(driver_count==1U&&agent) {
+        EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
+        EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
+        EFI_STATUS binding_status=bs->HandleProtocol(
+            agent,&DriverBindingGuid,(VOID **)&binding);
+        EFI_STATUS loaded_status=EFI_NOT_READY;
+        if(binding_status==EFI_SUCCESS&&binding&&binding->ImageHandle)
+          loaded_status=bs->HandleProtocol(
+              binding->ImageHandle,&LoadedGuid,(VOID **)&loaded);
+        if(loaded_status==EFI_SUCCESS&&loaded&&binding&&
+           binding->ImageHandle) {
+          image=binding->ImageHandle;driver_image_known=1;driver_images++;
+          Say("GOP_TEXT_DRIVER_IMAGE[%zu] AGENT=%p IMAGE=%p "
+              "BYTES=%llu BINDING_HANDLE=%p "
+              "TEXTOUT_INSTALLER_UNPROVEN=1\r\n",i,agent,image,
+              (unsigned long long)loaded->ImageSize,
+              binding->DriverBindingHandle);
+          if(loaded->FilePath) {
+            GU_TOPO_PATH file_path;
+            if(PathCopy(loaded->FilePath,&file_path)) {
+              Say("GOP_TEXT_DRIVER_PATH[%zu] BYTES=%zu\r\n",i,file_path.length);
+              SayPath("GOP_TEXT_DRIVER_PATH",i,&file_path);
+            }
+          }
+        } else Say("GOP_TEXT_DRIVER_IMAGE[%zu] AGENT=%p "
+                   "BINDING_STATUS=%#llx IMAGE_STATUS=%#llx UNRESOLVED=1\r\n",
+                   i,agent,(unsigned long long)binding_status,
+                   (unsigned long long)loaded_status);
+      }
+    }
+    freed=ObservationPoolRelease(bs,opens,"gop-text-driver");
+    Say("GOP_TEXT_DRIVER[%zu] GOP_DRIVER_EDGES=%zu AGENT=%p "
+        "IMAGE=%p OPEN_STATUS=%#llx OPEN_COUNT=%zu "
+        "FREE_STATUS=%#llx DRIVER_IMAGE_KNOWN=%u "
+        "TEXTOUT_INSTALLER_UNPROVEN=1\r\n",
+        i,driver_count,agent,image,(unsigned long long)os,
+        (size_t)count,(unsigned long long)freed,
+        (unsigned)driver_image_known);
+    if(gs!=EFI_SUCCESS||gop!=r->protocol||!same_path||
+       owner_count!=1U||ts!=EFI_SUCCESS||!text||
+       !text->OutputString||!driver_image_known||
+       os!=EFI_SUCCESS||count>256U||freed!=EFI_SUCCESS||
+       ObservationPoolFault)continue;
+    interfaces++;
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+    if(Snapshot.gop_count<=GU_TEXT_CYCLE_LIMIT&&
+       candidate_count<GU_TEXT_CYCLE_LIMIT)
+      candidates[candidate_count++]=(GU_DIRECT_TEXT_CANDIDATE){i,owner,gop,text};
+#endif
+  }
+  Say("GOP_TEXT_INVENTORY_END GOP_COUNT=%zu VERIFIED_INTERFACES=%zu "
+      "GOP_DRIVER_IMAGES=%zu INSTALLER_NOT_PROVEN=1 "
+      "NO_DRIVER_CONNECT=1 NO_STOP=1\r\n",
+      Snapshot.gop_count,interfaces,driver_images);
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+  Say("GOP_TEXT_CYCLE_BEGIN CANDIDATES=%zu DISPLAY_TEXT_WRITE=1 "
+      "NO_DRIVER_CONNECT=1 NO_SET_MODE=1 NO_NVRAM_WRITE=1\r\n",
+      candidate_count);
+  if(ObservationPoolFault||!bs->Stall||
+     Snapshot.gop_count>GU_TEXT_CYCLE_LIMIT) {
+    Say("GOP_TEXT_CYCLE=SKIPPED POOL_UNCERTAIN=%u STALL_PRESENT=%u "
+        "COUNT_WITHIN_LIMIT=%u MAX_GOPS=%u\r\n",
+        (unsigned)ObservationPoolFault,(unsigned)!!bs->Stall,
+        (unsigned)(Snapshot.gop_count<=GU_TEXT_CYCLE_LIMIT),
+        (unsigned)GU_TEXT_CYCLE_LIMIT);
+    return;
+  }
+  for(i=0;i<candidate_count;i++) {
+    const GU_DIRECT_TEXT_CANDIDATE *candidate=&candidates[i];
+    const GU_TOPO_GOP *r=&Snapshot.gop[candidate->gop_index];
+    const GU_GPU_RECORD *id=&Snapshot.pci[candidate->pci_index].identity;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text=NULL;
+    EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+    EFI_STATUS gs,ts,ps,call,stalled;
+    size_t j,duplicates=0;
+    CHAR16 message[]=L"\r\nGOP 000 PCI 0000:00:00.0 DIRECT TEXT TEST\r\n";
+    GU_TOPO_PATH current_path;
+    for(j=0;j<candidate_count;j++)
+      if(i!=j&&candidates[j].text==candidate->text)duplicates++;
+    if(duplicates||
+       (candidate->text==con&&r->handle!=con_handle)||
+       (candidate->text==err&&r->handle!=err_handle)) {
+      Say("GOP_TEXT_CYCLE[%zu] STATUS=SKIPPED "
+          "REASON=SHARED_OR_VIRTUAL_TEXT ALIASES=%zu\r\n",
+          candidate->gop_index,duplicates);
+      continue;
+    }
+    if(System->ConsoleOutHandle!=con_handle||
+       System->StandardErrorHandle!=err_handle||
+       System->ConOut!=con||System->StdErr!=err) {
+      Say("GOP_TEXT_CYCLE[%zu] STATUS=ABORTED GLOBAL_CONSOLE_DRIFT=1\r\n",
+          candidate->gop_index);
+      break;
+    }
+    gs=bs->HandleProtocol(r->handle,&GopGuid,(VOID **)&gop);
+    ts=bs->HandleProtocol(r->handle,&TextOutGuid,(VOID **)&text);
+    ps=bs->HandleProtocol(r->handle,&PathGuid,(VOID **)&path);
+    if(gs!=EFI_SUCCESS||ts!=EFI_SUCCESS||ps!=EFI_SUCCESS||
+       gop!=candidate->gop||text!=candidate->text||!text||
+       !text->OutputString||!path||!PathCopy(path,&current_path)||
+       current_path.length!=r->path.length||
+       memcmp(current_path.bytes,r->path.bytes,current_path.length)) {
+      Say("GOP_TEXT_CYCLE[%zu] STATUS=SKIPPED "
+          "REASON=HANDLE_PROTOCOL_OR_PATH_DRIFT GOP=%#llx "
+          "TEXT=%#llx PATH=%#llx\r\n",
+          candidate->gop_index,(unsigned long long)gs,
+          (unsigned long long)ts,(unsigned long long)ps);
+      continue;
+    }
+    GopTextHex(message,6U,3U,candidate->gop_index);
+    GopTextHex(message,14U,4U,id->segment);
+    GopTextHex(message,19U,2U,id->bus);
+    GopTextHex(message,22U,2U,id->device);
+    GopTextHex(message,25U,1U,id->function);
+    attempted++;
+    call=text->OutputString(text,message);
+    if(call==EFI_SUCCESS)api_success++;
+    Say("GOP_TEXT_CYCLE[%zu] PCI=%04x:%02x:%02x.%u "
+        "DIRECT_TEXTOUT_STATUS=%#llx SUCCESS=%u "
+        "PHYSICAL_PIXELS_VERIFIED=0 GLOBAL_CONOUT_CHANGED=0\r\n",
+        candidate->gop_index,(unsigned)id->segment,(unsigned)id->bus,
+        (unsigned)id->device,(unsigned)id->function,
+        (unsigned long long)call,(unsigned)(call==EFI_SUCCESS));
+    stalled=bs->Stall(2000000U);
+    if(stalled!=EFI_SUCCESS) {
+      Say("GOP_TEXT_CYCLE[%zu] STALL_STATUS=%#llx NEXT_GOP_SKIPPED=1\r\n",
+          candidate->gop_index,(unsigned long long)stalled);
+      break;
+    }
+  }
+  Say("GOP_TEXT_CYCLE_END ATTEMPTED=%zu API_SUCCEEDED=%zu "
+      "VISIBLE_PIXELS_VERIFIED=0 GLOBAL_CONOUT_UNCHANGED=%u "
+      "NO_STOP=1 NO_DRIVER_CONNECT=1\r\n",
+      attempted,api_success,
+      (unsigned)(System->ConsoleOutHandle==con_handle&&
+                 System->StandardErrorHandle==err_handle&&
+                 System->ConOut==con&&System->StdErr==err));
+#endif
+}
+
 /* Capture one complete boot-local GOP inventory. Publish only after
  * every identity and path is valid and the handle buffer is released. */
 static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
@@ -2893,6 +3122,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     if(gop_ok) {
       ReportNvidiaGopGraph(bs);
       ReportIndependentGopGraph(bs);
+      ReportGopTextEndpoints(bs);
     } else {
       Say("NVIDIA_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1\r\n");
       Say("INDEPENDENT_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1\r\n");
