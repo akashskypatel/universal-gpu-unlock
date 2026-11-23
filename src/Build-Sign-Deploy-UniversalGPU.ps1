@@ -33,7 +33,7 @@ The catalogue labels each variant:
   refuses-before-mutation  links the active source, refuses before GuInit
   compile-only            proves the sources compile for your selection
   stop-only               calls the original vendor Stop; may hang
-  actuates                the waived transaction; every eligibility flag is false
+  actuates                performs waived hardware mutation; Stop/release-only and firmware-transaction variants are distinct
 
 One named application variant can be staged to EFI\BOOT\BOOTX64.EFI on a
 verified writable non-system FAT32 USB stick, after a verified local backup of

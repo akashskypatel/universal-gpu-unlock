@@ -89,7 +89,7 @@ Secure Boot off, and the signature is then only an integrity record - say so: us
 | `dxe-compile-sequence` | `GPU-SEQUENCE-COMPILE-ONLY-DXE-<label>.efi` | `compile-only` | two or more BDFs | two or more targets, compile-checked only |
 | `dxe-actuate-one-target` | `GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-<label>.efi` | `actuates` | one BDF, private `src/local/boot_profile.h` | NVRAM-installed driver form; -StageDxeCompanion stages this exact paired build at EFI\Drivers\AdaUnlockDxe.efi, never as BOOTX64.EFI |
 | `dxe-actuate-sequence` | `GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-<label>.efi` | `actuates` | two or more BDFs, private `src/local/boot_profile.h` | NVRAM-installed driver form, ordered |
-| `dxe-actuate-sequence-bench-override` | `GPU-SEQUENCE-UNVERIFIED-BENCH-DXE-<label>.efi` | `actuates` | two or more BDFs, private `src/local/boot_profile.h` | Opt-in bench-only DXE build for the explicit 4090 then 3080 order. It bypasses ASPM and independent-AMD-console admission only; other transaction, peer, reset, and recovery logic remains active. After read-only preparation and before any mutating transaction, it requires firmware ConOut warning output plus a three-second stall; if either is unavailable, actuation is refused. The warning cautions that NVIDIA-connected displays may go black, disconnect, or flicker and that reattachment is not guaranteed. The warning uses configured ConOut, which is not proof of a physical display. File logging remains enabled; other screen output is suppressed. Not hardware-verified. |
+| `dxe-stop-release-sequence-bench` | `GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-<label>.efi` | `actuates` | two or more BDFs, private `src/local/boot_profile.h` | Bench-only DXE test for exactly 0000:01:00.0 (4090) then 0000:04:00.0 (3080). Waives ASPM admission only in this opt-in profile; independent AMD-console ownership and live text-output graph checks remain mandatory. Each selected GPU runs msi_release.c driver Stop/release, then ConnectController reattachment and protocol/GOP graph verification. The vendor gpu_unlock_610 firmware transaction is excluded from the image; UNLOCK=0, FLASH=0, RESET=0. Before the first Stop it requires warning output through configured firmware ConOut and a three-second stall; missing console, output failure, or missing stall service refuses actuation. Displays connected to either NVIDIA GPU may go dark, disconnect, or flicker; reattachment is attempted and verified against the captured protocol/GOP graph but remains unproven on physical hardware. File logging remains enabled and routine screen output is suppressed. Not hardware-verified or recovery-verified. |
 | `dxe-actuate-runtime-selection` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi` | `actuates` | private `src/local/boot_profile.h` | NVRAM-installed driver, target at boot |
 
 ### Original vendor Stop experiment — `src/Build-Msi-Stop-Observation.ps1` (PE subsystem 10, `STATUS=BUILT`)
@@ -239,7 +239,7 @@ value in the session log next to `M1_RECOVERY_TOOLKIT_READY`.
 # The explicitly waived sequential DXE bench experiment (4090 first, then 3080).
 # Requires the private local boot profile, Windows/MSVC, WSL signing tools/key,
 # and the enrolled certificate. Signs only; do not use -StageDrive for a DXE driver.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only dxe-actuate-sequence-bench-override `
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only dxe-stop-release-sequence-bench `
     -SelectionBdfs '0000:01:00.0,0000:04:00.0' -SignOnly
 
 # Local source/contract tests (not a firmware build or hardware test).

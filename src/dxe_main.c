@@ -8,10 +8,12 @@
 #include "unlock_execution.h"
 #include "boot_io.h"
 #include "compat/compat.h"
-#include "vendor/unlock_610.h"
 #include "s3_save.h"
 #include "boot_state.h"
 #include "driver_nvram.h"
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
+#include "vendor/unlock_610.h"
+#endif
 
 /* UEFI ReadyToBoot event group: 7ce88fb3-4bd7-4679-87a8-a8d8dee50d2b.
  * Run when console and PCI bindings are initialized, instead of assuming
@@ -32,10 +34,10 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   EFI_STATUS s = GuBootOpen(image, t);
   if (s != EFI_SUCCESS) return s;
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
-  GuLog("UNVERIFIED_BENCH_IMAGE=1 ORDER=4090_THEN_3080 ASPM_ADMISSION=BYPASSED "
-        "AMD_CONSOLE_OWNERSHIP=BYPASSED SCREEN_OUTPUT=SUPPRESSED "
-        "LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=4090_THEN_3080 ASPM_ADMISSION=BYPASSED "
+        "AMD_CONSOLE_OWNERSHIP=REQUIRED FIRMWARE_TRANSACTION=0 UNLOCK=0 "
+        "SCREEN_OUTPUT=SUPPRESSED LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
 #endif
 
   /* boot_io reports the previous record. This read carries its contents into
@@ -82,10 +84,9 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 
   s=GuPrepareBoundGpu(owner,&stage);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto finish;
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
-  /* Warn only after read-only preparation has passed, but before the intent
-   * record and any sequential Stop/release mutation. Missing console/countdown
-   * capability is an actuation refusal for this named image. */
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  /* Warn only after read-only preparation has passed, before the first Stop.
+   * Missing console/countdown capability refuses this named experiment. */
   s=GuBootBenchCountdown();
   if(s!=EFI_SUCCESS) {
     GuLog("BENCH_COUNTDOWN=FAILED STATUS=%#llx NO_GPU_ACTION=1\n",
@@ -94,6 +95,9 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     return close==EFI_SUCCESS?s:close;
   }
 #endif
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  s=GuExecuteStopReleaseSequence(owner,t,image,&stage);
+#else
   /* Name the card before the first mutation so a power loss leaves evidence. */
   (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_INTENT,0,owner->device_id,
@@ -109,13 +113,18 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
                           (UINT8)owner->discovery_identity.device,
                           (UINT8)owner->discovery_identity.function,
                           (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
+#endif
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 
 finish:
   if (s == EFI_SUCCESS && Gu.fault) s = EFI_DEVICE_ERROR;
   if (s == EFI_SUCCESS) {
     stage="dxe-close-USB-log";
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    GuLog("DXE-DRIVER: Stop/release and reattach sequence verified; closing boot resources.\n");
+#else
     GuLog("DXE-DRIVER: final transaction checks passed; closing boot resources.\n");
+#endif
     s=GuBootClose();
     if(s==EFI_SUCCESS)return s;
   }

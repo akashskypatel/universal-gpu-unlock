@@ -3,7 +3,9 @@
  * graph came from MSI Z790/AD102 CAP0001 (2026-10-25); other boards still
  * require independent Stop/console/peer/recovery evidence before live use.
  * Snapshot/delta checks derive controller paths and driver agents at runtime.
- * No firmware variables, controller reconnects or reset fallback are used.
+ * No firmware variables or reset fallback are used. Normal transaction builds
+ * do not reconnect controllers; the explicitly named stop/release-only bench
+ * build adds a separate ConnectController + graph-verification path.
  */
 #include "msi_release.h"
 #include "stop_contract.h"
@@ -55,7 +57,7 @@ typedef struct {
   SURVIVOR_GOP *survivors;
   UINTN survivor_count,survivor_capacity;
   BOOLEAN survivor_baseline_valid;
-  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized;
+  UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized,reattach_verified;
 } PLAN;
 /* Keep the release plan and its protocol graphs in one ownership context.
  * Never free a context that may describe a partially stopped driver or a
@@ -652,7 +654,7 @@ static EFI_STATUS AmdConsoleVariable(
 }
 static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
 {
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) && !defined(GU_STOP_RELEASE_ONLY_BENCH)
   GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=INDEPENDENT_AMD_CONSOLE RESULT=BYPASSED\n");
   return EFI_SUCCESS;
 #else
@@ -719,7 +721,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
  * not establish that the live ConsoleOutHandle uses that path. */
 static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
 {
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) && !defined(GU_STOP_RELEASE_ONLY_BENCH)
   (void)graph;
   GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=LIVE_AMD_TEXTOUT_GRAPH RESULT=BYPASSED\n");
   return EFI_SUCCESS;
@@ -948,6 +950,9 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(!b->DisconnectController||!b->OpenProtocol||!b->CloseProtocol||!b->RaiseTPL||!b->RestoreTPL||
      !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol||
      !b->AllocatePool||!b->FreePool)return EFI_UNSUPPORTED;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(!b->ConnectController)return EFI_UNSUPPORTED;
+#endif
   Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
   Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
   if(!Plan.console||!Plan.input||!Plan.error||!Plan.text||!Plan.err||!Plan.keys||
@@ -1204,7 +1209,7 @@ static EFI_STATUS ClaimRestore(VOID) {
  * line cannot imply a check that never happened. */
 static void StopContractLog(UINTN Stage, BOOLEAN Owner, BOOLEAN Cold,
                             BOOLEAN Console, BOOLEAN Peers) {
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) && !defined(GU_STOP_RELEASE_ONLY_BENCH)
   /* Do not log a bypassed AMD-console check as verified evidence. */
   Console=FALSE;
 #endif
@@ -1344,6 +1349,48 @@ BOOLEAN GuMsiReleased(VOID) {
   if(!failed)ReportAdditions();
   return !failed;
 }
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+EFI_STATUS GuMsiReattachAfterStop(VOID) {
+  if(!ReleaseOwnerMatches()||!Plan.ready||Plan.stage!=3||
+     !Plan.claimed||!Gu.owned||!Plan.mutated||Gu.fault||
+     !GuMsiReleased())return EFI_NOT_READY;
+  EFI_BOOT_SERVICES *b=Plan.table->BootServices;
+  if(!b||!b->CloseProtocol||!b->ConnectController)return EFI_UNSUPPORTED;
+  EFI_STATUS s=b->CloseProtocol(Plan.pci,&PciGuid,Plan.self,NULL);
+  if(s!=EFI_SUCCESS) {
+    NOTE("MSI reattach close-exclusive failed status=%#llx GPU_ACTION=HALT\\n",
+         (unsigned long long)s);
+    Gu.fault=TRUE;Gu.retained=TRUE;
+    return s;
+  }
+  Plan.claimed=FALSE;Gu.owned=FALSE;Plan.stage=0;
+  /* Reconnect only after releasing our exclusive PCI I/O claim. Recursive
+   * connection lets the firmware bind the original graphics stack and its
+   * children. It is an attempt, not a guarantee; verify the observed graph. */
+  s=b->ConnectController(Plan.pci,NULL,NULL,TRUE);
+  NOTE("MSI controller reconnect status=%#llx recursive=1\\n",
+       (unsigned long long)s);
+  if(s==EFI_SUCCESS)s=Snapshot(&Current);
+  if(s==EFI_SUCCESS&&!Expected(0,FALSE)) {
+    GraphDiff(0,FALSE);
+    s=EFI_NOT_READY;
+  }
+  if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
+  if(s==EFI_SUCCESS)s=Gops(FALSE);
+  if(s==EFI_SUCCESS)s=Alive();
+  if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
+  if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
+  if(s!=EFI_SUCCESS||Gu.fault) {
+    NOTE("MSI reattach verification failed status=%#llx GRAPH_RESTORED=0\\n",
+         (unsigned long long)(s==EFI_SUCCESS?EFI_DEVICE_ERROR:s));
+    Gu.fault=TRUE;Gu.retained=TRUE;
+    return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+  }
+  Plan.reattach_verified=TRUE;
+  NOTE("MSI reattach verification passed GRAPH_RESTORED=1 FIRMWARE_TRANSACTION=0\\n");
+  return EFI_SUCCESS;
+}
+#endif
 /* Keep the original architecture, SEC2, selector, PLM and chip readbacks.
  * Only perform MMIO while this image owns the PCI protocol. */
 static BOOLEAN GuMsiHardwareVerifiedBeforeClose(VOID) {
@@ -1442,16 +1489,39 @@ BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {
   if(!platform||!token||platform->release_state!=token||
      !ReleaseStateMatches(platform))return FALSE;
   const PLAN *plan=&platform->release_state->plan;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  return plan->table && plan->pci==platform->handle && plan->self==platform->image &&
+    plan->ready && plan->mutated && plan->stage==0 &&
+    plan->survivor_baseline_valid && !plan->claimed &&
+    plan->reattach_verified && !plan->hardware_verified;
+#else
   return plan->table && plan->pci==platform->handle && plan->self==platform->image &&
     plan->ready && plan->mutated && plan->stage==3 &&
     plan->survivor_baseline_valid &&
     !plan->claimed && plan->master_normalized && plan->hardware_verified;
+#endif
 }
 
 /* Check the live graph against the last target's baseline, which already
  * includes the earlier completed transactions. Never rebind an old context
  * or read device registers after the exclusive claim has closed. */
 BOOLEAN GuMsiVerifyFinalGraph(VOID) {
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(!ReleaseOwnerMatches()||!Plan.reattach_verified||Plan.stage!=0||
+     Plan.claimed||Gu.owned||Gu.fault)return FALSE;
+  EFI_STATUS s=Snapshot(&Current);
+  if(s==EFI_SUCCESS&&!Expected(0,FALSE)){GraphDiff(0,FALSE);s=EFI_NOT_READY;}
+  if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleGraph(&Current);
+  if(s==EFI_SUCCESS)s=Gops(FALSE);
+  if(s==EFI_SUCCESS)s=Alive();
+  if(s==EFI_SUCCESS)s=ReadOnlyAmdConsoleOwnership();
+  if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
+  if(s!=EFI_SUCCESS) {
+    Plan.reattach_verified=FALSE;
+    return FALSE;
+  }
+  return TRUE;
+#else
   if(!GuMsiReadyForWindows())return FALSE;
   if(Snapshot(&Current)!=EFI_SUCCESS||!Expected(3,FALSE)||
      ReadOnlyAmdConsoleGraph(&Current)!=EFI_SUCCESS) {
@@ -1459,5 +1529,6 @@ BOOLEAN GuMsiVerifyFinalGraph(VOID) {
     return FALSE;
   }
   return TRUE;
+#endif
 }
 #endif

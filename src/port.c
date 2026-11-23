@@ -240,9 +240,13 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
        !GuPlatformAssetsOwned(platform)||
        platform->fault||platform->retained||platform->owned||
        platform->allocations||platform->dma_count||platform->master_attributes_pending||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+       !GuMsiCompletedPlatform(platform,record->owners.release_plan))
+#else
        !platform->quiesced||platform->flrs!=1||
        !GuCompatCompletedPlatform(platform)||
        !GuMsiCompletedPlatform(platform,record->owners.release_plan))
+#endif
       return EFI_ACCESS_DENIED;
   }
   return EFI_SUCCESS;
@@ -290,7 +294,12 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
   /* This is the serialized boot entry path. The previous GPU's live
    * post-close proof must pass before the active pointer can change. */
   const VOID *release=sequence->targets[sequence->order[sequence->next_step-1]].owners.release_plan;
-  if(GuMsiPlanOwnerToken()!=release||!GuMsiReadyForWindows()||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  BOOLEAN previous_ready=GuMsiPlanOwnerToken()==release&&GuMsiVerifyFinalGraph();
+#else
+  BOOLEAN previous_ready=GuMsiPlanOwnerToken()==release&&GuMsiReadyForWindows();
+#endif
+  if(!previous_ready||
      GuPlatformActive!=&current->platform||GuMsiPlanOwnerToken()!=release||
      !GuSafeToReturn()||Gu.fault||Gu.owned||Gu.release_owner_invalid||
      *owner!=&candidate->platform||!PlatformPristine(candidate))

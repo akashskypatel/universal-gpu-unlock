@@ -4,6 +4,11 @@
 EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *,EFI_HANDLE,EFI_HANDLE);
 EFI_STATUS GuMsiRelease(VOID);
 BOOLEAN GuMsiReleased(VOID);
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+/* Close the exclusive PCI claim, reconnect firmware drivers, and verify the
+ * original controller/GOP graph is restored. Never performs a GPU firmware transaction. */
+EFI_STATUS GuMsiReattachAfterStop(VOID);
+#endif
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);
 BOOLEAN GuMsiMutated(VOID);

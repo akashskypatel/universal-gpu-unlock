@@ -122,7 +122,7 @@ VOID GuBootSay(const CHAR16 *text) {
 #endif
 }
 
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
 EFI_STATUS GuBootBenchCountdown(VOID) {
   static CHAR16 warning[]=L"\r\n*** WARNING: Sequential GPU Stop/release starts in 3 seconds. ***\r\n"
     L"RTX 4090 then RTX 3080 will be Stop/released. Firmware reattachment will be\r\n"

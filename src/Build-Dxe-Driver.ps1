@@ -5,7 +5,7 @@ param(
     [switch]$EnableSingleTargetExecution,
     [switch]$SyntheticCompileProfile,
     [switch]$AcceptUnverifiedActuation,
-    [switch]$UnsafeBenchExperiment,
+    [switch]$StopReleaseOnlyBench,
     [switch]$RuntimeSelection,
     [switch]$RuntimeEsp,
     [switch]$EspResident
@@ -78,13 +78,13 @@ try {
     if ($AcceptUnverifiedActuation -and -not $RuntimeSelection -and $selection.Count -lt 1) {
         throw '-AcceptUnverifiedActuation requires at least one explicit -SelectionBdf or -SelectionBdfs entry'
     }
-    if ($UnsafeBenchExperiment) {
+    if ($StopReleaseOnlyBench) {
         if (-not $AcceptUnverifiedActuation) {
-            throw '-UnsafeBenchExperiment requires -AcceptUnverifiedActuation.'
+            throw '-StopReleaseOnlyBench requires -AcceptUnverifiedActuation.'
         }
         if ($RuntimeSelection -or $selection.Count -ne 2 -or
             (($selection.Locations -join ',') -cne '0000:01:00.0,0000:04:00.0')) {
-            throw '-UnsafeBenchExperiment is restricted to the explicit 4090 then 3080 sequence: -SelectionBdfs 0000:01:00.0,0000:04:00.0.'
+            throw '-StopReleaseOnlyBench is restricted to the explicit 4090 then 3080 sequence: -SelectionBdfs 0000:01:00.0,0000:04:00.0.'
         }
     }
 
@@ -118,6 +118,12 @@ try {
         'vendor\vbios_610.c',
         'vendor\gfw_eval.c'
     )
+    if ($StopReleaseOnlyBench) {
+        # The release-only image must not even link the firmware-unlock
+        # implementation; unlock_execution.c is compiled to the dedicated
+        # Stop/release/reconnect runner under GU_STOP_RELEASE_ONLY_BENCH.
+        $sources = @($sources | Where-Object { $_ -ne 'vendor\unlock_610.c' })
+    }
 
     $objFiles = @()
     $compileCmds = @(
@@ -141,10 +147,10 @@ try {
         }
     }
 
-    if ($UnsafeBenchExperiment) {
-        # Explicit, experimental image only: retain transaction logging but
-        # waive ASPM admission and independent-AMD-console ownership checks.
-        $clFlags += ' /DGU_UNVERIFIED_BENCH_CONDITIONS /DGU_DXE_FILE_ONLY_OUTPUT'
+    if ($StopReleaseOnlyBench) {
+        # Explicit Stop/release-only image: keep file logging, waive ASPM admission
+        # only, and compile out the unlock path; AMD console checks stay active.
+        $clFlags += ' /DGU_UNVERIFIED_BENCH_CONDITIONS /DGU_DXE_FILE_ONLY_OUTPUT /DGU_STOP_RELEASE_ONLY_BENCH'
     }
 
     if ($EspResident) {
@@ -178,7 +184,7 @@ try {
     }
 
     $linkObjs = $objFiles -join ' '
-    $binaryName = if ($UnsafeBenchExperiment) { 'GPU-SEQUENCE-UNVERIFIED-BENCH-DXE-' + $selection.Label + '.efi' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP-DXE.efi' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
+    $binaryName = if ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-' + $selection.Label + '.efi' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP-DXE.efi' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
     $compileCmds += "link /nologo /subsystem:efi_boot_service_driver /entry:AdaUnlockDriverEntryPoint /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_dxe\$binaryName $linkObjs"
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
@@ -191,7 +197,7 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'DXE EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$([int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1))) ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int]($AcceptUnverifiedActuation -and $selection.Count -gt 1)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION UNVERIFIED_BENCH_EXPERIMENT=$([int][bool]$UnsafeBenchExperiment) ASPM_ADMISSION_BYPASSED=$([int][bool]$UnsafeBenchExperiment) AMD_CONSOLE_OWNERSHIP_BYPASSED=$([int][bool]$UnsafeBenchExperiment) FILE_ONLY_OUTPUT=$([int][bool]$UnsafeBenchExperiment) TARGET_ORDER=$($selection.Locations -join ',') NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$($selection.Count) RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$([int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1))) ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int]($AcceptUnverifiedActuation -and $selection.Count -gt 1)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) AMD_CONSOLE_OWNERSHIP_REQUIRED=$([int][bool]$StopReleaseOnlyBench) FILE_ONLY_OUTPUT=$([int][bool]$StopReleaseOnlyBench) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) FIRMWARE_TRANSACTION=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) UNLOCK=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) REATTACH_ATTEMPTED=$([int][bool]$StopReleaseOnlyBench) REATTACH_VERIFIED=0 TARGET_ORDER=$($selection.Locations -join ',') NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
 } finally {
     Pop-Location
 }

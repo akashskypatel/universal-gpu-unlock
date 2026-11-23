@@ -361,22 +361,25 @@ screen output. DXE has no interactive menu. The read-only topology image used
 for this run saved its durable log; its capture reported `SCREEN=AVAILABLE`.
 
 After the operator explicitly accepted the unverified bench risk, a separate
-catalogued variant `dxe-actuate-sequence-bench-override` was added for exactly
-the `0000:01:00.0` then `0000:04:00.0` order. Only that opt-in DXE build accepts
-nonzero ASPM and bypasses the independent-AMD-console ownership checks; it
-still checks link errors/training/width/speed, target identity, peer state,
-transaction ownership, and containment/recovery logic. It writes `GuLog` to
-the image volume and suppresses ordinary screen output. After read-only
-preparation and immediately before mutation, it emits a mandatory warning
-through firmware `SystemTable->ConOut` and requires a three-second stall; if the configured
-console or stall service is unavailable, the image refuses GPU work. The
-warning says NVIDIA-connected displays may go black, disconnect, or flicker,
-and that reattachment is only attempted, not guaranteed. `ConOut` may be a
-splitter or non-display console; the image cannot prove which physical screen
-receives the warning. All normal variants retain their prior gates. This
-variant has **not** been built, signed, staged, or hardware-tested in this Linux
-workspace. Its catalogue attests the bypasses explicitly and keeps
-`ACTUATION_VERIFIED=0` / `RECOVERY_VERIFIED=0`.
+catalogued variant `dxe-stop-release-sequence-bench` was added for exactly
+the `0000:01:00.0` then `0000:04:00.0` order. This opt-in DXE image waives
+ASPM admission only; independent-AMD-console ownership and live text-output
+checks remain mandatory. It then runs
+`GuMsiPreflight` / `GuMsiRelease` for each selected GPU and uses
+`ConnectController` plus protocol/GOP graph checks to attempt and verify driver
+reattachment. It does **not** link `vendor/unlock_610.c`, does not call
+`gpu_unlock_610_unlock`, and does not perform the firmware unlock transaction.
+It writes `GuLog` to the image volume and suppresses ordinary screen output.
+After read-only preparation and immediately before the first Stop, it emits a
+mandatory warning through firmware `SystemTable->ConOut` and requires a
+three-second stall; if configured `ConOut`, output, or the stall service is
+unavailable, the image refuses actuation. NVIDIA-connected displays may go
+black, disconnect, or flicker. `ConOut` may be a splitter or non-display console;
+the image cannot prove which physical screen receives the warning. All normal
+variants retain their prior gates. This image has **not** been built, signed,
+staged, or hardware-tested in this Linux workspace. The catalogue attests
+`FIRMWARE_TRANSACTION=0`, `UNLOCK=0`, `REATTACH_VERIFIED=0` at build time,
+`ACTUATION_VERIFIED=0`, and `RECOVERY_VERIFIED=0`.
 
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 

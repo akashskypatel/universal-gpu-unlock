@@ -4,14 +4,17 @@
 #include "gpu_discovery.h"
 #include "profile.h"
 #include "compat/compat.h"
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
 #include "vendor/unlock_610.h"
 #include "s3_save.h"
+#endif
 #include "boot_io.h"
 
 /* GU_PHASE and GU_TRACE_BEGIN come from boot_io.h. Every stage assignment is
  * also a trace line there, so the string a refusal prints at the end and the line
  * a stall prints at the moment it stalls cannot drift apart. */
 
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
 /* The app and the DXE driver must not diverge on the release/firmware
  * order or skip the final selected-target Windows handover validation. */
 static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
@@ -122,6 +125,7 @@ EFI_STATUS GuExecuteUnlock(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
   return GuExecuteUnlockCore(owner,table,image,stage);
 #endif
 }
+#endif /* !GU_STOP_RELEASE_ONLY_BENCH */
 
 /* Shared preparation of the currently bound GPU. The application runs
  * this once before operator choice. Each successor runs it after binding. */
@@ -140,6 +144,7 @@ EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage) {
   return s!=EFI_SUCCESS?s:(owner!=GuPlatformActive||owner->fault)?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
 /* The first target is prepared before entry. Only the ordered execution
  * record can select a successor. No retry, fallback, or hardware admission
  * is granted by this loop. Preserve required versus optional S3 policy. */
@@ -200,6 +205,64 @@ failed:
 #endif
   return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 }
+#else
+/* The explicitly scoped bench image stops/releases each selected card,
+ * reconnects its firmware drivers, verifies the reattached graph, then moves
+ * to the next target. It has no call edge into the vendor unlock transaction. */
+EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
+                           EFI_SYSTEM_TABLE *table,EFI_HANDLE image,
+                           const char **stage) {
+  if(!table||!table->BootServices||!image||!stage||
+     !owner||owner!=GuPlatformActive)return EFI_INVALID_PARAMETER;
+  EFI_STATUS s;
+  for(;;) {
+    GU_PHASE("stop-release-state-reserve");
+    s=GuMsiReserveSelectedState(table->BootServices);
+    if(s!=EFI_SUCCESS)goto failed;
+    s=GuBeginSelectedGpuStep(table,owner,GuMsiPlanOwnerToken(),owner->asset_entries);
+    if(s!=EFI_SUCCESS)goto failed;
+    GU_PHASE("stop-release-preflight");
+    s=GuMsiPreflight(table,image,owner->handle);
+    if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+    GU_PHASE("stop-release");
+    s=GuMsiRelease();
+    if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+    GU_PHASE("reattach-firmware-drivers");
+    s=GuMsiReattachAfterStop();
+    if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+    s=GuFinishSelectedGpuStep(table,1,owner,GuMsiPlanOwnerToken(),owner->asset_entries);
+    if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+    GuLog("STOP_RELEASE_STEP=COMPLETE BDF=%04x:%02x:%02x.%x "
+          "FIRMWARE_TRANSACTION=0 REATTACH_VERIFIED=1\n",
+          (unsigned)owner->discovery_identity.segment,
+          (unsigned)owner->discovery_identity.bus,
+          (unsigned)owner->discovery_identity.device,
+          (unsigned)owner->discovery_identity.function);
+    int more=0;
+    s=GuSelectedSequenceHasNext(table,&more);
+    if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+    if(!more)break;
+    s=GuSelectNextGpu(table);
+    if(s!=EFI_SUCCESS)goto failed;
+    owner=GuPlatformActive;
+    if(!owner){s=EFI_NOT_READY;goto failed;}
+    s=GuPrepareBoundGpu(owner,stage);
+    if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  }
+  GU_PHASE("stop-release-sequence-verification");
+  if(GuVerifySelectedSequence(table)!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault) {
+    s=EFI_NOT_READY;goto failed;
+  }
+  GuLog("STOP_RELEASE_SEQUENCE=COMPLETE ORDER=COMPILED_SELECTION "
+        "FIRMWARE_TRANSACTION=0 UNLOCK=0\n");
+  return EFI_SUCCESS;
+failed:
+  GuLog("STOP_RELEASE_SEQUENCE=FAILED STATUS=%#llx FIRMWARE_TRANSACTION=0\n",
+        (unsigned long long)(s==EFI_SUCCESS?EFI_DEVICE_ERROR:s));
+  GuAbortSelectedGpuStep();
+  return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+}
+#endif
 
 /* Do not classify a later preflight failure as an untouched boot. */
 BOOLEAN GuExecutionNeedsContainment(VOID) {
@@ -211,6 +274,7 @@ BOOLEAN GuExecutionNeedsContainment(VOID) {
     Gu.s3_script_attempted||Gu.flrs||Gu.mmio_writes||Gu.release_owner_invalid;
 }
 
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
 /* The selected path requires aggregate proof, not just the active GPU. */
 BOOLEAN GuExecutionReadyForWindows(EFI_SYSTEM_TABLE *table) {
 #ifdef GU_ACTIVE_SINGLE_TARGET
@@ -267,3 +331,4 @@ EFI_STATUS GuRegisterS3(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table)
         "ADDRESSES=2 WIDTH=UINT32\n");
   return b!=EFI_SUCCESS?b:owner==GuPlatformActive?EFI_SUCCESS:EFI_NOT_READY;
 }
+#endif /* !GU_STOP_RELEASE_ONLY_BENCH */

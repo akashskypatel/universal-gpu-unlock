@@ -97,10 +97,18 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #endif
 #if defined(GU_UNVERIFIED_BENCH_CONDITIONS)
 #if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
-#error The unverified ASPM/console bench override requires an explicit ordered actuation build
+#error The unverified ASPM bench-condition override requires an explicit ordered actuation build
 #endif
 #if !defined(GU_DXE_FILE_ONLY_OUTPUT)
 #error The unverified bench DXE must preserve its log while suppressing screen output
+#endif
+#endif
+#if defined(GU_STOP_RELEASE_ONLY_BENCH)
+#if !defined(GU_UNVERIFIED_BENCH_CONDITIONS) || !defined(GU_DXE_FILE_ONLY_OUTPUT)
+#error Stop/release-only bench mode requires explicit ASPM admission waiver and file-only logging
+#endif
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Stop/release-only mode requires explicit ordered stop/release consent
 #endif
 #endif
 

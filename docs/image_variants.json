@@ -56,7 +56,7 @@
     "actuates": {
       "writes_gpu": true,
       "may_be_staged": "with -AcceptActuatingDeploy",
-      "why": "the waived transaction image; every eligibility flag it prints is still false"
+      "why": "performs an explicitly waived hardware mutation, such as a driver Stop/release or the separate firmware-unlock transaction; the class alone does not imply that an unlock transaction is present or verified"
     }
   },
   "families": [
@@ -584,28 +584,33 @@
       "requires_local_boot_profile": true
     },
     {
-      "id": "dxe-actuate-sequence-bench-override",
+      "id": "dxe-stop-release-sequence-bench",
       "family": "prepare-dxe",
-      "title": "DXE waived sequence with explicit ASPM/console bench overrides",
+      "title": "DXE Stop/release-only sequence with ASPM admission waiver",
       "switches": {
         "EnableSingleTargetExecution": true,
         "AcceptUnverifiedActuation": true,
-        "UnsafeBenchExperiment": true
+        "StopReleaseOnlyBench": true
       },
-      "binary": "GPU-SEQUENCE-UNVERIFIED-BENCH-DXE-<label>.efi",
+      "binary": "GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-<label>.efi",
       "safety": "actuates",
       "attestations": [
         "ORDERED_SEQUENCE=1",
         "TARGET_ORDER=0000:01:00.0,0000:04:00.0",
         "ASPM_ADMISSION_BYPASSED=1",
-        "AMD_CONSOLE_OWNERSHIP_BYPASSED=1",
+        "AMD_CONSOLE_OWNERSHIP_REQUIRED=1",
         "FILE_ONLY_OUTPUT=1",
+        "STOP_RELEASE_ONLY=1",
+        "FIRMWARE_TRANSACTION=0",
+        "UNLOCK=0",
+        "REATTACH_ATTEMPTED=1",
+        "REATTACH_VERIFIED=0",
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0",
         "RECOVERY_VERIFIED=0"
       ],
       "requires_selection": "sequence",
-      "note": "Opt-in bench-only DXE build for the explicit 4090 then 3080 order. It bypasses ASPM and independent-AMD-console admission only; other transaction, peer, reset, and recovery logic remains active. After read-only preparation and before any mutating transaction, it requires firmware ConOut warning output plus a three-second stall; if either is unavailable, actuation is refused. The warning cautions that NVIDIA-connected displays may go black, disconnect, or flicker and that reattachment is not guaranteed. The warning uses configured ConOut, which is not proof of a physical display. File logging remains enabled; other screen output is suppressed. Not hardware-verified.",
+      "note": "Bench-only DXE test for exactly 0000:01:00.0 (4090) then 0000:04:00.0 (3080). Waives ASPM admission only in this opt-in profile; independent AMD-console ownership and live text-output graph checks remain mandatory. Each selected GPU runs msi_release.c driver Stop/release, then ConnectController reattachment and protocol/GOP graph verification. The vendor gpu_unlock_610 firmware transaction is excluded from the image; UNLOCK=0, FLASH=0, RESET=0. Before the first Stop it requires warning output through configured firmware ConOut and a three-second stall; missing console, output failure, or missing stall service refuses actuation. Displays connected to either NVIDIA GPU may go dark, disconnect, or flicker; reattachment is attempted and verified against the captured protocol/GOP graph but remains unproven on physical hardware. File logging remains enabled and routine screen output is suppressed. Not hardware-verified or recovery-verified.",
       "requires_local_boot_profile": true
     },
     {
