@@ -217,7 +217,10 @@ EFI_STATUS GuBootBenchCountdown(VOID) {
     GuLog("BENCH_WARNING=REFUSED REASON=LOG_OR_STALL_UNAVAILABLE GPU_ACTION=0\n");
     return EFI_UNSUPPORTED;
   }
-  EFI_STATUS text_status=BenchBuildTargetText(targets,GU_STOP_BENCH_TARGET_TEXT_CHARS);
+  /* The selected GPU inventory can exceed the fixed text-menu buffer.
+   * Multi-GPU warning pixels use only the current target identity. */
+  EFI_STATUS text_status=count>1U?EFI_SUCCESS:
+    BenchBuildTargetText(targets,GU_STOP_BENCH_TARGET_TEXT_CHARS);
   if(text_status!=EFI_SUCCESS)return text_status;
   /* Multi-target warnings use a non-target NVIDIA GOP directly.
    * System text output may be bound to the GPU that will be stopped. */
