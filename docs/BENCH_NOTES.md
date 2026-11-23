@@ -334,6 +334,36 @@ records the intended operating layout after the attached-iGPU comparison; it is
 not an actuation approval. No ASPM changes, Stop, preparation, or actuation
 image for this check.
 
+## Headless iGPU/4090 with PEG selected: run 0023
+
+Run `0023` follows the operator's PEG-selected layout, with the iGPU and 4090
+reported headless. PCI inventory still sees the AMD iGPU (`0000:0f:00.0`) and
+both NVIDIA GPUs. The 4090 (`0000:01:00.0`) has `GOP_COUNT=0`; the iGPU has no
+GOP record. The sole GOP is the 3080 (`0000:04:00.0`), with a valid
+2560-by-1440 mode descriptor and active LG EDID. Both configured `ConOut` and
+`ErrOut` contain the 3080 path only. Despite the single path, the diagnostic
+correctly reports `ERROR_CONSOLE_ISOLATION=CONFLICT`,
+`INDEPENDENT_CONSOLE_ASSOCIATION=0`, and
+`TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1`: there is no independent
+GOP/console association. The console handle's device path is unavailable, so
+the report does not prove which physical screen received text. The 3080 and its
+chipset links continue to report `ASPM=2`; the 3080 link is Gen4 x4 and records
+9 device errors.
+
+This does not authorize sequential Stop/release. Removing the ASPM admission
+gate or treating an output file as a replacement for the console-ownership and
+link-safety checks would turn unverified state into acceptance. No actuation
+image or hardware mutation was produced from this capture.
+
+For logging, the installed DXE implementation already separates `GuLog`
+(`EFI_FILE_PROTOCOL.Write`/flush to the image volume's numbered run file) from
+screen output. DXE has no interactive menu. That means log text need not be
+rendered to be written; it does **not** mean the file substitutes for the
+independent-console gate or that quieting safety/status output is harmless. No
+screen-suppression option was added to an active transaction build. The
+read-only topology image used for this run saved its durable log; its existing
+capture reported `SCREEN=AVAILABLE`.
+
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 
 The uploaded topology capture `GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` puts the
