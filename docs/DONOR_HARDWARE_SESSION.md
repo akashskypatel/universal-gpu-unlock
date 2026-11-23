@@ -521,6 +521,7 @@ Physical runs, stored as files and scored by the same tool an operator runs. Eac
 | `physical-prepare-0008` | `prep-selected (built with -CapturedPromReference)` | `prepare` | 17 | `ac9cf3bb73f56ae4f49008892d06c16535292f5d707eeba0dbad1968e0accc56` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=2 GATES_FAILED=0` |
 | `physical-readonly-0014` | `diag-topology-log` | `readonly` | 241 | `cd5fa956816016380c93aa6e4c87fe9c1ab2c4932774ac02bf1c3f92dd232eea` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 | `physical-readonly-0015` | `diag-topology-log` | `readonly` | 193 | `34bdb0494bf2895274020addafd60cd44271d412ae9d7fad80a784fc59a93741` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
+| `physical-readonly-0016` | `diag-topology-log` | `readonly` | 224 | `de5f4203212249d284b64be28e47618ff895bb8543dbc9ed80e0cc8a6528b509` | `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0` |
 
 ### `physical-readonly-0000`
 
@@ -1138,6 +1139,39 @@ It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FA
 *History:* Read-only run using the operator’s intended fixed display layout: three reported displays on the 3080, with the 4090 and AMD iGPU headless. The diagnostic captures one GOP, one configured ConOut path and one ErrOut path, all associated with the 3080; the 4090 remains enumerated but has no GOP in this boot. No independent AMD GOP or console association is observed, so the topology remains CONFLICT. The 3080 endpoint still reports ASPM=2. The operator reports three physical displays, but this GOP handle exposes only one active EDID record and the log does not inventory each connector. No controller was stopped and no GPU was changed.
 
 *What it does not show:* that all three physical displays were individually enumerated or that the GOP framebuffer is usable; the exact physical destination of the latest text output; that AMD GOP is impossible under another BIOS policy; that the 3080 driver can safely be released; or that a firmware transaction, Windows acceptance, or recovery succeeds.
+
+### `physical-readonly-0016`
+
+*File:* `tests/data/hardware_session/physical-readonly-0016.txt` — 21780 bytes stored, 22004 as captured, 224 lines. CRLF as captured; the recorded digest is over the LF-normalised file.
+
+*Captured:* 2026-11-18. *Bench:* Operator reports one display connected to the AMD iGPU, two to the RTX 3080, and none to the RTX 4090; read-only diagnostic booted from USB..
+
+*Score:*
+
+```bash
+python3 tools/verify_run_log.py tests/data/hardware_session/physical-readonly-0016.txt --stage readonly
+```
+
+It prints `RUN_LOG_VERDICT=PASS SYNTHETIC=0 HARDWARE_VERIFIED=0 GATES=3 GATES_FAILED=0`.
+
+*What this log puts on paper:*
+
+* `DIAGNOSTIC_OUTPUT SCREEN=AVAILABLE DURABLE_LOG=1` — the saved-log diagnostic completed with screen output available
+* `GOP_DISPLAY[0] HANDLE=0x74ed2b18 OWNER_CLASS=NVIDIA_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:04:00.0 OWNER_ID=10de:220a MODE_DESCRIPTOR=VALID MODE=0 MAX_MODE=14 INFO_SIZE=36 RESOLUTION=2560x1440 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=4096 FB_BASE=0xf400000000 FB_SIZE=0x1680000 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1` — the 3080 has a firmware GOP and reports a 2560 by 1440 mode descriptor
+* `GOP_EDID[0] TYPE=ACTIVE STATUS=0 SIZE=256 BLOCKS=2 HEADER_VALID=1 BASE_CHECKSUM_VALID=1 MANUFACTURER=GSM PRODUCT=0x772a READ_ONLY=1 SERIAL_OMITTED=1` — the 3080 GOP exposes an active EDID identity; the log does not enumerate every one of the two operator-reported 3080 monitors
+* `GOP_DISPLAY[1] HANDLE=0x76b6c418 OWNER_CLASS=INDEPENDENT_DISPLAY GRAPHICS_PCI_MATCHES=1 OWNER_BDF=0000:0f:00.0 OWNER_ID=1002:13c0 MODE_DESCRIPTOR=VALID MODE=1 MAX_MODE=10 INFO_SIZE=36 RESOLUTION=800x600 PIXEL_FORMAT=1 PIXELS_PER_SCANLINE=832 FB_BASE=0xf810000000 FB_SIZE=0x1e7800 FB_DESCRIPTOR_PRESENT=1 READ_ONLY=1` — an AMD independent-display GOP is now present, with an 800 by 600 firmware mode descriptor
+* `GOP_EDID[1] TYPE=ACTIVE STATUS=0 SIZE=256 BLOCKS=2 HEADER_VALID=1 BASE_CHECKSUM_VALID=1 MANUFACTURER=GSM PRODUCT=0x7700 READ_ONLY=1 SERIAL_OMITTED=1` — the AMD GOP exposes an active EDID identity; the bench report says one display is attached to iGPU
+* `ERROR_CONSOLE_CAPTURE=1 CLASSIFIED=1 NVIDIA=1 INDEPENDENT=1 UNMATCHED=0 AMBIGUOUS=0 INDEPENDENT_WITHOUT_GOP=0 NOT_DETACH_EVIDENCE=1` — ErrOut classification includes both an NVIDIA and an independent graphics path; it is not an isolated AMD console
+* `ERROR_CONSOLE_ISOLATION=CONFLICT` — console ownership remains mixed and is not accepted as isolated
+* `NVIDIA_GPU_COUNT=2 INDEPENDENT_GOP_COUNT=1 INDEPENDENT_CONOUT_MATCH=1 NVIDIA_CONOUT_MATCH=1 GOP_UNMATCHED=0 INDEPENDENT_CONSOLE_ASSOCIATION=0 CONOUT_WITHOUT_GOP=0 CONOUT_UNMATCHED=0 CONOUT_AMBIGUOUS=0` — both AMD and the 3080 match configured ConOut; the independent console association is zero because the configured console is mixed
+* `GPU[0] BDF=0000:01:00.0 ID=10de:2684 SUB=1043:88e6 PCI_INDEX=1 PARENT=0 ROOT_PORT=0 DEPTH=1 ANCESTRY=1 ROOT_VALID=1 GOP_COUNT=0` — the 4090 remains enumerated but no GOP is captured in this boot
+* `TOPOLOGY_VERDICT=CONFLICT NVIDIA_CONOUT_BLOCKER=1` — the diagnostic still blocks release based on its mixed NVIDIA console topology
+* `PCI_LINK_NODE BDF=0000:04:00.0 OBS=VALID SIDE_LOCAL=1 READ_ONLY=1 PCIE_CAP=0x78 TYPE=1 ASPM=2 SPEED=4 WIDTH=4 MAX_SPEED=4 MAX_WIDTH=16 TRAINING=0 DLL_ACTIVE=0 DEVICE_ERRORS=9` — the 3080 endpoint still reports ASPM L1 and Gen4 x4 negotiated
+* `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0` — the log reports no dropped or overflowing diagnostic lines
+
+*History:* Read-only comparison after the 3080-only display boot. With one reported display on AMD and two on the 3080 (4090 headless), the firmware exposes GOPs on both AMD 0000:0f:00.0 and NVIDIA 0000:04:00.0. Configured ConOut and ErrOut include both graphics paths, so the console-isolation result remains CONFLICT; this does not show that AMD owns the console independently. The 4090 remains enumerated with GOP_COUNT=0. The 3080 endpoint still reports ASPM=2. The log reports one EDID per GOP handle, not every physical monitor/connector. No device was stopped or changed.
+
+*What it does not show:* that the AMD GOP or framebuffer can operate without a monitor attached; that the console can be moved exclusively to AMD; that the three operator-reported displays are all individually enumerated; that the 3080 driver can be safely released; or that a firmware transaction, Windows acceptance, or recovery succeeds.
 
 ## Runs that stopped without terminating
 
