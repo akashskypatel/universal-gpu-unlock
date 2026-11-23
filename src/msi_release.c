@@ -1476,6 +1476,12 @@ EFI_STATUS GuMsiRelease(VOID) {
     if(s==EFI_SUCCESS)s=Driver(stage-1);
     b->RestoreTPL(old);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    /* A failed file write or flush is not an acceptable record of a new
+     * proprietary Stop callback. Reattach remains separately reachable if
+     * an earlier stage already stopped a driver. */
+    if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
+#endif
     /* Record before the callback: an error may follow a partial driver stop. */
     Plan.mutated=TRUE;
     s=b->DisconnectController(stage==3?Plan.pci:Plan.gop,
