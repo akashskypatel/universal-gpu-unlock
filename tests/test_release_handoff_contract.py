@@ -832,6 +832,7 @@ int main(void) {
   /* A valid target child path cannot alias a sibling's full path. */
   memcpy(children[1].path,gop_path,sizeof(gop_path));
   children[1].path_bytes=sizeof(gop_path);
+  current[0].controller=&duplicate; /* Both live children now have the same complete path. */
   CHECK(ReconcileTargetChildren()==EFI_COMPROMISED_DATA);
   (void)unknown_path;
   return 0;
