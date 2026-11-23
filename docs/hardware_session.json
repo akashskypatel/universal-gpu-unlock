@@ -162,6 +162,36 @@
     "after_the_steps": "That is the loop: build-sign-stage, boot once, capture, score. The verdict is written into the session record beside the candidate id and the goal it was collected for. It does not change `hardware_verified` for anything, and the next section says why: a green read-only log is a statement about one image on one machine, not about a card.",
     "candidates": [
       {
+        "id": "diag-topology-gop-text-cycle",
+        "title": "Device-specific GOP text output cycle with a USB log",
+        "safety": "read-only",
+        "stage": "readonly",
+        "log": "\\GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the USB root",
+        "summary": "Records the exact text interface on each captured GOP and its GOP-consuming driver image. It then sends a label through each distinct available device text interface for two seconds. The owner must confirm which monitor showed each label. No GPU driver Stop or console route change occurs.",
+        "command": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-gop-text-cycle -StageDrive G",
+        "evidence": [
+          {
+            "goal": "B1",
+            "token": "GOP_TEXT_ENDPOINT[%zu] HANDLE=%p GOP_STATUS=%#llx",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "Identifies the exact GOP handle where SimpleTextOut is available and whether it matches the captured graphics endpoint."
+          },
+          {
+            "goal": "B2",
+            "token": "GOP_TEXT_DRIVER[%zu] GOP_DRIVER_EDGES=%zu AGENT=%p",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "Records the separate graphics-console driver candidate, its agent and image resolution. The UEFI opener graph does not prove which driver installed SimpleTextOut."
+          },
+          {
+            "goal": "B1",
+            "token": "GOP_TEXT_CYCLE_END ATTEMPTED=%zu API_SUCCEEDED=%zu",
+            "emitter": "src/gpu_topology_efi.c",
+            "why": "Shows how many direct device-specific text calls returned success; the owner must observe each physical screen before treating the result as a usable display route."
+          }
+        ],
+        "does_not_prove": "that a successful OutputString call produced visible pixels, that an identified GOP consumer installed the text protocol, or that any GPU can be safely stopped or reattached. Screen contents change; GPU configuration and firmware console ownership do not."
+      },
+      {
         "id": "diag-topology-log",
         "title": "topology with a numbered USB log",
         "safety": "read-only",
