@@ -257,6 +257,13 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     /* GuMsiRelease does not return success until its released-state
      * PCI, protocol graph, survivor GOP and peer checks all pass. */
     GuLog("STOP_RELEASE_RELEASE_VERIFIED=1 FIRMWARE_TRANSACTION=0\n");
+    /* Console-owning first-card experiment: after Stop, request the
+     * independently captured peer GOP text interface. Its absence must
+     * not prevent the already-stopped target from reattaching. */
+    EFI_STATUS peer_console=GuMsiStopReleaseTryPeerConsole();
+    GuLog("STOP_RELEASE_PEER_CONSOLE_ATTEMPT STATUS=%#llx "
+          "REATTACH_CONTINUES=1 GLOBAL_CONOUT_CHANGED=0\n",
+          (unsigned long long)peer_console);
     GU_PHASE("reattach-firmware-drivers");
     s=GuMsiReattachAfterStop();
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault) {
