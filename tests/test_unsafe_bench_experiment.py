@@ -106,11 +106,19 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         preflight = self.release.split("EFI_STATUS GuMsiPreflight", 1)[1].split("static BOOLEAN DecodeMask", 1)[0]
         topology = preflight.index("s=Gops(TRUE)")
         consoleless = preflight.index("Plan.consoleless_target_gop=TRUE")
-        console_init = preflight.index("if(!Plan.consoleless_target_gop) {")
+        console_capture = preflight.index("Plan.console=t->ConsoleOutHandle")
+        console_validate = preflight.index("if(!Plan.consoleless_target_gop) {", console_capture)
         self.assertLess(topology, consoleless)
-        self.assertLess(consoleless, console_init)
-        self.assertLess(console_init, preflight.index("Plan.console=t->ConsoleOutHandle"))
-        self.assertIn("STOP_RELEASE_CONSOLE=NOT_REQUIRED TARGET_IS_ONLY_GOP=1", self.release)
+        self.assertLess(consoleless, console_capture)
+        self.assertLess(console_capture, console_validate)
+        self.assertIn("Reading these fields performs no console I/O.", self.release)
+        consumers = self.release.split("static EFI_STATUS Consumers(VOID)", 1)[1].split("EFI_STATUS GuMsiPreflight", 1)[0]
+        self.assertIn("console_child++", consumers)
+        self.assertIn("e->controller==Plan.console||e->controller==Plan.error", consumers)
+        self.assertIn("e->agent!=Plan.nv_agent||e->count!=1", consumers)
+        self.assertIn("!(Plan.consoleless_target_gop&&", consumers)
+        self.assertIn("Consumers refused target-console child", consumers)
+        self.assertIn("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_IS_ONLY_GOP=1", self.release)
         self.assertIn("if(Plan.consoleless_target_gop)return EFI_SUCCESS;", self.release)
         self.assertIn("if(Plan.consoleless_target_gop) {", self.release)
 

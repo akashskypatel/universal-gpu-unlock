@@ -688,7 +688,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
 #else
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   if(Plan.consoleless_target_gop) {
-    GuLog("STOP_RELEASE_CONSOLE=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 CONSOLE_IO=0\n");
+    GuLog("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_IS_ONLY_GOP=1 PREFLIGHT_CONSOLE_IO=0\n");
     return EFI_SUCCESS;
   }
 #endif
@@ -789,7 +789,7 @@ static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   if(Plan.consoleless_target_gop) {
     (void)graph;
-    GuLog("STOP_RELEASE_TEXT_GRAPH=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 CONSOLE_IO=0\n");
+    GuLog("STOP_RELEASE_TEXT_GRAPH=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 PREFLIGHT_CONSOLE_IO=0\n");
     return EFI_SUCCESS;
   }
 #endif
@@ -932,7 +932,7 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
   return EFI_SUCCESS;
 }
 static EFI_STATUS Consumers(VOID) {
-  UINTN pci=0,child=0,idle=0,text=0,virtual=0,gfx=0;
+  UINTN pci=0,child=0,idle=0,console_child=0,text=0,virtual=0,gfx=0;
   for(UINTN i=0;i<Original.count;i++) {
     const EDGE *e=&Original.edges[i];
     if(e->handle==Plan.pci) {
@@ -944,7 +944,10 @@ static EFI_STATUS Consumers(VOID) {
         child++;
       }
       else if(Guid(&e->protocol,&PathGuid)&&e->attributes==8){
-        idle++;
+        if(Plan.consoleless_target_gop&&
+           (e->controller==Plan.console||e->controller==Plan.error))
+          console_child++;
+        else idle++;
       }
     } else if(e->handle==Plan.gop) {
       if(Guid(&e->protocol,&TextGuid)&&(e->attributes&EFI_OPEN_PROTOCOL_BY_DRIVER)&&e->controller==Plan.gop){
@@ -979,21 +982,47 @@ static EFI_STATUS Consumers(VOID) {
           (unsigned long long)(UINTN)Plan.nv_agent,(size_t)Plan.survivor_count);
     return Driver(2);
   }
-  if(pci<1||(child<1&&idle<1)||text<1||gfx<1||!Plan.nv_agent||!Plan.out_agent||!Plan.gfx_agent||
+  if(pci<1||(child<1&&idle<1&&console_child<1)||text<1||gfx<1||!Plan.nv_agent||!Plan.out_agent||!Plan.gfx_agent||
      Plan.nv_agent==Plan.out_agent||Plan.out_agent==Plan.gfx_agent||Plan.gfx_agent==Plan.nv_agent) {
-    GuLog("Consumers check: pci=%zu child=%zu idle=%zu text=%zu virtual=%zu gfx=%zu\n",
-      pci, child, idle, text, virtual, gfx);
+    GuLog("Consumers check: pci=%zu child=%zu idle=%zu console_child=%zu text=%zu virtual=%zu gfx=%zu\n",
+      pci, child, idle, console_child, text, virtual, gfx);
     return EFI_ACCESS_DENIED;
+  }
+  /* A sole-GOP target may own the configured firmware text console. Its
+   * controller relationship is target-owned, not an independent idle output;
+   * keep the handle protected but let the target Stop remove that driver edge. */
+  if(console_child) {
+    for(UINTN i=0;i<Original.count;i++) {
+      const EDGE *e=&Original.edges[i];
+      if(e->handle==Plan.pci&&Guid(&e->protocol,&PathGuid)&&e->attributes==8&&
+         (e->controller==Plan.console||e->controller==Plan.error)&&
+         (e->agent!=Plan.nv_agent||e->count!=1)) {
+        GuLog("Consumers refused target-console child: AGENT=%#llx TARGET_DRIVER=%#llx COUNT=%u\n",
+              (unsigned long long)(UINTN)e->agent,
+              (unsigned long long)(UINTN)Plan.nv_agent,(unsigned)e->count);
+        return EFI_ACCESS_DENIED;
+      }
+    }
   }
   /* The driver agent is now known, irrespective of enumeration order.
    * The headless path above still refuses every child. */
-  if(idle&&pci!=1)return EFI_ACCESS_DENIED;
+  if(idle&&pci!=1) {
+    GuLog("Consumers refused idle outputs with ambiguous target driver count: PCI_DRIVERS=%u IDLE_OUTPUTS=%u\n",
+          (unsigned)pci,(unsigned)idle);
+    return EFI_ACCESS_DENIED;
+  }
   for(UINTN i=0;i<Original.count;i++) {
     EDGE *e=&Original.edges[i];
     if(e->handle==Plan.pci&&Guid(&e->protocol,&PathGuid)&&
-       e->attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER&&e->controller!=Plan.gop) {
+       e->attributes==EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER&&e->controller!=Plan.gop&&
+       !(Plan.consoleless_target_gop&&
+         (e->controller==Plan.console||e->controller==Plan.error))) {
       EFI_STATUS s=ClassifyIdleOutput(e);
-      if(s!=EFI_SUCCESS)return s;
+      if(s!=EFI_SUCCESS) {
+        GuLog("Consumers refused idle output: CONTROLLER=%#llx STATUS=%#llx\n",
+              (unsigned long long)(UINTN)e->controller,(unsigned long long)s);
+        return s;
+      }
     }
   }
   for(UINTN i=0;i<3;i++){
@@ -1038,13 +1067,15 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(Plan.gop&&!Plan.survivor_count) {
     Plan.consoleless_target_gop=TRUE;
     StopFileOnlyOutput=TRUE;
-    GuLog("STOP_RELEASE_CONSOLE=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 "
-          "TARGET_GOP=1 SURVIVOR_GOPS=0 CONSOLE_IO=0 FILE_LOG=1\n");
+    GuLog("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_IS_ONLY_GOP=1 "
+          "TARGET_GOP=1 SURVIVOR_GOPS=0 PREFLIGHT_CONSOLE_IO=0 FILE_LOG=1\n");
   }
 #endif
+  /* Retain system-table handles for graph protection even when console
+   * admission is waived. Reading these fields performs no console I/O. */
+  Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
+  Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
   if(!Plan.consoleless_target_gop) {
-    Plan.console=t->ConsoleOutHandle;Plan.input=t->ConsoleInHandle;Plan.error=t->StandardErrorHandle;
-    Plan.text=t->ConOut;Plan.err=t->StdErr;Plan.keys=t->ConIn;
     if(!Plan.console||!Plan.input||!Plan.error||!Plan.text||!Plan.err||!Plan.keys||
        !Plan.keys->ReadKeyStroke||!Plan.keys->Reset||!Plan.keys->WaitForKey)
       return EFI_UNSUPPORTED;
