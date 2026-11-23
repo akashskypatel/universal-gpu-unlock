@@ -127,6 +127,28 @@
       "note": "stage 1 of the donor session: the log this build writes is what tools/verify_run_log.py scores"
     },
     {
+      "id": "diag-topology-gop-text-cycle",
+      "family": "diagnostic",
+      "title": "GOP-specific TextOut protocol and visible cycle diagnostic",
+      "switches": {
+        "SaveLog": true,
+        "CycleGopText": true
+      },
+      "binary": "GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI",
+      "safety": "read-only",
+      "attestations": [
+        "READ_ONLY=1",
+        "DISPLAY_TEXT_WRITE=1",
+        "GOP_TEXT_CYCLE=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLR=0",
+        "SAVE_LOG=1",
+        "WINDOWS_HANDOFF=0"
+      ],
+      "note": "Explicit visual diagnostic: logs per-GOP SimpleTextOut and GOP driver image; writes only through already installed text interfaces and pauses two seconds each. Does not Stop, reconnect, set display modes, change global ConOut, or write NVRAM. Successful text API return is not proof of visible pixels."
+    },
+    {
       "id": "diag-topology-handoff",
       "family": "diagnostic",
       "title": "topology with a log and automatic Windows handoff",
