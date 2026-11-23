@@ -249,12 +249,12 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     /* GuMsiRelease does not return success until its released-state
      * PCI, protocol graph, survivor GOP and peer checks all pass. */
-    GuLog("STOP_RELEASE_RELEASE_VERIFIED=1 FIRMWARE_TRANSACTION=0\\n");
+    GuLog("STOP_RELEASE_RELEASE_VERIFIED=1 FIRMWARE_TRANSACTION=0\n");
     GU_PHASE("reattach-firmware-drivers");
     s=GuMsiReattachAfterStop();
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault) {
       GuLog("STOP_RELEASE_REATTACH=FAILED STATUS=%#llx NEXT_GPU=BLOCKED "
-            "WARM_RESET=MANUAL_AFTER_CONTAINMENT AUTO_RETRY=0\\n",
+            "WARM_RESET=MANUAL_AFTER_CONTAINMENT AUTO_RETRY=0\n",
             (unsigned long long)(s==EFI_SUCCESS?EFI_DEVICE_ERROR:s));
       goto failed;
     }
