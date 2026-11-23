@@ -16,6 +16,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         cls.boot = (SRC / "boot_io.c").read_text(encoding="utf-8")
         cls.dxe = (SRC / "dxe_main.c").read_text(encoding="utf-8")
         cls.builder = (SRC / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
+        cls.app_builder = (SRC / "Build-Experimental-MSVC.ps1").read_text(encoding="utf-8")
+        cls.app = (SRC / "app.c").read_text(encoding="utf-8")
         cls.execution = (SRC / "unlock_execution.c").read_text(encoding="utf-8")
         cls.port_source = (SRC / "port.c").read_text(encoding="utf-8")
         cls.sign_deploy = (SRC / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
@@ -89,6 +91,30 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("Gops(FALSE)", self.release)
         self.assertIn("FIRMWARE_TRANSACTION=0", self.release)
         self.assertIn("GuMsiVerifyFinalGraph()", self.port_source)
+
+    def test_bootable_application_variant_excludes_unlock_and_stages_as_application(self):
+        self.assertIn("[switch]$StopReleaseOnlyBench", self.app_builder)
+        self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-' + $selection.Label + '.EFI'", self.app_builder)
+        self.assertIn("/subsystem:efi_application", self.app_builder)
+        self.assertIn(r"Where-Object { $_ -ne 'vendor\unlock_610.c' }", self.app_builder)
+        self.assertIn("/DGU_STOP_RELEASE_ONLY_BENCH", self.app_builder)
+        branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
+        stop_branch = self.app[branch_start:self.app.index("#else", branch_start)]
+        self.assertIn("GuBootLoadWindows()", stop_branch)
+        self.assertIn("GuBootBenchCountdown()", stop_branch)
+        self.assertIn("GuExecuteStopReleaseSequence(", stop_branch)
+        self.assertIn("GuBootWindows()", stop_branch)
+        self.assertNotIn("GuExecutePreparedSequence(", stop_branch)
+        self.assertNotIn("GuBootChoose(", stop_branch)
+        variant = next(v for v in self.catalog["variants"]
+                       if v["id"] == "app-stop-release-sequence-bench")
+        self.assertEqual(variant["family"], "prepare")
+        self.assertNotIn("DXE", variant["binary"])
+        self.assertTrue(variant["requires_local_boot_profile"])
+        self.assertEqual(variant["requires_selection"], "sequence")
+        for token in ("FIRMWARE_TRANSACTION=0", "UNLOCK=0", "STOP_RELEASE_ONLY=1",
+                      "ASPM_ADMISSION_BYPASSED=1", "REATTACH_ATTEMPTED=1"):
+            self.assertIn(token, variant["attestations"])
 
     def test_catalogue_keeps_override_as_a_separate_actuating_variant(self):
         matches = [v for v in self.catalog["variants"] if v["id"] == "dxe-stop-release-sequence-bench"]

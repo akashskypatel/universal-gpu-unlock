@@ -16,11 +16,13 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
 typedef enum { GU_S3_DISABLED, GU_S3_REQUIRED, GU_S3_OPTIONAL } GU_S3_POLICY;
 /* Prepare the active context before its transaction. */
 EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage);
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
 /* The first context must already be prepared. Complete every ordered step
  * and its S3 policy, then check aggregate handover before returning. */
 EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
                            EFI_HANDLE image,
                                      GU_S3_POLICY policy,const char **stage);
+#endif
 /* Failure decision includes earlier published contexts. */
 BOOLEAN GuExecutionNeedsContainment(VOID);
 #ifndef GU_STOP_RELEASE_ONLY_BENCH

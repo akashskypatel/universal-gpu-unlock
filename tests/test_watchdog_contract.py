@@ -104,12 +104,22 @@ class WatchdogContract(unittest.TestCase):
 
     def test_the_handover_cancels_after_the_outcome_and_before_windows(self):
         outcome = APP.index("GU_BOOT_STATE_OUTCOME")
-        cancel = APP.index("GuBootWatchdogCancel()")
-        windows = APP.index('stage="start-Windows"')
+        cancel = APP.index("GuBootWatchdogCancel()", outcome)
+        windows = APP.index('stage="start-Windows"', outcome)
         self.assertLess(outcome, cancel,
                         "the timer must outlive the transaction it bounds")
         self.assertLess(cancel, windows,
                         "nothing may stay armed across the handover")
+
+    def test_stop_release_application_cancels_timer_after_checks_before_windows(self):
+        marker = APP.index("STOP_RELEASE_ONLY_IMAGE=1")
+        branch = APP[APP.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, marker):
+                     APP.index("#else", marker)]
+        execution = branch.index("GuExecuteStopReleaseSequence(")
+        cancel = branch.index("GuBootWatchdogCancel()")
+        windows = branch.index('stage="start-Windows"')
+        self.assertLess(execution, cancel)
+        self.assertLess(cancel, windows)
 
     def test_the_run_says_whether_a_bound_was_in_force(self):
         self.assertIn('GuLog("WATCHDOG BOUND=%u SECONDS ACTIVE=1\\n"', APP)

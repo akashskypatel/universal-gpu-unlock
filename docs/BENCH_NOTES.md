@@ -381,6 +381,16 @@ staged, or hardware-tested in this Linux workspace. The catalogue attests
 `FIRMWARE_TRANSACTION=0`, `UNLOCK=0`, `REATTACH_VERIFIED=0` at build time,
 `ACTUATION_VERIFIED=0`, and `RECOVERY_VERIFIED=0`.
 
+For a bootable USB test image, use the separate application variant
+`app-stop-release-sequence-bench` (PE subsystem 10), not the DXE driver above.
+The catalogue stages it as `EFI\\BOOT\\BOOTX64.EFI` with
+`-Only app-stop-release-sequence-bench -SelectionBdfs
+'0000:01:00.0,0000:04:00.0' -StageDrive G -AcceptActuatingDeploy`
+(after verifying G: is the intended USB). It follows the same Stop/release-only flow, preloads
+and retains the pinned Windows handoff, then starts Windows only after the
+sequence verifies. This application has also not been built, signed, staged,
+or exercised on hardware here.
+
 ## The chipset-connected RTX 3080: what the attached topology does and does not say
 
 The uploaded topology capture `GPU-TOPOLOGY-DIAGNOSTIC-0010.TXT` puts the

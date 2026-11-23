@@ -16,9 +16,10 @@
 
 #include "compat/compat.h"
 
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
 #include "vendor/unlock_610.h"
-
 #include "s3_save.h"
+#endif
 
 #include "driver_nvram.h"
 #include "boot_state.h"
@@ -274,6 +275,34 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
                 (unsigned long long)s,(unsigned)owner->profile_verified,
                 (unsigned)owner->prom_verified);
 
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  GuLog("STOP_RELEASE_ONLY_IMAGE=1 ORDER=4090_THEN_3080 ASPM_ADMISSION=BYPASSED "
+        "AMD_CONSOLE_OWNERSHIP=REQUIRED FIRMWARE_TRANSACTION=0 UNLOCK=0 "
+        "SCREEN_OUTPUT=SUPPRESSED LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
+  /* Load the pinned Windows handoff before mutation so failure to locate the
+   * handoff target can never strand the machine after Stop/release. */
+  stage="stage-windows-image";GuTracePhase(stage);
+  s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  s=GuBootBenchCountdown();
+  if(s!=EFI_SUCCESS) {
+    GuLog("BENCH_COUNTDOWN=FAILED STATUS=%#llx NO_GPU_ACTION=1\n",
+          (unsigned long long)s);
+    goto failed;
+  }
+  GuBootSilence();
+  s=GuExecuteStopReleaseSequence(owner,t,image,&stage);
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  s=GuBootWatchdogCancel();if(s!=EFI_SUCCESS)goto failed;
+  GuLog("STOP_RELEASE_ONLY=COMPLETE FIRMWARE_TRANSACTION=0 UNLOCK=0 "
+        "REATTACH_VERIFIED=1 WINDOWS_HANDOFF=READY\n");
+  GuBootUnsilence();
+  GuBootSay(L"\r\nStop/release and reattachment checks passed.\r\n"
+            L"No firmware unlock transaction was run. Starting Windows.\r\n");
+  stage="close-USB-log";GuTracePhase(stage);
+  s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  stage="start-Windows";GuTracePhase(stage);s=GuBootWindows();
+  GuBootHalt();return s==EFI_SUCCESS?EFI_ABORTED:s;
+#else
   stage="stage-windows-image";GuTracePhase(stage);s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 
   stage="manual-choice";GuTracePhase(stage);s=GuBootChoose(&choice);if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
@@ -419,6 +448,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   /* A returned Windows image is not a successful handoff. */
 
   GuBootHalt();return s==EFI_SUCCESS?EFI_ABORTED:s;
+#endif /* !GU_STOP_RELEASE_ONLY_BENCH */
 
 failed:
 

@@ -455,6 +455,7 @@ The same preparation as a boot-service driver, loaded from a `Driver####` entry 
 * `actuate-one-target` — writes the GPU: this is the `actuate` stage, needs `-AcceptActuatingDeploy`, and is outside a read-only session by definition.
 * `actuate-sequence` — writes the GPU, ordered over several cards: `actuate` stage, and it needs the selection to be exactly what the catalogue says.
 * `dxe-stop-release-sequence-bench` — Stops/releases and attempts firmware-driver reattachment on two GPUs sequentially while waiving ASPM admission only; independent AMD-console ownership and live text-output graph checks remain mandatory. It contains no GPU unlock firmware transaction, is unscoreable as read-only evidence, and has not been hardware-verified.
+* `app-stop-release-sequence-bench` — Bootable EFI application that performs the same ordered Stop/release and reattachment checks, then hands off to the pinned Windows Boot Manager; ASPM admission is waived, console ownership checks remain mandatory, and no firmware unlock transaction is linked or called. It is unscoreable as read-only evidence and has not been hardware-verified.
 * `actuate-one-target-resident` — writes the GPU from the ESP: `actuate` stage, and it is the only image that could observe B9's ESP-resident half.
 * `actuate-runtime-selection` — writes the GPU with the target chosen at boot: `actuate` stage.
 * `actuate-runtime-selection-resident` — writes the GPU, resident, target at boot: `actuate` stage.

@@ -100,7 +100,7 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #error The unverified ASPM bench-condition override requires an explicit ordered actuation build
 #endif
 #if !defined(GU_DXE_FILE_ONLY_OUTPUT)
-#error The unverified bench DXE must preserve its log while suppressing screen output
+#error The unverified bench image must preserve its log while suppressing routine screen output
 #endif
 #endif
 #if defined(GU_STOP_RELEASE_ONLY_BENCH)
