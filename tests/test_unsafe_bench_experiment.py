@@ -71,7 +71,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi", self.builder)
         self.assertIn("Where-Object { $_ -ne", self.builder)
         self.assertIn(r"vendor\unlock_610.c", self.builder)
-        for field in ("ASPM_ADMISSION_BYPASSED", "AMD_CONSOLE_OWNERSHIP_REQUIRED", "FILE_ONLY_OUTPUT",
+        for field in ("ASPM_ADMISSION_BYPASSED", "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED", "FILE_ONLY_OUTPUT",
                       "STOP_RELEASE_ONLY", "FIRMWARE_TRANSACTION", "UNLOCK", "REATTACH_ATTEMPTED", "REATTACH_VERIFIED"):
             self.assertIn(field + "=", self.builder)
 
@@ -90,6 +90,18 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertLess(run.index("GuBootBenchCountdown()"), run.index("GuExecuteStopReleaseSequence("))
         self.assertIn("NO_GPU_ACTION=1", run)
         self.assertIn("SYSTEM_TABLE_CONOUT", self.boot)
+
+    def test_stop_only_console_gate_accepts_non_target_nvidia_survivor_but_requires_it(self):
+        check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
+        variable = self.release.split("static EFI_STATUS AmdConsoleVariable", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[0]
+        self.assertIn("#ifdef GU_STOP_RELEASE_ONLY_BENCH\n      int owner=GuDevicePathDisplayOwner", variable)
+        self.assertIn("#else\n      int owner=GuDevicePathAmdDisplayOwner", variable)
+        self.assertIn("#ifdef GU_STOP_RELEASE_ONLY_BENCH\n    if(GuDevicePathDisplayOwner", check)
+        self.assertIn("#else\n    if(GuDevicePathAmdDisplayOwner", check)
+        self.assertIn("NO_INDEPENDENT_SURVIVOR_GOP", check)
+        self.assertIn("matching_gops!=1", variable)
+        graph = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[1].split("static EFI_STATUS ReadConfigMode", 1)[0]
+        self.assertIn("if(!survivor||e->count!=1)return EFI_ACCESS_DENIED;", graph)
 
     def test_stop_release_preparation_skips_assets_diagnostics_and_profile(self):
         body = self.execution.split("EFI_STATUS GuPrepareBoundGpu", 1)[1].split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[0]
@@ -175,7 +187,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertNotIn("requires_selection", v)
         self.assertEqual(v["attestations"][2],
                          "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION")
-        for token in ("ASPM_ADMISSION_BYPASSED=1", "AMD_CONSOLE_OWNERSHIP_REQUIRED=1",
+        for token in ("ASPM_ADMISSION_BYPASSED=1", "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
                       "FILE_ONLY_OUTPUT=1", "STOP_RELEASE_ONLY=1", "FIRMWARE_TRANSACTION=0",
                       "UNLOCK=0", "REATTACH_ATTEMPTED=1", "REATTACH_VERIFIED=0",
                       "RECOVERY_VERIFIED=0"):

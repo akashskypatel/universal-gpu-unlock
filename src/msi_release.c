@@ -634,8 +634,13 @@ static EFI_STATUS AmdConsoleVariable(
          at+n-start>192u||paths==8)return EFI_COMPROMISED_DATA;
       /* Normalize only this private GetVariable copy to END_ENTIRE. */
       data[at+1]=0xff;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+      int owner=GuDevicePathDisplayOwner(
+          data+start,at+n-start,owners,(size_t)owner_count);
+#else
       int owner=GuDevicePathAmdDisplayOwner(
           data+start,at+n-start,owners,(size_t)owner_count);
+#endif
       UINTN matching_gops=0;
       for(UINTN k=0;k<Plan.survivor_count;k++) {
         EFI_DEVICE_PATH_PROTOCOL *gop_path=NULL;
@@ -648,7 +653,13 @@ static EFI_STATUS AmdConsoleVariable(
         if(match)matching_gops++;
       }
       data[at+1]=subtype;
-      if(owner!=1||matching_gops!=1)return EFI_ACCESS_DENIED;
+      if(owner!=1||matching_gops!=1) {
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+        GuLog("STOP_RELEASE_CONSOLE=REFUSED VARIABLE=%s REASON=NOT_UNIQUE_NON_TARGET_SURVIVOR OWNER=%d GOP_MATCHES=%u\n",
+              name,owner,(unsigned)matching_gops);
+#endif
+        return EFI_ACCESS_DENIED;
+      }
       paths++;start=at+n;
       if(subtype==0xff)return start==used&&paths?EFI_SUCCESS:EFI_COMPROMISED_DATA;
     }
@@ -663,11 +674,20 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   return EFI_SUCCESS;
 #else
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
-  EFI_HANDLE *handles=NULL;UINTN count=0,display_count=0,amd_count=0;
+  EFI_HANDLE *handles=NULL;UINTN count=0,display_count=0;
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
+  UINTN amd_count=0;
+#endif
   GU_DEVICE_PATH_DISPLAY_OWNER *owners=NULL;
   EFI_STATUS s;
-  if(!Plan.survivor_baseline_valid||!Plan.survivor_count||!b||
-     !b->LocateHandleBuffer||!b->AllocatePool||!b->FreePool)
+  if(!Plan.survivor_baseline_valid||!Plan.survivor_count) {
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    GuLog("STOP_RELEASE_CONSOLE=REFUSED REASON=NO_INDEPENDENT_SURVIVOR_GOP TARGET_GOP=%u SURVIVOR_GOPS=%u\n",
+          (unsigned)(Plan.gop!=NULL),(unsigned)Plan.survivor_count);
+#endif
+    return EFI_NOT_READY;
+  }
+  if(!b||!b->LocateHandleBuffer||!b->AllocatePool||!b->FreePool)
     return EFI_NOT_READY;
   s=b->LocateHandleBuffer(ByProtocol,&PciGuid,NULL,&count,&handles);
   s=ObservationOutput(s,(VOID **)&handles);
@@ -702,27 +722,44 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
     if(s!=EFI_SUCCESS||!p){s=EFI_NOT_READY;break;}
     owners[display_count++]=(GU_DEVICE_PATH_DISPLAY_OWNER){
         (const unsigned char *)p,4096u,(UINT16)(h[0]&0xffffu),cls};
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
     if((h[0]&0xffffu)==0x1002u)amd_count++;
+#endif
   }
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(s==EFI_SUCCESS&&!display_count)s=EFI_ACCESS_DENIED;
+#else
   if(s==EFI_SUCCESS&&(!amd_count||!display_count))s=EFI_ACCESS_DENIED;
+#endif
   for(UINTN k=0;s==EFI_SUCCESS&&k<Plan.survivor_count;k++) {
     EFI_DEVICE_PATH_PROTOCOL *p=NULL;
     s=Interface(Plan.survivors[k].handle,&PathGuid,(VOID **)&p);
     if(s!=EFI_SUCCESS)break;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+    if(GuDevicePathDisplayOwner(
+          (const unsigned char *)p,4096u,owners,(size_t)display_count)!=1)
+#else
     if(GuDevicePathAmdDisplayOwner(
           (const unsigned char *)p,4096u,owners,(size_t)display_count)!=1)
+#endif
       s=EFI_ACCESS_DENIED;
   }
   if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ConOut",owners,display_count);
   if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ErrOut",owners,display_count);
   s=ReleaseObservation(b,owners,s);
   s=ReleaseObservation(b,handles,s);
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if(s==EFI_SUCCESS)
+    GuLog("STOP_RELEASE_CONSOLE=INDEPENDENT_SURVIVOR_VERIFIED POLICY=NON_TARGET_DISPLAY GOPS=%u\n",
+          (unsigned)Plan.survivor_count);
+#endif
   return s;
 #endif
 }
 /* Require graph evidence that the currently bound text console actually
- * consumes only verified AMD survivor GOPs. A configured path alone does
- * not establish that the live ConsoleOutHandle uses that path. */
+ * consumes only verified non-target survivor GOPs. The unlock/handoff policy
+ * requires AMD ownership; Stop/release-only also admits a distinct NVIDIA
+ * survivor, but never the selected target's GOP. */
 static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
 {
 #if defined(GU_UNVERIFIED_BENCH_CONDITIONS) && !defined(GU_STOP_RELEASE_ONLY_BENCH)
@@ -1001,11 +1038,11 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(s==EFI_SUCCESS) { s=Snapshot(&Original); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Snapshot(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) {
     s=ReadOnlyAmdConsoleOwnership();
-    if(s!=EFI_SUCCESS)GuLog("Preflight refused independent AMD ownership: %#llx\n",(unsigned long long)s);
+    if(s!=EFI_SUCCESS)GuLog("Preflight refused independent survivor display ownership: %#llx\n",(unsigned long long)s);
   }
   if(s==EFI_SUCCESS) {
     s=ReadOnlyAmdConsoleGraph(&Original);
-    if(s!=EFI_SUCCESS)GuLog("Preflight refused active AMD console graph: %#llx\n",(unsigned long long)s);
+    if(s!=EFI_SUCCESS)GuLog("Preflight refused active survivor console graph: %#llx\n",(unsigned long long)s);
   }
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
   if(s==EFI_SUCCESS) { s=PointerBaseline(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at PointerBaseline(): %#llx\n", (unsigned long long)s); }

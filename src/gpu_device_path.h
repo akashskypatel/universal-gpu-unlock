@@ -88,12 +88,11 @@ typedef struct {
   unsigned short display_class;
 } GU_DEVICE_PATH_DISPLAY_OWNER;
 
-static inline int GuDevicePathAmdDisplayOwner(
+static inline int GuDevicePathDisplayOwner(
     const unsigned char *candidate, size_t candidate_bytes,
     const GU_DEVICE_PATH_DISPLAY_OWNER *owners, size_t count)
 {
   unsigned matches=0;
-  int amd=0;
   if(!candidate||!owners||!count||count>GU_DISPLAY_OWNER_MAX)return -1;
   for(size_t i=0;i<count;i++) {
     if(!owners[i].path ||
@@ -101,10 +100,22 @@ static inline int GuDevicePathAmdDisplayOwner(
     int match=GuDevicePathHasPrefix(
         owners[i].path,owners[i].path_bytes,candidate,candidate_bytes);
     if(match<0)return -1;
-    if(match) {
-      if(++matches>1)return -1;
-      amd=owners[i].vendor==0x1002u;
-    }
+    if(match&&++matches>1)return -1;
   }
-  return matches&&amd?1:0;
+  return matches?1:0;
+}
+
+/* The strict Windows-handoff policy additionally requires an AMD owner. */
+static inline int GuDevicePathAmdDisplayOwner(
+    const unsigned char *candidate, size_t candidate_bytes,
+    const GU_DEVICE_PATH_DISPLAY_OWNER *owners, size_t count)
+{
+  int any=GuDevicePathDisplayOwner(candidate,candidate_bytes,owners,count);
+  if(any!=1)return any;
+  for(size_t i=0;i<count;i++) {
+    int match=GuDevicePathHasPrefix(
+        owners[i].path,owners[i].path_bytes,candidate,candidate_bytes);
+    if(match==1)return owners[i].vendor==0x1002u?1:0;
+  }
+  return -1;
 }
