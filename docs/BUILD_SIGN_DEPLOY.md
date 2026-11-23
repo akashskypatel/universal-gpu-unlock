@@ -20,8 +20,8 @@ status line contains `HARDWARE_VERIFIED=0`.
 
 | Piece | Where it lives | How the script uses it |
 | --- | --- | --- |
-| Private key | WSL: `~/.secureboot-signing/uefi-db.key` | `sbsign --key` inside WSL; never copied to Windows |
-| Signing certificate | WSL: `~/.secureboot-signing/uefi-db.crt` | `sbsign --cert`, then `sbverify --cert` |
+| Private key | WSL: `~/secureboot-signing/uefi-db.key` | `sbsign --key` inside WSL; never copied to Windows |
+| Signing certificate | WSL: `~/secureboot-signing/uefi-db.crt` | `sbsign --cert`, then `sbverify --cert` |
 | The same certificate, DER | Windows: `src\uefi-db.cer`, or `-PublicCertificate` | Proves the WSL cert is byte-identical to the one you enrolled |
 | Enrollment in `db` | The machine's own BIOS | `Get-SecureBootUEFI -Name db`; the script refuses to sign if absent |
 | WSL tools | Inside the distribution | `base64 wslpath sha256sum openssl cmp sbsign sbverify` |
@@ -31,13 +31,13 @@ Install the WSL side once:
 
 ```bash
 sudo apt update && sudo apt install -y sbsign openssl
-mkdir -p ~/.secureboot-signing
+mkdir -p ~/secureboot-signing
 # put uefi-db.key and uefi-db.crt here, mode 600 on the key
 ```
 
 Enroll the certificate in the BIOS once (this is what makes the signature count):
 
-1. Export the certificate as DER: `openssl x509 -in ~/.secureboot-signing/uefi-db.crt -outform DER -out uefi-db.cer`.
+1. Export the certificate as DER: `openssl x509 -in ~/secureboot-signing/uefi-db.crt -outform DER -out uefi-db.cer`.
 2. Copy `uefi-db.cer` beside the script (`src\uefi-db.cer`) so the script can prove the two are the same certificate.
 3. In the firmware setup, enroll it into `db` - "Enroll EFI image", "Append", or your board's equivalent for a DER certificate. Turn Secure Boot back on afterwards if you turned it off.
 4. Confirm from Windows: the script's `DB_ENROLLED=TRUE` line at the top of a run is the proof, and the receipt records it per image.
