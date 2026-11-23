@@ -67,7 +67,10 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("at least one BDF", self.builder)
         self.assertIn("$selection.Count -lt 1", self.builder)
         self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-' + $selection.Label", self.builder)
-        self.assertIn("/DGU_UNVERIFIED_BENCH_CONDITIONS /DGU_DXE_FILE_ONLY_OUTPUT /DGU_STOP_RELEASE_ONLY_BENCH", self.builder)
+        self.assertIn("/DGU_UNVERIFIED_BENCH_CONDITIONS /DGU_STOP_RELEASE_ONLY_BENCH", self.builder)
+        self.assertIn("[switch]$FileOnlyBootLog", self.builder)
+        self.assertIn("if ($FileOnlyBootLog)", self.builder)
+        self.assertIn("/DGU_DXE_FILE_ONLY_OUTPUT", self.builder)
         self.assertIn("GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi", self.builder)
         self.assertIn("Where-Object { $_ -ne", self.builder)
         self.assertIn(r"vendor\unlock_610.c", self.builder)
@@ -75,52 +78,62 @@ class UnsafeBenchVariantContract(unittest.TestCase):
                       "STOP_RELEASE_ONLY", "FIRMWARE_TRANSACTION", "UNLOCK", "REATTACH_ATTEMPTED", "REATTACH_VERIFIED"):
             self.assertIn(field + "=", self.builder)
 
-    def test_mandatory_warning_and_three_second_gate_precede_mutation(self):
-        self.assertIn("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required)", self.boot)
-        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required)", 1)[1].split("EFI_STATUS GuBootBenchReportCompletion", 1)[0]
-        self.assertIn("size_t count=GuSelectedGpuCount();", countdown)
-        file_only = countdown.split("if(!console_output)", 1)[1].split("/* A sole-GOP target", 1)[0]
-        self.assertIn("CONSOLE_IO=0", file_only)
-        self.assertNotIn("Table->ConOut", file_only)
-        self.assertIn("if(console_required)return display;", countdown)
-        self.assertIn("FILE_LOG=AUTHORITATIVE GPU_ACTION=%s", countdown)
-        completion = self.boot.split("EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output)", 1)[1].split("#endif", 1)[0]
-        self.assertIn("BENCH_COMPLETION=FILE_ONLY CONSOLE_IO=0", completion)
-        self.assertIn("BENCH_COMPLETION=CONSOLE_DISPLAYED", completion)
-        self.assertIn("BENCH_COMPLETION=CONSOLE_NOT_SHOWN", completion)
-        self.assertLess(countdown.index("if(!console_output)"), countdown.index("Table->ConOut->OutputString"))
-        for phrase in ("Live NVIDIA Stop/release and reattach test starts in 3 seconds",
-                       "selected for this test", "PCI=", "go black", "disconnect, or flicker",
-                       "reattachment is attempted, not guaranteed", "independent display"):
-            self.assertIn(phrase, self.boot)
-        self.assertIn("Table->BootServices->Stall(3000000U)", self.boot)
-        self.assertIn("GPU_ACTION=REFUSED", self.boot)
+    def test_mandatory_logged_warning_precedes_stop(self):
+        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(VOID)", 1)[1].split("EFI_STATUS GuBootBenchReportCompletion", 1)[0]
+        self.assertIn("BenchBuildTargetText(targets,GU_STOP_BENCH_TARGET_TEXT_CHARS)", countdown)
+        self.assertIn("BenchWriteConsole(prefix,targets,suffix)", countdown)
+        self.assertIn("FILE_LOG=AUTHORITATIVE", countdown)
+        self.assertIn("if(!GuBootLogOpen())return EFI_DEVICE_ERROR;", countdown)
+        self.assertIn("Stall(3000000U)", countdown)
+        self.assertNotIn("console_required", countdown)
+        self.assertLess(countdown.index("if(!GuBootLogOpen())return EFI_DEVICE_ERROR;"),
+                        countdown.index("Stall(3000000U)"))
+        display = self.boot.split("static EFI_STATUS BenchWriteConsole", 1)[1].split("EFI_STATUS GuBootBenchCountdown", 1)[0]
+        self.assertIn("HandleProtocol(handles[i],&text_guid,(VOID **)&live)", display)
+        self.assertIn("live!=expected[i]", display)
+        self.assertIn("ConsoleOutHandle", display)
+        self.assertIn("StandardErrorHandle", display)
+        self.assertIn("Do not rearrange display cables", self.boot)
+        self.assertIn("detected NVIDIA GPUs", self.boot)
+        self.assertIn("GuSelectedGpuRecordAt", self.boot)
+        completion = self.boot.split("EFI_STATUS GuBootBenchReportCompletion(VOID)", 1)[1].split("#endif", 1)[0]
+        self.assertIn("GuBootLogOpen()", completion)
+        self.assertIn("BenchWriteConsole(prefix,targets,suffix)", completion)
+        self.assertIn("FILE_LOG=AUTHORITATIVE", completion)
         sequence = self.execution.split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[1].split("#endif", 1)[0]
-        self.assertGreater(sequence.index("GuBootBenchCountdown("), sequence.index("GuMsiPreflight("))
-        self.assertLess(sequence.index("GuBootBenchCountdown("), sequence.index("GuMsiRelease("))
-        self.assertIn("GuMsiStopReleaseFileOnly()", sequence)
-        self.assertIn("GuMsiStopReleaseOnlyGopTarget()", sequence)
-        self.assertIn("GuMsiStopReleaseConsoleRestored()", self.app)
-        self.assertIn("GuMsiStopReleaseConsoleRestored()", self.dxe)
-        self.assertIn("SYSTEM_TABLE_CONOUT", self.boot)
+        self.assertLess(sequence.index("GuMsiPreflight("),
+                        sequence.index("GuBootBenchCountdown()"))
+        self.assertLess(sequence.index("GuBootBenchCountdown()"),
+                        sequence.index("GuMsiRelease()"))
+        self.assertIn("GuMsiReattachAfterStop()", sequence)
+        self.assertIn("GuBootBenchReportCompletion()", self.app)
+        self.assertIn("GuBootBenchReportCompletion()", self.dxe)
         preflight = self.release.split("EFI_STATUS GuMsiPreflight", 1)[1].split("static BOOLEAN DecodeMask", 1)[0]
-        topology = preflight.index("s=Gops(TRUE)")
-        consoleless = preflight.index("Plan.consoleless_target_gop=TRUE")
-        console_capture = preflight.index("Plan.console=t->ConsoleOutHandle")
-        console_validate = preflight.index("if(!Plan.consoleless_target_gop) {", console_capture)
-        self.assertLess(topology, consoleless)
-        self.assertLess(consoleless, console_capture)
-        self.assertLess(console_capture, console_validate)
-        self.assertIn("Reading these fields performs no console I/O.", self.release)
+        self.assertLess(preflight.index("s=Gops(TRUE)"),
+                        preflight.index("Plan.consoleless_target_gop=TRUE"))
         consumers = self.release.split("static EFI_STATUS Consumers(VOID)", 1)[1].split("EFI_STATUS GuMsiPreflight", 1)[0]
         self.assertIn("console_child++", consumers)
-        self.assertIn("e->controller==Plan.console||e->controller==Plan.error", consumers)
-        self.assertIn("e->agent!=Plan.nv_agent||e->count!=1", consumers)
-        self.assertIn("!(Plan.consoleless_target_gop&&", consumers)
         self.assertIn("Consumers refused target-console child", consumers)
-        self.assertIn("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_IS_ONLY_GOP=1", self.release)
-        self.assertIn("if(Plan.consoleless_target_gop)return EFI_SUCCESS;", self.release)
-        self.assertIn("if(Plan.consoleless_target_gop) {", self.release)
+
+    def test_run0039_refusal_identifies_exact_child_without_waiver(self):
+        classifier = self.release.split("static EFI_STATUS ClassifyIdleOutput", 1)[1].split("static EFI_STATUS Consumers", 1)[0]
+        for reason in ("NOT_EXACT_TARGET_CHILD", "PROTECTED_HANDLE",
+                       "SHARED_OR_CONSUMED_CHILD", "TARGET_PATH_NOT_PROVEN"):
+            self.assertIn("REASON=" + reason, classifier)
+        self.assertIn("other->handle==h||other->agent==h||other->controller==h", classifier)
+        self.assertIn("GuIsPreparedPeerHandle(h)", classifier)
+        self.assertIn("return EFI_ACCESS_DENIED;", classifier)
+        self.assertLess(classifier.index("REASON=SHARED_OR_CONSUMED_CHILD"),
+                        classifier.index("e->idle_output=TRUE;"))
+
+    def test_stop_only_file_write_or_flush_failure_remains_sticky(self):
+        logging = self.boot.split("VOID GuLog(const char *format,...)", 1)[1].split("VOID GuLogText", 1)[0]
+        for token in ("#ifdef GU_STOP_RELEASE_ONLY_BENCH", "Log->Write?", "Log->Flush?",
+                      "BootFileStatus=EFI_DEVICE_ERROR",
+                      "if(BootFileStatus!=EFI_SUCCESS)return;"):
+            self.assertIn(token, logging)
+        ready = self.boot.split("BOOLEAN GuBootLogOpen(VOID)", 1)[1].split("EFI_HANDLE GuBootGetTargetEspVolume", 1)[0]
+        self.assertIn("Log!=NULL&&BootFileStatus==EFI_SUCCESS", ready)
 
     def test_stop_only_console_gate_accepts_non_target_nvidia_survivor_but_requires_it(self):
         check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
@@ -177,13 +190,14 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("/subsystem:efi_application", self.app_builder)
         self.assertIn(r"Where-Object { $_ -ne 'vendor\unlock_610.c' }", self.app_builder)
         self.assertIn("/DGU_STOP_RELEASE_ONLY_BENCH", self.app_builder)
+        self.assertIn("[switch]$FileOnlyBootLog", self.app_builder)
         branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
         branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
         stop_branch = self.app[branch_start:branch_end]
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertNotIn("GuBootBenchCountdown(", stop_branch)
-        self.assertIn("GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly()||", stop_branch)
-        self.assertIn("GuMsiStopReleaseConsoleRestored()", stop_branch)
+        self.assertIn("GuBootBenchReportCompletion()", stop_branch)
+        self.assertIn("GuBootBenchReportCompletion()", stop_branch)
         self.assertIn("GuExecuteStopReleaseSequence(", stop_branch)
         self.assertNotIn("GuBootWindows()", stop_branch)
         self.assertIn("OS_HANDOFF=NONE", stop_branch)
@@ -199,6 +213,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertTrue(variant["requires_local_boot_profile"])
         self.assertNotIn("requires_selection", variant)
         self.assertTrue(variant["switches"]["RuntimeSelection"])
+        self.assertTrue(variant["switches"]["FileOnlyBootLog"])
         self.assertEqual(variant["attestations"][2],
                          "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION")
         for token in ("FIRMWARE_TRANSACTION=0", "UNLOCK=0", "STOP_RELEASE_ONLY=1",
@@ -217,6 +232,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertEqual(v["binary"], "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi")
         self.assertTrue(v["switches"]["StopReleaseOnlyBench"])
         self.assertTrue(v["switches"]["RuntimeSelection"])
+        self.assertTrue(v["switches"]["FileOnlyBootLog"])
         self.assertNotIn("requires_selection", v)
         self.assertEqual(v["attestations"][2],
                          "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION")
