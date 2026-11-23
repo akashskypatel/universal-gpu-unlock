@@ -78,6 +78,10 @@ typedef struct {
 #endif
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized,reattach_verified;
   BOOLEAN consoleless_target_gop;
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  /* The initial selected GPU owns ConOut; a separate GOP survives. */
+  BOOLEAN target_console_experiment;
+#endif
 } PLAN;
 /* Keep the release plan and its protocol graphs in one ownership context.
  * Never free a context that may describe a partially stopped driver or a
@@ -730,6 +734,91 @@ static EFI_STATUS Gops(BOOLEAN first) {
 static EFI_GUID GlobalVarGuid={
   0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}
 };
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+/* In this explicit first-card experiment, configured ConOut paths must belong
+ * to the selected PCI device. ErrOut can belong to that GPU or one recorded
+ * survivor. No NVRAM or UEFI system-table console pointers are modified. */
+static EFI_STATUS BenchConfiguredConsolePaths(const CHAR16 *name,
+                                               BOOLEAN permit_survivor) {
+  UINT8 data[8U*192U];
+  UINTN used=sizeof(data),at=0,start=0,paths=0,nodes=0;
+  UINT32 attributes=0;
+  EFI_DEVICE_PATH_PROTOCOL *target_path=NULL;
+  EFI_STATUS s=Interface(Plan.pci,&PathGuid,(VOID **)&target_path);
+  if(s!=EFI_SUCCESS||!target_path||!Plan.table->RuntimeServices||
+     !Plan.table->RuntimeServices->GetVariable)return EFI_NOT_READY;
+  s=Plan.table->RuntimeServices->GetVariable(
+      (CHAR16 *)name,&GlobalVarGuid,&attributes,&used,data);
+  if(s!=EFI_SUCCESS||!used||used>sizeof(data))return EFI_NOT_READY;
+  while(at+4U<=used&&nodes++<64U) {
+    UINTN bytes=(UINTN)data[at+2]+((UINTN)data[at+3]<<8);
+    if(bytes<4U||bytes>used-at)return EFI_COMPROMISED_DATA;
+    if(data[at]==0x7fU) {
+      UINT8 kind=data[at+1];
+      if(bytes!=4U||(kind!=1U&&kind!=0xffU)||
+         at+bytes-start>192U||paths==8U)return EFI_COMPROMISED_DATA;
+      data[at+1]=0xffU;
+      int target=GuDevicePathHasPrefix(
+          (const unsigned char *)target_path,4096U,
+          data+start,at+bytes-start);
+      UINTN peers=0;
+      for(UINTN i=0;i<Plan.survivor_count;i++) {
+        int matched=GuDevicePathHasPrefix(
+            Plan.survivors[i].path,Plan.survivors[i].path_bytes,
+            data+start,at+bytes-start);
+        if(matched<0)return EFI_COMPROMISED_DATA;
+        if(matched)peers++;
+      }
+      data[at+1]=kind;
+      if(target<0||peers>1U)return EFI_COMPROMISED_DATA;
+      if(target!=1 && !(permit_survivor&&target==0&&peers==1U))
+        return EFI_ACCESS_DENIED;
+      if(target==1&&peers)return EFI_ACCESS_DENIED;
+      paths++;start=at+bytes;
+      if(kind==0xffU)
+        return start==used&&paths?EFI_SUCCESS:EFI_COMPROMISED_DATA;
+    }
+    at+=bytes;
+  }
+  return EFI_COMPROMISED_DATA;
+}
+static EFI_STATUS BenchInitialTargetConsole(VOID) {
+  GU_GPU_RECORD first={0};
+  if(!Plan.gop||!Plan.survivor_count||GuSelectedGpuCount()<2U||
+     GuSelectedGpuRecordAt(0U,&first)!=EFI_SUCCESS||
+     (EFI_HANDLE)first.handle!=Plan.pci||first.pci!=Gu.pci)
+    return EFI_NOT_READY;
+  EFI_STATUS s=BenchConfiguredConsolePaths(L"ConOut",FALSE);
+  if(s==EFI_SUCCESS)s=BenchConfiguredConsolePaths(L"ErrOut",TRUE);
+  if(s==EFI_SUCCESS)
+    GuLog("STOP_RELEASE_TARGET_CONSOLE=EXPERIMENTAL_INITIAL "
+          "CONOUT=TARGET ERR_OUT=TARGET_OR_PEER "
+          "SURVIVOR_GOPS=%zu GLOBAL_CONOUT_CHANGED=0\n",
+          (size_t)Plan.survivor_count);
+  return s;
+}
+/* After reconnect, read only registered protocol interfaces and configured
+ * variables; never dereference an old console callback while the GPU is stopped. */
+static EFI_STATUS BenchTargetConsoleRestored(VOID) {
+  if(!Plan.target_console_experiment)return EFI_SUCCESS;
+  EFI_SYSTEM_TABLE *t=Plan.table;
+  VOID *out=NULL,*err=NULL;
+  if(!t||t->ConsoleOutHandle!=Plan.console||
+     t->StandardErrorHandle!=Plan.error||
+     t->ConOut!=Plan.text||t->StdErr!=Plan.err||
+     !Plan.console||!Plan.error||!Plan.text||!Plan.err)
+    return EFI_NOT_READY;
+  EFI_STATUS s=Interface(Plan.console,&TextGuid,&out);
+  if(s==EFI_SUCCESS)s=Interface(Plan.error,&TextGuid,&err);
+  if(s!=EFI_SUCCESS||out!=Plan.text||err!=Plan.err)return EFI_NOT_READY;
+  s=BenchConfiguredConsolePaths(L"ConOut",FALSE);
+  if(s==EFI_SUCCESS)s=BenchConfiguredConsolePaths(L"ErrOut",TRUE);
+  GuLog("STOP_RELEASE_TARGET_CONSOLE_RESTORED=%u "
+        "STATUS=%#llx GLOBAL_CONOUT_CHANGED=0\n",
+        (unsigned)(s==EFI_SUCCESS),(unsigned long long)s);
+  return s;
+}
+#endif
 static EFI_STATUS AmdConsoleVariable(
     const CHAR16 *name,const char *variable_label,
     const GU_DEVICE_PATH_DISPLAY_OWNER *owners,UINTN owner_count)
@@ -806,7 +895,8 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
 #else
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   if(Plan.consoleless_target_gop) {
-    GuLog("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_IS_ONLY_GOP=1 PREFLIGHT_CONSOLE_IO=0\n");
+    GuLog("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_CONSOLE_EXPERIMENT=%u PREFLIGHT_CONSOLE_IO=0\n",
+          (unsigned)Plan.target_console_experiment);
     return EFI_SUCCESS;
   }
 #endif
@@ -907,7 +997,8 @@ static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   if(Plan.consoleless_target_gop) {
     (void)graph;
-    GuLog("STOP_RELEASE_TEXT_GRAPH=NOT_REQUIRED TARGET_IS_ONLY_GOP=1 PREFLIGHT_CONSOLE_IO=0\n");
+    GuLog("STOP_RELEASE_TEXT_GRAPH=NOT_REQUIRED TARGET_CONSOLE_EXPERIMENT=%u PREFLIGHT_CONSOLE_IO=0\n",
+          (unsigned)Plan.target_console_experiment);
     return EFI_SUCCESS;
   }
 #endif
@@ -1476,6 +1567,20 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(s!=EFI_SUCCESS) {
     GuLog("Preflight failed at peer/GOP observation: %#llx\n",(unsigned long long)s);
     return s;
+  }
+  /* Experimental consoleless release applies to the initial target only.
+   * The peer warning still requires an independently verified NVIDIA GOP. */
+  if(Plan.gop&&Plan.survivor_count&&GuSelectedGpuCount()>1U) {
+    EFI_STATUS console_owner=BenchInitialTargetConsole();
+    if(console_owner==EFI_SUCCESS) {
+      Plan.target_console_experiment=TRUE;
+      Plan.consoleless_target_gop=TRUE;
+      StopFileOnlyOutput=TRUE;
+    } else {
+      GuLog("STOP_RELEASE_TARGET_CONSOLE=NOT_ADMITTED STATUS=%#llx "
+            "STANDARD_CONSOLE_ADMISSION=REQUIRED\n",
+            (unsigned long long)console_owner);
+    }
   }
   if(Plan.gop&&!Plan.survivor_count) {
     Plan.consoleless_target_gop=TRUE;
