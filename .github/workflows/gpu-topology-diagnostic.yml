@@ -636,7 +636,7 @@ jobs:
             if($maxSpec.Count -ne 128 -or $maxSpec.Locations[127] -ne '0000:80:00.0'){throw '128-target parser boundary failed'}
             $overRejected = $false
             try { New-GuGpuSelectionSpec -SelectionBdfs ($maximum+',0000:81:00.0') -OutputDirectory $env:RUNNER_TEMP | Out-Null } catch {
-              $overRejected = $_.Exception.Message -match 'requires 2-128'
+              $overRejected = $_.Exception.Message -match 'requires 1-128'
             }
             if(-not $overRejected){throw '129-target parse must fail'}
             $largeSpec = New-GuGpuSelectionSpec -SelectionBdfs $large -OutputDirectory $env:RUNNER_TEMP
