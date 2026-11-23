@@ -436,6 +436,7 @@
         "EnableSingleTargetExecution": true,
         "AcceptUnverifiedActuation": true,
         "StopReleaseOnlyBench": true,
+        "FileOnlyBootLog": true,
         "RuntimeSelection": true
       },
       "binary": "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI",
@@ -627,6 +628,7 @@
         "EnableSingleTargetExecution": true,
         "AcceptUnverifiedActuation": true,
         "StopReleaseOnlyBench": true,
+        "FileOnlyBootLog": true,
         "RuntimeSelection": true
       },
       "binary": "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi",
