@@ -200,7 +200,10 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         import re
         glyphs = set(re.findall(r"\{'(.)',\{", glyph_table))
         phrases = ["WARNING GPU DRIVER STOP TEST", "TARGET 0000:00:00.0",
-                   "DISPLAY MAY GO DARK", "RECOVERY MAY NEED POWER OFF"]
+                   "DISPLAY MAY GO DARK", "RECOVERY MAY NEED POWER OFF",
+                   "REATTACHMENT FAILED", "SYSTEM WILL REBOOT", "IN 30 SECONDS",
+                   "USB BOOT MAY REPEAT THE TEST", "ENTER BIOS SELECT OTHER DRIVE",
+                   "BREAK BOOT LOOP IN BIOS"]
         for char in "".join(phrases):
             if char != " ":
                 self.assertIn(char, glyphs)
@@ -208,6 +211,45 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("Gu.discovery_identity.bus", warning)
         self.assertIn("Gu.discovery_identity.device", warning)
         self.assertIn("Gu.discovery_identity.function", warning)
+
+    def test_failed_reattach_warns_on_peer_gop_before_thirty_second_reboot(self):
+        notice = self.release.split(
+            "EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID)", 1)[1].split(
+            "EFI_STATUS GuMsiReattachAfterStop", 1)[0]
+        failed = self.app.rsplit("failed:", 1)[1]
+        execution = self.execution.split("EFI_STATUS GuExecuteStopReleaseSequence", 1)[1].split(
+            "#endif", 1)[0]
+        self.assertIn("StopReleaseReattachFailed=TRUE;", execution)
+        self.assertIn("STOP_RELEASE_REATTACH=FAILED", execution)
+        self.assertIn("if(GuStopReleaseReattachFailed())", failed)
+        self.assertIn("GuMsiStopReleaseShowReattachFailureNotice()", failed)
+        self.assertIn("ENTER_BIOS_SELECT_OTHER_DRIVE=1", failed)
+        self.assertIn("USB_FIRST_BOOT_MAY_LOOP=1", failed)
+        self.assertIn("Stall(30000000U)", failed)
+        self.assertIn("ResetSystem(EfiResetWarm,EFI_ABORTED,0,NULL)", failed)
+        self.assertLess(failed.index("GuMsiStopReleaseShowReattachFailureNotice()"),
+                        failed.index("Stall(30000000U)"))
+        self.assertLess(failed.index("GuBootClose()", failed.index("GuMsiStopReleaseShowReattachFailureNotice()")),
+                        failed.index("Stall(30000000U)"))
+        self.assertLess(failed.index("Stall(30000000U)"),
+                        failed.index("ResetSystem(EfiResetWarm,EFI_ABORTED,0,NULL)"))
+        self.assertIn("if(notice!=EFI_SUCCESS", failed)
+        self.assertIn("GuBootHalt();return EFI_ABORTED;", failed)
+        self.assertIn("AUTO_WARM_RESET=0", failed)
+        self.assertIn("FIRMWARE_TRANSACTION=0", failed)
+        self.assertNotIn("GuBootSay(", failed.split("if(GuStopReleaseReattachFailed())", 1)[1].split(
+            "AUTO_WARM_RESET=0", 1)[0])
+        for code in ("warning_peer_gop", "GuDevicePathUnchanged(",
+                     "g!=survivor->interface", "EfiBltVideoFill",
+                     "EfiBltBufferToVideo", "PHYSICAL_PIXELS_VERIFIED=0"):
+            if code == "EfiBltBufferToVideo":
+                self.assertIn(code, self.release)
+            else:
+                self.assertIn(code, notice)
+        for line in ("REATTACHMENT FAILED", "SYSTEM WILL REBOOT", "IN 30 SECONDS",
+                     "USB BOOT MAY REPEAT THE TEST", "ENTER BIOS SELECT OTHER DRIVE",
+                     "BREAK BOOT LOOP IN BIOS"):
+            self.assertIn(line, notice)
 
     def test_stop_only_console_gate_accepts_non_target_nvidia_survivor_but_requires_it(self):
         check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
