@@ -485,19 +485,19 @@ failed:
       EFI_STATUS notice=GuMsiStopReleaseShowReattachFailureNotice();
       GuLog("STOP_RELEASE_REATTACH_FAILED_REBOOT_NOTICE STATUS=%#llx "
             "NEXT_GPU=BLOCKED REBOOT_DELAY_SECONDS=30 "
-            "USB_FIRST_BOOT_MAY_LOOP=1 ENTER_BIOS_SELECT_OTHER_DRIVE=1\\n",
+            "USB_FIRST_BOOT_MAY_LOOP=1 ENTER_BIOS_SELECT_OTHER_DRIVE=1\n",
             (unsigned long long)notice);
       if(notice!=EFI_SUCCESS||!t||!t->BootServices||
          !t->BootServices->Stall||!t->RuntimeServices||
          !t->RuntimeServices->ResetSystem) {
         GuLog("STOP_RELEASE_REBOOT=REFUSED "
               "REASON=NOTICE_OR_REBOOT_SERVICE_UNAVAILABLE "
-              "CONTAINMENT=HALT\\n");
+              "CONTAINMENT=HALT\n");
         (VOID)GuBootClose();GuBootHalt();return EFI_ABORTED;
       }
       GuLog("STOP_RELEASE_REBOOT=ARMED TYPE=WARM AFTER_SECONDS=30 "
             "USB_BOOT_LOOP_RISK=1 BIOS_SELECT_OTHER_BOOT_DRIVE=1 "
-            "FIRMWARE_TRANSACTION=0\\n");
+            "FIRMWARE_TRANSACTION=0\n");
       /* Flush and close the USB evidence before firmware resets control. */
       EFI_STATUS closed=GuBootClose();
       if(closed!=EFI_SUCCESS){GuBootHalt();return EFI_ABORTED;}
@@ -511,7 +511,7 @@ failed:
      * that a warm reboot can safely restore the original GPU driver. */
     GuLog("STOP_RELEASE_CONTAINMENT=HALT NEXT_GPU=BLOCKED "
           "RESET=OPERATOR_CONTROLLED AUTO_WARM_RESET=0 "
-          "REASON=UNVERIFIED_GPU_OR_CONSOLE_STATE\\n");
+          "REASON=UNVERIFIED_GPU_OR_CONSOLE_STATE\n");
 #endif
 
     (VOID)GuBootClose();GuBootHalt();return EFI_ABORTED;
