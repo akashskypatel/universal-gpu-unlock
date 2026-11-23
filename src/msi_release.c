@@ -78,6 +78,10 @@ typedef struct GU_MSI_OWNED_STATE {
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
 static BOOLEAN StopFileOnlyOutput;
 BOOLEAN GuMsiStopReleaseFileOnly(VOID) {return StopFileOnlyOutput;}
+BOOLEAN GuMsiStopReleaseOnlyGopTarget(VOID) {return Plan.consoleless_target_gop;}
+BOOLEAN GuMsiStopReleaseConsoleRestored(VOID) {
+  return GuSelectedGpuCount()==1U&&Plan.consoleless_target_gop&&Plan.reattach_verified;
+}
 VOID GuMsiStopReleaseRequireFileOnly(VOID) {StopFileOnlyOutput=TRUE;}
 #endif
 

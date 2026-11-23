@@ -128,7 +128,8 @@ finish:
     stage="dxe-close-USB-log";
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
     GuLog("DXE-DRIVER: Stop/release and reattach sequence verified; closing boot resources.\n");
-    s=GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly());
+    s=GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly()||
+                                   GuMsiStopReleaseConsoleRestored());
     if(s!=EFI_SUCCESS)
       GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
             (unsigned long long)s);

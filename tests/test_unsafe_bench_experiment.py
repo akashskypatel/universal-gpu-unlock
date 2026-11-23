@@ -76,14 +76,18 @@ class UnsafeBenchVariantContract(unittest.TestCase):
             self.assertIn(field + "=", self.builder)
 
     def test_mandatory_warning_and_three_second_gate_precede_mutation(self):
-        self.assertIn("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output)", self.boot)
-        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output)", 1)[1].split("EFI_STATUS GuBootBenchReportCompletion", 1)[0]
+        self.assertIn("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required)", self.boot)
+        countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required)", 1)[1].split("EFI_STATUS GuBootBenchReportCompletion", 1)[0]
         self.assertIn("size_t count=GuSelectedGpuCount();", countdown)
-        file_only = countdown.split("if(!console_output)", 1)[1].split("EFI_STATUS s=BenchBuildTargetText", 1)[0]
+        file_only = countdown.split("if(!console_output)", 1)[1].split("/* A sole-GOP target", 1)[0]
         self.assertIn("CONSOLE_IO=0", file_only)
         self.assertNotIn("Table->ConOut", file_only)
+        self.assertIn("if(console_required)return display;", countdown)
+        self.assertIn("FILE_LOG=AUTHORITATIVE GPU_ACTION=%s", countdown)
         completion = self.boot.split("EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output)", 1)[1].split("#endif", 1)[0]
         self.assertIn("BENCH_COMPLETION=FILE_ONLY CONSOLE_IO=0", completion)
+        self.assertIn("BENCH_COMPLETION=CONSOLE_DISPLAYED", completion)
+        self.assertIn("BENCH_COMPLETION=CONSOLE_NOT_SHOWN", completion)
         self.assertLess(countdown.index("if(!console_output)"), countdown.index("Table->ConOut->OutputString"))
         for phrase in ("Live NVIDIA Stop/release and reattach test starts in 3 seconds",
                        "selected for this test", "PCI=", "go black", "disconnect, or flicker",
@@ -95,6 +99,9 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertGreater(sequence.index("GuBootBenchCountdown("), sequence.index("GuMsiPreflight("))
         self.assertLess(sequence.index("GuBootBenchCountdown("), sequence.index("GuMsiRelease("))
         self.assertIn("GuMsiStopReleaseFileOnly()", sequence)
+        self.assertIn("GuMsiStopReleaseOnlyGopTarget()", sequence)
+        self.assertIn("GuMsiStopReleaseConsoleRestored()", self.app)
+        self.assertIn("GuMsiStopReleaseConsoleRestored()", self.dxe)
         self.assertIn("SYSTEM_TABLE_CONOUT", self.boot)
         preflight = self.release.split("EFI_STATUS GuMsiPreflight", 1)[1].split("static BOOLEAN DecodeMask", 1)[0]
         topology = preflight.index("s=Gops(TRUE)")
@@ -167,7 +174,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         stop_branch = self.app[branch_start:branch_end]
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertNotIn("GuBootBenchCountdown(", stop_branch)
-        self.assertIn("GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly())", stop_branch)
+        self.assertIn("GuBootBenchReportCompletion(!GuMsiStopReleaseFileOnly()||", stop_branch)
+        self.assertIn("GuMsiStopReleaseConsoleRestored()", stop_branch)
         self.assertIn("GuExecuteStopReleaseSequence(", stop_branch)
         self.assertNotIn("GuBootWindows()", stop_branch)
         self.assertIn("OS_HANDOFF=NONE", stop_branch)

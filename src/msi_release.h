@@ -10,6 +10,8 @@ BOOLEAN GuMsiReleased(VOID);
 EFI_STATUS GuMsiReattachAfterStop(VOID);
 /* True when this Stop-only run must avoid all system-console output. */
 BOOLEAN GuMsiStopReleaseFileOnly(VOID);
+BOOLEAN GuMsiStopReleaseOnlyGopTarget(VOID);
+BOOLEAN GuMsiStopReleaseConsoleRestored(VOID);
 VOID GuMsiStopReleaseRequireFileOnly(VOID);
 #endif
 EFI_STATUS GuMsiFinish(VOID);

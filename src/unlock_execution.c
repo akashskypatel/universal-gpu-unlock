@@ -243,7 +243,10 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     s=GuMsiPreflight(table,image,owner->handle);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     if(!warning_done) {
-      s=GuBootBenchCountdown(!GuMsiStopReleaseFileOnly());
+      BOOLEAN file_only=GuMsiStopReleaseFileOnly();
+      BOOLEAN only_gop=GuMsiStopReleaseOnlyGopTarget();
+      BOOLEAN console_output=!file_only||only_gop;
+      s=GuBootBenchCountdown(console_output,!file_only&&!only_gop);
       if(s!=EFI_SUCCESS)goto failed;
       warning_done=TRUE;
     }

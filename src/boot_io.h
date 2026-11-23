@@ -24,9 +24,10 @@ BOOLEAN GuBootWatchdogArmed(UINTN *seconds);
 EFI_STATUS GuBootWatchdogCancel(VOID);
 VOID GuBootSay(const CHAR16 *);
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-/* Emit the one pre-actuation warning directly to the firmware's configured
- * ConOut and require a successful three-second stall before any GPU access. */
-EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output);
+/* Emit the pre-actuation warning through configured ConOut when requested.
+ * Optional console output falls back to the file log; the three-second stall
+ * remains required before any GPU access. */
+EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required);
 EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output);
 #endif
 VOID GuBootSilence(VOID);

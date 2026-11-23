@@ -176,18 +176,19 @@ static EFI_STATUS BenchBuildTargetText(CHAR16 *out,UINTN capacity) {
   }
   return EFI_SUCCESS;
 }
-EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output) {
+EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output,BOOLEAN console_required) {
   static CHAR16 prefix[]=L"\r\n*** WARNING: Live NVIDIA Stop/release and reattach test starts in 3 seconds. ***\r\n"
     L"These supported NVIDIA cards selected for this test will be processed in order:\r\n";
   static CHAR16 suffix[]=L"\r\n\r\nFirmware reattachment is attempted, not guaranteed. Displays on these cards may go black, disconnect, or flicker.\r\n"
     L"Disconnect those displays; use an independent display. Stop may hang; recovery is not verified.\r\n\r\n";
   static CHAR16 target_text[GU_STOP_BENCH_TARGET_TEXT_CHARS];
   size_t count=GuSelectedGpuCount();
+  if(!Table||!Table->BootServices||!Table->BootServices->Stall) {
+    GuLog("BENCH_WARNING=REFUSED REASON=STALL_UNAVAILABLE GPU_ACTION=0 CONSOLE_IO=%u\n",
+          (unsigned)console_output);
+    return EFI_UNSUPPORTED;
+  }
   if(!console_output) {
-    if(!Table||!Table->BootServices||!Table->BootServices->Stall) {
-      GuLog("BENCH_WARNING=FILE_ONLY_REFUSED REASON=STALL_UNAVAILABLE GPU_ACTION=0 CONSOLE_IO=0\n");
-      return EFI_UNSUPPORTED;
-    }
     GuLog("BENCH_WARNING=FILE_ONLY CONSOLE_IO=0 TARGET_COUNT=%zu DELAY_US=3000000 GPU_ACTION=GATED\n",count);
     EFI_STATUS delay=Table->BootServices->Stall(3000000U);
     if(delay!=EFI_SUCCESS)
@@ -195,36 +196,31 @@ EFI_STATUS GuBootBenchCountdown(BOOLEAN console_output) {
             (unsigned long long)delay);
     return delay;
   }
-  EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
-  if(s!=EFI_SUCCESS) {
-    GuLog("BENCH_WARNING=NOT_SHOWN REASON=LIVE_TARGET_LIST_UNAVAILABLE STATUS=%#llx GPU_ACTION=REFUSED\n",
-          (unsigned long long)s);
-    return s;
+
+  /* A sole-GOP target still owns the active display before Stop. Its warning
+   * is best-effort: the file log remains authoritative and console failure
+   * must not turn an otherwise eligible Stop into a preflight refusal. */
+  EFI_STATUS display=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
+  if(display==EFI_SUCCESS&&Table->ConOut&&Table->ConOut->OutputString) {
+    display=Table->ConOut->OutputString(Table->ConOut,prefix);
+    if(display==EFI_SUCCESS)display=Table->ConOut->OutputString(Table->ConOut,target_text);
+    if(display==EFI_SUCCESS)display=Table->ConOut->OutputString(Table->ConOut,suffix);
+  } else if(display==EFI_SUCCESS)display=EFI_NOT_READY;
+  if(display==EFI_SUCCESS) {
+    GuLog("BENCH_WARNING=DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT TARGET_COUNT=%zu "
+          "DELAY_US=3000000 GPU_ACTION=GATED DISPLAY_TOPOLOGY=UNVERIFIED\n",count);
+  } else {
+    GuLog("BENCH_WARNING=CONSOLE_NOT_SHOWN STATUS=%#llx CONSOLE_REQUIRED=%u "
+          "FILE_LOG=AUTHORITATIVE GPU_ACTION=%s\n",
+          (unsigned long long)display,(unsigned)console_required,
+          console_required?"REFUSED":"GATED");
+    if(console_required)return display;
   }
-  if(!Table||!Table->ConOut||!Table->ConOut->OutputString||
-     !Table->BootServices||!Table->BootServices->Stall) {
-    GuLog("BENCH_WARNING=NOT_SHOWN REASON=CONFIGURED_CONOUT_OR_STALL_UNAVAILABLE "
-          "GPU_ACTION=REFUSED\n");
-    return EFI_NOT_READY;
-  }
-  /* Use configured ConOut, bypassing routine file-only suppression. The list
-   * comes from this boot's selected PCI identities, not compiled-in hardware. */
-  s=Table->ConOut->OutputString(Table->ConOut,prefix);
-  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,target_text);
-  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,suffix);
-  if(s!=EFI_SUCCESS) {
-    GuLog("BENCH_WARNING=OUTPUT_FAILED STATUS=%#llx GPU_ACTION=REFUSED\n",
-          (unsigned long long)s);
-    return s;
-  }
-  GuLog("BENCH_WARNING=DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT TARGET_COUNT=%zu "
-        "DELAY_US=3000000 GPU_ACTION=GATED DISPLAY_TOPOLOGY=UNVERIFIED\n",
-        count);
-  s=Table->BootServices->Stall(3000000U);
-  if(s!=EFI_SUCCESS)
-    GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED\n",
-          (unsigned long long)s);
-  return s;
+  EFI_STATUS delay=Table->BootServices->Stall(3000000U);
+  if(delay!=EFI_SUCCESS)
+    GuLog("BENCH_WARNING=DELAY_FAILED STATUS=%#llx GPU_ACTION=REFUSED CONSOLE_IO=%u\n",
+          (unsigned long long)delay,(unsigned)console_output);
+  return delay;
 }
 EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output) {
   static CHAR16 prefix[]=L"\r\nStop/release and reattachment checks passed for these live devices:\r\n";
@@ -235,12 +231,18 @@ EFI_STATUS GuBootBenchReportCompletion(BOOLEAN console_output) {
     return EFI_SUCCESS;
   }
   EFI_STATUS s=BenchBuildTargetText(target_text,GU_STOP_BENCH_TARGET_TEXT_CHARS);
-  if(s!=EFI_SUCCESS)return s;
-  if(!Table||!Table->ConOut||!Table->ConOut->OutputString)return EFI_UNSUPPORTED;
-  s=Table->ConOut->OutputString(Table->ConOut,prefix);
+  if(s==EFI_SUCCESS&&(!Table||!Table->ConOut||!Table->ConOut->OutputString))
+    s=EFI_UNSUPPORTED;
+  if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,prefix);
   if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,target_text);
   if(s==EFI_SUCCESS)s=Table->ConOut->OutputString(Table->ConOut,suffix);
-  return s;
+  if(s==EFI_SUCCESS)
+    GuLog("BENCH_COMPLETION=CONSOLE_DISPLAYED CONSOLE=SYSTEM_TABLE_CONOUT "
+          "GPU_SEQUENCE=COMPLETE FILE_LOG=AUTHORITATIVE\n");
+  else
+    GuLog("BENCH_COMPLETION=CONSOLE_NOT_SHOWN STATUS=%#llx "
+          "GPU_SEQUENCE=COMPLETE FILE_LOG=AUTHORITATIVE\n",(unsigned long long)s);
+  return EFI_SUCCESS;
 }
 #endif
 
