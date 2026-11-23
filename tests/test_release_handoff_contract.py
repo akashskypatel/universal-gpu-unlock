@@ -681,9 +681,13 @@ int main(void) {
   CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
   driver.Stop=(VOID *)(base+36863U);
   CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  /* Isolate the image-size floor: the Stop pointer must be inside the
+   * reduced image so only the 4096-byte minimum can cause rejection. */
+  driver.Stop=(VOID *)(base+128U);
   image.ImageSize=4095U;
   CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
   image.ImageSize=36864U;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
   driver.DriverBindingHandle=&image_storage;
   CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
   return 0;
