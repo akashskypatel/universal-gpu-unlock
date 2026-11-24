@@ -71,7 +71,10 @@ class UnsafeBenchVariantContract(unittest.TestCase):
 
     def test_builder_uses_runtime_inventory_and_marks_image(self):
         self.assertIn("[switch]$StopReleaseOnlyBench", self.builder)
-        self.assertIn("-StopReleaseOnlyBench requires -AcceptUnverifiedActuation", self.builder)
+        self.assertIn("Assert-GuExecutionBuildOptions ", self.builder)
+        self.assertIn("Assert-GuExecutionBuildOptions ", self.app_builder)
+        self.assertIn("-StopReleaseOnlyBench requires -AcceptUnverifiedActuation",
+                      (Path(__file__).resolve().parents[1] / "src" / "Gpu-Execution-Sources.ps1").read_text(encoding="utf-8"))
         self.assertIn("No explicit BDFs means the default live-inventory select-all policy", self.builder)
         self.assertIn("at least one BDF", self.builder)
         self.assertIn("$selection.Count -lt 1", self.builder)

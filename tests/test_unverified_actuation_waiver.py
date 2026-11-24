@@ -25,6 +25,7 @@ RELEASE = (SRC / "msi_release.c").read_text(encoding="utf-8")
 APP = (SRC / "Build-Experimental-MSVC.ps1").read_text(encoding="utf-8")
 DXE = (SRC / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
 BUILDERS = (("Build-Experimental-MSVC.ps1", APP), ("Build-Dxe-Driver.ps1", DXE))
+BUILD_OPTIONS = (SRC / "Gpu-Execution-Sources.ps1").read_text(encoding="utf-8")
 
 # Minimal waiver-complete define set: firmware transaction with one explicit
 # stock profile plus the ordered selected-target execution mode.
@@ -272,15 +273,59 @@ class BuilderOptIn(unittest.TestCase):
 
     def test_switch_requires_ordered_active_execution(self):
         for name, text in BUILDERS:
-            self.assertIn("-AcceptUnverifiedActuation requires -EnableSingleTargetExecution", text, name)
-            self.assertIn("-AcceptUnverifiedActuation cannot be combined with -SyntheticCompileProfile", text, name)
+            self.assertIn("Assert-GuExecutionBuildOptions ", text, name)
+        self.assertIn("-AcceptUnverifiedActuation requires -EnableSingleTargetExecution", BUILD_OPTIONS)
+        self.assertIn("-AcceptUnverifiedActuation cannot be combined with -SyntheticCompileProfile", BUILD_OPTIONS)
 
     def test_default_build_still_refuses_live_execution(self):
         for name, text in BUILDERS:
-            self.assertIn(
-                "if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation) {",
-                text, name)
-            self.assertIn("Live GPU execution build refused", text, name)
+            self.assertIn("Assert-GuExecutionBuildOptions ", text, name)
+        self.assertIn(
+            "if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation) {",
+            BUILD_OPTIONS)
+        self.assertIn("Live GPU execution build refused", BUILD_OPTIONS)
+
+    def test_shared_build_admission_executes_before_toolchain(self):
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable")
+        one = " -SelectionBdf '0000:01:00.0'"
+        cases = (
+            (one + " -AcceptUnverifiedActuation", "requires -EnableSingleTargetExecution"),
+            (one + " -EnableSingleTargetExecution -AcceptUnverifiedActuation -SyntheticCompileProfile", "cannot be combined with -SyntheticCompileProfile"),
+            (one + " -EnableSingleTargetExecution", "Live GPU execution build refused"),
+            (one + " -EspResident", "-EspResident requires -RuntimeEsp"),
+            (one + " -EspResident -RuntimeEsp -SyntheticCompileProfile", "-EspResident cannot be combined with -SyntheticCompileProfile"),
+            (one + " -RuntimeEsp -SyntheticCompileProfile", "-RuntimeEsp cannot be combined with -SyntheticCompileProfile"),
+            (" -RuntimeSelection -SyntheticCompileProfile", "-RuntimeSelection cannot be combined with -SyntheticCompileProfile"),
+            (one + " -RuntimeSelection", "-RuntimeSelection replaces the compiled target list"),
+            ("", "Active firmware build refused"),
+            (one + " -StopReleaseOnlyBench -FileOnlyBootLog", "-StopReleaseOnlyBench requires -AcceptUnverifiedActuation"),
+        )
+        for name, _ in BUILDERS:
+            path = str(SRC / name).replace("'", "''")
+            for args, expected in cases:
+                with self.subTest(builder=name, arguments=args):
+                    result = subprocess.run(
+                        [shell, "-NoProfile", "-NonInteractive", "-Command",
+                         f"try {{ & '{path}'{args} }} catch {{ [Console]::Error.WriteLine($_.Exception.Message); exit 1 }}"],
+                        capture_output=True, text=True, timeout=30)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(expected, result.stderr)
+        helper = str(SRC / "Gpu-Execution-Sources.ps1").replace("'", "''")
+        accepted = (
+            one,
+            one + " -SyntheticCompileProfile",
+            one + " -EnableSingleTargetExecution -AcceptUnverifiedActuation",
+            " -RuntimeSelection -RuntimeEsp -EnableSingleTargetExecution -AcceptUnverifiedActuation",
+            " -RuntimeSelection -EnableSingleTargetExecution -AcceptUnverifiedActuation -StopReleaseOnlyBench",
+        )
+        for args in accepted:
+            with self.subTest(allowed=args):
+                cmd = f"$ErrorActionPreference='Stop'; . '{helper}'; Assert-GuExecutionBuildOptions{args}"
+                result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_waived_build_emits_real_transaction_defines(self):
         for name, text in BUILDERS:

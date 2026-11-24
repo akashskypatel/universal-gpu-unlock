@@ -30,6 +30,7 @@ PORT = (SRC / "port.h").read_text(encoding="utf-8")
 DISCOVERY = (SRC / "gpu_discovery.c").read_text(encoding="utf-8")
 SELECTION = (SRC / "gpu_selection.c").read_text(encoding="utf-8")
 MSVC = (SRC / "Build-Experimental-MSVC.ps1").read_text(encoding="utf-8")
+BUILD_OPTIONS = (SRC / "Gpu-Execution-Sources.ps1").read_text(encoding="utf-8")
 SIMULATOR = (ROOT / "tools" / "run_simulation.py").read_text(encoding="utf-8")
 
 # A runtime-selection image is still a real ordered execution build: the
@@ -353,11 +354,12 @@ class BuilderWiring(unittest.TestCase):
         self.assertIn("' /DGU_RUNTIME_SELECTION'", MSVC)
 
     def test_msvc_builder_refuses_the_synthetic_combination(self):
+        self.assertIn("Assert-GuExecutionBuildOptions ", MSVC)
         self.assertIn(
             "-RuntimeSelection cannot be combined with -SyntheticCompileProfile",
-            MSVC)
+            BUILD_OPTIONS)
         self.assertIn(
-            "-RuntimeSelection replaces the compiled target list", MSVC)
+            "-RuntimeSelection replaces the compiled target list", BUILD_OPTIONS)
 
     def test_msvc_builder_links_the_selection_module(self):
         from test_build_source_lists import builder_sources

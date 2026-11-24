@@ -27,6 +27,7 @@ PATHS = (SRC / "gpu_windows_path.c").read_text(encoding="utf-8")
 MSVC = (SRC / "Build-Experimental-MSVC.ps1").read_text(encoding="utf-8")
 DXE = (SRC / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
 BUILDERS = (("Build-Experimental-MSVC.ps1", MSVC), ("Build-Dxe-Driver.ps1", DXE))
+BUILD_OPTIONS = (SRC / "Gpu-Execution-Sources.ps1").read_text(encoding="utf-8")
 
 
 def compiler():
@@ -372,8 +373,8 @@ class BuilderSwitches(unittest.TestCase):
 
     def test_builders_refuse_the_synthetic_combination(self):
         for name, text in BUILDERS:
-            self.assertIn(
-                "-RuntimeEsp cannot be combined with -SyntheticCompileProfile", text, name)
+            self.assertIn("Assert-GuExecutionBuildOptions ", text, name)
+        self.assertIn("-RuntimeEsp cannot be combined with -SyntheticCompileProfile", BUILD_OPTIONS)
 
 
 if __name__ == "__main__":

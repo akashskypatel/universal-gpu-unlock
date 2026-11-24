@@ -64,36 +64,8 @@ if ($StopReleaseWindowsHandoff -and (-not $StopReleaseOnlyBench -or -not $Runtim
 # an explicit multi-BDF order. It waives ASPM admission only and compiles out
 # vendor/unlock_610.c. Nothing here verifies the result:
 # CAN_DETACH/CAN_UNLOCK/CAN_FLASH/RECOVERY_VERIFIED stay false.
-if ($AcceptUnverifiedActuation -and -not $EnableSingleTargetExecution) {
-    throw '-AcceptUnverifiedActuation requires -EnableSingleTargetExecution: the waiver only applies to ordered active execution builds'
-}
-if ($AcceptUnverifiedActuation -and $SyntheticCompileProfile) {
-    throw '-AcceptUnverifiedActuation cannot be combined with -SyntheticCompileProfile: a compile-only image never actuates'
-}
-if ($StopReleaseOnlyBench -and -not $AcceptUnverifiedActuation) {
-    throw '-StopReleaseOnlyBench requires -AcceptUnverifiedActuation.'
-}
-if ($EnableSingleTargetExecution -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation) {
-    throw 'Live GPU execution build refused: production hardware ownership and signed firmware acceptance remain unverified. Use -AcceptUnverifiedActuation for an explicitly unverified image, or -SyntheticCompileProfile only for compile validation.'
-}
-if ($EspResident -and -not $RuntimeEsp) {
-    throw '-EspResident requires -RuntimeEsp: a compiled partition GUID would tie the installed copy to one machine'
-}
-if ($EspResident -and $SyntheticCompileProfile) {
-    throw '-EspResident cannot be combined with -SyntheticCompileProfile: a compile-only image never opens the ESP'
-}
-if ($RuntimeEsp -and $SyntheticCompileProfile) {
-    throw '-RuntimeEsp cannot be combined with -SyntheticCompileProfile: a compile-only image never opens the ESP'
-}
-if ($RuntimeSelection -and $SyntheticCompileProfile) {
-    throw '-RuntimeSelection cannot be combined with -SyntheticCompileProfile: a compile-only image has no operator policy to read'
-}
-if ($RuntimeSelection -and ($SelectionBdf -or $SelectionBdfs)) {
-    throw '-RuntimeSelection replaces the compiled target list; do not also pass -SelectionBdf or -SelectionBdfs'
-}
-if (-not $RuntimeSelection -and -not $SelectionBdf -and -not $SelectionBdfs) {
-    throw 'Active firmware build refused: supply -SelectionBdf or -SelectionBdfs, or -RuntimeSelection for boot-time target selection. Only preparation-only artifacts are supported.'
-}
+. (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
+Assert-GuExecutionBuildOptions -EnableSingleTargetExecution:$EnableSingleTargetExecution -SyntheticCompileProfile:$SyntheticCompileProfile -AcceptUnverifiedActuation:$AcceptUnverifiedActuation -StopReleaseOnlyBench:$StopReleaseOnlyBench -RuntimeSelection:$RuntimeSelection -RuntimeEsp:$RuntimeEsp -EspResident:$EspResident -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs
 . (Join-Path $PSScriptRoot 'Msvc-Environment.ps1')
 $VcVars = Resolve-GuVcVars -VcVars $VcVars -SearchDefaultPaths
 
@@ -113,7 +85,6 @@ try {
         throw '-StopReleaseOnlyBench with compiled targets requires at least one BDF; omit BDFs for live inventory selection.'
     }
 
-    . (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
     $sources = @('app.c', 'driver_nvram.c') + $executionCoreSources + $executionSupportSources
     if ($StopReleaseOnlyBench) {
         # This application can Stop/release and reconnect only; do not link the

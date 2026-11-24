@@ -153,10 +153,12 @@ class TheWaiverStillRefusesItsUnsafeCombinations(unittest.TestCase):
         self.assertIn("-match 'cannot be combined with -SyntheticCompileProfile'", block)
 
     def test_the_script_actually_throws_those_messages(self):
+        self.assertIn("Assert-GuExecutionBuildOptions ", APP)
+        self.assertIn("Assert-GuExecutionBuildOptions ", DXE)
+        options = (Path(__file__).resolve().parents[1] / "src" / "Gpu-Execution-Sources.ps1").read_text(encoding="utf-8")
         for message in ("requires -EnableSingleTargetExecution",
                         "cannot be combined with -SyntheticCompileProfile"):
-            self.assertIn(message, APP)
-            self.assertIn(message, DXE)
+            self.assertIn(message, options)
 
 
 class TheAdmittedImageIsNeverPublished(unittest.TestCase):
