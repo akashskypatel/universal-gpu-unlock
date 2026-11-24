@@ -51,7 +51,9 @@ reason recorded, when you do not supply one. -All cannot be combined with
 -StageDrive: a matrix run never stages anything.
 
 .PARAMETER Only
-One or more variant ids (see -List). Cannot be combined with -All.
+One canonical profile with typed options, or one or more legacy variant IDs
+(see -List). Cannot be combined with -All. -ResolveOnly reports the selected
+configuration without compiling, signing or staging.
 
 .PARAMETER Family
 diagnostic, prepare, prepare-dxe, stop-observation or maintenance. Selects a whole family;
@@ -158,6 +160,20 @@ param(
     [string]$WslUser,
     [string]$VcVars,
     [string[]]$Only,
+    [ValidateSet('Topology','GopTextCycle','MsiRom','MsiFuse','MsiSec2','VramBlocks')]
+    [string]$Probe = 'Topology',
+    [switch]$SaveLog = $true,
+    [ValidateSet('StopReattach','LegacyStopObservation','UnlockReattach','Unlock','UnlockWithResume','Menu','DxeTransaction','InstallDriver','RemoveDriver','ReviewBootState')]
+    [string]$Operation,
+    [ValidateSet('Application','Dxe')]
+    [string]$ImageKind = 'Application',
+    [ValidateSet('Return','WindowsAfterSuccess','Halt')]
+    [string]$Handoff,
+    [ValidateSet('RTX4090','RTX3080','BothNvidia')]
+    [string]$LegacyTarget,
+    [ValidateSet('Pinned','Runtime','Resident')]
+    [string]$EspPolicy,
+    [switch]$ResolveOnly,
     [ValidateSet('diagnostic', 'prepare', 'prepare-dxe', 'stop-observation', 'maintenance')]
     [string]$Family,
     [switch]$All,
@@ -171,6 +187,13 @@ param(
 )
 
 Set-StrictMode -Version Latest
+# Record explicit profile options before entering functions.
+$script:ExplicitProfileOptions = @()
+foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','LegacyTarget','EspPolicy')) {
+    if ($PSBoundParameters.ContainsKey($optionName)) { $script:ExplicitProfileOptions += $optionName }
+}
+$script:CanonicalProfiles = @('diagnostic','driver-transition','firmware-transaction','maintenance','compile-check')
+$script:RequestedCanonicalProfile = $null
 $ErrorActionPreference = 'Stop'
 
 $KeyInWsl = 'secureboot-signing/uefi-db.key'
@@ -627,16 +650,136 @@ $catalogue = Get-Content -LiteralPath $cataloguePath -Raw -Encoding UTF8 | Conve
 $familyById = @{}
 foreach ($familySpec in $catalogue.families) { $familyById[$familySpec.id] = $familySpec }
 
+# Translate only supported combinations to existing catalogue entries.
+# No new firmware policy, builder waiver or runtime operation is introduced here.
+function Assert-ProfileOptions([string[]]$Allowed) {
+    foreach ($optionName in $script:ExplicitProfileOptions) {
+        if ($Allowed -notcontains $optionName) {
+            throw "Profile $script:RequestedCanonicalProfile does not accept -$optionName."
+        }
+    }
+}
+
+function Resolve-ProfileVariant([string]$ProfileName) {
+    $targetCount = Get-SelectionCount
+    $isDxe = $ImageKind -eq 'Dxe'
+    $hasEsp = [bool]$WindowsEspGuid
+    switch ($ProfileName) {
+        'diagnostic' {
+            Assert-ProfileOptions @('Probe','SaveLog')
+            if ($CapturedPromReference) { throw 'Diagnostic does not accept firmware reference options.' }
+            if (-not $SaveLog) {
+                if ($Probe -ne 'Topology' -or $targetCount -or $hasEsp) { throw 'Console-only diagnostic supports topology without selection or handoff.' }
+                return 'diag-topology'
+            }
+            if ($Probe -eq 'Topology') {
+                if ($targetCount -and $hasEsp) { throw 'Selected diagnostic cannot include Windows handoff.' }
+                if ($targetCount) { return 'diag-selection' }
+                if ($hasEsp) { return 'diag-topology-handoff' }
+                return 'diag-topology-log'
+            }
+            if ($targetCount) { throw 'Special diagnostic probes do not accept a compiled GPU selection.' }
+            if ($Probe -eq 'GopTextCycle') {
+                if ($hasEsp) { throw 'GOP text cycle cannot include Windows handoff.' }
+                return 'diag-topology-gop-text-cycle'
+            }
+            $probeId = @{MsiRom='diag-msi-rom'; MsiFuse='diag-msi-fuse'; MsiSec2='diag-msi-sec2'; VramBlocks='diag-vram-blocks'}[$Probe]
+            if ($hasEsp) { return "$probeId-handoff" }
+            return $probeId
+        }
+        'compile-check' {
+            Assert-ProfileOptions @('ImageKind')
+            if (-not $targetCount -or $hasEsp -or $CapturedPromReference) {
+                throw 'Compile-check requires a compiled GPU selection and no ESP or firmware reference options.'
+            }
+            $compileId = if ($targetCount -eq 1) { 'compile-one-target' } else { 'compile-sequence' }
+            if ($isDxe) { return "dxe-$compileId" }
+            return $compileId
+        }
+        'driver-transition' {
+            if ($CapturedPromReference) { throw 'Driver transition does not accept firmware reference options.' }
+            if ($Operation -eq 'StopReattach') {
+                Assert-ProfileOptions @('Operation','ImageKind','Handoff')
+                if ($hasEsp -or $Handoff -eq 'Halt') { throw 'StopReattach supports Return or WindowsAfterSuccess, without a compiled ESP GUID.' }
+                if ($Handoff -eq 'WindowsAfterSuccess') {
+                    if ($isDxe -or $targetCount) { throw 'StopReattach Windows handoff requires the live-all application.' }
+                    return 'app-stop-release-sequence-handoff'
+                }
+                if ($isDxe) { return 'dxe-stop-release-sequence-bench' }
+                return 'app-stop-release-sequence-bench'
+            }
+            if ($Operation -eq 'LegacyStopObservation') {
+                Assert-ProfileOptions @('Operation','ImageKind','Handoff','LegacyTarget')
+                if ($isDxe -or $targetCount -or -not $LegacyTarget) { throw 'Legacy Stop requires an application and an explicit legacy target, not a BDF list.' }
+                if ($Handoff -eq 'Return' -or ($Handoff -eq 'Halt' -and $hasEsp) -or ($Handoff -eq 'WindowsAfterSuccess' -and -not $hasEsp)) {
+                    throw 'Legacy Stop handoff requires a pinned ESP GUID. Halt does not accept an ESP GUID.'
+                }
+                if ($LegacyTarget -eq 'BothNvidia') {
+                    if (-not $hasEsp) { throw 'Legacy dual Stop requires pinned Windows handoff.' }
+                    return 'stop-dual-handoff'
+                }
+                $legacyId = if ($LegacyTarget -eq 'RTX4090') { 'stop-4090' } else { 'stop-3080' }
+                if ($hasEsp) { return "$legacyId-handoff" }
+                return "$legacyId-once"
+            }
+            throw 'Driver transition requires -Operation StopReattach or LegacyStopObservation.'
+        }
+        'firmware-transaction' {
+            Assert-ProfileOptions @('Operation','ImageKind','EspPolicy')
+            if ($Operation -in @('UnlockReattach','Unlock','UnlockWithResume')) {
+                if ($isDxe -or $targetCount -or ($EspPolicy -and $EspPolicy -ne 'Runtime')) {
+                    throw 'Fixed firmware operations require the runtime-selection application and runtime ESP policy.'
+                }
+                if ($hasEsp -and $Operation -ne 'UnlockReattach') { throw 'Only UnlockReattach accepts an explicit ESP GUID.' }
+                return @{UnlockReattach='app-firmware-reattach'; Unlock='app-unlock'; UnlockWithResume='app-unlock-with-resume'}[$Operation]
+            }
+            if (($Operation -eq 'Menu' -and -not $isDxe) -or ($Operation -eq 'DxeTransaction' -and $isDxe)) {
+                if ($hasEsp -or $EspPolicy -eq 'Runtime' -or ($isDxe -and ($EspPolicy -eq 'Resident' -or $CapturedPromReference))) {
+                    throw 'This legacy firmware configuration does not support the requested ESP or reference options.'
+                }
+                $activeId = if ($targetCount -eq 0) { 'actuate-runtime-selection' } elseif ($targetCount -eq 1) { 'actuate-one-target' } else { 'actuate-sequence' }
+                if ($isDxe) { return "dxe-$activeId" }
+                if ($EspPolicy -eq 'Resident') {
+                    if ($targetCount -gt 1) { throw 'Resident sequence is not an existing supported configuration.' }
+                    return "$activeId-resident"
+                }
+                return $activeId
+            }
+            throw 'Firmware transaction requires an explicit supported operation and image kind.'
+        }
+        'maintenance' {
+            Assert-ProfileOptions @('Operation','ImageKind')
+            if ($isDxe -or $targetCount -or $hasEsp -or $CapturedPromReference -or $StageDxeCompanion) {
+                throw 'Maintenance requires an application without compiled selection, ESP pin, references or companion staging.'
+            }
+            if ($Operation -eq 'ReviewBootState') { return 'boot-state-maintenance' }
+            if ($Operation -eq 'InstallDriver') { return 'app-install-driver' }
+            if ($Operation -eq 'RemoveDriver') { return 'app-remove-driver' }
+            throw 'Maintenance requires an explicit supported operation.'
+        }
+    }
+    throw "Unknown canonical profile: $ProfileName"
+}
+
 function Select-Variants {
     $selected = @($catalogue.variants)
     if ($Only) {
         $wanted = @($Only | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $canonical = @($wanted | Where-Object { $script:CanonicalProfiles -contains $_ })
+        if ($canonical.Count) {
+            if ($wanted.Count -ne 1 -or $Family) { throw 'Select exactly one canonical profile without -Family.' }
+            $script:RequestedCanonicalProfile = $canonical[0]
+            $wanted = @(Resolve-ProfileVariant $script:RequestedCanonicalProfile)
+        } elseif ($script:ExplicitProfileOptions.Count) {
+            throw 'Canonical profile options require a canonical -Only value.'
+        }
         $known = @($catalogue.variants | ForEach-Object { $_.id })
         foreach ($name in $wanted) {
             if ($known -notcontains $name) { throw "Unknown variant id: $name (see -List)." }
         }
         $selected = @($selected | Where-Object { $wanted -contains $_.id })
     }
+    if (-not $Only -and $script:ExplicitProfileOptions.Count) { throw 'Canonical profile options require a canonical -Only value.' }
     if ($Family) { $selected = @($selected | Where-Object { $_.family -eq $Family }) }
     if (-not $selected.Count) { throw 'No variant matched the selection.' }
     return $selected
@@ -738,6 +881,12 @@ function Build-VariantArguments($Variant) {
 }
 
 if ($List) {
+    Say 'PROFILE diagnostic -Probe Topology|GopTextCycle|MsiRom|MsiFuse|MsiSec2|VramBlocks [-SaveLog:$false] [selection or ESP where supported]'
+    Say 'PROFILE compile-check -ImageKind Application|Dxe -SelectionBdf(s) <BDFs>'
+    Say 'PROFILE driver-transition -Operation StopReattach|LegacyStopObservation [-ImageKind] [-Handoff] [-LegacyTarget]'
+    Say 'PROFILE firmware-transaction -Operation UnlockReattach|Unlock|UnlockWithResume|Menu|DxeTransaction [-ImageKind] [-EspPolicy]'
+    Say 'PROFILE maintenance -Operation InstallDriver|RemoveDriver|ReviewBootState'
+    Say 'Legacy variant IDs remain available below. Use -ResolveOnly with -Only to inspect the selected configuration without building.'
     Say ('CATALOGUE {0} variants={1} families={2}' -f $cataloguePath, @($catalogue.variants).Count, @($catalogue.families).Count)
     foreach ($familySpec in $catalogue.families) {
         Say ("FAMILY {0} BUILDER={1} SUBSYSTEM={2}" -f $familySpec.id, $familySpec.builder, $familySpec.subsystem)
@@ -857,6 +1006,22 @@ try {
     if ($Deploy -and $SignOnly) { throw '-SignOnly and -Deploy are mutually exclusive: a sign-only run never touches a USB stick.' }
     if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
     $variants = @(Select-Variants)
+    if ($ResolveOnly) {
+        if (-not $Only -or $variants.Count -ne 1 -or $StageDrive -or $Deploy -or $StageDxeCompanion) {
+            throw '-ResolveOnly requires one explicit selection and does not permit deployment.'
+        }
+        $resolvedVariant = $variants[0]
+        Say ([ordered]@{
+            CanonicalProfile = $script:RequestedCanonicalProfile
+            VariantId = $resolvedVariant.id
+            Safety = $resolvedVariant.safety
+            Subsystem = $familyById[$resolvedVariant.family].subsystem
+            Builder = $familyById[$resolvedVariant.family].builder
+            Switches = (Build-VariantArguments $resolvedVariant)
+            ExpectedAttestations = @($resolvedVariant.attestations)
+        } | ConvertTo-Json -Depth 6 -Compress)
+        exit 0
+    }
     if ($StageDxeCompanion) {
         if (-not $StageDrive) { throw '-StageDxeCompanion requires -StageDrive <letter>.' }
         if ($variants.Count -ne 1 -or $variants[0].id -ne 'actuate-one-target') {
@@ -874,7 +1039,7 @@ try {
                        'Name it with -Only <id> (see -List).')
             throw ($notOne -f $variants.Count)
         }
-        if ($Deploy -and $variants[0].id -ne $Deploy) {
+        if ($Deploy -and $variants[0].id -ne $Deploy -and $script:RequestedCanonicalProfile -ne $Deploy) {
             $disagrees = ('-Deploy {0} is not the selected variant {1}. -Deploy is only an ' +
                           'assertion about what gets staged; drop it, or make both flags name one image.')
             throw ($disagrees -f $Deploy, $variants[0].id)
@@ -895,7 +1060,7 @@ try {
                    $deployVariant.id, $deployVariant.safety, $safety.writes_gpu)
         }
         if ($deployVariant.safety -eq 'maintenance') {
-            if (-not $Only -or @($Only).Count -ne 1 -or $Only[0] -ne 'boot-state-maintenance') {
+            if (-not $Only -or @($Only).Count -ne 1 -or ($Only[0] -ne 'boot-state-maintenance' -and $script:RequestedCanonicalProfile -ne 'maintenance')) {
                 throw 'Maintenance staging requires -Only boot-state-maintenance.'
             }
             if ($SelectionBdf -or $SelectionBdfs -or $WindowsEspGuid -or $CapturedPromReference) {
@@ -1178,6 +1343,7 @@ try {
 
             [ordered]@{
                 VariantId = $variantId
+                CanonicalProfile = $script:RequestedCanonicalProfile
                 Family = $variant.family
                 Safety = $variant.safety
                 WritesGpu = [bool]$catalogue.safety_classes.($variant.safety).writes_gpu
