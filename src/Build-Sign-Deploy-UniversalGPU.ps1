@@ -1366,7 +1366,7 @@ try {
                 VariantId = $variantId
                 CanonicalProfile = $variant.profile
                 RequestedCanonicalProfile = $script:RequestedCanonicalProfile
-                RequestedLegacyAlias = $(if (-not $script:RequestedCanonicalProfile -and @($Only | ForEach-Object { $_.Trim() }) -contains $variantId) { $variantId } else { $null })
+                RequestedLegacyAlias = $(if ($Only -and -not $script:RequestedCanonicalProfile -and @($Only | ForEach-Object { $_.Trim() }) -contains $variantId) { $variantId } else { $null })
                 Family = $variant.family
                 Safety = $variant.safety
                 WritesGpu = [bool]$catalogue.safety_classes.($variant.safety).writes_gpu
