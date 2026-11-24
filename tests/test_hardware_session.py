@@ -355,8 +355,36 @@ class TheReadOnlyGuideIsGrounded(unittest.TestCase):
 
     def test_every_candidate_names_the_command_that_selects_it(self):
         for candidate in self.guide["candidates"]:
-            self.assertIn(f"-Only {candidate['id']}", candidate["command"], candidate["id"])
-            self.assertEqual(self.variants[candidate["id"]]["safety"], candidate["safety"], candidate["id"])
+            variant = self.variants[candidate["id"]]
+            self.assertEqual(variant["profile"], "diagnostic", candidate["id"])
+            self.assertEqual(variant["safety"], candidate["safety"], candidate["id"])
+            self.assertIn("-Only diagnostic ", candidate["command"], candidate["id"])
+
+    def test_canonical_read_only_commands_resolve_to_original_configurations(self):
+        import shutil
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable for profile resolution")
+        script = str(ROOT / "src" / "Build-Sign-Deploy-UniversalGPU.ps1").replace("'", "''")
+        for candidate in self.guide["candidates"]:
+            for item in [candidate] + candidate.get("commands", []):
+                with self.subTest(candidate=candidate["id"], command=item["command"]):
+                    args = item["command"].split(".ps1 ", 1)[1]
+                    # Replace the guide's ESP placeholder with a valid example GUID.
+                    # Inspection must not compile, sign or stage the image.
+                    args = re.sub(r" -StageDrive [A-Z](?=\s|$)", "", args)
+                    args = args.replace("<reviewed GUID>", "a005858c-4487-4ee2-976e-1710ff484c31")
+                    command = f"& '{script}' -ResolveOnly {args}"
+                    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    resolved = json.loads(result.stdout)
+                    self.assertEqual(resolved["VariantId"], candidate["id"])
+                    self.assertEqual(resolved["CanonicalProfile"], "diagnostic")
+                    self.assertEqual(resolved["Safety"], candidate["safety"])
+                    if item.get("binary"):
+                        self.assertEqual(resolved["Binary"], item["binary"])
+
 
     def test_every_switch_in_a_candidate_command_exists_in_the_builder(self):
         text = (ROOT / "src" / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")

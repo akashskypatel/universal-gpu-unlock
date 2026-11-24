@@ -36,7 +36,7 @@ log does not exist, `3` the log set is synthetic, `4` reserved for too few logs
 (reported inline as a failing gate today).
 
 The images each stage needs are in [`image_variants.json`](image_variants.json):
-`src/Build-Sign-Deploy-UniversalGPU.ps1 -Only <id>` builds and signs them, and
+`src/Build-Sign-Deploy-UniversalGPU.ps1 -Only <profile>` with its arguments builds and signs the selected configuration, and
 [`BUILD_SIGN_DEPLOY.md`](BUILD_SIGN_DEPLOY.md) is the user document for that
 script. The session stages map to `diag-topology-log`, `prep-selected` and
 `actuate-one-target`.
@@ -61,7 +61,7 @@ The sections after this one describe the gates. This one is the sequence that pr
 
 Archived captures now include waived actuating boots as well as read-only and preparation runs. The U/P/I captures documented below exposed software/setup failures; they do not hardware-verify the subsequent fixes. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips.
 
-**The name.** There is no script called `build-sign-stage` in this repository. Building, signing and staging one image is a single command with `-Only <id>` and `-StageDrive <letter>`. Ordinary runs copy the signed `EFI\BOOT\BOOTX64.EFI`; the waived one-target application can also use `-StageDxeCompanion` to build/sign its matching driver and stage `EFI\Drivers\AdaUnlockDxe.efi` for the I path. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.
+**The name.** There is no script called `build-sign-stage` in this repository. Use `-Only <profile>` with its arguments to select one configuration. `-StageDrive <letter>` stages one application. `-ListLegacy` lists the retained configuration IDs that identify the log and receipt evidence. Ordinary runs copy the signed `EFI\BOOT\BOOTX64.EFI`; the waived one-target application can also use `-StageDxeCompanion` to build/sign its matching driver and stage `EFI\Drivers\AdaUnlockDxe.efi` for the I path. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.
 
 ### Before the first boot
 
@@ -93,7 +93,7 @@ Archived captures now include waived actuating boots as well as read-only and pr
 **Step 2 — build, sign and stage in one command**
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -StageDrive G
 ```
 
 *Expect:* `VARIANT_BEGIN` for the one image, `SIGNING_CERTIFICATE ... DB_ENROLLED=TRUE`, the verified signed SHA-256, `STAGED diag-topology-log PATH=... DRIVE=G:`, and a final `STATUS=SIGNED=1 FAILED=0 ... HARDWARE_VERIFIED=0`. A stick holds one `BOOTX64.EFI`, so this is one candidate per stick: the previous image is backed up locally before it is replaced.
@@ -196,7 +196,7 @@ Every image in the catalogue whose safety class writes nothing to the GPU. One c
 Records the exact text interface on each captured GOP and its GOP-consuming driver image. It then sends a label through each distinct available device text interface for two seconds. The owner must confirm which monitor showed each label. No GPU driver Stop or console route change occurs.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-gop-text-cycle -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe GopTextCycle -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the USB root
@@ -214,7 +214,7 @@ Records the exact text interface on each captured GOP and its GOP-consuming driv
 The baseline read-only contact: PCI tree, GPU identities, GOP and console ownership, one numbered log. This is the image the R1-R3 gates were written for.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -234,7 +234,7 @@ The baseline read-only contact: PCI tree, GPU identities, GOP and console owners
 The same report, then the explicitly pinned Windows Boot Manager. The added value is not the topology: it is the observation that the reviewed ESP GUID boots Windows on this machine, after the log is closed.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -WindowsEspGuid '<reviewed GUID>' -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -254,7 +254,7 @@ The same report, then the explicitly pinned Windows Boot Manager. The added valu
 The passive diagnostic with an ordered selection: one snapshot, every requested BDF resolved before any report, then per-target identity and a summary. This is the read-only image that says something about two cards.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-selection -SelectionBdfs '0000:01:00.0,0000:04:00.0' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -SelectionBdfs '0000:01:00.0,0000:04:00.0' -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -273,7 +273,7 @@ The passive diagnostic with an ordered selection: one snapshot, every requested 
 Reads the MS-7E56 firmware's `ROM_CMN`/`CSM_CMN` variables and dumps them raw, on the board fingerprint the earlier console analysis was done on. This is the only passive route to the firmware's own display-selection policy; it changes nothing.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-rom -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe MsiRom -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -291,7 +291,7 @@ Reads the MS-7E56 firmware's `ROM_CMN`/`CSM_CMN` variables and dumps them raw, o
 The ROM-variable dump plus the pinned Windows handoff, so a passive capture of the firmware's display policy does not end with the operator hunting for a boot entry.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-rom-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe MsiRom -WindowsEspGuid '<reviewed GUID>' -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -310,7 +310,7 @@ The ROM-variable dump plus the pinned Windows handoff, so a passive capture of t
 One 32-bit read of the GSP fuse register per identity-verified card, plus one of the SEC2 register, and nothing else. The only image that reports which firmware signature slot a physical card's fuse selects.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-fuse -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe MsiFuse -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -328,7 +328,7 @@ One 32-bit read of the GSP fuse register per identity-verified card, plus one of
 The fuse read plus the pinned Windows handoff: a card that is left alone still has to end the session in Windows, and this is the variant that says so in one boot.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-fuse-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe MsiFuse -WindowsEspGuid '<reviewed GUID>' -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -347,7 +347,7 @@ The fuse read plus the pinned Windows handoff: a card that is left alone still h
 One read of the SEC2 version register at BAR0+0x824140 per card, named as the Windows 617.42 register by the Linux 610.43.03 header. It reports a version and refuses to infer a signature from it.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-sec2 -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe MsiSec2 -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -364,7 +364,7 @@ One read of the SEC2 version register at BAR0+0x824140 per card, named as the Wi
 The SEC2 read plus the pinned Windows handoff, for a bench where the read-only image is expected to return to Windows by itself.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-msi-sec2-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe MsiSec2 -WindowsEspGuid '<reviewed GUID>' -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -383,7 +383,7 @@ The SEC2 read plus the pinned Windows handoff, for a bench where the read-only i
 Forty-two BAR0 reads per verified card, at the addresses the waived transaction writes, plus the twenty-four words it reads without writing - the two HwCfg words `falcon_reset()` polls, the RISC-V halt word, the GFW and WPR2 bookkeeping words, and the rest of the set whose refused read stops the transaction. It is the interlock for the first actuation: run the same image before and after, and any block that moved shows up as a different digest. Nothing is written. It also copies the one-megabyte ROM window at BAR0 + 0x300000 and applies the same structural check the transaction applies before it refuses a board.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe VramBlocks -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -402,7 +402,7 @@ Forty-two BAR0 reads per verified card, at the addresses the waived transaction 
 The block probe plus the pinned Windows handoff, for a bench where the read-only image has to return to Windows by itself. The end-of-session digest is in the log either way.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-vram-blocks-handoff -WindowsEspGuid '<reviewed GUID>' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe VramBlocks -WindowsEspGuid '<reviewed GUID>' -StageDrive G
 ```
 
 *Log:* \GPU-TOPOLOGY-DIAGNOSTIC-nnnn.TXT at the root of the stick, written by the image itself
@@ -423,13 +423,13 @@ The active application, built without the waiver: it runs the real inventory and
 *one card* — `GPU-ACTIVE-PREP-0000-01-00-0.EFI`
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected -SelectionBdf '0000:01:00.0' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe Preflight -SelectionBdf '0000:01:00.0' -StageDrive G
 ```
 
 *both cards, in this order* — `GPU-ACTIVE-PREP-0000-01-00-0--0000-04-00-0.EFI`
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected -SelectionBdfs '0000:01:00.0,0000:04:00.0' -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe Preflight -SelectionBdfs '0000:01:00.0,0000:04:00.0' -StageDrive G
 ```
 
 *Log:* \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten
@@ -453,7 +453,7 @@ The active application, built without the waiver: it runs the real inventory and
 The same preparation as a boot-service driver, loaded from a `Driver####` entry instead of `EFI\BOOT\BOOTX64.EFI`. It answers one question the application cannot: whether the same preflight runs under a driver loaded at `ReadyToBoot`.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only dxe-prep-selected -SelectionBdf '0000:01:00.0' -SignOnly
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe Preflight -ImageKind Dxe -SelectionBdf '0000:01:00.0' -SignOnly
 ```
 
 *Log:* \AD102-UNLOCK\RUNnnnn.TXT, one file per boot, never overwritten

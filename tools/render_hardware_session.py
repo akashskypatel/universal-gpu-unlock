@@ -58,7 +58,7 @@ log does not exist, `3` the log set is synthetic, `4` reserved for too few logs
 (reported inline as a failing gate today).
 
 The images each stage needs are in [`image_variants.json`](image_variants.json):
-`src/Build-Sign-Deploy-UniversalGPU.ps1 -Only <id>` builds and signs them, and
+`src/Build-Sign-Deploy-UniversalGPU.ps1 -Only <profile>` with its arguments builds and signs the selected configuration, and
 [`BUILD_SIGN_DEPLOY.md`](BUILD_SIGN_DEPLOY.md) is the user document for that
 script. The session stages map to `diag-topology-log`, `prep-selected` and
 `actuate-one-target`.
