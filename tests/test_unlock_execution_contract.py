@@ -71,7 +71,9 @@ class SharedExecutionContract(unittest.TestCase):
         for check in ("!platform", "!release_plan", "!firmware_assets",
                       ".owners.platform!=platform",
                       ".owners.release_plan!=release_plan",
-                      ".owners.firmware_assets!=firmware_assets"):
+                      ".owners.firmware_assets!=firmware_assets",
+                      "!GuMsiCompletedPlatform(&Gu,release_plan)",
+                      "!GuMsiVerifyFinalGraph()","Gu.fault","Gu.owned"):
             self.assertIn(check,finish_adapter)
         self.assertIn("GuMsiReserveSelectedState(",wrapper)
         self.assertLess(wrapper.index("GuMsiReserveSelectedState("),begin)

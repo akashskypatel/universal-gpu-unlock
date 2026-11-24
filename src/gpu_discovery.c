@@ -791,7 +791,9 @@ EFI_STATUS GuFinishSelectedGpuStep(EFI_SYSTEM_TABLE *table,
      !SelectedOwnersMatch(platform,release_plan,firmware_assets) ||
      ActiveSequence.targets[target].owners.platform!=platform ||
      ActiveSequence.targets[target].owners.release_plan!=release_plan ||
-     ActiveSequence.targets[target].owners.firmware_assets!=firmware_assets) {
+     ActiveSequence.targets[target].owners.firmware_assets!=firmware_assets ||
+     !GuMsiCompletedPlatform(&Gu,release_plan) ||
+     !GuMsiVerifyFinalGraph() || Gu.fault || Gu.owned) {
     /* A post-transaction check must not trust CPU owner tokens alone:
      * compare them to the actual live resource objects again. */
     GuAbortSelectedGpuStep();
