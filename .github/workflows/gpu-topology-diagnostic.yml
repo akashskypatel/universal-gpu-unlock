@@ -422,6 +422,10 @@ jobs:
         run: |
           try {
             $ErrorActionPreference='Stop'
+            # Separate maintenance image: compile/link only, never execute or stage it.
+            & .\src\Build-Boot-State-Maintenance.ps1 *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC maintenance build failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_boot_state_maintenance\BOOT-STATE-MAINTENANCE.EFI)){throw 'Maintenance EFI missing'}
             # Synthetic, non-deployable partition GUID: compile coverage only.
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -WindowsEspGuid '12345678-1234-4234-8234-123456789abc' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC handoff variant failed: $LASTEXITCODE"}
