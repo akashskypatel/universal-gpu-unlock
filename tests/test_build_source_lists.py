@@ -128,7 +128,7 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
                     exclusion = r"; $sources = @($sources | Where-Object { $_ -ne 'vendor\unlock_610.c' })" if stop_only else ""
                     cmd = (f". '{helper}'; {assignment}{exclusion}; "
                            f"New-GuSourceCompilePlan -Sources $sources -CompilerFlags '/nologo /Oi /TC' "
-                           f"-ObjectDirectory '{directory}' -VcVars 'C:\VS Tools\vcvars64.bat' "
+                           rf"-ObjectDirectory '{directory}' -VcVars 'C:\VS Tools\vcvars64.bat' "
                            r"-SourceDirectory 'C:\GPU Source' | ConvertTo-Json -Compress")
                     result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
                                             capture_output=True, text=True, check=True, timeout=30)

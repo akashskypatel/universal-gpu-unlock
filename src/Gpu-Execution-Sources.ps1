@@ -49,7 +49,7 @@ function New-GuSourceCompilePlan {
         "cd /d `"$SourceDirectory`""
     )
     foreach ($source in $Sources) {
-        $base = [System.IO.Path]::GetFileNameWithoutExtension($source)
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($source.Replace('\', '/'))
         if ($source -like 'vendor\*') { $base = 'vendor_' + $base }
         $object = "$ObjectDirectory\$base.obj"
         $objects += $object
