@@ -414,7 +414,7 @@ class Maintenance(unittest.TestCase):
                           "GuBootStateWrite(", "GuBootStateRecord("):
             self.assertNotIn(forbidden, source)
 
-    def test_actual_confirmation_requires_exact_input_and_service_success(self):
+    def test_actual_confirmation_requires_complete_word_enter_and_service_success(self):
         source = (SRC / "boot_state_maintenance.c").read_text(encoding="utf-8")
         confirm = source[source.index("static EFI_STATUS Confirm("):
                          source.index("EFI_STATUS EFIAPI UefiMain(")]
@@ -437,16 +437,20 @@ struct Input {
 typedef struct { EFI_STATUS (*WaitForEvent)(UINTN,EFI_EVENT *,UINTN *); } Services;
 typedef struct { Input *ConIn; Services *BootServices; } EFI_SYSTEM_TABLE;
 #define FALSE 0
+#define TRUE 1
+typedef int BOOLEAN;
+#define EFI_NOT_READY 3
+#define SCAN_ESC 23
 #define EFI_SUCCESS 0
 #define EFI_DEVICE_ERROR 1
 #define EFI_ABORTED 2
-static int scenario,pos;
+static int scenario,pos,reads,says;
 static const CHAR16 *keys;
 static EFI_STATUS Reset(Input *p,int flag) {
-  (void)p;(void)flag;pos=0;return scenario==1?EFI_DEVICE_ERROR:EFI_SUCCESS;
+  (void)p;(void)flag;pos=reads=says=0;return scenario==1?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 static EFI_STATUS Say(EFI_SYSTEM_TABLE *t,const char *fmt,...) {
-  (void)t;(void)fmt;return scenario==2?EFI_DEVICE_ERROR:EFI_SUCCESS;
+  (void)t;(void)fmt;says++;return scenario==2||(scenario==8&&says==2)?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 static EFI_STATUS Wait(UINTN count,EFI_EVENT *events,UINTN *index) {
   if(count!=1||!events||!*events)return EFI_DEVICE_ERROR;
@@ -454,8 +458,13 @@ static EFI_STATUS Wait(UINTN count,EFI_EVENT *events,UINTN *index) {
   return scenario==3?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 static EFI_STATUS Read(Input *p,EFI_INPUT_KEY *key) {
-  (void)p;if(scenario==5||!keys[pos])return EFI_DEVICE_ERROR;
-  key->ScanCode=scenario==6?1:0;key->UnicodeChar=keys[pos++];return EFI_SUCCESS;
+  (void)p;reads++;
+  if(scenario==7&&reads==1)return EFI_NOT_READY;
+  if(scenario==5||!keys[pos])return EFI_DEVICE_ERROR;
+  key->ScanCode=scenario==6?1:0;
+  if(keys[pos]==27){key->ScanCode=SCAN_ESC;key->UnicodeChar=0;pos++;}
+  else key->UnicodeChar=keys[pos++];
+  return EFI_SUCCESS;
 }
 """ + confirm + r"""
 int main(void) {
@@ -463,14 +472,21 @@ int main(void) {
   Services services={Wait};
   EFI_SYSTEM_TABLE table={&input,&services};
   keys=L"REARM\r";
-  for(scenario=0;scenario<=6;scenario++) {
+  for(scenario=0;scenario<=8;scenario++) {
     EFI_STATUS status=Confirm(&table);
-    if((status==EFI_SUCCESS)!=(scenario==0))return 1;
+    if((status==EFI_SUCCESS)!=(scenario==0||scenario==7))return 1;
+    if((scenario==0||scenario==7)&&pos!=6)return 2;
   }
   scenario=0;
-  keys=L"REARX\r";if(Confirm(&table)==EFI_SUCCESS)return 2;
-  keys=L"REARM";if(Confirm(&table)==EFI_SUCCESS)return 3;
-  keys=L"rearm\r";if(Confirm(&table)==EFI_SUCCESS)return 4;
+  keys=L"REARX\r";if(Confirm(&table)!=EFI_ABORTED||pos!=6)return 3;
+  keys=L"REARM";if(Confirm(&table)==EFI_SUCCESS)return 4;
+  keys=L"rearm\r";if(Confirm(&table)!=EFI_SUCCESS||pos!=6)return 5;
+  keys=L"ReArM\r";if(Confirm(&table)!=EFI_SUCCESS||pos!=6)return 6;
+  keys=L"R\r";if(Confirm(&table)!=EFI_ABORTED||pos!=2)return 7;
+  keys=L"XREARM\r";if(Confirm(&table)!=EFI_ABORTED||pos!=7)return 8;
+  keys=L"REARMX\r";if(Confirm(&table)!=EFI_ABORTED||pos!=7)return 9;
+  keys=L"\r";if(Confirm(&table)!=EFI_ABORTED||pos!=1)return 10;
+  keys=L"R\x1b";if(Confirm(&table)!=EFI_ABORTED||pos!=2)return 11;
   return 0;
 }
 """

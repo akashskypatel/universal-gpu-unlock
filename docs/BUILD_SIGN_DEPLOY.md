@@ -289,7 +289,7 @@ For an explicitly authorized maintenance deployment, replace `G` with the isolat
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only maintenance -Operation ReviewBootState -StageDrive G -AcceptActuatingDeploy
 ```
 
-Before confirmation, photograph the reviewed record. Type `REARM` and press Enter only if the prerequisites are met. On success, record `REACTIVATION=RECORD_REMOVAL_VERIFIED`. Power off and remove the maintenance media. Do not remove unrelated DriverOrder entries or retry after uncertain readback.
+Before confirmation, photograph the reviewed record. Type `REARM` (any letter case) and press Enter only if the prerequisites are met. The image displays the entered letters. An incorrect or incomplete entry cancels on Enter; Esc cancels immediately. On success, record `REACTIVATION=RECORD_REMOVAL_VERIFIED`. Power off and remove the maintenance media. Do not remove unrelated DriverOrder entries or retry after uncertain readback.
 
 `<label>` is the repository's own selection label from
 `src/Gpu-Selection-Build.ps1`: `0000:01:00.0` becomes `0000-01-00-0`, two targets
