@@ -107,7 +107,7 @@ Status values: NOT STARTED, IN PROGRESS, BLOCKED, IMPLEMENTED, VERIFIED, COMPLET
 | --- | --- | --- | --- | --- |
 | B0 | Enumerate all 41 entries; verify builders and current hardware baseline | None | COMPLETE | Baseline commit and physical evidence in sections 2–3; existing CI pass |
 | G0 | Audit every affected admission predicate and classify using G1–G11. Remove duplicate or over-restrictive experimental conditions only within their proven scope; document unchanged negative cases. | B0 | IN PROGRESS | Reviewed combined, Stop-only and preparation entry conditions. See predicate audit below. |
-| R1 | Implement small profile resolver with typed options, exact alias mappings, strict illegal-option rejection and one effective configuration | G0 | IMPLEMENTED | 6dd22b4, 90f1f6b; final test run pending |
+| R1 | Implement small profile resolver with typed options, exact alias mappings, strict illegal-option rejection and one effective configuration | G0 | IMPLEMENTED | 6dd22b4, 90f1f6b; CI 45345437502 host and EFI PASS |
 | D1 | Consolidate 13 diagnostics; preserve all existing evidence shapes, probe limits and handoff rules | R1 | IMPLEMENTED | 13 mappings use original diagnostic builder |
 | D2 | Split passive preparation from recovery writes; only then migrate two preparation IDs to diagnostic Preflight. Retain DXE timing distinction and old compatibility until proved. | D1,G0 | NOT STARTED | Pending |
 | C1 | Consolidate four compile-only IDs; validate count, app/DXE, non-stageable contract and no execution | R1 | IMPLEMENTED | Four mappings preserve synthetic build and stage refusal |
@@ -116,7 +116,7 @@ Status values: NOT STARTED, IN PROGRESS, BLOCKED, IMPLEMENTED, VERIFIED, COMPLET
 | F1 | Consolidate eight menu/legacy DXE transaction IDs; preserve compiled/runtime and ESP policies, event lifecycle and INTENT | R1,G0 | IMPLEMENTED | Eight existing menu/DXE configurations |
 | F2 | Consolidate three fixed U/P/combined IDs; preserve separate modes and verified combined default recommendation; never imply S3 qualification | F1,G0 | IMPLEMENTED | Three existing fixed application configurations |
 | A1 | Consolidate three administrative IDs; preserve independent reviewed maintenance image, recovery path and owned entry semantics | R1,G0 | IN PROGRESS | Three mappings implemented. Administrative dependency review remains open. |
-| V1 | Compare all 41 old configurations with alias resolution; builder switch, image identity, attestations, safety, target order and negative cases. Run existing host and Windows EFI CI; verify actual outcomes. | D1,D2,C1,T1,T2,F1,F2,A1 | IN PROGRESS | 8fde00b5 adds actual PowerShell resolution tests; CI 45345437502 pending. |
+| V1 | Compare all 41 old configurations with alias resolution; builder switch, image identity, attestations, safety, target order and negative cases. Run existing host and Windows EFI CI; verify actual outcomes. | D1,D2,C1,T1,T2,F1,F2,A1 | IN PROGRESS | 8fde00b5 adds actual PowerShell resolution tests; CI 45345437502 host/EFI PASS; actual resolver tests passed. Preparation and remaining migration regression pending. |
 | V2 | Update generated catalogue, user guide, donor guide, readiness/log scoring consumers, CI scripts and command references; prove coverage and receipt compatibility | V1 | IN PROGRESS | fdf57303 documents canonical commands. Downstream consumers and complete receipts pending. |
 | V3 | Remove redundant public IDs from canonical catalogue only after alias migration; retain documented compatibility where needed. Archive legacy observer only if distinct evidence use is closed. | V2 | NOT STARTED | Pending |
 
@@ -190,18 +190,34 @@ Test the resolved options through actual PowerShell entrypoints using controlled
 
 For unchanged verified combined execution, preserve the recorded physical result as the reference; no repeated hardware operation needed for mechanical wrapper/alias consolidation. If a proposed source change alters a real admission or execution boundary beyond the proven scope, isolate it and require applicable evidence before claiming equivalent physical behavior. Numerical reference-output qualification remains a separate open task. Do not force a repeat transaction or clear INTENT to test catalogue changes.
 
+### Source consolidation and qualification terminology
+
+Owner direction: consolidate overlapping implementations, not only profile IDs. Use the passed hardware tests as the admission reference. Remove generic experimental labels from current product identity. Preserve historical log literals and accurate mode-specific verification limits.
+
+| Source task | Status | Evidence |
+| --- | --- | --- |
+| Common recovery predicate | IMPLEMENTED | bc664c7ddf2fec53d638ec51bc78bd41471ced1a replaces repeated boot-state conditions with a shared predicate used by app, DXE and maintenance. Existing record validation, recovery ownership and deletion checks remain. |
+| Passive preparation recovery isolation | IMPLEMENTED | Same commit refuses a latched prior state before discovery without modifying boot registration. Preparation migration remains pending independent verification of the complete path. |
+| Current product identity and combined-profile evidence | IMPLEMENTED | a1db569d8a7b8dba08c74132b2692321d874ac1f removes the global experimental banner and records the historical physical PASS in the catalogue and generated table. No new physical qualification claimed. |
+| Common application/DXE source inventory | BLOCKED | Draft shared source-list refactor not published. Connector rejected the associated test-update operation. Existing branch source lists remain unchanged. |
+| Remaining source overlap and naming | NOT STARTED | Review shared execution orchestration and current versus historical identifiers; do not merge distinct firmware, resume, driver lifecycle or recovery semantics solely by name. |
+
+CI run 45345437502 completed successfully (host job 138278726356, Windows EFI job 138278726067). Host log confirms both canonical profile tests actually ran and passed. New source changes: CI 45350039751 and 45350306343 in progress at last check.
+
+The hardware-passed combined path already admits the verified dual-display and runtime selection configuration. No further redundant live hardware admission predicate was established in this increment. Do not mark other modes or production qualification as passed on the basis of this result.
+
 ### Migration evidence
 
 - Owner approval: current conversation, 2026-11-23 local date.
 - `6dd22b4730da834bbe042c387bc2ba89ceee0251`: initial resolver. Host CI 45345335862 failed two existing parameter assignment assertions. The new default parameter declarations matched those checks.
 - `90f1f6b3ef492ea6862ba97ddf4eb4e02040a9b9`: moved default selection into local resolver values. Did not weaken tests.
-- `8fde00b5007e61e688f0568d83138161f96675a0`: added actual PowerShell tests for all 39 eligible configurations and negative combinations. CI 45345437502 in progress at last check. No result claimed.
+- `8fde00b5007e61e688f0568d83138161f96675a0`: added actual PowerShell tests for all 39 eligible configurations and negative combinations. CI 45345437502 host and EFI PASS, actual PowerShell tests PASS.
 - `fdf573037ef47b22af2c6bba0c3cd0f49816562b`: documented options and resolution-only inspection.
 - No physical build, sign, deployment, firmware operation or numerical qualification performed.
 
 ## 7. Recommendation: execution order and owner / agent
 
-Agent: verify resolver CI and actual PowerShell test coverage. Correct any demonstrated defect without weakening assertions. Then complete the preparation and administration dependency review, receipt and downstream migration, and final catalogue reduction. Keep existing IDs until V1/V2 pass. Update this tracker with commit and test evidence.
+Agent: verify new source CI, assess the preparation no-write contract, review remaining overlapping source paths and naming, and complete receipt and catalogue migration when the required edits are available. Keep existing IDs until V1/V2 pass. Update this tracker with commit and test evidence.
 
 Owner: no hardware action for the audit or migration. Preserve existing logs, receipts and INTENT until a separately reviewed experiment. Use only presently implemented commands until migration is verified.
 
