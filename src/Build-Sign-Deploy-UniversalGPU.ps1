@@ -53,7 +53,7 @@ reason recorded, when you do not supply one. -All cannot be combined with
 .PARAMETER Only
 One canonical profile with typed options (see -List). Cannot be combined with
 -All or -Family. -ResolveOnly reports the selected
-configuration without compiling, signing or staging.
+configuration without compiling, signing or staging. Firmware transaction staging also copies the required reference assets to the USB root.
 
 .PARAMETER Family
 diagnostic, prepare, prepare-dxe, stop-observation or maintenance. Selects a build matrix family, not an individual configuration.
@@ -525,9 +525,79 @@ exit "$status"
     return [int]$code
 }
 
+function Assert-FirmwareAssetFile($AssetPath, $AssetPin) {
+    $assetItem = Get-Item -LiteralPath $AssetPath -Force -ErrorAction Stop
+    if ($assetItem.PSIsContainer -or ($assetItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+        $assetItem.Length -ne [int64]$AssetPin.bytes -or (Get-Sha256 $AssetPath) -ne $AssetPin.sha256) {
+        throw "Firmware asset does not match the reference: $AssetPath"
+    }
+}
+
+function Stage-FirmwareAssets {
+    param([string]$AssetRepo, [string]$Root, [string]$Drive, [string]$ExpectedVolumeId)
+    # The loader accepts the shared GSP file in AD102-ASSETS for both architectures.
+    $assetManifest = Get-Content -LiteralPath (Join-Path $AssetRepo 'docs/asset_provenance.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $assetPaths = @(
+        'AD102-ASSETS/booter_load_ad102.bin',
+        'AD102-ASSETS/gsp_boot_ad102.bin',
+        'AD102-ASSETS/gsp_boot_desc_ad102.bin',
+        'AD102-ASSETS/gsp_ga10x.bin',
+        'AD102-ASSETS/v67-ad102-610.43.03-four-plm.bin',
+        'GA102-ASSETS/booter_load_ga102.bin',
+        'GA102-ASSETS/gsp_boot_desc_ga102.bin',
+        'GA102-ASSETS/gsp_boot_ga102.bin',
+        'GA102-ASSETS/v67-ga102-610.43.03.bin'
+    )
+    # An old Ampere GSP copy takes precedence over the shared file. Verify it too.
+    $alternateAsset = 'GA102-ASSETS/gsp_ga10x.bin'
+    if (Test-Path -LiteralPath (Join-Path $Root $alternateAsset)) { $assetPaths += $alternateAsset }
+    $assetPlan = @(foreach ($assetRelative in $assetPaths) {
+        $assetName = [IO.Path]::GetFileName($assetRelative)
+        $assetPins = @($assetManifest.records | Where-Object { $_.asset -ceq "gpu-unlock/610.43.03/$assetName" })
+        if ($assetPins.Count -ne 1 -or $assetPins[0].sha256 -cnotmatch '^[0-9a-f]{64}$' -or [int64]$assetPins[0].bytes -le 0) {
+            throw "Missing or invalid reference pin: $assetRelative"
+        }
+        $assetSourceRelative = if ($assetRelative -eq $alternateAsset) { 'AD102-ASSETS/gsp_ga10x.bin' } else { $assetRelative }
+        $assetSource = Join-Path $AssetRepo $assetSourceRelative
+        Assert-NormalDirectory (Split-Path -Parent $assetSource)
+        Assert-FirmwareAssetFile $assetSource $assetPins[0]
+        $assetDestination = Join-Path $Root $assetRelative
+        $assetDirectory = Split-Path -Parent $assetDestination
+        if (Test-Path -LiteralPath $assetDirectory) { Assert-NormalDirectory $assetDirectory }
+        if (Test-Path -LiteralPath $assetDestination) { Assert-FirmwareAssetFile $assetDestination $assetPins[0] }
+        [pscustomobject]@{ Source = $assetSource; Destination = $assetDestination; Pin = $assetPins[0] }
+    })
+    foreach ($assetEntry in $assetPlan) {
+        if ((Assert-UsbVolume $Drive) -ne $Root -or
+            [string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
+            throw 'Target USB identity changed during firmware asset staging.'
+        }
+        $assetDirectory = Split-Path -Parent $assetEntry.Destination
+        if (-not (Test-Path -LiteralPath $assetDirectory)) {
+            [void](New-Item -ItemType Directory -Path $assetDirectory -ErrorAction Stop)
+        }
+        Assert-NormalDirectory $assetDirectory
+        if (-not (Test-Path -LiteralPath $assetEntry.Destination)) {
+            $assetTemporary = Join-Path $assetDirectory ('.new-asset-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
+            try {
+                Copy-Item -LiteralPath $assetEntry.Source -Destination $assetTemporary -ErrorAction Stop
+                Assert-FirmwareAssetFile $assetTemporary $assetEntry.Pin
+                [IO.File]::Move($assetTemporary, $assetEntry.Destination)
+            } finally {
+                if (Test-Path -LiteralPath $assetTemporary -PathType Leaf) {
+                    Remove-Item -LiteralPath $assetTemporary -Force -ErrorAction Stop
+                }
+            }
+        }
+        Assert-FirmwareAssetFile $assetEntry.Destination $assetEntry.Pin
+        Say ("FIRMWARE_ASSET_VERIFIED PATH={0} SHA256={1}" -f $assetEntry.Destination, $assetEntry.Pin.sha256)
+        [pscustomobject]@{ Path = $assetEntry.Destination; Sha256 = $assetEntry.Pin.sha256; Bytes = $assetEntry.Pin.bytes }
+    }
+}
+
 function Stage-SignedEfi {
     param([string]$Drive, [string]$Root, [string]$SignedFile, [string]$SignedSha256,
-          [string]$LocalOutput, [string]$ExpectedVolumeId, [switch]$MaintenanceOnly)
+          [string]$LocalOutput, [string]$ExpectedVolumeId, [switch]$MaintenanceOnly, [string]$FirmwareAssetRepo)
     if ((Assert-UsbVolume $Drive) -ne $Root) { throw 'Drive letter identity changed.' }
     if ([string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
         throw 'Target USB volume identity changed before staging.'
@@ -576,6 +646,14 @@ function Stage-SignedEfi {
         Say "Verified original USB BOOTX64.EFI backup: $savedOld"
     }
 
+    $stagedFirmwareAssets = @()
+    if ($FirmwareAssetRepo) {
+        if ([IO.Path]::GetPathRoot($FirmwareAssetRepo).TrimEnd('\') -ieq $Root.TrimEnd('\')) {
+            throw 'Firmware asset source must not reside on the USB destination drive.'
+        }
+        $stagedFirmwareAssets = @(Stage-FirmwareAssets -AssetRepo $FirmwareAssetRepo -Root $Root -Drive $Drive -ExpectedVolumeId $ExpectedVolumeId)
+    }
+
     $temporary = Join-Path $bootDir ('.new-efi-{0}.tmp' -f [guid]::NewGuid().ToString('N'))
     $replacementStarted = $false
     try {
@@ -606,6 +684,7 @@ function Stage-SignedEfi {
             Status = 'DEPLOYED'; Path = $destination; ReplacedBootEfi = [bool]$oldBootPresent
             PreviousEfiCount = $allEfi.Count; PreservedOtherEfiCount = $otherEfiCount
             BackupDirectory = $backup; SignedSha256 = $SignedSha256
+            FirmwareAssets = $stagedFirmwareAssets
         }
     } catch {
         $originalError = $_.Exception.Message
@@ -1082,6 +1161,7 @@ function Restore-DxeCompanionDeployment($Deployment, [string]$Drive, [string]$Ro
 
 try {
     $stageVariantId = $null
+    $assetRepoForStage = $null
     if ($All -and $Only) { throw '-All and -Only are mutually exclusive.' }
     if ($CapturedPromReference -and -not $Only) {
         throw ('-CapturedPromReference applies to the prepare family only, so it needs ' +
@@ -1153,6 +1233,7 @@ try {
         }
         $deployVariant = $variants[0]
         $stageVariantId = $deployVariant.id
+        if ($deployVariant.profile -eq 'firmware-transaction') { $assetRepoForStage = $RepoRoot }
         $safety = $catalogue.safety_classes.($deployVariant.safety)
         if ($deployVariant.binary -match 'DXE' -or $familyById[$deployVariant.family].subsystem -eq 11) {
             throw 'A DXE boot-service driver cannot be staged as BOOTX64.EFI. Sign it and install it as a Driver#### entry.'
@@ -1173,7 +1254,7 @@ try {
             if ($SelectionBdf -or $SelectionBdfs -or $WindowsEspGuid -or $CapturedPromReference) {
                 throw 'Maintenance does not accept GPU selection, Windows ESP or firmware reference options.'
             }
-            Say 'WARNING: maintenance can remove GuBootState only after explicit REARM confirmation. Use isolated media and disconnect other experimental boot media before booting.'
+            Say 'WARNING: maintenance can remove GuBootState only after explicit D/d confirmation. Use isolated media and disconnect other experimental boot media before booting.'
         }
         if ($safety.writes_gpu) {
             Say ("WARNING: staging ACTUATING_IMAGE={0} SAFETY={1}; it may write the GPU. Recovery toolkit on the bench is not optional." -f
@@ -1219,6 +1300,7 @@ try {
     if ($stageVariantId) {
         $drive = $StageDrive.ToUpperInvariant()
         $usbRoot = Assert-UsbVolume $drive
+        if ($assetRepoForStage) { $assetRepoForStage = $RepoRoot }
         $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
         if (-not $targetVolumeId) { throw 'USB volume identity unavailable; refusing staging.' }
         if ([IO.Path]::GetPathRoot($OutputDirectory).TrimEnd('\') -ieq $usbRoot.TrimEnd('\')) {
@@ -1414,7 +1496,7 @@ try {
             } elseif ($stageVariantId -and $stageVariantId -eq $variantId) {
                 $deployment = Stage-SignedEfi -Drive $drive -Root $usbRoot -SignedFile $signedEfi `
                                   -SignedSha256 $signedHash -LocalOutput $OutputDirectory `
-                                  -ExpectedVolumeId $targetVolumeId -MaintenanceOnly:($variant.safety -eq 'maintenance')
+                                  -ExpectedVolumeId $targetVolumeId -MaintenanceOnly:($variant.safety -eq 'maintenance') -FirmwareAssetRepo $assetRepoForStage
                 $stagedPath = $deployment.Path
             }
 
@@ -1441,6 +1523,7 @@ try {
                 DbEnrolled = $dbEnrolled
                 VerifiedBySbverify = $true
                 Destination = $(if ($deployment) { $deployment.Path } else { $null })
+                FirmwareAssets = @(if ($deployment) { $deployment.FirmwareAssets })
                 DxeCompanionStaged = [bool]($dxeStageVariantId -and $variantId -eq $dxeStageVariantId -and $deployment)
                 DxeCompanionPath = $null
                 DxeCompanionSha256 = $null
@@ -1482,7 +1565,7 @@ try {
         try {
             $bootDeployment = Stage-SignedEfi -Drive $drive -Root $usbRoot `
                 -SignedFile $pendingBootImage.Path -SignedSha256 $pendingBootImage.Sha256 `
-                -LocalOutput $OutputDirectory -ExpectedVolumeId $targetVolumeId
+                -LocalOutput $OutputDirectory -ExpectedVolumeId $targetVolumeId -FirmwareAssetRepo $assetRepoForStage
         } catch {
             $stageError = $_.Exception.Message
             try { Restore-DxeCompanionDeployment $dxeDeployment $drive $usbRoot $targetVolumeId }
@@ -1495,11 +1578,13 @@ try {
         $dxeReceipt = Get-Content -LiteralPath $pendingDxeImage.Receipt -Raw | ConvertFrom-Json
         $dxeReceipt.Destination = $dxeDeployment.Path
         $dxeReceipt.DxeCompanionStaged = $true
+        $dxeReceipt.FirmwareAssets = $bootDeployment.FirmwareAssets
         $dxeReceipt.BackupDirectory = $dxeDeployment.BackupDirectory
         $dxeReceipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $pendingDxeImage.Receipt -Encoding UTF8 -ErrorAction Stop
         $appReceipt = Get-Content -LiteralPath $pendingBootImage.Receipt -Raw | ConvertFrom-Json
         $appReceipt.Destination = $bootDeployment.Path
         $appReceipt.DxeCompanionStaged = $true
+        $appReceipt.FirmwareAssets = $bootDeployment.FirmwareAssets
         $appReceipt.DxeCompanionPath = $dxeDeployment.Path
         $appReceipt.DxeCompanionSha256 = $pendingDxeImage.Sha256
         $appReceipt.ReplacedBootEfi = $bootDeployment.ReplacedBootEfi
