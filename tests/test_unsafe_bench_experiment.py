@@ -207,7 +207,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertLess(sequence.index("GuMsiRelease()"),
                         sequence.index("GuMsiReattachAfterStop()"))
         self.assertLess(sequence.index("GuMsiReattachAfterStop()"),
-                        sequence.index("GuSelectNextGpu(table)"))
+                        sequence.index("GuPrepareNextSelectedGpu(&owner,table,stage)"))
         self.assertNotIn("warning_done", sequence)
 
     def test_warning_font_contains_every_character_drawn(self):

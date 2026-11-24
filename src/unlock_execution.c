@@ -179,6 +179,27 @@ EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage) {
 #endif
 }
 
+#ifdef GU_ACTIVE_SINGLE_TARGET
+/* Advance only after the current step has completed and the caller has
+ * checked that the ordered record has a successor. Keep the previous
+ * owner until the checked binding operation publishes a different one. */
+static EFI_STATUS GuPrepareNextSelectedGpu(GU_PLATFORM **owner,EFI_SYSTEM_TABLE *table,
+                                          const char **stage) {
+  if(!owner||!*owner||*owner!=GuPlatformActive||!stage)return EFI_NOT_READY;
+  GU_PLATFORM *previous=*owner;
+  if(previous->fault||previous->retained)return EFI_NOT_READY;
+  if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
+  EFI_STATUS s=GuSelectNextGpu(table);
+  if(s!=EFI_SUCCESS)return s;
+  GU_PLATFORM *next=GuPlatformActive;
+  if(!next||next==previous||previous->fault||previous->retained||next->fault)
+    return EFI_NOT_READY;
+  *owner=next;
+  s=GuPrepareBoundGpu(next,stage);
+  return s!=EFI_SUCCESS?s:(next!=GuPlatformActive||next->fault)?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+#endif
+
 #ifndef GU_STOP_RELEASE_ONLY_BENCH
 /* The first target is prepared before entry. Only the ordered execution
  * record can select a successor. No retry, fallback, or hardware admission
@@ -218,17 +239,8 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
     s=GuSelectedSequenceHasNext(table,&more);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     if(more) {
-      if(!GuBootLogOpen()){s=EFI_DEVICE_ERROR;goto failed;}
-      s=GuSelectNextGpu(table);
+      s=GuPrepareNextSelectedGpu(&owner,table,stage);
       if(s!=EFI_SUCCESS)goto failed;
-      /* Only the checked selection operation can publish a successor. */
-      GU_PLATFORM *next=GuPlatformActive;
-      if(!next||next==owner||owner->fault||owner->retained||next->fault) {
-        s=EFI_NOT_READY;goto failed;
-      }
-      owner=next;
-      s=GuPrepareBoundGpu(owner,stage);
-      if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
       continue;
     }
 #endif
@@ -313,12 +325,8 @@ EFI_STATUS GuExecuteStopReleaseSequence(GU_PLATFORM *owner,
     s=GuSelectedSequenceHasNext(table,&more);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     if(!more)break;
-    s=GuSelectNextGpu(table);
+    s=GuPrepareNextSelectedGpu(&owner,table,stage);
     if(s!=EFI_SUCCESS)goto failed;
-    owner=GuPlatformActive;
-    if(!owner){s=EFI_NOT_READY;goto failed;}
-    s=GuPrepareBoundGpu(owner,stage);
-    if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
   }
   GU_PHASE("stop-release-sequence-verification");
   if(GuVerifySelectedSequence(table)!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault) {
