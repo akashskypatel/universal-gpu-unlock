@@ -27,6 +27,7 @@ static GU_PLATFORM *last_candidate;
 #endif
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static int refuse_advance,refuse_completed,refuse_final_graph,drift_after_graph;
+static int refuse_target_completion;
 #endif
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -231,6 +232,9 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
     return EFI_NOT_READY;
   return EFI_SUCCESS;
 }
+int GuMsiCompletedPlatform(const GU_PLATFORM *platform,const void *token){
+  return !refuse_target_completion&&platform==GuPlatformActive&&token&&platform->release_state==token;
+}
 int GuMsiVerifyFinalGraph(void){
   if(drift_after_graph)gpu[1].dwords[4]^=0x4000U;
   return !refuse_final_graph;
@@ -362,7 +366,7 @@ static void ResetActivePair(void) {
   ActiveSequenceValid=ActiveInventoryValid=0;
   state_allocs=state_frees=fail_state_alloc=0;
   context_allocs=context_frees=fail_context_free=0;
-  refuse_advance=refuse_completed=refuse_final_graph=drift_after_graph=0;
+  refuse_advance=refuse_completed=refuse_final_graph=drift_after_graph=refuse_target_completion=0;
   ResetPair();gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;
 }
 static void PrepareMockOwners(void) {
@@ -624,6 +628,22 @@ int main(void) {
                                 &release_owner_token,Gu.asset_entries)==EFI_UNSUPPORTED &&
         ActiveSequence.halted);
   CHECK(ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_FAILED);
+
+  /* A successful caller verdict is insufficient if independent completion
+   * or graph verification fails. Neither refusal publishes a successor. */
+  for(int reason=0;reason<2;reason++) {
+    ResetActivePair();
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+    Gu.profile_verified=Gu.prom_verified=1;
+    PrepareMockOwners();
+    CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                  &release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+    refuse_target_completion=reason==0;
+    refuse_final_graph=reason==1;
+    CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,
+                                  &release_owner_token,Gu.asset_entries)==EFI_NOT_READY);
+    CHECK(ActiveSequence.halted&&ActiveSequence.next_step==0);
+  }
 
   /* Reject a changed live owner even if PCI and handover are unchanged. */
   ResetActivePair();
