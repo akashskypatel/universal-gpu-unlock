@@ -474,7 +474,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
                           (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
   /* The outcome is known and recorded: nothing may reset from here on, and the
    * timer must not survive into Windows. */
-  (VOID)GuBootWatchdogCancel();
+  EFI_STATUS cancelled=GuBootWatchdogCancel();
+  if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;
   if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");

@@ -111,6 +111,21 @@ class WatchdogContract(unittest.TestCase):
         self.assertLess(cancel, windows,
                         "nothing may stay armed across the handover")
 
+    def test_active_application_blocks_handover_if_watchdog_cancel_fails(self):
+        # Select the actual active transaction completion path, not the
+        # earlier Stop-only branch or recovery record read.
+        execution = APP.index("s=GuExecutePreparedSequence(")
+        start = APP.index("EFI_STATUS cancelled=GuBootWatchdogCancel();", execution)
+        end = APP.index("GuBootWindows()", start)
+        branch = APP[start:end]
+        self.assertIn("if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;", branch)
+        self.assertIn("if(s!=EFI_SUCCESS||Gu.fault)goto failed;", branch)
+        self.assertLess(branch.index("if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;"),
+                        branch.index("if(s!=EFI_SUCCESS||Gu.fault)goto failed;"))
+        self.assertLess(branch.index("if(s!=EFI_SUCCESS||Gu.fault)goto failed;"),
+                        branch.index("GuBootClose()"))
+        self.assertNotIn("(VOID)GuBootWatchdogCancel()", APP[execution:end])
+
     def test_stop_release_application_cancels_timer_and_returns_to_firmware(self):
         marker = APP.index("STOP_RELEASE_ONLY_IMAGE=1")
         start = APP.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, marker)
