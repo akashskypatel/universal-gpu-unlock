@@ -255,6 +255,10 @@ int main(void) {
   Reset(L'S');CHECK(Run()==102&&menus==1&&installs==0&&removes==0);
   Reset(L'I');CHECK(Run()==EFI_SUCCESS&&menus==1&&installs==1&&removes==0&&resets==1);
   Reset(L'R');CHECK(Run()==EFI_SUCCESS&&menus==1&&installs==0&&removes==1&&resets==1);
+  Reset(L'I');GuPlatformActive=&peer;
+  CHECK(Run()==EFI_DEVICE_ERROR&&menus==1&&installs==0&&removes==0&&resets==0);
+  Reset(L'R');platform.fault=1;
+  CHECK(Run()==EFI_DEVICE_ERROR&&menus==1&&installs==0&&removes==0&&resets==0);
 #endif
   return 0;
 }

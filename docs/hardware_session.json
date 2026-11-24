@@ -671,6 +671,22 @@
         "why": "writes the GPU, resident, target at boot: `actuate` stage."
       },
       {
+        "id": "app-unlock",
+        "why": "Build-selected U operation uses the existing firmware transaction; it is not a read-only candidate."
+      },
+      {
+        "id": "app-unlock-with-resume",
+        "why": "Build-selected P operation uses the existing firmware transaction and resume policy; it is not a read-only candidate."
+      },
+      {
+        "id": "app-install-driver",
+        "why": "Build-selected I operation can change owned firmware boot registration; it is outside read-only scope and requires the reviewed companion."
+      },
+      {
+        "id": "app-remove-driver",
+        "why": "Build-selected R operation can change owned firmware boot registration; it is outside read-only scope and does not remove the experiment record."
+      },
+      {
         "id": "dxe-actuate-one-target",
         "why": "writes the GPU from a driver: `actuate` stage."
       },
