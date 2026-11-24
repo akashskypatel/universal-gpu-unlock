@@ -125,14 +125,9 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   owner=GuPlatformActive;
   if(!owner){s=EFI_NOT_READY;goto finish;}
   if(s==EFI_SUCCESS&&!GuBootLogOpen())s=EFI_DEVICE_ERROR;
-  EFI_STATUS recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
-                          GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
-                          (UINT16)owner->discovery_identity.segment,
-                          (UINT16)owner->discovery_identity.bus,
-                          (UINT8)owner->discovery_identity.device,
-                          (UINT8)owner->discovery_identity.function,
-                          (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
-  if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;
+  /* Preserve the confirmed INTENT on any failure, including log failure. */
+  EFI_STATUS cancelled=GuBootWatchdogCancel();
+  if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;
 #endif
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 
@@ -151,6 +146,22 @@ finish:
     GuLog("DXE-DRIVER: final transaction checks passed; closing boot resources.\n");
 #endif
     s=GuBootClose();
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
+    if(s==EFI_SUCCESS) {
+      GU_PLATFORM *completed=GuPlatformActive;
+      if(!completed||completed->fault)s=EFI_NOT_READY;
+      else {
+        EFI_STATUS recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+                          GU_BOOT_STATE_OUTCOME,EFI_SUCCESS,completed->device_id,
+                          (UINT16)completed->discovery_identity.segment,
+                          (UINT16)completed->discovery_identity.bus,
+                          (UINT8)completed->discovery_identity.device,
+                          (UINT8)completed->discovery_identity.function,
+                          (UINT8)(completed->armed?1U:0U));
+        if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;
+      }
+    }
+#endif
     if(s==EFI_SUCCESS)return s;
   }
   if (s != EFI_SUCCESS) {

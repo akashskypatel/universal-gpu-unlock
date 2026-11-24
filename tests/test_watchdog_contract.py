@@ -102,14 +102,18 @@ class WatchdogContract(unittest.TestCase):
                         body.index(CANCEL),
                         "an unarmed build must not touch the timer")
 
-    def test_the_handover_cancels_after_the_outcome_and_before_windows(self):
-        outcome = APP.index("GU_BOOT_STATE_OUTCOME")
-        cancel = APP.index("GuBootWatchdogCancel()", outcome)
+    def test_the_handover_cancels_after_execution_and_before_outcome(self):
+        execution = APP.index("s=GuExecutePreparedSequence(")
+        cancel = APP.index("GuBootWatchdogCancel()", execution)
+        close = APP.index("s=GuBootClose()", cancel)
+        outcome = APP.index("GU_BOOT_STATE_OUTCOME", close)
         windows = APP.index('stage="start-Windows"', outcome)
-        self.assertLess(outcome, cancel,
+        self.assertLess(execution, cancel,
                         "the timer must outlive the transaction it bounds")
-        self.assertLess(cancel, windows,
-                        "nothing may stay armed across the handover")
+        self.assertLess(cancel, close)
+        self.assertLess(close, outcome,
+                        "keep the restart barrier until durable close")
+        self.assertLess(outcome, windows)
 
     def test_active_application_blocks_handover_if_watchdog_cancel_fails(self):
         # Select the actual active transaction completion path, not the

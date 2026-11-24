@@ -475,16 +475,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   owner=GuPlatformActive;
   if(!owner){s=EFI_NOT_READY;goto failed;}
   if(s==EFI_SUCCESS&&!GuBootLogOpen())s=EFI_DEVICE_ERROR;
-  EFI_STATUS recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
-                          GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
-                          (UINT16)owner->discovery_identity.segment,
-                          (UINT16)owner->discovery_identity.bus,
-                          (UINT8)owner->discovery_identity.device,
-                          (UINT8)owner->discovery_identity.function,
-                          (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
-  if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;
-  /* The outcome is known and recorded: nothing may reset from here on, and the
-   * timer must not survive into Windows. */
+  /* Keep the verified INTENT until all pre-handover checks succeed.
+   * A failed transaction leaves the restart barrier intact. */
   EFI_STATUS cancelled=GuBootWatchdogCancel();
   if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;
   if(s!=EFI_SUCCESS||Gu.fault)goto failed;
@@ -499,11 +491,30 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   stage="close-USB-log";GuTracePhase(stage);s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
+  /* This outcome records preboot completion, not a successful OS boot. */
+  stage="record-preboot-outcome";
+  EFI_STATUS recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+                          GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
+                          (UINT16)owner->discovery_identity.segment,
+                          (UINT16)owner->discovery_identity.bus,
+                          (UINT8)owner->discovery_identity.device,
+                          (UINT8)owner->discovery_identity.function,
+                          (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
+  if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;
+  if(s!=EFI_SUCCESS)goto failed;
+
   stage="start-Windows";GuTracePhase(stage);s=GuBootWindows();
 
-  /* A returned Windows image is not a successful handoff. */
-
-  GuBootHalt();return s==EFI_SUCCESS?EFI_ABORTED:s;
+  /* A returned Windows image is not a successful handoff. Re-establish
+   * the failed boot barrier; never request a reset or retry here. */
+  if(s==EFI_SUCCESS)s=EFI_ABORTED;
+  recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+                          GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
+                          (UINT16)owner->discovery_identity.segment,
+                          (UINT16)owner->discovery_identity.bus,
+                          (UINT8)owner->discovery_identity.device,
+                          (UINT8)owner->discovery_identity.function,0);
+  GuBootHalt();return recorded==EFI_SUCCESS?s:recorded;
 #endif /* !GU_STOP_RELEASE_ONLY_BENCH */
 
 failed:
