@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 import torch
+from quick_check import check_numerical_accuracy
 
 
 SIZES = (4096, 8192, 16384)
@@ -156,6 +157,8 @@ def _benchmark_device(index, device):
         del x, y
         torch.cuda.empty_cache()
 
+    print("\n--- NUMERICAL ACCURACY ---")
+    failures += check_numerical_accuracy(torch, device, index)
     print(f"Measurements failed on GPU {index}: {failures}\n")
     return {"index": index, "name": props.name, "failures": failures,
             "results": results, "bandwidth": bandwidth}

@@ -1259,7 +1259,10 @@ int main(void) {
                     self.assertEqual(run.returncode,0,run.stdout+run.stderr)
 
     def test_version_does_not_claim_parent_release(self):
-        self.assertIn("GPU-Unlock fork: experimental",V)
+        self.assertIn('#define GU_FORK_VERSION "GPU-Unlock"', V)
+        self.assertIn('#define GU_FORK_VERSION_WIDE L"GPU-Unlock"', V)
+        self.assertNotIn("experimental", V.lower())
+        self.assertNotIn("v1.8.22", V.split("#define GU_FORK_VERSION", 1)[1])
         self.assertIn("GU_FORK_VERSION_WIDE",B)
         self.assertIn("GU_FORK_VERSION",A)
         self.assertNotIn("proven rock-solid",B)

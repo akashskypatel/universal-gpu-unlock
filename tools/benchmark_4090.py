@@ -53,6 +53,7 @@ def device_identity(index: int, props) -> str:
 
 def run_benchmark(device_index: int) -> int:
     import torch
+    from quick_check import check_numerical_accuracy
 
     if not torch.cuda.is_available():
         print("ERROR: CUDA is not available!")
@@ -94,6 +95,7 @@ def run_benchmark(device_index: int) -> int:
     print(f"{'Precision':<20} | {'Matrix Size':<12} | {'Avg Latency (ms)':<16} | {'Throughput (TFLOPS)':<20}")
     print("-" * 75)
 
+    failures = 0
     for dtype_name, dtype in dtypes:
         for N in sizes:
             # FLOPs for C = A @ B (where A is N x N, B is N x N) is 2 * N^3
@@ -113,10 +115,10 @@ def run_benchmark(device_index: int) -> int:
                 start_event = torch.cuda.Event(enable_timing=True)
                 end_event = torch.cuda.Event(enable_timing=True)
 
-                start_event.record()
+                start_event.record(torch.cuda.current_stream(device))
                 for _ in range(num_iters):
                     c = torch.matmul(a, b)
-                end_event.record()
+                end_event.record(torch.cuda.current_stream(device))
                 torch.cuda.synchronize(device)
 
                 elapsed_ms = start_event.elapsed_time(end_event) / num_iters
@@ -127,6 +129,7 @@ def run_benchmark(device_index: int) -> int:
                 del a, b, c
                 torch.cuda.empty_cache()
             except Exception as e:
+                failures += 1
                 print(f"{dtype_name:<20} | {f'{N}x{N}':<12} | ERROR: {e}")
 
     print("\n--- 2. VRAM MEMORY BANDWIDTH TEST ---")
@@ -144,10 +147,10 @@ def run_benchmark(device_index: int) -> int:
         end_event = torch.cuda.Event(enable_timing=True)
 
         num_bw_iters = 10
-        start_event.record()
+        start_event.record(torch.cuda.current_stream(device))
         for _ in range(num_bw_iters):
             y.copy_(x)
-        end_event.record()
+        end_event.record(torch.cuda.current_stream(device))
         torch.cuda.synchronize(device)
 
         bw_ms = start_event.elapsed_time(end_event) / num_bw_iters
@@ -159,13 +162,18 @@ def run_benchmark(device_index: int) -> int:
         del x, y
         torch.cuda.empty_cache()
     except Exception as e:
+        failures += 1
         print(f"VRAM Bandwidth ERROR: {e}")
+
+    print("\n--- 3. NUMERICAL ACCURACY ---")
+    failures += check_numerical_accuracy(torch, device, device_index)
 
     print("=" * 70)
     print(f"RESULT ATTRIBUTION: CUDA_INDEX={device_index} {ATTRIBUTION}")
     print("LEGACY_SINGLE_DEVICE_USED=1 THROUGHPUT_IS_NOT_UNLOCK_EVIDENCE=1")
+    print(f"FAILURES={failures}")
     print("=" * 70)
-    return 0
+    return 1 if failures else 0
 
 
 def main(argv=None) -> int:
