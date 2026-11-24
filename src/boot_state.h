@@ -53,6 +53,9 @@ typedef struct {
  * stored value fails validation. Active entry refuses an invalid record. */
 EFI_STATUS GuBootStateRead(EFI_SYSTEM_TABLE *Table, GU_BOOT_STATE *Out);
 
+/* Call with a successfully read/validated record. NULL denotes absence. */
+int GuBootStateRequiresRecovery(const GU_BOOT_STATE *State);
+
 /* Replace the record and verify the stored bytes and attributes. A successful
  * service return alone is not sufficient evidence of a restart barrier. */
 EFI_STATUS GuBootStateWrite(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *State);

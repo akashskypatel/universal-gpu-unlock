@@ -53,6 +53,11 @@ EFI_STATUS GuBootStateRead(EFI_SYSTEM_TABLE *Table, GU_BOOT_STATE *Out) {
   return EFI_SUCCESS;
 }
 
+int GuBootStateRequiresRecovery(const GU_BOOT_STATE *State) {
+  return State && (State->Phase == GU_BOOT_STATE_INTENT ||
+                   (State->Phase == GU_BOOT_STATE_OUTCOME && State->Status != EFI_SUCCESS));
+}
+
 EFI_STATUS GuBootStateWrite(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *State) {
   if (!Table || !State) return EFI_INVALID_PARAMETER;
   if (!Usable(Table)) return EFI_UNSUPPORTED;
@@ -74,8 +79,7 @@ EFI_STATUS GuBootStateDeleteReviewed(EFI_SYSTEM_TABLE *Table,
                                     const GU_BOOT_STATE *Reviewed) {
   if(!Valid(Reviewed))return EFI_INVALID_PARAMETER;
   if(!Usable(Table))return EFI_UNSUPPORTED;
-  if(Reviewed->Phase!=GU_BOOT_STATE_INTENT &&
-     !(Reviewed->Phase==GU_BOOT_STATE_OUTCOME&&Reviewed->Status!=EFI_SUCCESS))
+  if(!GuBootStateRequiresRecovery(Reviewed))
     return EFI_NOT_READY;
   EFI_GUID global = {0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0x00,0xe0,0x98,0x03,0x2b,0x8c}};
   UINT16 order;

@@ -55,8 +55,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     (VOID)Say(t,"REACTIVATION=REFUSED READ_STATUS=%#llx\r\n",(unsigned long long)s);
     return s;
   }
-  if(reviewed.Phase!=GU_BOOT_STATE_INTENT&&
-     !(reviewed.Phase==GU_BOOT_STATE_OUTCOME&&reviewed.Status!=EFI_SUCCESS)) {
+  if(!GuBootStateRequiresRecovery(&reviewed)) {
     (VOID)Say(t,"REACTIVATION=REFUSED REASON=NOT_LATCHED\r\n");
     return EFI_NOT_READY;
   }

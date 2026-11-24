@@ -241,26 +241,20 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     return closed==EFI_SUCCESS?boot_state_status:closed;
   }
 
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
-  /* Never repair another image's state or change NVRAM in this test.
-   * A prior failed transaction also blocks the optional Windows handover. */
-  if(boot_state_present&&
-     (boot_state.Phase==GU_BOOT_STATE_INTENT||
-      (boot_state.Phase==GU_BOOT_STATE_OUTCOME&&boot_state.Status!=EFI_SUCCESS))) {
+  /* The shared predicate selects recovery before discovery. Observation and
+   * Stop-only profiles never change the previous record or boot registration. */
+  if(GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)) {
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+    GuLog("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+#else
     GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+#endif
     GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete or awaits acceptance; no GPU action was taken.\r\n");
     EFI_STATUS closed=GuBootClose();
     return closed==EFI_SUCCESS?EFI_ABORTED:closed;
-  }
 #else
-  /* USB recovery is intentionally before GPU discovery/preparation: those
-   * stages may be exactly what failed on the previous boot. An unfinished
-   * INTENT or failed OUTCOME means the prior transaction did not complete
-   * safely, so remove our owned DXE option, preserve the failure latch,
-   * and continue to Windows without touching PCI. */
-  if(boot_state_present&&
-     (boot_state.Phase==GU_BOOT_STATE_INTENT||
-      (boot_state.Phase==GU_BOOT_STATE_OUTCOME&&boot_state.Status!=EFI_SUCCESS))) {
+    /* Remove only the owned DXE option and preserve the record. */
     GuLog("USB_RECOVERY=FAILED_OR_INTERRUPTED ACTION=REMOVE_DXE_AND_SKIP_GPU\n");
     GuBootSay(L"\r\n[RECOVERY] An earlier GPU/DXE attempt failed or awaits owner acceptance.\r\n"
               L"Removing the AdaUnlock DXE boot entry; no GPU will be touched.\r\n");
@@ -280,9 +274,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
       return remove!=EFI_SUCCESS?remove:(closed!=EFI_SUCCESS?closed:load);
     }
     return GuBootWindows();
+#endif /* observation/Stop-only versus recovery */
   }
-
-#endif /* GU_STOP_RELEASE_ONLY_BENCH */
 
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   GuLog("STOP_ONLY_SCOPE=DRIVER_STOP_REATTACH FIRMWARE_ASSET_FILES_READ=0 "

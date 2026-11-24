@@ -63,11 +63,13 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
    * our verified Driver#### entry from DriverOrder, then let firmware continue
    * to the normal boot target. If NVRAM refuses the write, this invocation
    * still performs no GPU work and the next boot retries this recovery check. */
-  if (boot_state_present &&
-      (boot_state.Phase == GU_BOOT_STATE_INTENT ||
-       (boot_state.Phase == GU_BOOT_STATE_OUTCOME && boot_state.Status != EFI_SUCCESS))) {
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  if (GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)) {
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+    GuLog("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+#else
     GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+#endif
     GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete or awaits acceptance; no GPU action was taken.\r\n");
     EFI_STATUS closed=GuBootClose();
     return closed==EFI_SUCCESS?EFI_ABORTED:closed;

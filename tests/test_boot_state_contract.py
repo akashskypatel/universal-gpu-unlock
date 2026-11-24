@@ -29,7 +29,7 @@ class RecoveryPolicy(unittest.TestCase):
         self.assertLess(recovery, discover)
         self.assertLess(disable, discover)
         self.assertIn("ACTION=SKIP_GPU", DXE)
-        self.assertIn("boot_state.Status != EFI_SUCCESS", DXE)
+        self.assertIn("GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)", DXE)
 
     def test_usb_recovery_removes_dxe_before_discovery(self):
         recovery = APP.index("USB_RECOVERY=FAILED_OR_INTERRUPTED")
@@ -41,7 +41,22 @@ class RecoveryPolicy(unittest.TestCase):
         self.assertIn("BOOT_STATE_PRESERVED=1 AUTO_RETRY=0", APP)
         self.assertNotIn("ResetSystem(", APP[recovery:discover])
         self.assertIn("GuBootWindows()", APP)
-        self.assertIn("boot_state.Status!=EFI_SUCCESS", APP)
+        self.assertIn("GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)", APP)
+
+    def test_preparation_recovery_refuses_without_persistent_write(self):
+        for name, source, mutation in (("app", APP, "GuRemoveDriverOption(t)"),
+                                       ("dxe", DXE, "GuDisableDriverOption(t)")):
+            recovery = source.index("GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)")
+            guard = source.index("#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)", recovery)
+            branch = source.index("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE", guard)
+            refused = source.index("return closed==EFI_SUCCESS?EFI_ABORTED:closed;", branch)
+            alternate = source.index("#else", refused)
+            self.assertLess(alternate, source.index(mutation, recovery), name)
+            self.assertNotIn(mutation, source[guard:alternate], name)
+            self.assertNotIn("GuBootWindows()", source[guard:alternate], name)
+        maintenance = (SRC / "boot_state_maintenance.c").read_text(encoding="utf-8")
+        self.assertIn("if(!GuBootStateRequiresRecovery(&reviewed))", maintenance)
+        self.assertIn("if(!GuBootStateRequiresRecovery(Reviewed))", STATE)
 
     def test_recovery_only_disables_or_removes_owned_driver_option(self):
         self.assertIn("EFI_STATUS GuDisableDriverOption", (SRC / "driver_nvram.c").read_text())

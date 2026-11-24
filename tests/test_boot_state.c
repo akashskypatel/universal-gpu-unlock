@@ -226,6 +226,21 @@ static int CheckTransitions(void) {
   return 0;
 }
 
+static int CheckRecoveryPredicate(void) {
+  GU_BOOT_STATE state=Sample();
+  CHECK(!GuBootStateRequiresRecovery(NULL));
+  CHECK(!GuBootStateRequiresRecovery(&state)); /* successful OUTCOME */
+  state.Status=EFI_DEVICE_ERROR;
+  CHECK(GuBootStateRequiresRecovery(&state));
+  state.Phase=GU_BOOT_STATE_IDLE;
+  CHECK(!GuBootStateRequiresRecovery(&state));
+  state.Phase=GU_BOOT_STATE_INTENT;
+  CHECK(GuBootStateRequiresRecovery(&state));
+  state.Status=EFI_SUCCESS;
+  CHECK(GuBootStateRequiresRecovery(&state));
+  return 0;
+}
+
 static int CheckReviewedDeletion(void) {
   GU_BOOT_STATE reviewed,current,stale;
   Reset();
@@ -277,6 +292,7 @@ int main(void) {
 
   if (CheckReadValidation()) return 1;
   if (CheckTransitions()) return 1;
+  if (CheckRecoveryPredicate()) return 1;
   if (CheckReviewedDeletion()) return 1;
   printf("test_boot_state: %u checks OK\n", checks);
   return 0;
