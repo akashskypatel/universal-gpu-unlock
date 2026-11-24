@@ -660,12 +660,12 @@ function Assert-ProfileOptions([string[]]$Allowed) {
 # Select by the exact declared build contract. Configuration IDs are output
 # metadata only; a missing or ambiguous declaration must refuse the request.
 function Find-ProfileConfiguration {
-    param([string]$ProfileName, [string]$Family, [string]$Safety,
+    param([string]$ProfileName, [string]$BuilderFamily, [string]$Safety,
           [hashtable]$Switches, [string]$Selection = '',
           [switch]$RequiresLocalBootProfile)
     $matches = @($catalogue.variants | Where-Object {
         $candidate = $_
-        if ($candidate.profile -ne $ProfileName -or $candidate.family -ne $Family -or
+        if ($candidate.profile -ne $ProfileName -or $candidate.family -ne $BuilderFamily -or
             $candidate.safety -ne $Safety) { return $false }
         $selectionProperty = $candidate.PSObject.Properties['requires_selection']
         $selectionMode = if ($selectionProperty) { [string]$selectionProperty.Value } else { '' }
@@ -694,7 +694,7 @@ function Find-ProfileConfiguration {
 function Resolve-ProfileVariant([string]$ProfileName) {
     $targetCount = Get-SelectionCount
     $isDxe = $ImageKind -eq 'Dxe'
-    $family = if ($isDxe) { 'prepare-dxe' } else { 'prepare' }
+    $builderFamily = if ($isDxe) { 'prepare-dxe' } else { 'prepare' }
     $hasEsp = [bool]$WindowsEspGuid
     $selection = if ($targetCount -eq 0) { '' } elseif ($targetCount -eq 1) { 'single' } else { 'sequence' }
     switch ($ProfileName) {
@@ -705,7 +705,7 @@ function Resolve-ProfileVariant([string]$ProfileName) {
                     ($script:ExplicitProfileOptions -contains 'SaveLog' -and -not $SaveLog)) {
                     throw 'Preflight requires explicit GPU selection and file logging, without Windows handoff. Firmware references require the application.'
                 }
-                return (Find-ProfileConfiguration $ProfileName $family 'refuses-before-mutation' @{} -Selection 'any')
+                return (Find-ProfileConfiguration $ProfileName $builderFamily 'refuses-before-mutation' @{} -Selection 'any')
             }
             Assert-ProfileOptions @('Probe','SaveLog')
             if ($CapturedPromReference) { throw 'Diagnostic does not accept firmware reference options.' }
@@ -732,7 +732,7 @@ function Resolve-ProfileVariant([string]$ProfileName) {
             if (-not $targetCount -or $hasEsp -or $CapturedPromReference) {
                 throw 'Compile-check requires a compiled GPU selection and no ESP or firmware reference options.'
             }
-            return (Find-ProfileConfiguration $ProfileName $family 'compile-only' @{SyntheticCompileProfile=$true} -Selection $selection)
+            return (Find-ProfileConfiguration $ProfileName $builderFamily 'compile-only' @{SyntheticCompileProfile=$true} -Selection $selection)
         }
         'driver-transition' {
             if ($CapturedPromReference) { throw 'Driver transition does not accept firmware reference options.' }
@@ -745,7 +745,7 @@ function Resolve-ProfileVariant([string]$ProfileName) {
                     if ($isDxe -or $targetCount) { throw 'StopReattach Windows handoff requires the live-all application.' }
                     $switches['StopReleaseWindowsHandoff'] = $true
                 }
-                return (Find-ProfileConfiguration $ProfileName $family 'actuates' $switches -RequiresLocalBootProfile:$isDxe)
+                return (Find-ProfileConfiguration $ProfileName $builderFamily 'actuates' $switches -RequiresLocalBootProfile:$isDxe)
             }
             if ($Operation -eq 'ObserveStop') {
                 Assert-ProfileOptions @('Operation','ImageKind','Handoff','ObservationTarget')
@@ -780,7 +780,7 @@ function Resolve-ProfileVariant([string]$ProfileName) {
                 $switches['RuntimeEsp'] = $true
                 $switches['ApplicationOperation'] = if ($Operation -eq 'UnlockReattach') { 'Unlock' } else { $Operation }
                 if ($Operation -eq 'UnlockReattach') { $switches['FirmwareReattach'] = $true }
-                return (Find-ProfileConfiguration $ProfileName $family 'actuates' $switches)
+                return (Find-ProfileConfiguration $ProfileName $builderFamily 'actuates' $switches)
             }
             if (($Operation -eq 'Menu' -and -not $isDxe) -or ($Operation -eq 'DxeTransaction' -and $isDxe)) {
                 if ($hasEsp -or $EspPolicy -eq 'Runtime' -or ($isDxe -and ($EspPolicy -eq 'Resident' -or $CapturedPromReference))) {
@@ -792,7 +792,7 @@ function Resolve-ProfileVariant([string]$ProfileName) {
                     $switches['RuntimeEsp'] = $true
                     $switches['EspResident'] = $true
                 }
-                return (Find-ProfileConfiguration $ProfileName $family 'actuates' $switches -Selection $selection -RequiresLocalBootProfile:($EspPolicy -ne 'Resident'))
+                return (Find-ProfileConfiguration $ProfileName $builderFamily 'actuates' $switches -Selection $selection -RequiresLocalBootProfile:($EspPolicy -ne 'Resident'))
             }
             throw 'Firmware transaction requires an explicit supported operation and image kind.'
         }
@@ -803,7 +803,7 @@ function Resolve-ProfileVariant([string]$ProfileName) {
             }
             if ($Operation -eq 'ReviewBootState') { return (Find-ProfileConfiguration $ProfileName 'maintenance' 'maintenance' @{}) }
             if ($Operation -in @('InstallDriver','RemoveDriver')) {
-                return (Find-ProfileConfiguration $ProfileName $family 'actuates' @{RuntimeSelection=$true; RuntimeEsp=$true; EnableSingleTargetExecution=$true; AcceptUnverifiedActuation=$true; ApplicationOperation=$Operation})
+                return (Find-ProfileConfiguration $ProfileName $builderFamily 'actuates' @{RuntimeSelection=$true; RuntimeEsp=$true; EnableSingleTargetExecution=$true; AcceptUnverifiedActuation=$true; ApplicationOperation=$Operation})
             }
             throw 'Maintenance requires an explicit supported operation.'
         }

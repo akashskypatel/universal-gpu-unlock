@@ -258,6 +258,20 @@ failed:
 #endif
   return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 }
+/* Completion is shared by the application and DXE driver. Preserve the
+ * first failure, never cancel before the transaction ends, and leave INTENT
+ * and the caller's containment or handover policy untouched. */
+EFI_STATUS GuCompletePreparedSequence(EFI_STATUS status,GU_PLATFORM **owner) {
+  if(!owner)return EFI_INVALID_PARAMETER;
+  *owner=GuPlatformActive;
+  if(!*owner)return EFI_NOT_READY;
+  if(status==EFI_SUCCESS&&!GuBootLogOpen())status=EFI_DEVICE_ERROR;
+  EFI_STATUS cancelled=GuBootWatchdogCancel();
+  if(status==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)status=cancelled;
+  if(status==EFI_SUCCESS&&(*owner!=GuPlatformActive||(*owner)->fault||
+                           !GuBootLogOpen()))status=EFI_DEVICE_ERROR;
+  return status;
+}
 #else
 /* This is scoped to the attempted reattachment, not a refused preflight
  * or a release stage that never reached reconnect. */

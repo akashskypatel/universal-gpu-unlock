@@ -24,6 +24,8 @@ EFI_STATUS GuPrepareBoundGpu(GU_PLATFORM *owner,const char **stage);
 EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
                            EFI_HANDLE image,
                                      GU_S3_POLICY policy,const char **stage);
+/* Resolve the final owner and cancel the watchdog before log closure. */
+EFI_STATUS GuCompletePreparedSequence(EFI_STATUS status,GU_PLATFORM **owner);
 #endif
 /* Failure decision includes earlier published contexts. */
 BOOLEAN GuExecutionNeedsContainment(VOID);

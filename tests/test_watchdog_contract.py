@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BOOT_IO = (ROOT / "src" / "boot_io.c").read_text(encoding="utf-8")
 BOOT_IO_H = (ROOT / "src" / "boot_io.h").read_text(encoding="utf-8")
 APP = (ROOT / "src" / "app.c").read_text(encoding="utf-8")
+SHARED = (ROOT / "src" / "unlock_execution.c").read_text(encoding="utf-8")
 
 ARM = "SetWatchdogTimer(Bound * 10000000U, 0, 0, NULL)"
 CANCEL = "SetWatchdogTimer(0, 0, 0, NULL)"
@@ -104,7 +105,7 @@ class WatchdogContract(unittest.TestCase):
 
     def test_the_handover_cancels_after_execution_and_before_outcome(self):
         execution = APP.index("s=GuExecutePreparedSequence(")
-        cancel = APP.index("GuBootWatchdogCancel()", execution)
+        cancel = APP.index("GuCompletePreparedSequence(s,&owner)", execution)
         close = APP.index("s=GuBootClose()", cancel)
         outcome = APP.index("GU_BOOT_STATE_OUTCOME", close)
         windows = APP.index('stage="start-Windows"', outcome)
@@ -119,14 +120,16 @@ class WatchdogContract(unittest.TestCase):
         # Select the actual active transaction completion path, not the
         # earlier Stop-only branch or recovery record read.
         execution = APP.index("s=GuExecutePreparedSequence(")
-        start = APP.index("EFI_STATUS cancelled=GuBootWatchdogCancel();", execution)
+        start = APP.index("s=GuCompletePreparedSequence(s,&owner);", execution)
         end = APP.index("GuBootWindows()", start)
         branch = APP[start:end]
-        self.assertIn("if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;", branch)
-        self.assertIn("if(s!=EFI_SUCCESS||Gu.fault)goto failed;", branch)
-        self.assertLess(branch.index("if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;"),
-                        branch.index("if(s!=EFI_SUCCESS||Gu.fault)goto failed;"))
-        self.assertLess(branch.index("if(s!=EFI_SUCCESS||Gu.fault)goto failed;"),
+        completion = function_body(SHARED, "EFI_STATUS GuCompletePreparedSequence(")
+        self.assertIn("EFI_STATUS cancelled=GuBootWatchdogCancel();", completion)
+        self.assertIn("if(status==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)status=cancelled;", completion)
+        self.assertIn("if(!owner||s!=EFI_SUCCESS||Gu.fault)goto failed;", branch)
+        self.assertLess(branch.index("s=GuCompletePreparedSequence(s,&owner);"),
+                        branch.index("if(!owner||s!=EFI_SUCCESS||Gu.fault)goto failed;"))
+        self.assertLess(branch.index("if(!owner||s!=EFI_SUCCESS||Gu.fault)goto failed;"),
                         branch.index("GuBootClose()"))
         self.assertNotIn("(VOID)GuBootWatchdogCancel()", APP[execution:end])
 

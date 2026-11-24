@@ -100,7 +100,7 @@ class TwoPhaseWrites(unittest.TestCase):
             self.assertIn("if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;", text[outcome:], name)
             close = text.index("s=GuBootClose()", sequence)
             self.assertLess(close, outcome, name)
-            cancel = text.index("EFI_STATUS cancelled=GuBootWatchdogCancel()", sequence)
+            cancel = text.index("s=GuCompletePreparedSequence(s,&owner);", sequence)
             self.assertLess(cancel, close, name)
             self.assertNotIn("(VOID)GuBootStateRecord", text, name)
             self.assertIn("s=GuBootReadPriorState(t,&boot_state,&boot_state_present);\n  if(s!=EFI_SUCCESS)return s;", text[:intent], name)

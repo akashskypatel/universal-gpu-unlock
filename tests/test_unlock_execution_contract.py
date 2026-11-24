@@ -545,6 +545,68 @@ int main(void){
                 ran=subprocess.run([str(binary)],capture_output=True,text=True)
                 self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
 
+    def test_actual_completion_preserves_failure_and_refuses_lost_log_or_owner(self):
+        actual = "EFI_STATUS GuCompletePreparedSequence(EFI_STATUS status,GU_PLATFORM **owner) {\n" + body(SHARED,"GuCompletePreparedSequence") + "\n}\n"
+        mock = r"""
+#include <stdio.h>
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 1
+#define EFI_NOT_READY 2
+#define EFI_DEVICE_ERROR 3
+#define EFI_UNSUPPORTED 4
+#define EFI_ABORTED 5
+typedef int EFI_STATUS;
+typedef struct {int fault;} GU_PLATFORM;
+static GU_PLATFORM first,last,peer,*GuPlatformActive;
+static int scenario,log_open,cancel_calls;
+static int GuBootLogOpen(void){return log_open;}
+static EFI_STATUS GuBootWatchdogCancel(void){
+  cancel_calls++;
+  if(scenario==4)return EFI_UNSUPPORTED;
+  if(scenario==5)log_open=0;
+  if(scenario==6)GuPlatformActive=&peer;
+  if(scenario==7)last.fault=1;
+  return EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d scenario=%d: %s\n",__LINE__,scenario,#x);return 1;}} while(0)
+int main(void){
+  for(scenario=0;scenario<=10;scenario++){
+    last.fault=0;GuPlatformActive=&last;log_open=1;cancel_calls=0;
+    GU_PLATFORM *owner=&first;
+    EFI_STATUS input=EFI_SUCCESS,expected=EFI_SUCCESS;
+    if(scenario==1){GuPlatformActive=NULL;expected=EFI_NOT_READY;}
+    if(scenario==2){log_open=0;expected=EFI_DEVICE_ERROR;}
+    if(scenario==3){input=expected=EFI_ABORTED;log_open=0;}
+    if(scenario==4)expected=EFI_UNSUPPORTED;
+    if(scenario>=5&&scenario<=7)expected=EFI_DEVICE_ERROR;
+    if(scenario==8){last.fault=1;expected=EFI_DEVICE_ERROR;}
+    if(scenario==9)expected=EFI_INVALID_PARAMETER;
+    if(scenario==10){input=expected=EFI_ABORTED;}
+    CHECK(GuCompletePreparedSequence(input,scenario==9?NULL:&owner)==expected);
+    CHECK(cancel_calls==(scenario!=1&&scenario!=9));
+    CHECK(owner==(scenario==1?NULL:scenario==9?&first:&last));
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source=Path(directory)/"completion.c"
+            source.write_text(mock,encoding="utf-8")
+            for compiler in ("gcc","clang"):
+                binary=Path(directory)/compiler
+                built=subprocess.run([compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(source),"-o",str(binary)],capture_output=True,text=True)
+                self.assertEqual(built.returncode,0,built.stderr)
+                ran=subprocess.run([str(binary)],capture_output=True,text=True)
+                self.assertEqual(ran.returncode,0,ran.stdout+ran.stderr)
+        for src,name in [(APP,"UefiMain"),(DXE,"GuDxeRun")]:
+            code=body(src,name)
+            sequence=code.index("s=GuExecutePreparedSequence(")
+            completion=code.index("s=GuCompletePreparedSequence(s,&owner);",sequence)
+            close=code.index("s=GuBootClose()",completion)
+            self.assertLess(sequence,completion)
+            self.assertLess(completion,close)
+
     def test_failure_decision_retains_prior_transaction(self):
         actual = "int GuExecutionNeedsContainment(void) {\n" + body(SHARED,"GuExecutionNeedsContainment") + "\n}"
         mock = r"""

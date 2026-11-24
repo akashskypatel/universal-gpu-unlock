@@ -557,14 +557,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     goto failed;
   }
   s=GuExecutePreparedSequence(owner,t,image,enable_s3?GU_S3_REQUIRED:GU_S3_DISABLED,&stage);
-  owner=GuPlatformActive;
-  if(!owner){s=EFI_NOT_READY;goto failed;}
-  if(s==EFI_SUCCESS&&!GuBootLogOpen())s=EFI_DEVICE_ERROR;
-  /* Keep the verified INTENT until all pre-handover checks succeed.
-   * A failed transaction leaves the restart barrier intact. */
-  EFI_STATUS cancelled=GuBootWatchdogCancel();
-  if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;
-  if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  s=GuCompletePreparedSequence(s,&owner);
+  if(!owner||s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");
 #ifdef GU_FIRMWARE_REATTACH

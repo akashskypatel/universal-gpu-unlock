@@ -103,12 +103,8 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
     goto finish;
   }
   s=GuExecutePreparedSequence(owner,t,image,GU_S3_OPTIONAL,&stage);
-  owner=GuPlatformActive;
-  if(!owner){s=EFI_NOT_READY;goto finish;}
-  if(s==EFI_SUCCESS&&!GuBootLogOpen())s=EFI_DEVICE_ERROR;
-  /* Preserve the confirmed INTENT on any failure, including log failure. */
-  EFI_STATUS cancelled=GuBootWatchdogCancel();
-  if(s==EFI_SUCCESS&&cancelled!=EFI_SUCCESS)s=cancelled;
+  s=GuCompletePreparedSequence(s,&owner);
+  if(!owner)goto finish;
 #endif
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 
