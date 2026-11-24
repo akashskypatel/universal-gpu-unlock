@@ -292,7 +292,8 @@ static GU_PLATFORM gpus[4],*active;
 #define GuPlatformActive active
 #define Gu (*active)
 static int current,count,scenario,failed_at,aborted,violations,final_calls,select_calls;
-static int executions,loads,diagnostics,profiles,script_calls;
+static int executions,loads,diagnostics,profiles,script_calls,log_failed;
+static int GuBootLogOpen(void){return !log_failed;}
 static char logtext[8192];
 static size_t logused;
 static int LogHas(const char *needle);
@@ -346,6 +347,7 @@ static EFI_STATUS GuExecuteUnlock(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,EFI
   if(owner!=active||aborted||!Gu.profile||Gu.completed||Gu.fault||Gu.retained)violations++;
   if(current==failed_at&&scenario==6)return EFI_DEVICE_ERROR;
   Gu.completed=1;
+  if(current==failed_at&&scenario==17)log_failed=1;
   if(current==failed_at&&scenario==7)Gu.fault=1;
   return EFI_SUCCESS;
 }
@@ -385,13 +387,13 @@ static int GuExecutionReadyForWindows(EFI_SYSTEM_TABLE *table){
 #define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL line %d count=%d scenario=%d policy=%d: %s\n",__LINE__,count,scenario,policy,#x);return 1;}} while(0)
 int main(void){
   EFI_SYSTEM_TABLE table={&table};
-  for(count=1;count<=4;count++)for(int policy=0;policy<=2;policy++)for(scenario=0;scenario<=15;scenario++){
+  for(count=1;count<=4;count++)for(int policy=0;policy<=2;policy++)for(scenario=0;scenario<=17;scenario++){
     memset(gpus,0,sizeof(gpus));
     current=0;active=&gpus[0];aborted=violations=final_calls=select_calls=0;
-    executions=loads=diagnostics=profiles=script_calls=0;
+    executions=loads=diagnostics=profiles=script_calls=log_failed=0;
     /* For a multi-card sequence exercise failures after the first card completed.
      * Selection failure occurs on the first card, before binding its successor. */
-    failed_at=count>1&&scenario!=13&&scenario!=15?1:0;
+    failed_at=count>1&&scenario!=13&&scenario!=15&&scenario!=16?1:0;
     for(int i=0;i<count;i++){gpus[i].handle=&gpus[i];gpus[i].pci=&gpus[i].pci;}
     const char *stage="";
     CHECK(GuPrepareBoundGpu(&gpus[1],&stage)==EFI_NOT_READY);
@@ -403,6 +405,7 @@ int main(void){
       continue;
     }
     CHECK(init==EFI_SUCCESS);
+    if(scenario==16)log_failed=1;
     EFI_STATUS status=GuExecutePreparedSequence(active,&table,&table,(GU_S3_POLICY)policy,&stage);
     int success=scenario==0||(policy==GU_S3_DISABLED&&scenario>=8&&scenario<=11)||
        (policy==GU_S3_OPTIONAL&&scenario==8)||(count==1&&(scenario==13||scenario==15));
@@ -426,6 +429,8 @@ int main(void){
       }
       if(scenario>=1&&scenario<=5)CHECK(executions==failed_at);
       if(scenario>=8&&scenario<=11)CHECK(executions==failed_at+1);
+      if(scenario==16)CHECK(executions==0&&select_calls==0&&script_calls==0);
+      if(scenario==17)CHECK(executions==failed_at+1&&select_calls==failed_at&&script_calls==(policy==GU_S3_DISABLED?0:failed_at));
     }
   }
   return 0;
