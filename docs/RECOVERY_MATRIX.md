@@ -2,8 +2,9 @@
 
 What to do when a boot did not end the way it should, and what proves recovery.
 **Manual cold-power recovery: HARDWARE AND FIRMWARE VERIFIED (owner report).**
-The owner confirms recovery from a failed firmware transaction after 60 seconds
-powered off, with USB removed, followed by successful cold boot. Do not repeat
+The owner confirms recovery from a failed firmware transaction by a
+60-second cold boot with USB removed (60 seconds powered off before boot).
+Manual recovery is verified on hardware by owner report. Do not repeat
 the test. This verifies the observed manual recovery, not every automated
 recovery branch or failure class. The source/host contracts for those branches
 remain separate. Production eligibility gates still read
