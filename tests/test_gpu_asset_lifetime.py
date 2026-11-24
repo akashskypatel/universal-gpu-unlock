@@ -181,6 +181,154 @@ int main(int argc,char **argv) {
 """
         self.compile_run(host, range(9))
 
+    def test_adaptive_reader_and_exact_path_cache(self):
+        reader = body(BOOT, "static EFI_STATUS ReadFile(",
+                      "/* Both asset fallback and Windows staging")
+        cache = body(BOOT, "typedef struct {\n  const CHAR16 *path;",
+                     "#endif\n\nstatic BOOLEAN TraceClock")
+        host = r'''
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+typedef void VOID;
+typedef int EFI_STATUS;
+typedef size_t UINTN;
+typedef uint64_t UINT64;
+typedef uint8_t UINT8;
+typedef wchar_t CHAR16;
+typedef int BOOLEAN;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_NOT_FOUND 1
+#define EFI_DEVICE_ERROR 2
+#define EFI_BAD_BUFFER_SIZE 3
+#define EFI_COMPROMISED_DATA 4
+#define EFI_OUT_OF_RESOURCES 5
+#define EFI_FILE_MODE_READ 1
+#define EFI_FILE_DIRECTORY 16
+#define GU_ACTIVE_SINGLE_TARGET 1
+#define MIB (1048576U)
+#define SIZE (20U*MIB+7U)
+typedef struct {unsigned Year,Month,Day;} EFI_TIME;
+typedef struct {
+  UINT64 FileSize,PhysicalSize,Attribute;
+  EFI_TIME CreateTime,ModificationTime;
+} EFI_FILE_INFO;
+typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+struct EFI_FILE_PROTOCOL {
+  EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,UINT64,UINT64);
+  EFI_STATUS (*GetInfo)(EFI_FILE_PROTOCOL *,void *,UINTN *,void *);
+  EFI_STATUS (*Read)(EFI_FILE_PROTOCOL *,UINTN *,void *);
+  EFI_STATUS (*SetPosition)(EFI_FILE_PROTOCOL *,UINT64);
+  EFI_STATUS (*GetPosition)(EFI_FILE_PROTOCOL *,UINT64 *);
+};
+typedef struct {UINTN size;const VOID *data;} FW;
+struct firmware {UINTN size;const VOID *data;};
+typedef struct {struct firmware firmware;} ASSET;
+typedef struct {int fault,retained;ASSET asset_entries[5];} GU_PLATFORM;
+typedef struct {const CHAR16 *path;const char *name,*sha256;UINTN bytes;} GU_ARCH_ASSET;
+typedef struct {GU_ARCH_ASSET entries[5];} GU_ARCH_ASSETS;
+static GU_PLATFORM cards[2],*GuPlatformActive=&cards[0];
+#define Gu (*GuPlatformActive)
+static const GU_ARCH_ASSETS arch={.entries={[2]={L"gsp","gsp","digest",SIZE}}};
+static const GU_ARCH_ASSETS *GuGetArchAssets(void){return &arch;}
+static EFI_STATUS BootFileStatus;
+static EFI_FILE_PROTOCOL root,file,*Root=&root;
+static int InfoGuid,mode,read_calls,close_calls,seek_calls,progress_calls;
+static UINTN AssetReadSize=MIB,AssetReadBestBytes,AssetReadBestSeconds;
+static BOOLEAN AssetReadSizeSettled,TraceAssetReadActive=TRUE;
+static UINTN pos,largest,clock_seconds,last_progress;
+static VOID *allocation;
+static GU_PLATFORM *allocation_owner;
+static UINT8 *cached_bytes;
+static BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *owner) {
+  return owner==&cards[0] && mode!=10;
+}
+static BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *owner,const VOID *p,UINTN bytes) {
+  return bytes==SIZE && ((owner==allocation_owner&&p==allocation)||
+         (owner==&cards[0]&&p==cached_bytes&&cached_bytes));
+}
+static BOOLEAN TraceClock(UINTN *seconds){*seconds=clock_seconds;return mode!=11;}
+static VOID GuTraceDetail(const char *phase,const char *fmt,...){(void)phase;(void)fmt;}
+static VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
+  (void)phase;(void)total;progress_calls++;last_progress=done;
+  if(mode==6)BootFileStatus=EFI_DEVICE_ERROR;
+}
+static VOID *GuAlloc(UINTN bytes){allocation=malloc(bytes);allocation_owner=&Gu;return allocation;}
+static VOID GuFree(VOID *p){free(p);if(p==allocation)allocation=NULL;}
+static EFI_STATUS BootFileOpenResult(EFI_STATUS s,EFI_FILE_PROTOCOL **f){(void)f;return s;}
+static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **f){*f=NULL;close_calls++;return mode==13?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+static EFI_STATUS Open(EFI_FILE_PROTOCOL *r,EFI_FILE_PROTOCOL **f,CHAR16 *n,UINT64 m,UINT64 a) {
+  (void)r;(void)n;(void)m;(void)a;pos=0;*f=&file;return EFI_SUCCESS;
+}
+static EFI_STATUS Info(EFI_FILE_PROTOCOL *f,void *g,UINTN *n,void *out) {
+  (void)f;(void)g;EFI_FILE_INFO *i=out;memset(i,0,sizeof(*i));
+  i->FileSize=SIZE;i->PhysicalSize=SIZE;i->CreateTime.Year=2026;
+  i->ModificationTime.Year=mode==9?2025:2026;*n=sizeof(*i);return EFI_SUCCESS;
+}
+static EFI_STATUS Read(EFI_FILE_PROTOCOL *f,UINTN *n,void *out) {
+  (void)f;
+  if(pos==SIZE){*n=mode==5?1:0;return EFI_SUCCESS;}
+  read_calls++;if(*n>largest)largest=*n;
+  if((mode==1||mode==4)&&*n>2*MIB){pos+=17;return EFI_BAD_BUFFER_SIZE;}
+  if(mode==2&&read_calls==2){*n-=1;return EFI_SUCCESS;}
+  if(mode==3&&read_calls==2)return EFI_DEVICE_ERROR;
+  if(mode==12&&*n==4*MIB)clock_seconds+=20;
+  else clock_seconds+=(unsigned)(*n/MIB)*2U;
+  memset(out,0x5a,*n);pos+=*n;return EFI_SUCCESS;
+}
+static EFI_STATUS Seek(EFI_FILE_PROTOCOL *f,UINT64 n){(void)f;seek_calls++;pos=(UINTN)n;return mode==4?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+static EFI_STATUS Position(EFI_FILE_PROTOCOL *f,UINT64 *n){(void)f;*n=pos;return EFI_SUCCESS;}
+''' + cache + reader + r'''
+#define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}} while(0)
+int main(int argc,char **argv) {
+  mode=argc>1?atoi(argv[1]):-1;
+  root.Open=Open;file.GetInfo=Info;file.Read=Read;file.SetPosition=Seek;file.GetPosition=Position;
+  const CHAR16 *name=L"gsp";
+  if(mode>=7&&mode<=10) {
+    cached_bytes=malloc(SIZE);CHECK(cached_bytes);
+    memset(cached_bytes,0x6b,SIZE);
+    cards[0].asset_entries[2].firmware=(struct firmware){SIZE,cached_bytes};
+    GspCacheOwner=&cards[0];GspCacheManifest=&arch.entries[2];
+    GspFileCached.path=L"gsp";GspFileCached.created.Year=2026;
+    GspFileCached.modified.Year=2026;GspFileCached.physical_size=SIZE;
+    GuPlatformActive=&cards[1];GspFileReadActive=TRUE;
+    if(mode==8)name=L"other";
+  }
+  if(mode==14)TraceAssetReadActive=FALSE;
+  VOID *data=NULL;EFI_STATUS status=ReadFile(Root,name,SIZE,&data);
+  CHECK(close_calls==1);
+  if(mode==2||mode==3||mode==4||mode==5||mode==6||mode==10||mode==13) {
+    CHECK(status!=EFI_SUCCESS&&!data&&!allocation);
+    if(mode==2||mode==3)CHECK(read_calls==2&&seek_calls==0);
+    if(mode==4)CHECK(seek_calls==1);
+    if(mode==10)CHECK(read_calls==0);
+  } else {
+    CHECK(status==EFI_SUCCESS&&data==allocation&&data);
+    if(mode==7) {
+      CHECK(!read_calls&&seek_calls==1&&data!=cached_bytes&&last_progress==SIZE);
+      CHECK(((UINT8 *)data)[0]==0x6b&&((UINT8 *)data)[SIZE-1]==0x6b);
+      CHECK(GspFileCandidate.path==name);
+    } else {
+      CHECK(((UINT8 *)data)[0]==0x5a&&((UINT8 *)data)[SIZE-1]==0x5a);
+      if(mode==1)CHECK(seek_calls==1&&AssetReadSize==2*MIB);
+      if(mode==0||mode==11)CHECK(read_calls==5&&largest==8*MIB&&last_progress==SIZE);
+      if(mode==8||mode==9)CHECK(read_calls>0&&seek_calls==0);
+      if(mode==12)CHECK(AssetReadSize==2*MIB&&AssetReadSizeSettled);
+      if(mode==14)CHECK(read_calls==21&&largest==MIB&&!progress_calls&&AssetReadSize==MIB);
+    }
+    GuFree(data);
+  }
+  free(cached_bytes);
+  return 0;
+}
+'''
+        self.compile_run(host, range(15))
+
     def test_loader_prevents_cross_target_asset_replacement(self):
         source = r'''
 #include <stdint.h>
