@@ -657,10 +657,46 @@ function Assert-ProfileOptions([string[]]$Allowed) {
     }
 }
 
+# Select by the exact declared build contract. Configuration IDs are output
+# metadata only; a missing or ambiguous declaration must refuse the request.
+function Find-ProfileConfiguration {
+    param([string]$ProfileName, [string]$Family, [string]$Safety,
+          [hashtable]$Switches, [string]$Selection = '',
+          [switch]$RequiresLocalBootProfile)
+    $matches = @($catalogue.variants | Where-Object {
+        $candidate = $_
+        if ($candidate.profile -ne $ProfileName -or $candidate.family -ne $Family -or
+            $candidate.safety -ne $Safety) { return $false }
+        $selectionProperty = $candidate.PSObject.Properties['requires_selection']
+        $selectionMode = if ($selectionProperty) { [string]$selectionProperty.Value } else { '' }
+        $espProperty = $candidate.PSObject.Properties['requires_esp_guid']
+        $requiresEsp = $null -ne $espProperty -and $espProperty.Value -eq $true
+        $localProperty = $candidate.PSObject.Properties['requires_local_boot_profile']
+        $requiresLocal = $null -ne $localProperty -and $localProperty.Value -eq $true
+        if ($selectionMode -ne $Selection -or $requiresEsp -ne $Switches.ContainsKey('WindowsEspGuid') -or
+            $requiresLocal -ne [bool]$RequiresLocalBootProfile) { return $false }
+        $properties = @($candidate.switches.PSObject.Properties | ForEach-Object { $_ })
+        if ($properties.Count -ne $Switches.Count) { return $false }
+        foreach ($key in $Switches.Keys) {
+            $property = $candidate.switches.PSObject.Properties[$key]
+            if ($null -eq $property -or $null -eq $property.Value -or
+                $property.Value.GetType() -ne $Switches[$key].GetType() -or
+                $property.Value -cne $Switches[$key]) { return $false }
+        }
+        return $true
+    })
+    if ($matches.Count -ne 1) {
+        throw "Profile $ProfileName must resolve to exactly one build configuration; found $($matches.Count)."
+    }
+    return $matches[0]
+}
+
 function Resolve-ProfileVariant([string]$ProfileName) {
     $targetCount = Get-SelectionCount
     $isDxe = $ImageKind -eq 'Dxe'
+    $family = if ($isDxe) { 'prepare-dxe' } else { 'prepare' }
     $hasEsp = [bool]$WindowsEspGuid
+    $selection = if ($targetCount -eq 0) { '' } elseif ($targetCount -eq 1) { 'single' } else { 'sequence' }
     switch ($ProfileName) {
         'diagnostic' {
             if ($Probe -eq 'Preflight') {
@@ -669,88 +705,94 @@ function Resolve-ProfileVariant([string]$ProfileName) {
                     ($script:ExplicitProfileOptions -contains 'SaveLog' -and -not $SaveLog)) {
                     throw 'Preflight requires explicit GPU selection and file logging, without Windows handoff. Firmware references require the application.'
                 }
-                if ($isDxe) { return 'dxe-prep-selected' }
-                return 'prep-selected'
+                return (Find-ProfileConfiguration $ProfileName $family 'refuses-before-mutation' @{} -Selection 'any')
             }
             Assert-ProfileOptions @('Probe','SaveLog')
             if ($CapturedPromReference) { throw 'Diagnostic does not accept firmware reference options.' }
             $probeMode = if ($Probe) { $Probe } else { 'Topology' }
             if ($script:ExplicitProfileOptions -contains 'SaveLog' -and -not $SaveLog) {
                 if ($probeMode -ne 'Topology' -or $targetCount -or $hasEsp) { throw 'Console-only diagnostic supports topology without selection or handoff.' }
-                return 'diag-topology'
+                return (Find-ProfileConfiguration $ProfileName 'diagnostic' 'read-only' @{})
             }
+            $switches = @{SaveLog=$true}
             if ($probeMode -eq 'Topology') {
                 if ($targetCount -and $hasEsp) { throw 'Selected diagnostic cannot include Windows handoff.' }
-                if ($targetCount) { return 'diag-selection' }
-                if ($hasEsp) { return 'diag-topology-handoff' }
-                return 'diag-topology-log'
+                if ($targetCount) { return (Find-ProfileConfiguration $ProfileName 'diagnostic' 'read-only' $switches -Selection 'any') }
+            } else {
+                if ($targetCount) { throw 'Special diagnostic probes do not accept a compiled GPU selection.' }
+                if ($probeMode -eq 'GopTextCycle' -and $hasEsp) { throw 'GOP text cycle cannot include Windows handoff.' }
+                $probeSwitch = @{GopTextCycle='CycleGopText'; MsiRom='MsiB850RomVariables'; MsiFuse='MsiB850FuseVersion'; MsiSec2='MsiB850Sec2Ucode1'; VramBlocks='VramBlockProbe'}[$probeMode]
+                $switches[$probeSwitch] = $true
             }
-            if ($targetCount) { throw 'Special diagnostic probes do not accept a compiled GPU selection.' }
-            if ($probeMode -eq 'GopTextCycle') {
-                if ($hasEsp) { throw 'GOP text cycle cannot include Windows handoff.' }
-                return 'diag-topology-gop-text-cycle'
-            }
-            $probeId = (@{MsiRom='diag-msi-rom'; MsiFuse='diag-msi-fuse'; MsiSec2='diag-msi-sec2'; VramBlocks='diag-vram-blocks'}[$probeMode])
-            if ($hasEsp) { return "$probeId-handoff" }
-            return $probeId
+            if ($hasEsp) { $switches['WindowsEspGuid'] = '<esp>' }
+            return (Find-ProfileConfiguration $ProfileName 'diagnostic' 'read-only' $switches)
         }
         'compile-check' {
             Assert-ProfileOptions @('ImageKind')
             if (-not $targetCount -or $hasEsp -or $CapturedPromReference) {
                 throw 'Compile-check requires a compiled GPU selection and no ESP or firmware reference options.'
             }
-            $compileId = if ($targetCount -eq 1) { 'compile-one-target' } else { 'compile-sequence' }
-            if ($isDxe) { return "dxe-$compileId" }
-            return $compileId
+            return (Find-ProfileConfiguration $ProfileName $family 'compile-only' @{SyntheticCompileProfile=$true} -Selection $selection)
         }
         'driver-transition' {
             if ($CapturedPromReference) { throw 'Driver transition does not accept firmware reference options.' }
             if ($Operation -eq 'StopReattach') {
                 Assert-ProfileOptions @('Operation','ImageKind','Handoff')
                 if ($hasEsp -or $Handoff -eq 'Halt') { throw 'StopReattach supports Return or WindowsAfterSuccess, without a compiled ESP GUID.' }
+                $switches = @{EnableSingleTargetExecution=$true; AcceptUnverifiedActuation=$true; StopReleaseOnlyBench=$true; FileOnlyBootLog=$true; RuntimeSelection=$true}
+                if (-not $isDxe) { $switches['RuntimeEsp'] = $true }
                 if ($Handoff -eq 'WindowsAfterSuccess') {
                     if ($isDxe -or $targetCount) { throw 'StopReattach Windows handoff requires the live-all application.' }
-                    return 'app-stop-release-sequence-handoff'
+                    $switches['StopReleaseWindowsHandoff'] = $true
                 }
-                if ($isDxe) { return 'dxe-stop-release-sequence-bench' }
-                return 'app-stop-release-sequence-bench'
+                return (Find-ProfileConfiguration $ProfileName $family 'actuates' $switches -RequiresLocalBootProfile:$isDxe)
             }
             if ($Operation -eq 'ObserveStop') {
                 Assert-ProfileOptions @('Operation','ImageKind','Handoff','ObservationTarget')
                 if ($isDxe -or $targetCount -or -not $ObservationTarget) { throw 'Stop observation requires an application and an explicit observation target, not a BDF list.' }
                 if ($Handoff -eq 'Return' -or ($Handoff -eq 'Halt' -and $hasEsp) -or ($Handoff -eq 'WindowsAfterSuccess' -and -not $hasEsp)) {
-                    throw 'Legacy Stop handoff requires a pinned ESP GUID. Halt does not accept an ESP GUID.'
+                    throw 'Stop observation handoff requires a pinned ESP GUID. Halt does not accept an ESP GUID.'
                 }
+                $switches = @{AcceptUnboundedStopRisk=$true}
                 if ($ObservationTarget -eq 'BothNvidia') {
-                    if (-not $hasEsp) { throw 'Legacy dual Stop requires pinned Windows handoff.' }
-                    return 'stop-dual-handoff'
+                    if (-not $hasEsp) { throw 'Dual Stop observation requires pinned Windows handoff.' }
+                    $switches['BothNvidia'] = $true
+                } elseif ($ObservationTarget -eq 'RTX3080') {
+                    $switches['Target3080'] = $true
                 }
-                $observationId = if ($ObservationTarget -eq 'RTX4090') { 'stop-4090' } else { 'stop-3080' }
-                if ($hasEsp) { return "$observationId-handoff" }
-                return "$observationId-once"
+                if ($hasEsp) {
+                    $switches['WindowsEspGuid'] = '<esp>'
+                    $switches['AcceptWindowsHandoffRisk'] = $true
+                }
+                return (Find-ProfileConfiguration $ProfileName 'stop-observation' 'stop-only' $switches)
             }
             throw 'Driver transition requires -Operation StopReattach or ObserveStop.'
         }
         'firmware-transaction' {
             Assert-ProfileOptions @('Operation','ImageKind','EspPolicy')
+            $switches = @{EnableSingleTargetExecution=$true; AcceptUnverifiedActuation=$true}
             if ($Operation -in @('UnlockReattach','Unlock','UnlockWithResume')) {
                 if ($isDxe -or $targetCount -or ($EspPolicy -and $EspPolicy -ne 'Runtime')) {
                     throw 'Fixed firmware operations require the runtime-selection application and runtime ESP policy.'
                 }
                 if ($hasEsp -and $Operation -ne 'UnlockReattach') { throw 'Only UnlockReattach accepts an explicit ESP GUID.' }
-                return (@{UnlockReattach='app-firmware-reattach'; Unlock='app-unlock'; UnlockWithResume='app-unlock-with-resume'}[$Operation])
+                $switches['RuntimeSelection'] = $true
+                $switches['RuntimeEsp'] = $true
+                $switches['ApplicationOperation'] = if ($Operation -eq 'UnlockReattach') { 'Unlock' } else { $Operation }
+                if ($Operation -eq 'UnlockReattach') { $switches['FirmwareReattach'] = $true }
+                return (Find-ProfileConfiguration $ProfileName $family 'actuates' $switches)
             }
             if (($Operation -eq 'Menu' -and -not $isDxe) -or ($Operation -eq 'DxeTransaction' -and $isDxe)) {
                 if ($hasEsp -or $EspPolicy -eq 'Runtime' -or ($isDxe -and ($EspPolicy -eq 'Resident' -or $CapturedPromReference))) {
-                    throw 'This legacy firmware configuration does not support the requested ESP or reference options.'
+                    throw 'This firmware configuration does not support the requested ESP or reference options.'
                 }
-                $activeId = if ($targetCount -eq 0) { 'actuate-runtime-selection' } elseif ($targetCount -eq 1) { 'actuate-one-target' } else { 'actuate-sequence' }
-                if ($isDxe) { return "dxe-$activeId" }
+                if (-not $targetCount) { $switches['RuntimeSelection'] = $true }
                 if ($EspPolicy -eq 'Resident') {
                     if ($targetCount -gt 1) { throw 'Resident sequence is not an existing supported configuration.' }
-                    return "$activeId-resident"
+                    $switches['RuntimeEsp'] = $true
+                    $switches['EspResident'] = $true
                 }
-                return $activeId
+                return (Find-ProfileConfiguration $ProfileName $family 'actuates' $switches -Selection $selection -RequiresLocalBootProfile:($EspPolicy -ne 'Resident'))
             }
             throw 'Firmware transaction requires an explicit supported operation and image kind.'
         }
@@ -759,9 +801,10 @@ function Resolve-ProfileVariant([string]$ProfileName) {
             if ($isDxe -or $targetCount -or $hasEsp -or $CapturedPromReference -or $StageDxeCompanion) {
                 throw 'Maintenance requires an application without compiled selection, ESP pin, references or companion staging.'
             }
-            if ($Operation -eq 'ReviewBootState') { return 'boot-state-maintenance' }
-            if ($Operation -eq 'InstallDriver') { return 'app-install-driver' }
-            if ($Operation -eq 'RemoveDriver') { return 'app-remove-driver' }
+            if ($Operation -eq 'ReviewBootState') { return (Find-ProfileConfiguration $ProfileName 'maintenance' 'maintenance' @{}) }
+            if ($Operation -in @('InstallDriver','RemoveDriver')) {
+                return (Find-ProfileConfiguration $ProfileName $family 'actuates' @{RuntimeSelection=$true; RuntimeEsp=$true; EnableSingleTargetExecution=$true; AcceptUnverifiedActuation=$true; ApplicationOperation=$Operation})
+            }
             throw 'Maintenance requires an explicit supported operation.'
         }
     }
@@ -776,9 +819,7 @@ function Select-Variants {
             throw "Unknown profile: $Only (see -List)."
         }
         $script:RequestedCanonicalProfile = $Only
-        $configuration = Resolve-ProfileVariant $Only
-        $selected = @($selected | Where-Object { $_.id -eq $configuration })
-        if ($selected.Count -ne 1) { throw "Profile $Only must resolve to exactly one build configuration." }
+        $selected = @(Resolve-ProfileVariant $Only)
     } elseif ($script:ExplicitProfileOptions.Count) {
         throw 'Profile options require -Only <profile>.'
     }

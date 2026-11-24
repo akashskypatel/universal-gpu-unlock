@@ -748,11 +748,12 @@ class CanonicalProfileResolution(unittest.TestCase):
         if not cls.shell:
             raise unittest.SkipTest("PowerShell unavailable; profile resolution was not executed")
 
-    def resolve(self, args, valid=True):
+    def resolve(self, args, valid=True, script_path=SCRIPT_PATH):
         import subprocess
         # The command is composed only from fixed test arguments. -Command is
         # needed for explicit false switch values in Windows PowerShell 5.1.
-        command = "& '" + str(SCRIPT_PATH).replace("'", "''") + "' -ResolveOnly " + " ".join(args)
+        command = ("& '" + str(script_path).replace("'", "''") + "' -ResolveOnly -RepoRoot '"
+                   + str(ROOT).replace("'", "''") + "' " + " ".join(args))
         result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command],
                                 text=True, capture_output=True, timeout=30)
         if not valid:
@@ -812,6 +813,19 @@ class CanonicalProfileResolution(unittest.TestCase):
         self.assertEqual({alias for alias, _, _ in cases},
                          {v["id"] for v in MANIFEST["variants"]})
         variants = {v["id"]: v for v in MANIFEST["variants"]}
+        import copy
+        import shutil
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        fixture = Path(temporary.name)
+        (fixture / "src").mkdir()
+        (fixture / "docs").mkdir()
+        renamed_script = fixture / "src" / SCRIPT_PATH.name
+        shutil.copy2(SCRIPT_PATH, renamed_script)
+        renamed = copy.deepcopy(MANIFEST)
+        for variant in renamed["variants"]:
+            variant["id"] = "rewritten-" + variant["id"]
+        (fixture / "docs" / "image_variants.json").write_text(json.dumps(renamed), encoding="utf-8")
         for configuration, canonical, extra in cases:
             with self.subTest(configuration=configuration, canonical=canonical, extra=extra):
                 new = self.resolve(["-Only"] + canonical + extra)
@@ -858,6 +872,9 @@ class CanonicalProfileResolution(unittest.TestCase):
                     attestations.append("WINDOWS_ESP_GUID=" + (guid or "NONE"))
                 self.assertEqual(new["ResolvedAttestations"], attestations)
                 self.assertNotIn("RequestedLegacyAlias", new)
+                rewritten = self.resolve(["-Only"] + canonical + extra, script_path=renamed_script)
+                self.assertEqual(rewritten.pop("VariantId"), "rewritten-" + configuration)
+                self.assertEqual(rewritten, {key: value for key, value in new.items() if key != "VariantId"})
 
     def test_stop_selection_and_combined_esp_follow_builder_configuration(self):
         two = ["-SelectionBdfs", "'0000:04:00.0,0000:01:00.0'"]
@@ -945,6 +962,40 @@ ConvertTo-Json -InputObject @($results) -Compress
         for row in rows:
             self.assertEqual(row["app"], row["renamedApp"], row["id"])
             self.assertEqual(row["dxe"], row["renamedDxe"], row["id"])
+
+    def test_missing_and_ambiguous_build_contracts_refuse_resolution(self):
+        import copy
+        import shutil
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "docs").mkdir()
+            script = root / "src" / SCRIPT_PATH.name
+            shutil.copy2(SCRIPT_PATH, script)
+            manifest = root / "docs" / "image_variants.json"
+            original = next(v for v in MANIFEST["variants"] if v["id"] == "diag-topology-log")
+            for defect in ("missing", "duplicate", "safety", "selection", "esp", "local", "switch"):
+                with self.subTest(defect=defect):
+                    data = copy.deepcopy(MANIFEST)
+                    target = next(v for v in data["variants"] if v["id"] == original["id"])
+                    if defect == "missing":
+                        data["variants"].remove(target)
+                    elif defect == "duplicate":
+                        duplicate = copy.deepcopy(target)
+                        duplicate["id"] = "duplicate-build"
+                        data["variants"].append(duplicate)
+                    elif defect == "safety":
+                        target["safety"] = "actuates"
+                    elif defect == "selection":
+                        target["requires_selection"] = "single"
+                    elif defect == "esp":
+                        target["requires_esp_guid"] = True
+                    elif defect == "local":
+                        target["requires_local_boot_profile"] = True
+                    else:
+                        target["switches"]["CycleGopText"] = True
+                    manifest.write_text(json.dumps(data), encoding="utf-8")
+                    self.resolve(["-Only", "diagnostic"], valid=False, script_path=script)
 
     def test_configuration_ids_are_not_public_selectors(self):
         for variant in MANIFEST["variants"]:
