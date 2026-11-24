@@ -61,7 +61,7 @@ The sections after this one describe the gates. This one is the sequence that pr
 
 Archived captures now include waived actuating boots as well as read-only and preparation runs. The U/P/I captures documented below exposed software/setup failures; they do not hardware-verify the subsequent fixes. Every tool in the chain prints `HARDWARE_VERIFIED=0`, and no captured log changes a row in `docs/readiness_status.json` by itself: a log is something a reviewer reads, not a flag this repository flips.
 
-**The name.** There is no script called `build-sign-stage` in this repository. Use `-Only <profile>` with its arguments to select one configuration. `-StageDrive <letter>` stages one application. `-ListLegacy` lists the retained configuration IDs that identify the log and receipt evidence. Ordinary runs copy the signed `EFI\BOOT\BOOTX64.EFI`; the waived one-target application can also use `-StageDxeCompanion` to build/sign its matching driver and stage `EFI\Drivers\AdaUnlockDxe.efi` for the I path. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.
+**The name.** There is no script called `build-sign-stage` in this repository. Use `-Only <profile>` with its arguments to select one configuration. `-StageDrive <letter>` stages one application. `-ListConfigurations` lists the build configuration IDs that identify the log and receipt evidence. Ordinary runs copy the signed `EFI\BOOT\BOOTX64.EFI`; the waived one-target application can also use `-StageDxeCompanion` to build/sign its matching driver and stage `EFI\Drivers\AdaUnlockDxe.efi` for the I path. `src/Build-Sign-Deploy-UniversalGPU.ps1` is that command, and `docs/BUILD_SIGN_DEPLOY.md` is its user document.
 
 ### Before the first boot
 
@@ -78,7 +78,7 @@ Archived captures now include waived actuating boots as well as read-only and pr
 **Step 1 — confirm the catalogue accepts the candidate**
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -ListLegacy
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -ListConfigurations
 ```
 
 *Expect:* one `CATALOGUE ... variants=41 families=5` line, then a `VARIANT <id> PROFILE=<profile> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.

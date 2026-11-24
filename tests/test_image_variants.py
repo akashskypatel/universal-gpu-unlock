@@ -449,7 +449,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         gate = SCRIPT.index("if ($safety.may_be_staged -ne $true -and -not $AcceptActuatingDeploy)")
         maintenance = SCRIPT.index("if ($deployVariant.safety -eq 'maintenance')")
         self.assertLess(gate, maintenance)
-        self.assertIn("Maintenance staging requires -Only boot-state-maintenance.", SCRIPT)
+        self.assertIn("Maintenance staging requires -Only maintenance -Operation ReviewBootState.", SCRIPT)
         stage = SCRIPT[SCRIPT.index("function Stage-SignedEfi"):SCRIPT.index("# --- catalogue")]
         self.assertLess(stage.index("if ($MaintenanceOnly -and $otherEfiCount -ne 0)"),
                         stage.index("$replacementStarted = $false"))
@@ -459,7 +459,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
 
     def test_the_script_never_stages_from_a_matrix_run(self):
         self.assertIn("-All must not stage", SCRIPT)
-        self.assertIn("-SignOnly and -Deploy are mutually exclusive", SCRIPT)
+        self.assertIn("-SignOnly and -StageDrive are mutually exclusive", SCRIPT)
 
     def test_the_script_refuses_a_dxe_as_a_boot_application(self):
         self.assertIn("A DXE boot-service driver cannot be staged as BOOTX64.EFI", SCRIPT)
@@ -706,12 +706,9 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertIn("-StageDrive stages exactly one image", SCRIPT)
         self.assertNotIn("nothing is copied without -Deploy", SCRIPT)
 
-    def test_a_deploy_that_disagrees_with_the_selection_is_refused(self):
-        # -Deploy survives only as an assertion about what gets staged.
-        self.assertIn("-Deploy {0} is not the selected variant {1}", SCRIPT)
-
-    def test_deploy_without_a_stage_drive_is_refused(self):
-        self.assertIn("-Deploy names the image to stage, so it needs -StageDrive <letter>", SCRIPT)
+    def test_staging_requires_explicit_profile(self):
+        self.assertIn("if (-not $Only) { throw 'Staging requires an explicit -Only <profile> request.' }", SCRIPT)
+        self.assertNotIn("[string]$Deploy,", SCRIPT)
 
     def test_a_deploy_run_says_what_it_staged(self):
         self.assertIn('Say (("STAGED {0} PATH={1} DRIVE={2}:")', SCRIPT)
@@ -765,7 +762,7 @@ class CanonicalProfileResolution(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout.strip())
 
-    def test_canonical_configs_preserve_legacy_builder_contracts(self):
+    def test_canonical_configs_preserve_builder_contracts(self):
         one = ["-SelectionBdf", "'0000:01:00.0'"]
         two = ["-SelectionBdfs", "'0000:01:00.0,0000:04:00.0'"]
         esp = ["-WindowsEspGuid", "'a005858c-4487-4ee2-976e-1710ff484c31'"]
@@ -814,18 +811,53 @@ class CanonicalProfileResolution(unittest.TestCase):
             cases.append(("stop-" + card + "-handoff", opts, esp))
         self.assertEqual({alias for alias, _, _ in cases},
                          {v["id"] for v in MANIFEST["variants"]})
-        for alias, canonical, extra in cases:
-            with self.subTest(alias=alias, canonical=canonical, extra=extra):
-                old = self.resolve(["-Only", alias] + extra)
+        variants = {v["id"]: v for v in MANIFEST["variants"]}
+        for configuration, canonical, extra in cases:
+            with self.subTest(configuration=configuration, canonical=canonical, extra=extra):
                 new = self.resolve(["-Only"] + canonical + extra)
+                expected = variants[configuration]
                 self.assertEqual(new["CanonicalProfile"], canonical[0])
-                self.assertEqual(old["CanonicalProfile"], canonical[0])
-                self.assertEqual(new.pop("RequestedCanonicalProfile"), canonical[0])
-                self.assertIsNone(old.pop("RequestedCanonicalProfile"))
-                self.assertIsNone(new.pop("RequestedLegacyAlias"))
-                self.assertEqual(old.pop("RequestedLegacyAlias"), alias)
-                self.assertEqual(new, old)
-                self.assertEqual(new["VariantId"], alias)
+                self.assertEqual(new["RequestedCanonicalProfile"], canonical[0])
+                self.assertEqual(new["VariantId"], configuration)
+                self.assertEqual(new["Safety"], expected["safety"])
+                self.assertEqual(new["Builder"], FAMILY[expected["family"]]["builder"])
+                self.assertEqual(new["Subsystem"], FAMILY[expected["family"]]["subsystem"])
+                self.assertEqual(new["ExpectedAttestations"], expected["attestations"])
+                switches = {k: v for k, v in expected["switches"].items() if v is not False}
+                guid = None
+                if "-WindowsEspGuid" in extra:
+                    guid = extra[extra.index("-WindowsEspGuid") + 1].strip("'")
+                    switches["WindowsEspGuid"] = guid
+                selection = []
+                for key in ("SelectionBdf", "SelectionBdfs"):
+                    if "-" + key in extra:
+                        value = extra[extra.index("-" + key) + 1].strip("'")
+                        switches[key] = value
+                        selection = value.split(",")
+                compiled_stop = bool(selection and switches.get("StopReleaseOnlyBench"))
+                if compiled_stop:
+                    switches.pop("RuntimeSelection")
+                if "-CapturedPromReference" in extra:
+                    switches["CapturedPromReference"] = True
+                self.assertEqual(new["Switches"], switches)
+                self.assertEqual(new["Selection"], selection)
+                binary = expected_binary(expected)
+                if compiled_stop:
+                    suffix = "-DXE-" if expected["family"] == "prepare-dxe" else "-"
+                    extension = ".efi" if expected["family"] == "prepare-dxe" else ".EFI"
+                    binary = "GPU-SEQUENCE-STOP-RELEASE-BENCH" + suffix + label(len(selection)) + extension
+                elif "<label>" in binary:
+                    binary = binary.replace("<label>", label(len(selection)))
+                self.assertEqual(new["Binary"], binary)
+                attestations = [a.replace("<selection-count>", str(len(selection))) for a in expected["attestations"]]
+                if compiled_stop:
+                    attestations = [a.replace("RUNTIME_SELECTION=1", "RUNTIME_SELECTION=0").replace(
+                        "TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION", "TARGET_ORDER=" + ",".join(selection))
+                        for a in attestations]
+                if switches.get("FirmwareReattach"):
+                    attestations.append("WINDOWS_ESP_GUID=" + (guid or "NONE"))
+                self.assertEqual(new["ResolvedAttestations"], attestations)
+                self.assertNotIn("RequestedLegacyAlias", new)
 
     def test_stop_selection_and_combined_esp_follow_builder_configuration(self):
         two = ["-SelectionBdfs", "'0000:04:00.0,0000:01:00.0'"]
@@ -914,40 +946,30 @@ ConvertTo-Json -InputObject @($results) -Compress
             self.assertEqual(row["app"], row["renamedApp"], row["id"])
             self.assertEqual(row["dxe"], row["renamedDxe"], row["id"])
 
-    def test_legacy_alias_notice_preserves_machine_readable_resolution(self):
-        import subprocess
-        script = str(SCRIPT_PATH).replace("'", "''")
-        for selector, expected_alias in (("diag-topology-log", "diag-topology-log"),
-                                          ("diagnostic", None)):
-            command = f"& '{script}' -ResolveOnly -Only {selector}"
-            result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command],
-                                    capture_output=True, text=True, timeout=30)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            resolved = json.loads(result.stdout)
-            self.assertEqual(resolved["VariantId"], "diag-topology-log")
-            self.assertEqual(resolved["CanonicalProfile"], "diagnostic")
-            self.assertEqual(resolved["RequestedLegacyAlias"], expected_alias)
-            if expected_alias:
-                self.assertIn("DEPRECATED_ALIAS diag-topology-log: use -Only diagnostic ", result.stderr)
-            else:
-                self.assertNotIn("DEPRECATED_ALIAS", result.stderr)
+    def test_configuration_ids_are_not_public_selectors(self):
+        for variant in MANIFEST["variants"]:
+            with self.subTest(configuration=variant["id"]):
+                self.resolve(["-Only", variant["id"]], valid=False)
+        self.resolve(["-Only", "diagnostic,compile-check"], valid=False)
+        self.resolve(["-Only", "diagnostic", "-ListLegacy"], valid=False)
+        self.resolve(["-Only", "diagnostic", "-Deploy", "diag-topology-log"], valid=False)
 
     def test_generated_profile_summary_matches_manifest(self):
         generated = renderer.render(MANIFEST)
-        self.assertIn("5 canonical profiles. 41 compatibility configurations", generated)
+        self.assertIn("5 canonical profiles. 41 build configurations", generated)
         expected = {"diagnostic": 15, "driver-transition": 8, "firmware-transaction": 11,
                     "maintenance": 3, "compile-check": 4}
         for profile, count in expected.items():
             self.assertEqual(sum(v["profile"] == profile for v in MANIFEST["variants"]), count)
             self.assertIn(f"| `{profile}` | {count} |", generated)
 
-    def test_public_listing_has_five_profiles_and_legacy_listing_has_all_configs(self):
+    def test_public_listing_has_five_profiles_and_configuration_listing_has_all_configs(self):
         import subprocess
         command = "& '" + str(SCRIPT_PATH).replace("'", "''") + "' "
         expected = {"diagnostic", "driver-transition", "firmware-transaction", "maintenance", "compile-check"}
         self.assertEqual({p["id"] for p in MANIFEST["profiles"]}, expected)
         self.assertEqual(len(MANIFEST["profiles"]), 5)
-        for option in ("-List", "-ListLegacy"):
+        for option in ("-List", "-ListConfigurations"):
             result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command + option],
                                     text=True, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

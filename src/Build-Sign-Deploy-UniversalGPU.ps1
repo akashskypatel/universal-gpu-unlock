@@ -51,18 +51,12 @@ reason recorded, when you do not supply one. -All cannot be combined with
 -StageDrive: a matrix run never stages anything.
 
 .PARAMETER Only
-One canonical profile with typed options, or one or more legacy variant IDs
-(see -List or -ListLegacy). Cannot be combined with -All. -ResolveOnly reports the selected
+One canonical profile with typed options (see -List). Cannot be combined with
+-All or -Family. -ResolveOnly reports the selected
 configuration without compiling, signing or staging.
 
 .PARAMETER Family
-diagnostic, prepare, prepare-dxe, stop-observation or maintenance. Selects a whole family;
-combine with -Only to narrow further.
-
-.PARAMETER Deploy
-Optional. The variant id you expect to stage, checked against the selection. The
-image to stage is whatever -Only selected; naming it a second time is a typed
-assertion, not a requirement, and a mismatch is an error rather than a guess.
+diagnostic, prepare, prepare-dxe, stop-observation or maintenance. Selects a build matrix family, not an individual configuration.
 
 .PARAMETER StageDrive
 The USB drive letter to stage onto. This is the switch that stages: it takes the
@@ -92,8 +86,8 @@ the receipt, so a later reader can tell the difference.
 .PARAMETER List
 Print the five canonical profiles and exit. Nothing is built, signed or staged.
 
-.PARAMETER ListLegacy
-Print the complete compatibility matrix and exit. Nothing is built, signed or staged.
+.PARAMETER ListConfigurations
+Print the complete build configuration matrix and exit. Nothing is built, signed or staged.
 
 .EXAMPLE
 # What can this repository build?
@@ -162,7 +156,7 @@ param(
     [string]$WslDistribution,
     [string]$WslUser,
     [string]$VcVars,
-    [string[]]$Only,
+    [string]$Only,
     [ValidateSet('Topology','GopTextCycle','MsiRom','MsiFuse','MsiSec2','VramBlocks','Preflight')]
     [string]$Probe,
     [switch]$SaveLog,
@@ -180,14 +174,13 @@ param(
     [ValidateSet('diagnostic', 'prepare', 'prepare-dxe', 'stop-observation', 'maintenance')]
     [string]$Family,
     [switch]$All,
-    [string]$Deploy,
     [switch]$SignOnly,
     [switch]$AcceptActuatingDeploy,
     [switch]$StageDxeCompanion,
     [switch]$CapturedPromReference,
     [switch]$SkipDbCheck,
     [switch]$List,
-    [switch]$ListLegacy
+    [switch]$ListConfigurations
 )
 
 Set-StrictMode -Version Latest
@@ -778,29 +771,17 @@ function Resolve-ProfileVariant([string]$ProfileName) {
 function Select-Variants {
     $selected = @($catalogue.variants)
     if ($Only) {
-        $wanted = @($Only | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        $canonical = @($wanted | Where-Object { $script:CanonicalProfiles -contains $_ })
-        if ($canonical.Count) {
-            if ($wanted.Count -ne 1 -or $Family) { throw 'Select exactly one canonical profile without -Family.' }
-            $script:RequestedCanonicalProfile = $canonical[0]
-            $wanted = @(Resolve-ProfileVariant $script:RequestedCanonicalProfile)
-        } elseif ($script:ExplicitProfileOptions.Count) {
-            throw 'Canonical profile options require a canonical -Only value.'
+        if ($Family) { throw 'Select exactly one canonical profile without -Family.' }
+        if ($script:CanonicalProfiles -notcontains $Only) {
+            throw "Unknown profile: $Only (see -List)."
         }
-        $known = @($catalogue.variants | ForEach-Object { $_.id })
-        foreach ($name in $wanted) {
-            if ($known -notcontains $name) { throw "Unknown profile or compatibility ID: $name (see -List or -ListLegacy)." }
-        }
-        $selected = @($selected | Where-Object { $wanted -contains $_.id })
-        if (-not $script:RequestedCanonicalProfile) {
-            foreach ($variant in $selected) {
-                # Keep ResolveOnly stdout as one JSON object and do not add
-                # a PowerShell pipeline value to Select-Variants.
-                [Console]::Error.WriteLine(("DEPRECATED_ALIAS {0}: use -Only {1} with its profile arguments (see -List)." -f $variant.id, $variant.profile))
-            }
-        }
+        $script:RequestedCanonicalProfile = $Only
+        $configuration = Resolve-ProfileVariant $Only
+        $selected = @($selected | Where-Object { $_.id -eq $configuration })
+        if ($selected.Count -ne 1) { throw "Profile $Only must resolve to exactly one build configuration." }
+    } elseif ($script:ExplicitProfileOptions.Count) {
+        throw 'Profile options require -Only <profile>.'
     }
-    if (-not $Only -and $script:ExplicitProfileOptions.Count) { throw 'Canonical profile options require a canonical -Only value.' }
     if ($Family) { $selected = @($selected | Where-Object { $_.family -eq $Family }) }
     if (-not $selected.Count) { throw 'No variant matched the selection.' }
     return $selected
@@ -810,7 +791,7 @@ function Get-SelectionCount {
     return $script:SelectionSpec.Count
 }
 
-# Behavior follows the configured builder switches, not the compatibility ID.
+# Behavior follows the configured builder switches, not the configuration ID.
 function Test-VariantSwitch($Variant, [string]$Name) {
     $property = $Variant.switches.PSObject.Properties[$Name]
     return ($null -ne $property -and $property.Value -is [bool] -and $property.Value)
@@ -944,13 +925,13 @@ function Build-VariantArguments($Variant) {
     return $arguments
 }
 
-if ($List -or $ListLegacy) {
+if ($List -or $ListConfigurations) {
     foreach ($profileSpec in $catalogue.profiles) {
         Say ("PROFILE {0} {1}" -f $profileSpec.id, $profileSpec.usage)
         Say ("  {0}" -f $profileSpec.note)
     }
-    if (-not $ListLegacy) {
-        Say 'Use -ListLegacy for the compatibility matrix. Use -ResolveOnly with -Only to inspect a configuration without building.'
+    if (-not $ListConfigurations) {
+        Say 'Use -ListConfigurations for the build configuration matrix. Use -ResolveOnly with -Only to inspect a configuration without building.'
         exit 0
     }
     Say ('CATALOGUE {0} variants={1} families={2}' -f $cataloguePath, @($catalogue.variants).Count, @($catalogue.families).Count)
@@ -1066,10 +1047,8 @@ try {
                '-Only naming the variant it is for (e.g. -Only diagnostic -Probe Preflight). A matrix run ' +
                'would apply it to image kinds whose sources have no PROM read behind it.')
     }
-    if ($All -and $StageDrive) { throw '-All must not stage: a matrix run signs only. Name one image with -Only <id> -StageDrive <letter>.' }
+    if ($All -and $StageDrive) { throw '-All must not stage: a matrix run signs only. Name one image with -Only <profile> -StageDrive <letter>.' }
     if ($SignOnly -and $StageDrive) { throw '-SignOnly and -StageDrive are mutually exclusive: -SignOnly never touches a stick. Drop -StageDrive, or drop -SignOnly to stage the selected image.' }
-    if ($Deploy -and -not $StageDrive) { throw '-Deploy names the image to stage, so it needs -StageDrive <letter>. Add the drive, or drop -Deploy.' }
-    if ($Deploy -and $SignOnly) { throw '-SignOnly and -Deploy are mutually exclusive: a sign-only run never touches a USB stick.' }
     if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
     # Use the builder's parser before resolving a profile. Inspection never
     # creates a build directory or writes a selection header.
@@ -1083,7 +1062,7 @@ try {
     $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
     $variants = @(Select-Variants)
     if ($ResolveOnly) {
-        if (-not $Only -or $variants.Count -ne 1 -or $StageDrive -or $Deploy -or $StageDxeCompanion) {
+        if (-not $Only -or $variants.Count -ne 1 -or $StageDrive -or $StageDxeCompanion) {
             throw '-ResolveOnly requires one explicit selection and does not permit deployment.'
         }
         $resolvedVariant = $variants[0]
@@ -1101,7 +1080,6 @@ try {
         Say ([ordered]@{
             CanonicalProfile = $resolvedVariant.profile
             RequestedCanonicalProfile = $script:RequestedCanonicalProfile
-            RequestedLegacyAlias = $(if (-not $script:RequestedCanonicalProfile) { $resolvedVariant.id } else { $null })
             VariantId = $resolvedVariant.id
             Safety = $resolvedVariant.safety
             Subsystem = $familyById[$resolvedVariant.family].subsystem
@@ -1126,17 +1104,13 @@ try {
         }
     }
     if ($StageDrive) {
+        if (-not $Only) { throw 'Staging requires an explicit -Only <profile> request.' }
         # The selection is what names the image; a stick holds one BOOTX64.EFI, so
         # staging more than one variant is not a thing.
         if ($variants.Count -ne 1) {
             $notOne = ('-StageDrive stages exactly one image, but {0} variants are selected. ' +
-                       'Name it with -Only <id> (see -List).')
+                       'Name it with -Only <profile> (see -List).')
             throw ($notOne -f $variants.Count)
-        }
-        if ($Deploy -and $variants[0].id -ne $Deploy -and $script:RequestedCanonicalProfile -ne $Deploy) {
-            $disagrees = ('-Deploy {0} is not the selected variant {1}. -Deploy is only an ' +
-                          'assertion about what gets staged; drop it, or make both flags name one image.')
-            throw ($disagrees -f $Deploy, $variants[0].id)
         }
         $deployVariant = $variants[0]
         $stageVariantId = $deployVariant.id
@@ -1154,8 +1128,8 @@ try {
                    $deployVariant.id, $deployVariant.safety, $safety.writes_gpu)
         }
         if ($deployVariant.safety -eq 'maintenance') {
-            if (-not $Only -or @($Only).Count -ne 1 -or ($Only[0] -ne 'boot-state-maintenance' -and $script:RequestedCanonicalProfile -ne 'maintenance')) {
-                throw 'Maintenance staging requires -Only boot-state-maintenance.'
+            if ($script:RequestedCanonicalProfile -ne 'maintenance' -or $Operation -ne 'ReviewBootState') {
+                throw 'Maintenance staging requires -Only maintenance -Operation ReviewBootState.'
             }
             if ($SelectionBdf -or $SelectionBdfs -or $WindowsEspGuid -or $CapturedPromReference) {
                 throw 'Maintenance does not accept GPU selection, Windows ESP or firmware reference options.'
@@ -1409,7 +1383,6 @@ try {
                 VariantId = $variantId
                 CanonicalProfile = $variant.profile
                 RequestedCanonicalProfile = $script:RequestedCanonicalProfile
-                RequestedLegacyAlias = $(if ($Only -and -not $script:RequestedCanonicalProfile -and @($Only | ForEach-Object { $_.Trim() }) -contains $variantId) { $variantId } else { $null })
                 Family = $variant.family
                 Safety = $variant.safety
                 WritesGpu = [bool]$catalogue.safety_classes.($variant.safety).writes_gpu

@@ -41,19 +41,19 @@ def needs(variant: dict) -> str:
 def render(manifest: dict) -> str:
     blocks = [BEGIN, ""]
     blocks.append(f"{len(manifest['profiles'])} canonical profiles. "
-                  f"{len(manifest['variants'])} compatibility configurations across "
+                  f"{len(manifest['variants'])} build configurations across "
                   f"{len(manifest['families'])} builders.\n\n")
     blocks.append("| Canonical profile | Configurations |\n| --- | ---: |\n")
     for profile in manifest["profiles"]:
         count = sum(v["profile"] == profile["id"] for v in manifest["variants"])
         blocks.append(f"| `{profile['id']}` | {count} |\n")
-    blocks.append("\nCompatibility matrix (also available with `-ListLegacy`). Legacy selectors are deprecated; configuration IDs remain stable for receipts and evidence. "
+    blocks.append("\nBuild configuration matrix (also available with `-ListConfigurations`). Configuration IDs identify resolved builds and evidence; only profiles are selectors. "
                   "`Safety` is what the image may do to the system, not what it has been shown to do.\n")
     for family in manifest["families"]:
         variants = [v for v in manifest["variants"] if v["family"] == family["id"]]
         blocks.append(f"\n### {family['title']} — `{family['builder']}` (PE subsystem "
                       f"{family['subsystem']}, `{family['status_token']}`)\n\n")
-        blocks.append("| Deprecated `-Only` alias / configuration ID | Output | Safety | Needs | What it is |\n")
+        blocks.append("| Configuration ID | Output | Safety | Needs | What it is |\n")
         blocks.append("| --- | --- | --- | --- | --- |\n")
         for variant in variants:
             blocks.append(f"| `{variant['id']}` | `{variant['binary']}` | "
