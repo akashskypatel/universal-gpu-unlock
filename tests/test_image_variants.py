@@ -757,10 +757,20 @@ class TheReviewedProfileSkipSaysWhatToCreate(unittest.TestCase):
         self.assertIn("re-partition changes it", section)
         self.assertIn("M1_RECOVERY_TOOLKIT_READY", section)
 
-    def test_the_prepare_family_has_no_guid_switch(self):
+    def test_explicit_guid_is_exclusive_to_combined_runtime_application(self):
         builder = (ROOT / "src" / "Build-Experimental-MSVC.ps1").read_text(encoding="utf-8")
-        self.assertNotIn("WindowsEspGuid", builder,
-                         "the prepare builder must keep requiring the reviewed local profile")
+        self.assertIn("if (-not $FirmwareReattach -or -not $RuntimeEsp) { throw '-WindowsEspGuid", builder)
+        self.assertLess(builder.index("if (-not $FirmwareReattach -or -not $RuntimeEsp)"),
+                        builder.index("Push-Location"))
+        self.assertIn("if ($Variant.id -eq 'app-firmware-reattach' -and $WindowsEspGuid)", SCRIPT)
+        dxe = (ROOT / "src" / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
+        self.assertNotIn("WindowsEspGuid", dxe)
+        profile = (ROOT / "src" / "boot_profile.h").read_text(encoding="utf-8")
+        self.assertIn('#include "local/boot_profile.h"', profile)
+        for variant in MANIFEST["variants"]:
+            if variant.get("requires_local_boot_profile"):
+                self.assertNotIn("WindowsEspGuid", variant["switches"], variant["id"])
+                self.assertNotEqual(variant["id"], "app-firmware-reattach")
 
     def test_the_synthetic_guid_is_still_refused_by_the_preflight(self):
         import session_preflight
