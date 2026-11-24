@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 static unsigned checks;
 #define CHECK(x) do {checks++;if(!(x)){fprintf(stderr,"FAIL:%d: %s\n",__LINE__,#x);return 1;}}while(0)
@@ -15,16 +16,24 @@ static unsigned char store[64];
 static UINTN store_len;
 static int store_present, writes, deletes, fail_write, drop_write;
 static int order_present, order_unreadable, drop_delete, delete_read_error;
+static const EFI_GUID state_guid={0x2a7d54c1,0x5b3e,0x4a19,{0x8f,0x60,0x9d,0x21,0xc4,0xb7,0xe8,0x03}};
+static const EFI_GUID global_guid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0x00,0xe0,0x98,0x03,0x2b,0x8c}};
 
 static EFI_STATUS FakeGetVariable(const void *Name, EFI_GUID *Vendor, UINT32 *Attributes,
                                   UINTN *Size, VOID *Data) {
   if (!Name || !Vendor || !Size) return EFI_INVALID_PARAMETER;
-  if(Vendor->a==0x8be4df61U) {
+  if(!memcmp(Vendor,&global_guid,sizeof(*Vendor))) {
+    if(wcscmp((const wchar_t *)Name,L"DriverOrder"))return EFI_INVALID_PARAMETER;
     if(order_unreadable)return EFI_DEVICE_ERROR;
-    if(order_present)return EFI_BUFFER_TOO_SMALL;
+    if(order_present==1)return EFI_BUFFER_TOO_SMALL;
+    if(order_present==2) {
+      if(*Size<sizeof(UINT16))return EFI_BUFFER_TOO_SMALL;
+      *Size=sizeof(UINT16);*(UINT16 *)Data=1;return EFI_SUCCESS;
+    }
     return EFI_NOT_FOUND;
   }
-  if(Vendor->a!=0x2a7d54c1U)return EFI_INVALID_PARAMETER;
+  if(memcmp(Vendor,&state_guid,sizeof(*Vendor))||
+     wcscmp((const wchar_t *)Name,L"GuBootState"))return EFI_INVALID_PARAMETER;
   if(delete_read_error&&deletes)return EFI_DEVICE_ERROR;
   if (!store_present) return EFI_NOT_FOUND;
   if (*Size < store_len) {
@@ -41,7 +50,8 @@ static EFI_STATUS FakeGetVariable(const void *Name, EFI_GUID *Vendor, UINT32 *At
 
 static EFI_STATUS FakeSetVariable(const void *Name, EFI_GUID *Vendor, UINT32 Attributes,
                                   UINTN Size, VOID *Data) {
-  if (!Name || !Vendor || Vendor->a!=0x2a7d54c1U) return EFI_INVALID_PARAMETER;
+  if(!Name||!Vendor||memcmp(Vendor,&state_guid,sizeof(*Vendor))||
+     wcscmp((const wchar_t *)Name,L"GuBootState"))return EFI_INVALID_PARAMETER;
   if (fail_write) return EFI_DEVICE_ERROR;
   if (!Data || !Size) {
     if (!store_present) return EFI_NOT_FOUND;
@@ -229,6 +239,8 @@ static int CheckReviewedDeletion(void) {
   CHECK(GuBootStateDeleteReviewed(&table,&stale)==EFI_COMPROMISED_DATA);
   CHECK(store_present&&deletes==0);
   order_present=1;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_NOT_READY);
+  order_present=2;
   CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_NOT_READY);
   order_present=0;order_unreadable=1;
   CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_DEVICE_ERROR);

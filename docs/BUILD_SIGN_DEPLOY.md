@@ -119,6 +119,8 @@ Secure Boot off, and the signature is then only an integrity record - say so: us
 
 **One-use active experiment:** Explicitly waived firmware transaction images retain the readback-verified `GuBootState` INTENT through successful preboot completion and Windows handover. The next boot refuses another GPU transaction while this record remains. A successful preboot result is not owner acceptance. No automatic record deletion or rearm is provided. The Stop-only profiles remain separate and do not create an active transaction record.
 
+**Administrative maintenance image (build only):** The separate `src/Build-Boot-State-Maintenance.ps1` builds `src/build_boot_state_maintenance/BOOT-STATE-MAINTENANCE.EFI`. It is deliberately outside the sign/deploy catalogue and does not sign, stage or register itself. It links only the boot-record, console and CPU formatting/runtime source. The image displays the exact record and requires an explicit typed confirmation. It checks the reviewed record again, refuses any existing or unreadable `DriverOrder` (including unrelated entries), and verifies absence after removing the owned record. It cannot accept a GPU result or verify stock recovery. Owner review and separately authorized next experiment are prerequisites; no automatic reactivation. Do not remove unrelated firmware boot entries to satisfy this restriction. The utility stops after a deletion attempt, including uncertain readback, and does not start an image or request a reset. Physical qualification remains outstanding; do not run it solely to continue development.
+
 `<label>` is the repository's own selection label from
 `src/Gpu-Selection-Build.ps1`: `0000:01:00.0` becomes `0000-01-00-0`, two targets
 are joined with `--`, and more than two become `N<count>-<12 hex>`. The script
@@ -204,7 +206,7 @@ python3 tools\session_preflight.py --profile src\local\boot_profile.h
 
 Expect `PROFILE path=src\local\boot_profile.h PRESENT=1 GUID=REVIEWED`. The other
 three answers are each a different mistake: `PRESENT=0` is the wrong path (it is
-`src\local\`, not the repository root), `GUID=SYNTHETIC` is the placeholder
+`src\local`, not the repository root), `GUID=SYNTHETIC` is the placeholder
 `0x11111111` still being in the file, and `GUID=UNDEFINED` is a renamed or
 misspelled macro.
 

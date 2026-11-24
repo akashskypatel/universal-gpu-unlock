@@ -152,5 +152,102 @@ class BuildWiring(unittest.TestCase):
         self.assertIn("EFI_VARIABLE_NON_VOLATILE", STATE)
 
 
+class Maintenance(unittest.TestCase):
+    def test_independent_image_requires_review_and_confirmation(self):
+        source = (SRC / "boot_state_maintenance.c").read_text(encoding="utf-8")
+        builder = (SRC / "Build-Boot-State-Maintenance.ps1").read_text(encoding="utf-8")
+        self.assertIn("$sources=@('boot_state_maintenance.c','boot_state.c','format.c','runtime.c')", builder)
+        self.assertIn("Reviewed record bytes: %s", source)
+        self.assertIn("s=GuBootStateRead(t,&reviewed);", source)
+        confirm = source.index("s=Confirm(t);")
+        watchdog = source.index("s=t->BootServices->SetWatchdogTimer(0,0,0,NULL);")
+        delete = source.index("s=GuBootStateDeleteReviewed(t,&reviewed);")
+        self.assertLess(source.index("Reviewed record bytes"), confirm)
+        self.assertLess(confirm, watchdog)
+        self.assertLess(watchdog, delete)
+        self.assertIn("return s;", source[confirm:watchdog])
+        self.assertIn("if(s!=EFI_SUCCESS)return s;", source[watchdog:delete])
+        self.assertIn("for(;;) {}", source[delete:])
+        for forbidden in ("StartImage(", "ResetSystem(", "GuInstallDriverOption(",
+                          "GuExecutePreparedSequence(", "DisconnectController(",
+                          "GuBootStateWrite(", "GuBootStateRecord("):
+            self.assertNotIn(forbidden, source)
+
+    def test_actual_confirmation_requires_exact_input_and_service_success(self):
+        source = (SRC / "boot_state_maintenance.c").read_text(encoding="utf-8")
+        confirm = source[source.index("static EFI_STATUS Confirm("):
+                         source.index("EFI_STATUS EFIAPI UefiMain(")]
+        mock = r"""
+#include <stddef.h>
+#include <wchar.h>
+#include <stdio.h>
+#include <stdarg.h>
+typedef int EFI_STATUS;
+typedef size_t UINTN;
+typedef wchar_t CHAR16;
+typedef void *EFI_EVENT;
+typedef struct { unsigned ScanCode; CHAR16 UnicodeChar; } EFI_INPUT_KEY;
+typedef struct Input Input;
+struct Input {
+  EFI_STATUS (*Reset)(Input *,int);
+  EFI_STATUS (*ReadKeyStroke)(Input *,EFI_INPUT_KEY *);
+  EFI_EVENT WaitForKey;
+};
+typedef struct { EFI_STATUS (*WaitForEvent)(UINTN,EFI_EVENT *,UINTN *); } Services;
+typedef struct { Input *ConIn; Services *BootServices; } EFI_SYSTEM_TABLE;
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_DEVICE_ERROR 1
+#define EFI_ABORTED 2
+static int scenario,pos;
+static const CHAR16 *keys;
+static EFI_STATUS Reset(Input *p,int flag) {
+  (void)p;(void)flag;pos=0;return scenario==1?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static EFI_STATUS Say(EFI_SYSTEM_TABLE *t,const char *fmt,...) {
+  (void)t;(void)fmt;return scenario==2?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static EFI_STATUS Wait(UINTN count,EFI_EVENT *events,UINTN *index) {
+  if(count!=1||!events||!*events)return EFI_DEVICE_ERROR;
+  *index=scenario==4?1:0;
+  return scenario==3?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static EFI_STATUS Read(Input *p,EFI_INPUT_KEY *key) {
+  (void)p;if(scenario==5||!keys[pos])return EFI_DEVICE_ERROR;
+  key->ScanCode=scenario==6?1:0;key->UnicodeChar=keys[pos++];return EFI_SUCCESS;
+}
+""" + confirm + r"""
+int main(void) {
+  Input input={Reset,Read,&input};
+  Services services={Wait};
+  EFI_SYSTEM_TABLE table={&input,&services};
+  keys=L"REARM\r";
+  for(scenario=0;scenario<=6;scenario++) {
+    EFI_STATUS status=Confirm(&table);
+    if((status==EFI_SUCCESS)!=(scenario==0))return 1;
+  }
+  scenario=0;
+  keys=L"REARX\r";if(Confirm(&table)==EFI_SUCCESS)return 2;
+  keys=L"REARM";if(Confirm(&table)==EFI_SUCCESS)return 3;
+  keys=L"rearm\r";if(Confirm(&table)==EFI_SUCCESS)return 4;
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            code = Path(directory) / "confirm.c"
+            code.write_text(mock, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                cc = shutil.which(compiler)
+                if not cc:
+                    self.skipTest("Host compilers are required")
+                binary = Path(directory) / compiler
+                built = subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                                        "-pedantic", str(code), "-o", str(binary)],
+                                       capture_output=True, text=True)
+                self.assertEqual(built.returncode, 0, built.stderr)
+                run = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
