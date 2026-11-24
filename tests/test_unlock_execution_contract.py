@@ -31,15 +31,42 @@ class SharedExecutionContract(unittest.TestCase):
              "GuMsiReadyForWindows("]
         indices=[core.index(op) for op in ops]
         self.assertEqual(indices,sorted(indices))
-        # Every stage of the core is one GU_PHASE, in this order. The macro sets
-        # `*stage` and traces at the same moment (src/boot_io.h), so the order of
-        # the phases is the order of the stage strings a refusal can print.
-        phases=[line.strip().split('"')[1] for line in core.splitlines()
-                if "GU_PHASE(" in line]
-        self.assertEqual(phases,["preflight","compatibility-reserve","driver-release",
-                                 "cold-entry","compatibility-open",
-                                 "shared-firmware-assets","firmware-transaction",
-                                 "release-exclusive-claim","final-Windows-verification"])
+        # Preprocess the actual function body for each profile. Inspecting raw
+        # text mixes mutually exclusive build stages into one execution order.
+        detached = ["preflight","compatibility-reserve","driver-release",
+                    "cold-entry","compatibility-open","shared-firmware-assets",
+                    "firmware-transaction","release-exclusive-claim",
+                    "final-Windows-verification"]
+        combined = detached.copy()
+        combined.insert(combined.index("driver-release"), "firmware-peer-warning")
+        combined.insert(combined.index("final-Windows-verification"),
+                        "reattach-firmware-drivers")
+        for profile, expected in (("detached", detached), ("combined", combined)):
+            with self.subTest(profile=profile):
+                args = ["gcc", "-E", "-P", "-x", "c", "-"]
+                if profile == "combined":
+                    args.insert(1, "-DGU_FIRMWARE_REATTACH")
+                result = subprocess.run(args, input=core, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                compiled = result.stdout
+                phases = re.findall(r'GU_PHASE\("([^"]+)"\)', compiled)
+                self.assertEqual(phases, expected)
+                expected_ops = ops.copy()
+                if profile == "combined":
+                    expected_ops.insert(expected_ops.index("GuMsiRelease("),
+                                        "GuMsiStopReleaseWarnSurvivor(")
+                    expected_ops.insert(expected_ops.index("GuMsiReadyForWindows("),
+                                        "GuMsiReattachAfterStop(")
+                    self.assertIn("Stall(3000000U)", compiled)
+                    self.assertLess(compiled.index("GuMsiStopReleaseWarnSurvivor("),
+                                    compiled.index("Stall(3000000U)"))
+                    self.assertLess(compiled.index("Stall(3000000U)"),
+                                    compiled.index("GuMsiRelease("))
+                else:
+                    self.assertNotIn("GuMsiStopReleaseWarnSurvivor(", compiled)
+                    self.assertNotIn("GuMsiReattachAfterStop(", compiled)
+                actual_indices = [compiled.index(op) for op in expected_ops]
+                self.assertEqual(actual_indices, sorted(actual_indices))
         self.assertIn("*stage=(NAME); GuTracePhase(NAME);",
                       (ROOT/"boot_io.h").read_text(encoding="utf-8"))
         self.assertIn("result||owner!=GuPlatformActive||owner->fault",core)
