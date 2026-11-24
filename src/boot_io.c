@@ -766,6 +766,18 @@ static EFI_STATUS LocateBootFilesystems(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handl
 /* Only the explicitly configured Windows GPT ESP may supply a missing
  * firmware file. Never search arbitrary partitions or write to this ESP. */
 #ifdef GU_RUNTIME_ESP
+#ifdef GU_RUNTIME_ESP_PIN
+#include "windows-esp-pin.h"
+static const uint8_t RuntimeEspPin[16]=GU_WINDOWS_ESP_PIN_BYTES;
+#endif
+/* The same exact optional pin constrains firmware fallback and Windows staging. */
+static BOOLEAN RuntimeEspPathCandidate(const EFI_DEVICE_PATH_PROTOCOL *path,UINTN bytes) {
+#ifdef GU_RUNTIME_ESP_PIN
+  return GuWindowsEspPathMatches((const uint8_t *)path,bytes,RuntimeEspPin);
+#else
+  return GuWindowsEspPathCandidate((const uint8_t *)path,bytes);
+#endif
+}
 /* Probe only: does this volume carry the Windows boot manager? A failure means
  * "not the Windows ESP", so it must not latch BootFileStatus or disturb the
  * image's own open-file accounting. */
@@ -854,7 +866,7 @@ static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {
 #ifdef GU_RUNTIME_ESP
        /* The marker is what makes a volume the Windows ESP, so a second ESP
         * without one can no longer make the machine ambiguous. */
-       GuWindowsEspPathCandidate((const uint8_t *)dp,bytes)&&
+       RuntimeEspPathCandidate(dp,bytes)&&
        EspCarriesWindowsManager(b,handles[i])
 #else
        GuWindowsEspPathMatches((const uint8_t *)dp,bytes,
@@ -1043,6 +1055,9 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   EFI_BOOT_SERVICES *b=Table->BootServices;EFI_HANDLE *h=NULL,volume=NULL;UINTN count=0,matches=0,path_bytes=0;
   EFI_DEVICE_PATH_PROTOCOL *base=NULL;
   const CHAR16 *selected_name=NULL;
+#ifdef GU_RUNTIME_ESP_PIN
+  GuLog("WINDOWS_ESP_GUID=%s POLICY=EXPLICIT_GUID\n",GU_WINDOWS_ESP_PIN_TEXT);
+#endif
   EFI_STATUS s=LocateBootFilesystems(b,&h,&count);
   if(s!=EFI_SUCCESS)return s;
   EFI_FILE_PROTOCOL *matched_root=NULL;
@@ -1054,7 +1069,7 @@ EFI_STATUS GuBootLoadWindows(VOID) {
 #ifdef GU_RUNTIME_ESP
        /* The candidate-file probe below is the Windows-ESP test in this build;
         * the volume list itself still has to yield exactly one match. */
-       GuWindowsEspPathCandidate((const uint8_t *)p,bytes)
+       RuntimeEspPathCandidate(p,bytes)
 #else
        GuWindowsEspPathMatches((const uint8_t *)p,bytes,(const uint8_t *)&WindowsPartition)
 #endif
@@ -1135,7 +1150,9 @@ EFI_STATUS GuBootLoadWindows(VOID) {
     }
   }
   if(s==EFI_SUCCESS)TargetEspVolume=volume;
-#ifdef GU_RUNTIME_ESP
+#ifdef GU_RUNTIME_ESP_PIN
+  GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=1 policy=explicit_runtime_guid GUID=%s path='%ls'\n",(unsigned long long)s,(size_t)matches,GU_WINDOWS_ESP_PIN_TEXT,selected_name);
+#elif defined(GU_RUNTIME_ESP)
   GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=0 policy=runtime_marker path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
 #else
   GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=1 path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);

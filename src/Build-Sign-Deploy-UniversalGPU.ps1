@@ -712,6 +712,9 @@ function Build-VariantArguments($Variant) {
         elseif ($SelectionBdfs) { $arguments['SelectionBdfs'] = $SelectionBdfs }
         else { throw 'SELECTION_REQUIRED' }
     }
+    if ($Variant.id -eq 'app-firmware-reattach' -and $WindowsEspGuid) {
+        $arguments['WindowsEspGuid'] = $WindowsEspGuid
+    }
     if ($CapturedPromReference) {
         # The two per-card firmware references this bench captured, compiled into
         # the image that asks for them. Only the active preparation builder links
@@ -1102,6 +1105,12 @@ try {
                 }
                 if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape($attestation) + '(?:\s|$)')) {
                     throw "Build attestation missing or wrong for $($variantId): $declared"
+                }
+            }
+            if ($variantId -eq 'app-firmware-reattach') {
+                $expectedEsp = if ($WindowsEspGuid) { ([guid]$WindowsEspGuid).ToString('D') } else { 'NONE' }
+                if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape("WINDOWS_ESP_GUID=$expectedEsp") + '(?:\s|$)')) {
+                    throw 'Combined image Windows ESP GUID attestation mismatch.'
                 }
             }
             Assert-EfiImage $builtImage ([int]$familySpec.subsystem)

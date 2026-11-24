@@ -86,9 +86,70 @@ class BootIoWiring(unittest.TestCase):
 
     def test_both_esp_sites_select_on_the_runtime_rule(self):
         # The asset reader and the Windows loader each choose the runtime rule.
-        self.assertEqual(BOOT_IO.count("GuWindowsEspPathCandidate((const uint8_t *)"), 2)
-        self.assertEqual(BOOT_IO.count("GuWindowsEspPathMatches("), 2)
+        self.assertIn("RuntimeEspPathCandidate(dp,bytes)&&", BOOT_IO)
+        self.assertIn("RuntimeEspPathCandidate(p,bytes)", BOOT_IO)
+        self.assertEqual(BOOT_IO.count("GuWindowsEspPathCandidate((const uint8_t *)"), 1)
+        self.assertEqual(BOOT_IO.count("GuWindowsEspPathMatches("), 3)
         self.assertIn("EspCarriesWindowsManager(b,handles[i])", BOOT_IO)
+
+    def test_explicit_pin_filters_both_runtime_candidates_without_fallback(self):
+        cc = compiler()
+        if not cc:
+            self.skipTest("A host C compiler is required")
+        start = BOOT_IO.index("static BOOLEAN RuntimeEspPathCandidate(")
+        body = BOOT_IO[start:BOOT_IO.index("\n/* Probe only:", start)]
+        # Compile the actual caller predicate with the existing device-path parser.
+        # Two different structurally valid GPT volumes must remain distinct.
+        harness = r"""
+#include <assert.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include "gpu_windows_path.h"
+typedef uint8_t EFI_DEVICE_PATH_PROTOCOL;
+typedef size_t UINTN;
+typedef int BOOLEAN;
+#ifdef GU_RUNTIME_ESP_PIN
+static const uint8_t RuntimeEspPin[16]={0x8c,0x85,0x05,0xa0,0x87,0x44,0xe2,0x4e,
+                                       0x97,0x6e,0x17,0x10,0xff,0x48,0x4c,0x31};
+#endif
+""" + body + r"""
+int main(void) {
+    uint8_t path[46]={4,1,42,0};
+    const uint8_t guid[16]={0x8c,0x85,0x05,0xa0,0x87,0x44,0xe2,0x4e,
+                            0x97,0x6e,0x17,0x10,0xff,0x48,0x4c,0x31};
+    memcpy(path+24,guid,16);
+    path[16]=1;path[40]=2;path[41]=2;path[42]=0x7f;path[43]=0xff;path[44]=4;
+    assert(RuntimeEspPathCandidate(path,sizeof(path)));
+    path[24]^=0xff;
+#ifdef GU_RUNTIME_ESP_PIN
+    assert(!RuntimeEspPathCandidate(path,sizeof(path)));
+#else
+    assert(RuntimeEspPathCandidate(path,sizeof(path)));
+#endif
+    assert(!RuntimeEspPathCandidate(path,sizeof(path)-1));
+    path[40]=0;assert(!RuntimeEspPathCandidate(path,sizeof(path)));
+    return 0;
+}
+"""
+        for flags in ((), ("-DGU_RUNTIME_ESP_PIN",)):
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as tmp:
+                src = Path(tmp) / "pin.c"
+                binary = Path(tmp) / "pin"
+                src.write_text(harness, encoding="utf-8")
+                built = subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                                        *flags, "-I", str(SRC), str(src),
+                                        str(SRC / "gpu_windows_path.c"), "-o", str(binary)],
+                                       capture_output=True, text=True)
+                self.assertEqual(built.returncode, 0, built.stderr)
+                run = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertEqual(run.returncode, 0, run.stderr)
+        wrapper = (SRC / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
+        self.assertIn("$arguments['WindowsEspGuid'] = $WindowsEspGuid", wrapper)
+        self.assertIn('WINDOWS_ESP_GUID=$expectedEsp', wrapper)
+        self.assertIn('$espPin.ToByteArray()', MSVC)
+        self.assertIn('WINDOWS_ESP_GUID=$espPinText', MSVC)
+        self.assertIn('policy=explicit_runtime_guid GUID=%s', BOOT_IO)
 
     def test_single_esp_refusal_survives(self):
         self.assertIn("if(matches!=1U)return matches?EFI_UNSUPPORTED:EFI_NOT_FOUND;", BOOT_IO)
@@ -209,7 +270,7 @@ class BootOrderCrossCheck(unittest.TestCase):
 class BuilderSwitches(unittest.TestCase):
     def test_both_builders_expose_the_switch_once(self):
         for name, text in BUILDERS:
-            self.assertEqual(text.count("/DGU_RUNTIME_ESP"), 1, name)
+            self.assertEqual(text.count("/DGU_RUNTIME_ESP\'"), 1, name)
             self.assertIn("[switch]$RuntimeEsp", text, name)
             self.assertIn("RUNTIME_ESP=$([int][bool]$RuntimeEsp)", text, name)
 

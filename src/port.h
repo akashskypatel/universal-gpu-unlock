@@ -112,6 +112,9 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #endif
 #endif
 
+#if defined(GU_RUNTIME_ESP_PIN) && (!defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_ESP))
+#error Explicit runtime ESP pin requires the combined runtime application
+#endif
 #ifdef GU_FIRMWARE_REATTACH
 #if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET) || !defined(GU_RUNTIME_SELECTION) || !defined(GU_RUNTIME_ESP) || !defined(GU_APP_OPERATION)
 #error Firmware reattachment requires the explicitly waived runtime application
