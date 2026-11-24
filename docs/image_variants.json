@@ -592,6 +592,122 @@
       "note": "no compiled BDF and no compiled ESP GUID: both are resolved at boot"
     },
     {
+      "id": "app-unlock",
+      "family": "prepare",
+      "title": "Build-selected RAM-only firmware transaction",
+      "switches": {
+        "RuntimeSelection": true,
+        "RuntimeEsp": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "ApplicationOperation": "Unlock"
+      },
+      "binary": "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-UNLOCK.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0",
+        "APP_OPERATION=Unlock",
+        "FIXED_OPERATION=1",
+        "FIRMWARE_TRANSACTION=1",
+        "UNLOCK=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLASH=0",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "note": "Existing U handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. RAM-only; no new S3 script requested. Not a combined reattachment/persistence profile."
+    },
+    {
+      "id": "app-unlock-with-resume",
+      "family": "prepare",
+      "title": "Build-selected Firmware transaction with existing S3 resume policy",
+      "switches": {
+        "RuntimeSelection": true,
+        "RuntimeEsp": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "ApplicationOperation": "UnlockWithResume"
+      },
+      "binary": "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-UNLOCK-WITH-RESUME.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0",
+        "APP_OPERATION=UnlockWithResume",
+        "FIXED_OPERATION=1",
+        "FIRMWARE_TRANSACTION=1",
+        "UNLOCK=1",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLASH=0",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "note": "Existing P handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Existing S3 resume policy is requested. Not a combined reattachment/persistence profile."
+    },
+    {
+      "id": "app-install-driver",
+      "family": "prepare",
+      "title": "Build-selected Owned DXE driver registration",
+      "switches": {
+        "RuntimeSelection": true,
+        "RuntimeEsp": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "ApplicationOperation": "InstallDriver"
+      },
+      "binary": "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-INSTALL-DRIVER.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0",
+        "APP_OPERATION=InstallDriver",
+        "FIXED_OPERATION=1",
+        "FIRMWARE_TRANSACTION=0",
+        "UNLOCK=0",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLASH=0",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "note": "Existing I handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Registers only the existing companion driver path; the correctly reviewed companion must already be present. Stops after the operation instead of rebooting into itself. Not a combined reattachment/persistence profile."
+    },
+    {
+      "id": "app-remove-driver",
+      "family": "prepare",
+      "title": "Build-selected Owned DXE driver registration removal",
+      "switches": {
+        "RuntimeSelection": true,
+        "RuntimeEsp": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "ApplicationOperation": "RemoveDriver"
+      },
+      "binary": "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-REMOVE-DRIVER.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0",
+        "APP_OPERATION=RemoveDriver",
+        "FIXED_OPERATION=1",
+        "FIRMWARE_TRANSACTION=0",
+        "UNLOCK=0",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLASH=0",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "note": "Existing R handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Removes owned driver entries; does not clear the restart barrier. Stops after the operation instead of rebooting into itself. Not a combined reattachment/persistence profile."
+    },
+    {
       "id": "dxe-prep-selected",
       "family": "prepare-dxe",
       "title": "DXE preparation for explicit targets",

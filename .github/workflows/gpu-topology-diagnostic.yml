@@ -672,6 +672,22 @@ jobs:
             # Compile the explicitly owner-authorized Stop/reconnect-only EFI.
             # No firmware transaction is linked. The runtime build selects live
             # NVIDIA PCI devices and requires the mandatory USB file log.
+            # Compile/link fixed operation profiles only; never boot or stage them.
+            $operationImages = @{
+              Unlock = 'UNLOCK'
+              UnlockWithResume = 'UNLOCK-WITH-RESUME'
+              InstallDriver = 'INSTALL-DRIVER'
+              RemoveDriver = 'REMOVE-DRIVER'
+            }
+            foreach ($operation in @('Unlock','UnlockWithResume','InstallDriver','RemoveDriver')) {
+              $operationBuild = & .\src\Build-Experimental-MSVC.ps1 -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation $operation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+              if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "Fixed operation EFI failed: $operation"}
+              $operationFile = "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-$($operationImages[$operation]).EFI"
+              if(-not (Test-Path (Join-Path .\src\build $operationFile))){throw "Fixed operation EFI missing: $operationFile"}
+              $operationFirmware = [int]($operation -in @('Unlock','UnlockWithResume'))
+              $operationStatus = @($operationBuild | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+              if($operationStatus.Count -ne 1 -or "$($operationStatus[0])" -notmatch "APP_OPERATION=$operation FIXED_OPERATION=1 FIRMWARE_TRANSACTION=$operationFirmware UNLOCK=$operationFirmware"){throw "Fixed operation attestation mismatch: $operation"}
+            }
             & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime app compilation failed'}
             if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI)){throw 'Stop-only runtime EFI missing'}

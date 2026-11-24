@@ -108,14 +108,18 @@ def expected_binary(variant: dict) -> str:
             return "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI"
         if switches.get("StopReleaseOnlyBench"):
             return f"GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME{dxe}{ext}"
+        operation_suffix = {"Menu": "", "Unlock": "-UNLOCK",
+                            "UnlockWithResume": "-UNLOCK-WITH-RESUME",
+                            "InstallDriver": "-INSTALL-DRIVER",
+                            "RemoveDriver": "-REMOVE-DRIVER"}[switches.get("ApplicationOperation", "Menu")]
         if switches.get("RuntimeSelection") and switches.get("AcceptUnverifiedActuation"):
-            return f"GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION{dxe}{ext}"
+            return f"GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION{dxe}{operation_suffix}{ext}"
         if switches.get("RuntimeSelection"):
             return f"GPU-RUNTIME-SELECTION-PREP{dxe}{ext}"
         if switches.get("AcceptUnverifiedActuation") and count > 1:
-            return f"GPU-SEQUENCE-UNVERIFIED-ACTUATION{dxe}-<label>{ext}"
+            return f"GPU-SEQUENCE-UNVERIFIED-ACTUATION{dxe}-<label>{operation_suffix}{ext}"
         if switches.get("AcceptUnverifiedActuation"):
-            return f"GPU-ONE-TARGET-UNVERIFIED-ACTUATION{dxe}-<label>{ext}"
+            return f"GPU-ONE-TARGET-UNVERIFIED-ACTUATION{dxe}-<label>{operation_suffix}{ext}"
         if switches.get("SyntheticCompileProfile") and count > 1:
             return f"GPU-SEQUENCE-COMPILE-ONLY{dxe}-<label>{ext}"
         if switches.get("SyntheticCompileProfile"):
@@ -203,6 +207,21 @@ class TheCatalogueMatchesTheBuilders(unittest.TestCase):
         self.assertEqual(label(1), "0000-01-00-0")
         self.assertEqual(label(2), "0000-01-00-0--0000-04-00-0")
 
+    def test_four_fixed_operation_profiles_are_distinct(self):
+        expected = {"app-unlock": "Unlock", "app-unlock-with-resume": "UnlockWithResume",
+                    "app-install-driver": "InstallDriver", "app-remove-driver": "RemoveDriver"}
+        found = {v["id"]: v for v in MANIFEST["variants"]
+                 if v["switches"].get("ApplicationOperation")}
+        self.assertEqual({key: v["switches"]["ApplicationOperation"] for key, v in found.items()}, expected)
+        self.assertEqual(len({v["binary"] for v in found.values()}), 4)
+        for v in found.values():
+            self.assertEqual(v["family"], "prepare")
+            self.assertEqual(v["safety"], "actuates")
+            self.assertTrue(v["switches"]["AcceptUnverifiedActuation"])
+            self.assertTrue(v["switches"]["RuntimeSelection"])
+            self.assertTrue(v["switches"]["RuntimeEsp"])
+            self.assertIn("FIXED_OPERATION=1", v["attestations"])
+
     def test_every_attestation_names_a_field_the_builder_prints(self):
         for variant in MANIFEST["variants"]:
             text = builder_text(variant["family"])
@@ -230,6 +249,8 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
         runtime = 1 if switches.get("RuntimeSelection") else 0
         runtime_esp = 1 if switches.get("RuntimeEsp") else 0
         unsafe_bench = 1 if switches.get("StopReleaseOnlyBench") else 0
+        operation = switches.get("ApplicationOperation", "Menu")
+        firmware_transaction = int(accept and not unsafe_bench and operation not in ("InstallDriver", "RemoveDriver"))
         count = {"single": 1, "sequence": 2, "any": 1}.get(variant.get("requires_selection") or "", 0)
         return count, {
             "SELECTED_COUNT": count,
@@ -243,8 +264,10 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": "CONDITIONAL" if unsafe_bench else 0,
             "FILE_ONLY_OUTPUT": unsafe_bench,
             "STOP_RELEASE_ONLY": unsafe_bench,
-            "FIRMWARE_TRANSACTION": int(accept and not unsafe_bench),
-            "UNLOCK": int(accept and not unsafe_bench),
+            "APP_OPERATION": operation,
+            "FIXED_OPERATION": int(operation != "Menu"),
+            "FIRMWARE_TRANSACTION": firmware_transaction,
+            "UNLOCK": firmware_transaction,
             "REATTACH_ATTEMPTED": unsafe_bench,
             "REATTACH_VERIFIED": 0,
             "FIRMWARE_ASSET_FILES_READ": 0 if unsafe_bench else None,

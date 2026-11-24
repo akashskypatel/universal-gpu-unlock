@@ -18,6 +18,15 @@
 #error Stop-only Windows handover requires runtime selection, runtime ESP discovery and file-only Stop scope
 #endif
 
+#if defined(GU_APP_OPERATION)
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_SYNTHETIC_COMPILE_ONLY) || defined(GU_ASSET_INSTALL_ONLY)
+#error A fixed application operation requires the ordinary explicitly waived application
+#endif
+#if GU_APP_OPERATION != 'U' && GU_APP_OPERATION != 'P' && GU_APP_OPERATION != 'I' && GU_APP_OPERATION != 'R'
+#error Invalid fixed application operation
+#endif
+#endif
+
 #include "compat/compat.h"
 
 #ifndef GU_STOP_RELEASE_ONLY_BENCH
@@ -147,6 +156,21 @@ static const char *DxeInstallReason(EFI_STATUS s) {
   if(s==EFI_COMPROMISED_DATA)return "NVRAM_ENTRY_INVALID";
   return "UNEXPECTED";
 }
+
+#ifdef GU_APP_OPERATION
+/* A fixed I/R image must not reboot into itself. Keep the existing operation
+ * result, require a checked log close, then stop for manual boot selection. */
+static EFI_STATUS FinishBuildSelectedDriverOperation(EFI_STATUS status) {
+  GuLog("BUILD_SELECTED_DRIVER_OPERATION=RETURNED STATUS=%#llx AUTO_RESET=0\n",
+        (unsigned long long)status);
+  EFI_STATUS closed=GuBootClose();
+  if(status==EFI_SUCCESS&&closed!=EFI_SUCCESS)status=closed;
+  GuBootSay(L"\r\nAdministrative operation returned. Review the log. "
+            L"Power off and select the intended next boot manually.\r\n");
+  GuBootHalt();
+  return status;
+}
+#endif
 
 EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
@@ -352,7 +376,20 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 #else
   stage="stage-windows-image";GuTracePhase(stage);s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 
+#ifdef GU_APP_OPERATION
+  stage="build-selected-operation";GuTracePhase(stage);
+  choice=(CHAR16)GU_APP_OPERATION;
+  if(owner!=GuPlatformActive||owner->fault){s=EFI_NOT_READY;goto failed;}
+  GuLog("APP_OPERATION_SOURCE=BUILD KEY=%c MENU=0\n",(char)choice);
+  if(choice==L'I'||choice==L'R') {
+    /* These profiles halt instead of resetting. Do not leave a watchdog
+     * armed or start an administrative operation without a healthy log. */
+    s=GuBootWatchdogCancel();if(s!=EFI_SUCCESS)goto failed;
+    if(!GuBootLogOpen()){s=EFI_DEVICE_ERROR;goto failed;}
+  }
+#else
   stage="manual-choice";GuTracePhase(stage);s=GuBootChoose(&choice);if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+#endif
 
   if (choice == L'I') {
 
@@ -367,8 +404,10 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
       GuBootSay(L"\r\n\r\n[OK] AdaUnlock DXE Driver registered in UEFI NVRAM.\r\n"
 
                 L"Driver starts on subsequent boots while this USB device stays connected.\r\n"
-
-                L"Rebooting system in 3 seconds...\r\n");
+#ifndef GU_APP_OPERATION
+                L"Rebooting system in 3 seconds...\r\n"
+#endif
+                );
 
     } else {
 
@@ -378,13 +417,19 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
             (unsigned long long)s,DxeInstallReason(s));
 
       GuBootSay(L"\r\n\r\n[ERROR] Failed to install DXE Driver to NVRAM!\r\n"
-
-                L"Rebooting in 5 seconds...\r\n");
-
+#ifndef GU_APP_OPERATION
+                L"Rebooting in 5 seconds...\r\n"
+#endif
+                );
+#ifndef GU_APP_OPERATION
       if (t->BootServices->Stall) t->BootServices->Stall(2000000);
+#endif
 
     }
 
+#ifdef GU_APP_OPERATION
+    return FinishBuildSelectedDriverOperation(s);
+#else
     (VOID)GuBootClose();
 
     if (t->BootServices->Stall) t->BootServices->Stall(3000000);
@@ -396,6 +441,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     }
 
     return s;
+#endif
 
   }
 
@@ -411,6 +457,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
               s == EFI_NOT_FOUND ? L"\r\n\r\n[INFO] No owned AdaUnlock NVRAM entry exists.\r\n" :
               L"\r\n\r\n[ERROR] NVRAM removal failed; review USB log.\r\n");
 
+#ifdef GU_APP_OPERATION
+    return FinishBuildSelectedDriverOperation(s);
+#else
     GuBootSay(L"Rebooting system in 3 seconds...\r\n");
 
     (VOID)GuBootClose();
@@ -424,6 +473,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     }
 
     return s;
+#endif
 
   }
 
