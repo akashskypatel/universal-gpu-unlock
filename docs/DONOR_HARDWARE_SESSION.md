@@ -1661,7 +1661,7 @@ Note: a selection without -EnableSingleTargetExecution and without the waiver co
 *Build:*
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-sequence -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -StageDrive G -AcceptActuatingDeploy
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation Menu -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -StageDrive G -AcceptActuatingDeploy
 ```
 
 Note: the same image the `actuate` stage uses; this stage exists because a refusal before mutation is a result, and it used to score as four missing-token failures.
@@ -1695,7 +1695,7 @@ Note: the same image the `actuate` stage uses; this stage exists because a refus
 *Build:*
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation Menu -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion
 ```
 
 Note: the single-target waived app and matching DXE driver are both built and signed first; the script stages `EFI\Drivers\AdaUnlockDxe.efi` and then `EFI\BOOT\BOOTX64.EFI`, with local backups. `-StageDxeCompanion` does not install a Driver#### NVRAM option; the operator's I path remains an explicit separate firmware action. This does not authorize a 3080 run or change hardware/link policy..

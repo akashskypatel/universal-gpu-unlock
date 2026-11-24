@@ -71,7 +71,7 @@ EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
 -AcceptActuatingDeploy, and a matrix run (-All) can never stage.
 
 .PARAMETER StageDxeCompanion
-For -Only actuate-one-target only: build and sign the matching
+For -Only firmware-transaction -Operation Menu with one selected BDF and the pinned ESP policy: build and sign the matching
 `dxe-actuate-one-target` image, stage it at EFI\Drivers\AdaUnlockDxe.efi,
 then stage the application at EFI\BOOT\BOOTX64.EFI. Requires -StageDrive and
 -AcceptActuatingDeploy; the paired stage is rolled back if application staging fails.
@@ -124,23 +124,23 @@ Print the complete compatibility matrix and exit. Nothing is built, signed or st
 # Bootable Stop/release-only test application; stages as EFI\BOOT\BOOTX64.EFI.
 # Confirm G: is the intended USB. No BDFs selects every supported NVIDIA GPU at boot.
 # Uses runtime ESP discovery (no private boot profile). Requires the personal WSL signing key, certificate and enrolled db.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only driver-transition -Operation StopReattach `
     -StageDrive G -AcceptActuatingDeploy
 
 .EXAMPLE
 # Optional fixed target: one BDF via -SelectionBdf or -SelectionBdfs, or an
 # ordered list via -SelectionBdfs. Replace these placeholders before running.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only driver-transition -Operation StopReattach `
     -SelectionBdf '<BDF>' -StageDrive G -AcceptActuatingDeploy
 
 .EXAMPLE
 # Optional fixed ordered sequence of multiple targets.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only driver-transition -Operation StopReattach `
     -SelectionBdfs '<BDF1>,<BDF2>' -StageDrive G -AcceptActuatingDeploy
 
 .EXAMPLE
 # The waived one-target image, staged deliberately, on a donor card.
-.\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target -SelectionBdf '0000:01:00.0' `
+.\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation Menu -SelectionBdf '0000:01:00.0' `
     -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion
 
 .NOTES
@@ -809,6 +809,21 @@ function Test-VariantSwitch($Variant, [string]$Name) {
     return ($null -ne $property -and $property.Value -is [bool] -and $property.Value)
 }
 
+# Paired deployment is restricted to the original pinned, single-target,
+# waived transaction. No additional builder operation switches are permitted.
+function Test-PairedTransactionVariant($Variant, [string]$Family) {
+    return ($Variant.family -eq $Family -and
+            $Variant.profile -eq 'firmware-transaction' -and
+            $Variant.safety -eq 'actuates' -and
+            $Variant.PSObject.Properties.Name -contains 'requires_selection' -and
+            $Variant.requires_selection -eq 'single' -and
+            $Variant.PSObject.Properties.Name -contains 'requires_local_boot_profile' -and
+            $Variant.requires_local_boot_profile -eq $true -and
+            @($Variant.switches.PSObject.Properties.Name).Count -eq 2 -and
+            (Test-VariantSwitch $Variant 'EnableSingleTargetExecution') -and
+            (Test-VariantSwitch $Variant 'AcceptUnverifiedActuation'))
+}
+
 function Test-CompiledStopSelection($Variant) {
     return ((Get-SelectionCount) -ge 1 -and
             (Test-VariantSwitch $Variant 'StopReleaseOnlyBench') -and
@@ -1041,7 +1056,7 @@ try {
     if ($All -and $Only) { throw '-All and -Only are mutually exclusive.' }
     if ($CapturedPromReference -and -not $Only) {
         throw ('-CapturedPromReference applies to the prepare family only, so it needs ' +
-               '-Only naming the variant it is for (e.g. -Only prep-selected). A matrix run ' +
+               '-Only naming the variant it is for (e.g. -Only diagnostic -Probe Preflight). A matrix run ' +
                'would apply it to image kinds whose sources have no PROM read behind it.')
     }
     if ($All -and $StageDrive) { throw '-All must not stage: a matrix run signs only. Name one image with -Only <id> -StageDrive <letter>.' }
@@ -1095,8 +1110,9 @@ try {
     }
     if ($StageDxeCompanion) {
         if (-not $StageDrive) { throw '-StageDxeCompanion requires -StageDrive <letter>.' }
-        if ($variants.Count -ne 1 -or $variants[0].id -ne 'actuate-one-target') {
-            throw '-StageDxeCompanion is only supported with -Only actuate-one-target and one selected BDF.'
+        if ($variants.Count -ne 1 -or (Get-SelectionCount) -ne 1 -or
+            -not (Test-PairedTransactionVariant $variants[0] 'prepare')) {
+            throw '-StageDxeCompanion requires firmware-transaction -Operation Menu, one selected BDF and the pinned application configuration.'
         }
         if (-not $AcceptActuatingDeploy) {
             throw '-StageDxeCompanion requires -AcceptActuatingDeploy; it stages the waived app and its matching DXE driver.'
@@ -1147,8 +1163,8 @@ try {
 
     $dxeStageVariantId = $null
     if ($StageDxeCompanion) {
-        $companion = @($catalogue.variants | Where-Object { $_.id -eq 'dxe-actuate-one-target' })
-        if ($companion.Count -ne 1) { throw 'Catalogue must contain exactly one dxe-actuate-one-target companion.' }
+        $companion = @($catalogue.variants | Where-Object { Test-PairedTransactionVariant $_ 'prepare-dxe' })
+        if ($companion.Count -ne 1) { throw 'Catalogue must contain exactly one pinned single-target DXE transaction companion.' }
         $companionSafety = $catalogue.safety_classes.($companion[0].safety)
         if ($companion[0].safety -ne 'actuates' -or $familyById[$companion[0].family].subsystem -ne 11 -or
             -not $companionSafety.writes_gpu) {
@@ -1472,8 +1488,8 @@ try {
         $appReceipt.PreservedOtherEfiCount = $bootDeployment.PreservedOtherEfiCount
         $appReceipt | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $pendingBootImage.Receipt -Encoding UTF8 -ErrorAction Stop
         foreach ($result in $results) {
-            if ($result.id -eq 'dxe-actuate-one-target') { $result.destination = $dxeDeployment.Path }
-            if ($result.id -eq 'actuate-one-target') { $result.destination = $bootDeployment.Path }
+            if ($result.id -eq $dxeStageVariantId) { $result.destination = $dxeDeployment.Path }
+            if ($result.id -eq $stageVariantId) { $result.destination = $bootDeployment.Path }
         }
     }
 

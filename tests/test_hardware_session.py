@@ -309,6 +309,40 @@ class TheBuildCommandsExist(unittest.TestCase):
             self.assertTrue(variant["switches"]["AcceptUnverifiedActuation"])
 
 
+    def test_canonical_active_stage_commands_resolve_to_original_configurations(self):
+        import shutil
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable for profile resolution")
+        script = str(ROOT / "src" / "Build-Sign-Deploy-UniversalGPU.ps1").replace("'", "''")
+        expected = {"admission": ("actuate-sequence", ["0000:01:00.0", "0000:04:00.0"]),
+                    "actuate": ("actuate-one-target", ["0000:01:00.0"])}
+        for stage in MANIFEST["stages"]:
+            if stage["id"] not in expected:
+                continue
+            with self.subTest(stage=stage["id"]):
+                alias, selection = expected[stage["id"]]
+                args = stage["build"].split(".ps1 ", 1)[1]
+                self.assertIn("-Only firmware-transaction -Operation Menu", args)
+                self.assertIn("-StageDrive G -AcceptActuatingDeploy", args)
+                self.assertEqual("-StageDxeCompanion" in args, stage["id"] == "actuate")
+                self.assertEqual("-CapturedPromReference" in args, stage["id"] == "admission")
+                # Resolution must not deploy. The stage flags above remain mandatory.
+                args = re.sub(r" -StageDrive [A-Z](?=\s|$)| -StageDxeCompanion(?=\s|$)", "", args)
+                result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command",
+                                         f"& '{script}' -ResolveOnly {args}"],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                resolved = json.loads(result.stdout)
+                self.assertEqual(resolved["VariantId"], alias)
+                self.assertEqual(resolved["CanonicalProfile"], "firmware-transaction")
+                self.assertEqual(resolved["Safety"], "actuates")
+                self.assertEqual(resolved["Selection"], selection)
+                self.assertTrue(resolved["Switches"]["AcceptUnverifiedActuation"])
+                self.assertTrue(resolved["Switches"]["EnableSingleTargetExecution"])
+                self.assertEqual(bool(resolved["Switches"].get("CapturedPromReference")), stage["id"] == "admission")
+
+
 class TheReadOnlyGuideIsGrounded(unittest.TestCase):
     """The step-by-step guide is data, and every line of it is checked.
 

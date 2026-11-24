@@ -466,7 +466,13 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
 
     def test_actuating_one_target_can_stage_its_signed_dxe_companion_in_driver_path(self):
         self.assertIn("[switch]$StageDxeCompanion", SCRIPT)
-        self.assertIn("-StageDxeCompanion is only supported with -Only actuate-one-target", SCRIPT)
+        self.assertIn("-StageDxeCompanion requires firmware-transaction -Operation Menu", SCRIPT)
+        self.assertIn("(Get-SelectionCount) -ne 1", SCRIPT)
+        self.assertIn("Test-PairedTransactionVariant $variants[0] 'prepare'", SCRIPT)
+        self.assertIn("Test-PairedTransactionVariant $_ 'prepare-dxe'", SCRIPT)
+        self.assertIn("if ($companion.Count -ne 1)", SCRIPT)
+        self.assertIn("if ($result.id -eq $dxeStageVariantId) { $result.destination = $dxeDeployment.Path }", SCRIPT)
+        self.assertIn("if ($result.id -eq $stageVariantId) { $result.destination = $bootDeployment.Path }", SCRIPT)
         self.assertIn("$companion[0]) + @($variants)", SCRIPT)
         self.assertIn("Stage-SignedDxeCompanion", SCRIPT)
         self.assertIn("Join-Path $driversDir 'AdaUnlockDxe.efi'", SCRIPT)
@@ -866,6 +872,47 @@ class CanonicalProfileResolution(unittest.TestCase):
             self.assertNotIn("WindowsEspGuid", result["Switches"])
             self.assertFalse(any(a.startswith("WINDOWS_ESP_GUID=") for a in result["ResolvedAttestations"]))
             self.resolve(args + ["-WindowsEspGuid", guid], valid=False)
+
+    def test_paired_transaction_predicate_accepts_only_original_pair(self):
+        import subprocess
+        script = str(SCRIPT_PATH).replace("'", "''")
+        manifest = str(ROOT / "docs" / "image_variants.json").replace("'", "''")
+        # Load only the two pure functions from the actual wrapper. No build,
+        # signing, USB discovery or staging code is executed.
+        command = r"""
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+$tokens = $null; $errors = $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile('SCRIPT_PATH', [ref]$tokens, [ref]$errors)
+if ($errors.Count) { throw 'Wrapper parse failed' }
+foreach ($name in @('Test-VariantSwitch', 'Test-PairedTransactionVariant')) {
+    $functions = @($ast.FindAll({param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name}, $true))
+    if ($functions.Count -ne 1) { throw "Missing unique function $name" }
+    . ([scriptblock]::Create($functions[0].Extent.Text))
+}
+$catalogue = Get-Content -LiteralPath 'MANIFEST_PATH' -Raw | ConvertFrom-Json
+$results = foreach ($variant in $catalogue.variants) {
+    $id = $variant.id
+    $app = Test-PairedTransactionVariant $variant 'prepare'
+    $dxe = Test-PairedTransactionVariant $variant 'prepare-dxe'
+    $variant.id = 'renamed-' + $id
+    [ordered]@{ id = $id; app = $app; dxe = $dxe;
+                renamedApp = (Test-PairedTransactionVariant $variant 'prepare');
+                renamedDxe = (Test-PairedTransactionVariant $variant 'prepare-dxe') }
+}
+ConvertTo-Json -InputObject @($results) -Compress
+""".replace("SCRIPT_PATH", script).replace("MANIFEST_PATH", manifest)
+        result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        rows = json.loads(result.stdout)
+        self.assertEqual({r["id"] for r in rows}, {v["id"] for v in MANIFEST["variants"]})
+        self.assertEqual(len(rows), 41)
+        self.assertEqual([r["id"] for r in rows if r["app"]], ["actuate-one-target"])
+        self.assertEqual([r["id"] for r in rows if r["dxe"]], ["dxe-actuate-one-target"])
+        for row in rows:
+            self.assertEqual(row["app"], row["renamedApp"], row["id"])
+            self.assertEqual(row["dxe"], row["renamedDxe"], row["id"])
 
     def test_generated_profile_summary_matches_manifest(self):
         generated = renderer.render(MANIFEST)

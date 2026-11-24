@@ -843,7 +843,7 @@
       "title": "Admission of a waived image, refused before mutation",
       "what_it_costs": "nothing when it refuses, and that is the case this stage records: the image is allowed to write and did not. A run that gets past admission is scored as `actuate`, not here",
       "exit": "the waived image prepared both cards, applied its admission policy, refused with a named reason, and the boot ended with nothing mutated, retained or faulted",
-      "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-sequence -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -StageDrive G -AcceptActuatingDeploy",
+      "build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation Menu -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -StageDrive G -AcceptActuatingDeploy",
       "build_note": "the same image the `actuate` stage uses; this stage exists because a refusal before mutation is a result, and it used to score as four missing-token failures"
     },
     {
@@ -851,7 +851,7 @@
       "title": "Waived actuation",
       "what_it_costs": "the one admission that may write: an ordered list executed one card at a time, no retry, with the firmware timer bounded or explicitly off; more than one target is admitted by the same waiver (`MULTI_TARGET_WITHOUT_WAIVER` otherwise)",
       "exit": "the waiver is recorded once, the pre-Stop contract is captured, the step reaches a terminal record, and the next boot reads the record it left",
-      "build": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion",
+      "build": ".\\src\\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation Menu -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion",
       "build_note": "the single-target waived app and matching DXE driver are both built and signed first; the script stages `EFI\\Drivers\\AdaUnlockDxe.efi` and then `EFI\\BOOT\\BOOTX64.EFI`, with local backups. `-StageDxeCompanion` does not install a Driver#### NVRAM option; the operator's I path remains an explicit separate firmware action. This does not authorize a 3080 run or change hardware/link policy."
     }
   ],
