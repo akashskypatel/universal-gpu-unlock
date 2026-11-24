@@ -81,6 +81,8 @@ def expected_binary(variant: dict) -> str:
     count = selection_count(variant)
     guid = "WindowsEspGuid" in switches
     family = variant["family"]
+    if family == "maintenance":
+        return "BOOT-STATE-MAINTENANCE.EFI"
     if family == "diagnostic":
         if switches.get("MsiB850RomVariables"):
             stem = "MSI-B850-ROM-VARIABLES"
@@ -424,10 +426,36 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
 
     def test_the_staging_rule_mirrors_the_safety_classes(self):
         for name, safety in MANIFEST["safety_classes"].items():
-            expected = (not safety["writes_gpu"]) and name != "compile-only"
+            expected = (not safety["writes_gpu"]) and name not in ("compile-only", "maintenance")
             self.assertEqual(safety["may_be_staged"] is True, expected,
                              f"{name}: may_be_staged must be true exactly when the image "
                              "is safe to boot and has something to observe")
+
+    def test_maintenance_is_explicit_and_isolated(self):
+        variants = [v for v in MANIFEST["variants"] if v["family"] == "maintenance"]
+        self.assertEqual(len(variants), 1)
+        variant = variants[0]
+        self.assertEqual(variant["id"], "boot-state-maintenance")
+        self.assertEqual(variant["safety"], "maintenance")
+        self.assertEqual(variant["switches"], {})
+        safety = MANIFEST["safety_classes"]["maintenance"]
+        self.assertFalse(safety["writes_gpu"])
+        self.assertEqual(safety["may_be_staged"], "with -AcceptActuatingDeploy")
+        builder = builder_text("maintenance")
+        for token in ("MAINTENANCE_ONLY=1", "GPU_ACTION=0", "NVRAM_DELETE=EXPLICIT_REVIEW_ONLY",
+                      "NO_BOOT_ENTRY_CHANGE=1", "NO_RESET=1", "HARDWARE_TESTED=0"):
+            self.assertIn(token, variant["attestations"])
+            self.assertIn(token, builder)
+        gate = SCRIPT.index("if ($safety.may_be_staged -ne $true -and -not $AcceptActuatingDeploy)")
+        maintenance = SCRIPT.index("if ($deployVariant.safety -eq 'maintenance')")
+        self.assertLess(gate, maintenance)
+        self.assertIn("Maintenance staging requires -Only boot-state-maintenance.", SCRIPT)
+        stage = SCRIPT[SCRIPT.index("function Stage-SignedEfi"):SCRIPT.index("# --- catalogue")]
+        self.assertLess(stage.index("if ($MaintenanceOnly -and $otherEfiCount -ne 0)"),
+                        stage.index("$replacementStarted = $false"))
+        self.assertLess(stage.index("Maintenance media is no longer isolated"),
+                        stage.index("Copy-Item -LiteralPath $SignedFile -Destination $temporary"))
+        self.assertIn("-MaintenanceOnly:($variant.safety -eq 'maintenance')", SCRIPT)
 
     def test_the_script_never_stages_from_a_matrix_run(self):
         self.assertIn("-All must not stage", SCRIPT)

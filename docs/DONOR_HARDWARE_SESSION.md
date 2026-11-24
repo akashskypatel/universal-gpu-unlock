@@ -484,6 +484,7 @@ The same preparation as a boot-service driver, loaded from a `Driver####` entry 
 * `app-unlock-with-resume` — Build-selected P operation uses the existing firmware transaction and resume policy; it is not a read-only candidate.
 * `app-install-driver` — Build-selected I operation can change owned firmware boot registration; it is outside read-only scope and requires the reviewed companion.
 * `app-remove-driver` — Build-selected R operation can change owned firmware boot registration; it is outside read-only scope and does not remove the experiment record.
+* `boot-state-maintenance` — Changes the reviewed project boot-state variable after explicit confirmation; not a read-only candidate and does not produce a scored GPU log.
 * `dxe-actuate-one-target` — writes the GPU from a driver: `actuate` stage.
 * `dxe-actuate-sequence` — writes the GPU, ordered, from a driver: `actuate` stage.
 * `dxe-actuate-runtime-selection` — writes the GPU from a driver with the target chosen at boot: `actuate` stage.

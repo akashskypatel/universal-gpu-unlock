@@ -42,7 +42,7 @@ def render(manifest: dict) -> str:
     blocks = [BEGIN, ""]
     blocks.append(f"{len(manifest['variants'])} variants across "
                  f"{len(manifest['families'])} builders. `Safety` is what the image may "
-                 "do to the card, not what it has been shown to do.\n")
+                 "do to the system, not what it has been shown to do.\n")
     for family in manifest["families"]:
         variants = [v for v in manifest["variants"] if v["family"] == family["id"]]
         blocks.append(f"\n### {family['title']} — `{family['builder']}` (PE subsystem "

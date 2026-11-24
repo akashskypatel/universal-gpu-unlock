@@ -6,8 +6,8 @@ produce, using a personal Secure Boot certificate that is already enrolled in
 the BIOS db and signed inside a WSL instance.
 
 .DESCRIPTION
-The catalogue is docs/image_variants.json: 32 variants across four builders
-(diagnostic, active preparation, DXE preparation, original vendor Stop). This
+The catalogue is docs/image_variants.json: variants across five builders
+(diagnostic, active preparation, DXE preparation, original vendor Stop, boot-state maintenance). This
 script executes that catalogue, so "all possible combinations" is data, not a
 hand-maintained list, and tests/test_image_variants.py keeps the catalogue
 honest against the builders.
@@ -32,13 +32,14 @@ The catalogue labels each variant:
   read-only               the diagnostic family; never writes a GPU register
   refuses-before-mutation  links the active source, refuses before GuInit
   compile-only            proves the sources compile for your selection
+  maintenance             removes only the reviewed boot record after confirmation; no GPU writes
   stop-only               calls the original vendor Stop; may hang
   actuates                performs waived hardware mutation; Stop/release-only and firmware-transaction variants are distinct
 
 One named application variant can be staged to EFI\BOOT\BOOTX64.EFI on a
 verified writable non-system FAT32 USB stick, after a verified local backup of
 the file being replaced. Stop-only/actuating images also require
--AcceptActuatingDeploy. A DXE driver (subsystem 11) is never staged as
+-AcceptActuatingDeploy. Maintenance also requires explicit consent and isolated USB media. A DXE driver (subsystem 11) is never staged as
 BOOTX64.EFI. For the waived one-target app, -StageDxeCompanion additionally
 builds, signs and stages its matching DXE image at
 EFI\Drivers\AdaUnlockDxe.efi for the app's explicit I path.
@@ -53,7 +54,7 @@ reason recorded, when you do not supply one. -All cannot be combined with
 One or more variant ids (see -List). Cannot be combined with -All.
 
 .PARAMETER Family
-diagnostic, prepare, prepare-dxe or stop-observation. Selects a whole family;
+diagnostic, prepare, prepare-dxe, stop-observation or maintenance. Selects a whole family;
 combine with -Only to narrow further.
 
 .PARAMETER Deploy
@@ -157,7 +158,7 @@ param(
     [string]$WslUser,
     [string]$VcVars,
     [string[]]$Only,
-    [ValidateSet('diagnostic', 'prepare', 'prepare-dxe', 'stop-observation')]
+    [ValidateSet('diagnostic', 'prepare', 'prepare-dxe', 'stop-observation', 'maintenance')]
     [string]$Family,
     [switch]$All,
     [string]$Deploy,
@@ -507,7 +508,7 @@ exit "$status"
 
 function Stage-SignedEfi {
     param([string]$Drive, [string]$Root, [string]$SignedFile, [string]$SignedSha256,
-          [string]$LocalOutput, [string]$ExpectedVolumeId)
+          [string]$LocalOutput, [string]$ExpectedVolumeId, [switch]$MaintenanceOnly)
     if ((Assert-UsbVolume $Drive) -ne $Root) { throw 'Drive letter identity changed.' }
     if ([string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
         throw 'Target USB volume identity changed before staging.'
@@ -531,6 +532,9 @@ function Stage-SignedEfi {
     $allEfi = @(Get-ExistingEfi $Root)
     $oldBootPresent = Test-Path -LiteralPath $destination -PathType Leaf
     $otherEfiCount = @($allEfi | Where-Object { $_.FullName -ine $destination }).Count
+    if ($MaintenanceOnly -and $otherEfiCount -ne 0) {
+        throw 'Maintenance requires isolated USB media: other EFI files exist. Use separate media; no files were removed.'
+    }
     Say "Other EFI files preserved on USB: $otherEfiCount"
     Say "Install only: $destination"
 
@@ -559,6 +563,9 @@ function Stage-SignedEfi {
         if ((Assert-UsbVolume $Drive) -ne $Root -or
             [string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
             throw 'Target USB identity changed during staging.'
+        }
+        if ($MaintenanceOnly -and @(Get-ExistingEfi $Root | Where-Object { $_.FullName -ine $destination }).Count -ne 0) {
+            throw 'Maintenance media is no longer isolated; no original EFI was removed.'
         }
         if ((Get-Sha256 $SignedFile) -ne $SignedSha256) { throw 'Signed EFI hash changed before USB copy.' }
         Copy-Item -LiteralPath $SignedFile -Destination $temporary -ErrorAction Stop
@@ -887,6 +894,15 @@ try {
             throw ("Refusing to stage {0}: safety={1} writes_gpu={2}. Add -AcceptActuatingDeploy if the donor card, the recovery toolkit and the session plan are ready." -f
                    $deployVariant.id, $deployVariant.safety, $safety.writes_gpu)
         }
+        if ($deployVariant.safety -eq 'maintenance') {
+            if (-not $Only -or @($Only).Count -ne 1 -or $Only[0] -ne 'boot-state-maintenance') {
+                throw 'Maintenance staging requires -Only boot-state-maintenance.'
+            }
+            if ($SelectionBdf -or $SelectionBdfs -or $WindowsEspGuid -or $CapturedPromReference) {
+                throw 'Maintenance does not accept GPU selection, Windows ESP or firmware reference options.'
+            }
+            Say 'WARNING: maintenance can remove GuBootState only after explicit REARM confirmation. Use isolated media and disconnect other experimental boot media before booting.'
+        }
         if ($safety.writes_gpu) {
             Say ("WARNING: staging ACTUATING_IMAGE={0} SAFETY={1}; it may write the GPU. Recovery toolkit on the bench is not optional." -f
                  $deployVariant.id, $deployVariant.safety)
@@ -1156,7 +1172,7 @@ try {
             } elseif ($stageVariantId -and $stageVariantId -eq $variantId) {
                 $deployment = Stage-SignedEfi -Drive $drive -Root $usbRoot -SignedFile $signedEfi `
                                   -SignedSha256 $signedHash -LocalOutput $OutputDirectory `
-                                  -ExpectedVolumeId $targetVolumeId
+                                  -ExpectedVolumeId $targetVolumeId -MaintenanceOnly:($variant.safety -eq 'maintenance')
                 $stagedPath = $deployment.Path
             }
 

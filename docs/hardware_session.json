@@ -691,6 +691,10 @@
         "why": "Build-selected R operation can change owned firmware boot registration; it is outside read-only scope and does not remove the experiment record."
       },
       {
+        "id": "boot-state-maintenance",
+        "why": "Changes the reviewed project boot-state variable after explicit confirmation; not a read-only candidate and does not produce a scored GPU log."
+      },
+      {
         "id": "dxe-actuate-one-target",
         "why": "writes the GPU from a driver: `actuate` stage."
       },

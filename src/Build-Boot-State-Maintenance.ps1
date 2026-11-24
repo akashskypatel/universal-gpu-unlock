@@ -1,4 +1,6 @@
-param([string]$VcVars)
+param(
+    [string]$VcVars
+)
 $ErrorActionPreference='Stop'
 # Separate owner maintenance image. Build only; no signing, staging or boot entry.
 if (-not $VcVars) {
