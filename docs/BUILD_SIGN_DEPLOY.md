@@ -531,8 +531,8 @@ Each signed image gets `<signed>.efi.json` and the run gets
   "RequestedLegacyAlias": null,
   "Family": "diagnostic",
   "Switches": {"SaveLog": true},
-  "ExpectedAttestations": ["READ_ONLY=1"],
-  "AttestationsVerified": ["READ_ONLY=1"],
+  "ExpectedAttestations": ["READ_ONLY=1","CAN_DETACH=0","CAN_UNLOCK=0","SAVE_LOG=1","WINDOWS_HANDOFF=0"],
+  "AttestationsVerified": ["READ_ONLY=1","CAN_DETACH=0","CAN_UNLOCK=0","SAVE_LOG=1","WINDOWS_HANDOFF=0"],
   "Safety": "read-only",
   "WritesGpu": false,
   "SourceSha256": "…",
@@ -613,6 +613,6 @@ case for this fork; two *different* lists between stages is not.
 The combined firmware transaction and reattachment have passed physical testing
 on the two recorded GPUs. The owner also confirmed recovery from a failed
 transaction after a 60-second power-off. These results are specific to the tested
-configuration. Signing a new image does not qualify its physical operation,
+configuration. Signing a new image does not prove its physical operation,
 numerical accuracy, resume behavior, every failure class, or Windows Booter
 provenance. See the [execution map](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia_unlock_evidence_to_execution_map.md) for current physical evidence.
