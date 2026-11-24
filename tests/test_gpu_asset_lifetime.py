@@ -213,7 +213,7 @@ typedef int BOOLEAN;
 #define GU_ACTIVE_SINGLE_TARGET 1
 #define MIB (1048576U)
 #define SIZE (20U*MIB+7U)
-typedef struct {unsigned Year,Month,Day;} EFI_TIME;
+typedef struct {unsigned Year,Month,Day,Hour,Minute,Second,Nanosecond,TimeZone,Daylight;} EFI_TIME;
 typedef struct {
   UINT64 FileSize,PhysicalSize,Attribute;
   EFI_TIME CreateTime,ModificationTime;
@@ -259,7 +259,7 @@ static VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
   if(mode==6)BootFileStatus=EFI_DEVICE_ERROR;
 }
 static VOID *GuAlloc(UINTN bytes){allocation=malloc(bytes);allocation_owner=&Gu;return allocation;}
-static VOID GuFree(VOID *p){free(p);if(p==allocation)allocation=NULL;}
+static VOID GuFree(VOID *p){if(p==allocation)allocation=NULL;free(p);}
 static EFI_STATUS BootFileOpenResult(EFI_STATUS s,EFI_FILE_PROTOCOL **f){(void)f;return s;}
 static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **f){*f=NULL;close_calls++;return mode==13?EFI_DEVICE_ERROR:EFI_SUCCESS;}
 static EFI_STATUS Open(EFI_FILE_PROTOCOL *r,EFI_FILE_PROTOCOL **f,CHAR16 *n,UINT64 m,UINT64 a) {
@@ -316,7 +316,7 @@ int main(int argc,char **argv) {
     } else {
       CHECK(((UINT8 *)data)[0]==0x5a&&((UINT8 *)data)[SIZE-1]==0x5a);
       if(mode==1)CHECK(seek_calls==1&&AssetReadSize==2*MIB);
-      if(mode==0||mode==11)CHECK(read_calls==5&&largest==8*MIB&&last_progress==SIZE);
+      if(mode==0||mode==11)CHECK(read_calls==5&&largest==8*MIB&&last_progress==SIZE&&AssetReadSize==8*MIB);
       if(mode==8||mode==9)CHECK(read_calls>0&&seek_calls==0);
       if(mode==12)CHECK(AssetReadSize==2*MIB&&AssetReadSizeSettled);
       if(mode==14)CHECK(read_calls==21&&largest==MIB&&!progress_calls&&AssetReadSize==MIB);

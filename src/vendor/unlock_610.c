@@ -801,9 +801,12 @@ static bool free_coherent(struct unlock_transaction_work *work)
 	GU_PLATFORM *owner = GuCompatOwner(work->pdev);
 	if (!owner || owner->retained) return false;
 
-	for (i = 0; i < work->pages_allocated; i++) {
+	/* GuDmaAllocate and the CPU pool insert at the head. After the existing
+	 * quiescence gates, release the radix pages newest-first: the same
+	 * checked unmap/free calls, without a quadratic linked-list traversal. */
+	for (i = work->pages_allocated; i > 0; i--) {
 		dma_free_coherent(&work->pdev->dev, GU_RADIX_PAGE,
-				  work->pages[i].cpu, work->pages[i].dma);
+				  work->pages[i - 1].cpu, work->pages[i - 1].dma);
 		if (GuCompatOwner(work->pdev)!=owner || owner->retained) return false;
 	}
 	if (!GuCompatFree(work->pdev, work->pages)) return false;
@@ -1939,8 +1942,11 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 		ret = unlock_transaction_claim(work);
 	if (!ret)
 		ret = unlock_transaction_layout(work);
-	if (!ret)
+	if (!ret) {
+		GuTraceDetail("dma-prepare", "BEGIN=1");
 		ret = unlock_transaction_dma(work);
+		GuTraceDetail("dma-prepare", "RESULT=%d", ret);
+	}
 	if (!ret)
 		ret = unlock_transaction_gfw(work);
 	if (!ret)
@@ -1961,7 +1967,9 @@ int gpu_unlock_610_unlock(struct pci_dev *pdev, const struct gpu_unlock_610_shar
 		unlock_transaction_signature(work);
 	if (is_ad102(work) && work->permission_saved && !work->permission_sampled && work->mapped)
 		ad102_sample_permissions(work, "abort", work->permission_after, false);
+	GuTraceDetail("dma-unwind", "BEGIN=1");
 	cleanup = unlock_transaction_unwind(work);
+	GuTraceDetail("dma-unwind", "RESULT=%d", cleanup);
 	if (!ret)
 		ret = cleanup;
 	if (work->retained) {

@@ -340,6 +340,11 @@ static GU_GSP_FILE_SNAPSHOT GspFileCandidate,GspFileCached;
 static GU_PLATFORM *GspCacheOwner;
 static const GU_ARCH_ASSET *GspCacheManifest;
 static BOOLEAN GspFileReadActive;
+static BOOLEAN GspTimeEqual(const EFI_TIME *a,const EFI_TIME *b) {
+  return a->Year==b->Year&&a->Month==b->Month&&a->Day==b->Day&&
+    a->Hour==b->Hour&&a->Minute==b->Minute&&a->Second==b->Second&&
+    a->Nanosecond==b->Nanosecond&&a->TimeZone==b->TimeZone&&a->Daylight==b->Daylight;
+}
 #endif
 
 static BOOLEAN TraceClock(UINTN *seconds) {
@@ -453,7 +458,9 @@ VOID GuTraceDetail(const char *phase,const char *format,...) {
   va_start(args,format);
   {size_t n=GuFormatV(detail,sizeof(detail),format,args);(void)n;}
   va_end(args);
-  GuLog("TRACE STEP=%u PHASE=%s %s\n",(unsigned)TraceSteps,phase?phase:"?",detail);
+  char elapsed[16];
+  GuLog("TRACE STEP=%u PHASE=%s %s ELAPSED=%s\n",(unsigned)TraceSteps,phase?phase:"?",detail,
+        TraceElapsedText(elapsed,sizeof(elapsed)));
 }
 
 VOID GuTracePhase(const char *phase) {
@@ -784,6 +791,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
   UINTN best_bytes=learn?AssetReadBestBytes:0,best_seconds=learn?AssetReadBestSeconds:0;
   BOOLEAN settled=learn&&AssetReadSizeSettled;
   UINTN reads=0,read_seconds=0,progress_seconds=0,reported=0,last_report=0;
+  UINTN proven=learn?AssetReadSize:1048576U;
   BOOLEAN timing=adaptive&&TraceClock(&last_report);
   UINTN at=0;
 #ifdef GU_ACTIVE_SINGLE_TARGET
@@ -801,8 +809,8 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
        strcmp(arch->entries[2].sha256,GspCacheManifest->sha256)==0&&
        info->PhysicalSize==GspFileCached.physical_size&&
        info->Attribute==GspFileCached.attributes&&
-       !memcmp(&info->CreateTime,&GspFileCached.created,sizeof(EFI_TIME))&&
-       !memcmp(&info->ModificationTime,&GspFileCached.modified,sizeof(EFI_TIME))) {
+       GspTimeEqual(&info->CreateTime,&GspFileCached.created)&&
+       GspTimeEqual(&info->ModificationTime,&GspFileCached.modified)) {
       const struct firmware *source=&GspCacheOwner->asset_entries[2].firmware;
       if(GspCacheOwner->fault||GspCacheOwner->retained||
          !GuPlatformAssetsOwned(GspCacheOwner)||
@@ -836,6 +844,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
     BOOLEAN measured=adaptive&&TraceClock(&before);
     s=f->Read(f,&n,(UINT8 *)p+at);reads++;
     measured=measured&&TraceClock(&after);
+    if(adaptive&&!measured)timing=FALSE;
     UINTN elapsed=measured?(after+86400U-before)%86400U:0;
     read_seconds+=elapsed;
     /* A generic device error or short read is not a size rejection. Only
@@ -847,7 +856,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
       if(s==EFI_SUCCESS)s=f->GetPosition(f,&pos);
       if(s!=EFI_SUCCESS||pos!=(UINT64)at){s=EFI_DEVICE_ERROR;break;}
       do {chunk/=2U;} while(chunk>=wanted&&chunk>1048576U);
-      settled=TRUE;best_bytes=0;best_seconds=0;
+      settled=TRUE;best_bytes=0;best_seconds=0;proven=chunk;
       GuTraceDetail("asset-read-size","REJECTED=%u RETRY=%u",(unsigned)wanted,(unsigned)chunk);
       if(BootFileStatus!=EFI_SUCCESS){s=BootFileStatus;break;}
       continue;
@@ -855,6 +864,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
     if(s!=EFI_SUCCESS)break;
     if(n!=wanted){s=EFI_DEVICE_ERROR;break;}
     at+=n;
+    if(adaptive&&wanted==chunk)proven=chunk;
     if(adaptive&&!settled&&wanted==chunk) {
       /* RTC seconds are coarse. Require two sufficiently long measurements
        * and a material regression before reducing; otherwise grow on exact
@@ -863,7 +873,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
         if(best_seconds&&((UINT64)n*best_seconds*4U <
                           (UINT64)best_bytes*elapsed*3U)) {
           if(chunk>1048576U)chunk/=2U;
-          settled=TRUE;
+          settled=TRUE;proven=chunk;
         } else if(!best_seconds||(UINT64)n*best_seconds>(UINT64)best_bytes*elapsed) {
           best_bytes=n;best_seconds=elapsed;
         }
@@ -882,7 +892,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
         if(clock&&TraceClock(&finished)) {
           progress_seconds+=(finished+86400U-now)%86400U;
           last_report=finished;
-        }
+        } else timing=FALSE;
         if(BootFileStatus!=EFI_SUCCESS){s=BootFileStatus;break;}
       }
     }
@@ -898,7 +908,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
   EFI_STATUS closed=CloseBootFile(&f);if(closed!=EFI_SUCCESS)s=closed;
 
   if(s!=EFI_SUCCESS){GuFree(p);return s;}
-  if(learn&&expected>=1048576U&&reads){AssetReadSize=chunk;AssetReadBestBytes=best_bytes;
+  if(learn&&expected>=1048576U&&reads){AssetReadSize=proven;AssetReadBestBytes=best_bytes;
     AssetReadBestSeconds=best_seconds;AssetReadSizeSettled=settled;}
 #ifdef GU_ACTIVE_SINGLE_TARGET
   if(adaptive&&GspFileReadActive&&root==Root&&info->ModificationTime.Year) {
@@ -1345,7 +1355,10 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     GuTraceProgress("asset-read",(UINTN)i+1U,(UINTN)GU_ASSET_COUNT);
   }
   TraceAssetReadActive=FALSE;
-  if(status==EFI_SUCCESS&&!GuAd104AssetsValid(&Gu))status=EFI_CRC_ERROR;
+  if(status==EFI_SUCCESS) {
+    GuTracePhase("asset-verify-bundle");
+    if(!GuAd104AssetsValid(&Gu))status=EFI_CRC_ERROR;
+  }
   GuTraceDetail("asset-load","STATUS=%#llx",(unsigned long long)status);
   if(status==EFI_SUCCESS&&BootFileStatus!=EFI_SUCCESS)status=BootFileStatus;
 #ifdef GU_ACTIVE_SINGLE_TARGET

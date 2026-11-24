@@ -411,6 +411,75 @@ class DmaQuiescence(unittest.TestCase):
             self.assertIn("STATUS=COMPLETE PASS=%d DMA_QUIESCENCE_CASES" % expected,
                           executed.stdout)
 
+    def test_radix_cleanup_releases_newest_first_and_stops_on_failure(self):
+        vendor = (ROOT / "src/vendor/unlock_610.c").read_text(encoding="utf-8")
+        start = vendor.index("static bool free_coherent(")
+        actual = vendor[start:vendor.index("static int unlock_transaction_unwind(", start)]
+        host = r'''
+#include <stdint.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+typedef uint32_t u32;
+typedef uint64_t dma_addr_t;
+#define GU_RADIX_PAGE 4096U
+#define GU_V67_SIZE 4096U
+#define GU_WPR_META_SIZE 4096U
+typedef struct {bool retained;} GU_PLATFORM;
+struct pci_dev {int dev;};
+struct page {void *cpu;dma_addr_t dma;};
+struct unlock_transaction_work {
+  struct pci_dev *pdev;
+  u32 pages_allocated;
+  struct page *pages;
+  struct {size_t image_size;} boot_desc;
+  void *boot_cpu,*fwsec_cpu,*booter_cpu,*v67_cpu,*stock_cpu,*meta_cpu;
+  size_t fwsec_size,booter_image_size,stock_size;
+  dma_addr_t boot_dma,fwsec_dma,booter_dma,v67_dma,stock_dma,meta_dma;
+};
+static GU_PLATFORM owner;
+static struct pci_dev pci;
+static unsigned count,fail_at,pool_frees;
+static dma_addr_t order[8];
+static GU_PLATFORM *GuCompatOwner(struct pci_dev *p) {return p==&pci?&owner:NULL;}
+static void dma_free_coherent(int *dev,size_t n,void *p,dma_addr_t addr) {
+  (void)dev;(void)n;(void)p;order[count++]=addr;
+  if(count==fail_at)owner.retained=true;
+}
+static bool GuCompatFree(struct pci_dev *p,void *mem){(void)p;(void)mem;pool_frees++;return true;}
+''' + actual + r'''
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void) {
+  struct page pages[3]={{(void *)1,11},{(void *)2,22},{(void *)3,33}};
+  for(unsigned mode=0;mode<4;mode++) {
+    struct unlock_transaction_work work={0};
+    count=pool_frees=0;fail_at=mode==1?2:0;owner.retained=mode==2;
+    work.pdev=mode==3?NULL:&pci;work.pages_allocated=3;work.pages=pages;
+    work.boot_cpu=(void *)4;work.boot_dma=44;work.boot_desc.image_size=GU_RADIX_PAGE;
+    bool result=free_coherent(&work);
+    if(mode==0) {
+      CHECK(result&&count==4&&order[0]==33&&order[1]==22&&order[2]==11&&order[3]==44);
+      CHECK(pool_frees==1&&!work.pages&&!work.pages_allocated);
+    } else if(mode==1) {
+      CHECK(!result&&owner.retained&&count==2&&order[0]==33&&order[1]==22&&!pool_frees);
+      CHECK(work.pages==pages&&work.pages_allocated==3);
+    } else CHECK(!result&&!count&&!pool_frees);
+  }
+  return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "cleanup.c"
+            binary = Path(directory) / "cleanup"
+            source.write_text(host, encoding="utf-8")
+            built = subprocess.run(
+                [os.environ.get("CC", "gcc"), "-std=c11", "-O2", "-Wall", "-Wextra",
+                 "-Werror", str(source), "-o", str(binary)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            run = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+
     def test_the_observation_is_attached_to_the_stop_path(self):
         body = source_body("NormalizeMasterAfterStop")
         self.assertIn("WaitTxPendingClear(&polls)", body)

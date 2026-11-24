@@ -392,6 +392,7 @@ EFI_STATUS GuAd104Prepare(VOID) {
      * unready: retrying cannot help and nothing was changed. */
     return StockProfileMismatch?EFI_UNSUPPORTED:EFI_NOT_READY;
   }
+  GuTracePhase("profile-assets");
   if(!GuAd104AssetsValid(&Gu)) {
     GuLog("GuAd104Prepare: Assets invalid\n");
     return EFI_CRC_ERROR;
