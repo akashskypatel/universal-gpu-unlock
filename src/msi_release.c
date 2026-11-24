@@ -2550,10 +2550,10 @@ BOOLEAN GuMsiMutated(VOID){
   return Plan.mutated;
 }
 BOOLEAN GuMsiReadyForWindows(VOID) {
+  if(!ReleaseOwnerMatches())return FALSE;
 #ifdef GU_FIRMWARE_REATTACH
   return GuMsiVerifyFinalGraph();
 #else
-  if(!ReleaseOwnerMatches())return FALSE;
   if(!Plan.ready||Plan.stage!=3||Plan.claimed||Gu.owned||Gu.fault||
      !Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn()||!Plan.hardware_verified){
     /* A failed state prerequisite is as final as a failed PCI/GOP check.
