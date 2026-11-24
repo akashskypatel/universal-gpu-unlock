@@ -31,15 +31,16 @@ $executionSupportSources = @(
     'vendor\gfw_eval.c'
 )
 
-# Generate the same commands for both entrypoints. The caller supplies its
-# existing compiler flags and keeps its own linker subsystem and entrypoint.
+# Generate compiler commands for all image builders. Each caller retains its
+# own source inventory, compiler flags, linker subsystem and entrypoint.
 function New-GuSourceCompilePlan {
     param(
         [string[]]$Sources,
         [string]$CompilerFlags,
         [string]$ObjectDirectory,
         [string]$VcVars,
-        [string]$SourceDirectory
+        [string]$SourceDirectory,
+        [switch]$QuotePaths
     )
     $objects = @()
     $commands = @(
@@ -55,9 +56,13 @@ function New-GuSourceCompilePlan {
         $objects += $object
         $flags = $CompilerFlags
         if ($source -eq 'runtime.c') {
-            $flags = $CompilerFlags.Replace('/Oi', '/Oi-')
+            $flags = $CompilerFlags -replace '(?<!\S)/Oi(?!\S)', '/Oi-'
         }
-        $commands += "cl $flags /Fo$object $source"
+        if ($QuotePaths) {
+            $commands += "cl $flags /Fo`"$object`" `"$source`""
+        } else {
+            $commands += "cl $flags /Fo$object $source"
+        }
         $commands += 'if errorlevel 1 exit /b 1'
     }
     return @{ Commands = $commands; Objects = $objects }

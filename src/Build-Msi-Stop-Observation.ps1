@@ -48,14 +48,10 @@ try {
         $sources+=@('gpu_windows_handoff.c','gpu_windows_path.c')
         $flags+=' /DGU_STOP_WINDOWS_HANDOFF'
     }
-    $commands=@('@echo off',('call "'+$VcVars+'" >nul'),'if errorlevel 1 exit /b 1',('cd /d "'+$PSScriptRoot+'"'))
-    $objects=@()
-    foreach ($source in $sources) {
-        $obj='build_stop_observation\' + [IO.Path]::GetFileNameWithoutExtension($source) + '.obj'
-        $objects+=$obj
-        $commands+=('cl '+$flags+' /Fo"'+$obj+'" "'+$source+'"')
-        $commands+='if errorlevel 1 exit /b 1'
-    }
+    . (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
+    $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $flags -ObjectDirectory 'build_stop_observation' -VcVars $VcVars -SourceDirectory $PSScriptRoot -QuotePaths
+    $commands = $compilePlan.Commands
+    $objects = $compilePlan.Objects
     $joined=($objects | ForEach-Object { '"'+$_+'"' }) -join ' '
     $targetName=if ($BothNvidia) { 'DUAL-NVIDIA' } elseif ($Target3080) { 'RTX3080' } else { 'RTX4090' }
     $binary=if ($WindowsEspGuid) { "MSI-$targetName-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI" }

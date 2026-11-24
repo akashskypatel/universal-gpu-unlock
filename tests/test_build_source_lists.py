@@ -180,6 +180,50 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
                         self.assertNotEqual(result.returncode, 0)
                         self.assertIn("Visual Studio x64 Build Tools not found", result.stderr)
 
+    def test_shared_compile_plan_for_other_image_builders(self):
+        import json
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable")
+        helper = str(ROOT / "src" / "Gpu-Execution-Sources.ps1").replace("'", "''")
+        cases = (
+            ("Build-Gpu-Topology-Diagnostic.ps1", "build_diagnostic",
+             ["gpu_inventory.c", "gpu_topology.c", "gpu_pci_observation.c",
+              "gpu_topology_efi.c", "gpu_windows_path.c", "sha256.c",
+              "gpu_loaded_pe_text.c", "format.c", "runtime.c"]),
+            ("Build-Msi-Stop-Observation.ps1", "build_stop_observation",
+             ["msi_stop_observation.c", "sha256.c", "format.c", "runtime.c"]),
+            ("Build-Boot-State-Maintenance.ps1", "build_boot_state_maintenance",
+             ["boot_state_maintenance.c", "boot_state.c", "format.c", "runtime.c"]),
+        )
+        for name, directory, expected in cases:
+            with self.subTest(builder=name):
+                text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
+                assignment = next(line.strip() for line in text.splitlines()
+                                  if re.match(r"\$sources\s*=\s*@\(", line.strip()))
+                self.assertIn(f"New-GuSourceCompilePlan -Sources $sources -CompilerFlags $flags -ObjectDirectory '{directory}'", text)
+                self.assertIn("-SourceDirectory $PSScriptRoot -QuotePaths", text)
+                self.assertIn("$objects = $compilePlan.Objects", text)
+                cmd = (f". '{helper}'; {assignment}; "
+                       f"New-GuSourceCompilePlan -Sources $sources -CompilerFlags '/nologo /Oi- /TC' "
+                       rf"-ObjectDirectory '{directory}' -VcVars 'C:\VS Tools\vcvars64.bat' "
+                       r"-SourceDirectory 'C:\GPU Source' -QuotePaths | ConvertTo-Json -Compress")
+                result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
+                                        capture_output=True, text=True, check=True, timeout=30)
+                plan = json.loads(result.stdout)
+                objects = [f"{directory}\\{Path(source).stem}.obj" for source in expected]
+                commands = ['@echo off', r'call "C:\VS Tools\vcvars64.bat" >nul',
+                            'if errorlevel 1 exit /b 1', r'cd /d "C:\GPU Source"']
+                for source, obj in zip(expected, objects):
+                    commands.extend([f'cl /nologo /Oi- /TC /Fo"{obj}" "{source}"',
+                                     'if errorlevel 1 exit /b 1'])
+                self.assertEqual(plan["Objects"], objects)
+                self.assertEqual(plan["Commands"], commands)
+        diagnostic = (ROOT / "src" / "Build-Gpu-Topology-Diagnostic.ps1").read_text(encoding="utf-8")
+        self.assertIn("foreach ($captureSource in @('gpu_prom_capture.c','gpu_prom_capture_efi.c'))", diagnostic)
+        capture = diagnostic.split("foreach ($captureSource", 1)[1].split("$joined =", 1)[0]
+        self.assertNotIn("$objects +=", capture)
+
     def test_no_builder_list_silently_skips_a_unit(self):
         for builder in BUILDERS:
             listed = builder_sources(builder)

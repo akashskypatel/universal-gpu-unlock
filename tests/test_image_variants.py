@@ -858,6 +858,14 @@ class CanonicalProfileResolution(unittest.TestCase):
         self.assertIn("CanonicalProfile = $variant.profile", SCRIPT)
         self.assertIn("HardwareVerified = $false", SCRIPT)
 
+    def test_documented_preflight_reference_resolves(self):
+        result = self.resolve(["-Only", "diagnostic", "-Probe", "Preflight",
+                               "-SelectionBdfs", "'0000:01:00.0,0000:04:00.0'",
+                               "-CapturedPromReference", "-SignOnly"])
+        self.assertEqual(result["VariantId"], "prep-selected")
+        self.assertEqual(result["Builder"], "src/Build-Experimental-MSVC.ps1")
+        self.assertTrue(result["Switches"]["CapturedPromReference"])
+
     def test_invalid_combinations_refuse_resolution(self):
         one = ["-SelectionBdf", "'0000:01:00.0'"]
         esp = ["-WindowsEspGuid", "'a005858c-4487-4ee2-976e-1710ff484c31'"]
@@ -1004,7 +1012,8 @@ class TheCapturedReferenceIsAnExplicitBuildOption(unittest.TestCase):
                       "the line must not let a reference read as authentication")
 
     def test_the_documented_example_uses_a_real_variant(self):
-        self.assertIn("-CapturedPromReference", DOC)
-        example = DOC[DOC.index("-CapturedPromReference") - 400:]
-        self.assertIn("prep-selected", example[:600])
-        self.assertIn("prep-selected", [variant["id"] for variant in MANIFEST["variants"]])
+        example = r".\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe Preflight -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -SignOnly"
+        self.assertIn(example, DOC.splitlines())
+        variant = next(v for v in MANIFEST["variants"] if v["id"] == "prep-selected")
+        self.assertEqual(variant["profile"], "diagnostic")
+        self.assertEqual(variant["family"], "prepare")

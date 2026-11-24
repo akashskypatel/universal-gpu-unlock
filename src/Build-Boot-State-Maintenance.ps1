@@ -12,14 +12,10 @@ try {
     New-Item -ItemType Directory -Force -Path $output | Out-Null
     $sources=@('boot_state_maintenance.c','boot_state.c','format.c','runtime.c')
     $flags='/nologo /O2 /Oi- /GS- /Gs65536 /Zl /c /TC /D_CRT_SECURE_NO_WARNINGS /I. /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
-    $commands=@('@echo off',('call "'+$VcVars+'" >nul'),'if errorlevel 1 exit /b 1',('cd /d "'+$PSScriptRoot+'"'))
-    $objects=@()
-    foreach ($source in $sources) {
-        $obj='build_boot_state_maintenance\' + [IO.Path]::GetFileNameWithoutExtension($source) + '.obj'
-        $objects+=$obj
-        $commands+=('cl '+$flags+' /Fo"'+$obj+'" "'+$source+'"')
-        $commands+='if errorlevel 1 exit /b 1'
-    }
+    . (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
+    $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $flags -ObjectDirectory 'build_boot_state_maintenance' -VcVars $VcVars -SourceDirectory $PSScriptRoot -QuotePaths
+    $commands = $compilePlan.Commands
+    $objects = $compilePlan.Objects
     $joined=($objects | ForEach-Object { '"'+$_+'"' }) -join ' '
     $binary='BOOT-STATE-MAINTENANCE.EFI'
     $path=Join-Path $output $binary

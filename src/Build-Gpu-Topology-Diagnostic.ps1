@@ -77,14 +77,10 @@ try {
         'GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI'
     } else { 'GPU-TOPOLOGY-DIAGNOSTIC.EFI' }
     if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }
-    $commands = @('@echo off', "call `"$VcVars`" >nul", 'if errorlevel 1 exit /b 1', "cd /d `"$PSScriptRoot`"")
-    $objects = @()
-    foreach ($source in $sources) {
-        $object = 'build_diagnostic\' + [System.IO.Path]::GetFileNameWithoutExtension($source) + '.obj'
-        $objects += $object
-        $commands += "cl $flags /Fo`"$object`" `"$source`""
-        $commands += 'if errorlevel 1 exit /b 1'
-    }
+    . (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
+    $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $flags -ObjectDirectory 'build_diagnostic' -VcVars $VcVars -SourceDirectory $PSScriptRoot -QuotePaths
+    $commands = $compilePlan.Commands
+    $objects = $compilePlan.Objects
     # Compile the imported PROM reader and EFI adapter for Windows ABI
     # coverage, but NEVER link them into a passive topology EFI. The original
     # BAR0 capture has not been approved for this dual-GPU hardware.
