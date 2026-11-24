@@ -40,9 +40,15 @@ def needs(variant: dict) -> str:
 
 def render(manifest: dict) -> str:
     blocks = [BEGIN, ""]
-    blocks.append(f"{len(manifest['variants'])} variants across "
-                 f"{len(manifest['families'])} builders. `Safety` is what the image may "
-                 "do to the system, not what it has been shown to do.\n")
+    blocks.append(f"{len(manifest['profiles'])} canonical profiles. "
+                  f"{len(manifest['variants'])} compatibility configurations across "
+                  f"{len(manifest['families'])} builders.\n\n")
+    blocks.append("| Canonical profile | Configurations |\n| --- | ---: |\n")
+    for profile in manifest["profiles"]:
+        count = sum(v["profile"] == profile["id"] for v in manifest["variants"])
+        blocks.append(f"| `{profile['id']}` | {count} |\n")
+    blocks.append("\nCompatibility matrix (also available with `-ListLegacy`). "
+                  "`Safety` is what the image may do to the system, not what it has been shown to do.\n")
     for family in manifest["families"]:
         variants = [v for v in manifest["variants"] if v["family"] == family["id"]]
         blocks.append(f"\n### {family['title']} — `{family['builder']}` (PE subsystem "

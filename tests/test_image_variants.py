@@ -821,6 +821,15 @@ class CanonicalProfileResolution(unittest.TestCase):
                 self.assertEqual(new, old)
                 self.assertEqual(new["VariantId"], alias)
 
+    def test_generated_profile_summary_matches_manifest(self):
+        generated = renderer.render(MANIFEST)
+        self.assertIn("5 canonical profiles. 41 compatibility configurations", generated)
+        expected = {"diagnostic": 15, "driver-transition": 8, "firmware-transaction": 11,
+                    "maintenance": 3, "compile-check": 4}
+        for profile, count in expected.items():
+            self.assertEqual(sum(v["profile"] == profile for v in MANIFEST["variants"]), count)
+            self.assertIn(f"| `{profile}` | {count} |", generated)
+
     def test_public_listing_has_five_profiles_and_legacy_listing_has_all_configs(self):
         import subprocess
         command = "& '" + str(SCRIPT_PATH).replace("'", "''") + "' "
