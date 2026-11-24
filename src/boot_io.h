@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #pragma once
 #include "port.h"
+#include "boot_state.h"
 /* Only the fixed-operation runtime USB applications with a Windows staging
  * step offer a boot-local partition choice. DXE and Stop-only stay unchanged. */
 #if defined(GU_RUNTIME_ESP) && defined(GU_APP_OPERATION) && \
@@ -8,6 +9,9 @@
 #define GU_INTERACTIVE_WINDOWS_ESP 1
 #endif
 EFI_STATUS GuBootOpen(EFI_HANDLE,EFI_SYSTEM_TABLE *);
+/* Read the admission record after opening the log. On refusal, close the log
+ * and return the read/refusal status unless closure fails. */
+EFI_STATUS GuBootReadPriorState(EFI_SYSTEM_TABLE *,GU_BOOT_STATE *,BOOLEAN *);
 EFI_STATUS GuBootLoadAssets(VOID);
 EFI_STATUS GuBootLoadWindows(VOID);
 EFI_STATUS GuBootChoose(CHAR16 *);

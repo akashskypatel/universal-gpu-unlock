@@ -46,34 +46,13 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
         "LOG_FILE=IMAGE_VOLUME HARDWARE_VERIFIED=0\n");
 #endif
 
-  /* boot_io reports the previous record. This read carries its contents into
-   * the recovery check below; only failed/interrupted transactions can select
-   * the no-GPU recovery path. */
-  GU_BOOT_STATE boot_state; BOOLEAN boot_state_present = FALSE;
-  EFI_STATUS boot_state_status=GuBootStateRead(t,&boot_state);
-  boot_state_present=(boot_state_status==EFI_SUCCESS);
-  if(!boot_state_present&&boot_state_status!=EFI_NOT_FOUND) {
-    GuLog("BOOT_STATE=REFUSED READ_STATUS=%#llx GPU_ACTION=0\n",(unsigned long long)boot_state_status);
-    EFI_STATUS closed=GuBootClose();
-    return closed==EFI_SUCCESS?boot_state_status:closed;
-  }
+  /* Read again after GuBootOpen. The earlier log observation is not admission. */
+  GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
+  s=GuBootReadPriorState(t,&boot_state,&boot_state_present);
+  if(s!=EFI_SUCCESS)return s;
 
-  /* An unmatched INTENT, or a non-success OUTCOME, means the prior DXE
-   * transaction was interrupted or failed. Do not touch PCI or retry: remove
-   * our verified Driver#### entry from DriverOrder, then let firmware continue
-   * to the normal boot target. If NVRAM refuses the write, this invocation
-   * still performs no GPU work and the next boot retries this recovery check. */
-  if (GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)) {
-#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
-    GuLog("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
-#else
-    GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
-#endif
-    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete or awaits acceptance; no GPU action was taken.\r\n");
-    EFI_STATUS closed=GuBootClose();
-    return closed==EFI_SUCCESS?EFI_ABORTED:closed;
-#else
+#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+  if(GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)) {
     EFI_STATUS disabled = GuDisableDriverOption(t);
     GuLog("DXE_RECOVERY=FAILED_OR_INTERRUPTED DRIVER_ORDER_DISABLE=%#llx ACTION=SKIP_GPU\n",
           (unsigned long long)disabled);
@@ -81,8 +60,8 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
               L"The GPU transaction is disabled for this boot; continuing normally.\r\n");
     EFI_STATUS closed = GuBootClose();
     return closed == EFI_SUCCESS ? EFI_SUCCESS : closed;
-#endif
   }
+#endif
 
   const char *stage = "dxe-discover";
 #if defined(GU_STOP_RELEASE_ONLY_BENCH) && defined(GU_RUNTIME_SELECTION)

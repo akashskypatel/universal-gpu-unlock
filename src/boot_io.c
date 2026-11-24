@@ -1661,3 +1661,30 @@ EFI_STATUS GuBootWatchdogCancel(VOID) {
   WatchdogArmed = FALSE;
   return EFI_SUCCESS;
 }
+
+/* This is the admission read, not the earlier log observation in GuBootOpen.
+ * Preparation and Stop-only builds refuse latched records without modifying
+ * boot registration. Full transactions leave recovery to their entrypoint. */
+EFI_STATUS GuBootReadPriorState(EFI_SYSTEM_TABLE *table,GU_BOOT_STATE *state,
+                                BOOLEAN *present) {
+  EFI_STATUS status=GuBootStateRead(table,state);
+  *present=(status==EFI_SUCCESS);
+  if(!*present&&status!=EFI_NOT_FOUND) {
+    GuLog("BOOT_STATE=REFUSED READ_STATUS=%#llx GPU_ACTION=0\n",(unsigned long long)status);
+    EFI_STATUS closed=GuBootClose();
+    return closed==EFI_SUCCESS?status:closed;
+  }
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+  if(GuBootStateRequiresRecovery(*present?state:NULL)) {
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+    GuLog("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+#else
+    GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
+#endif
+    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete or awaits acceptance; no GPU action was taken.\r\n");
+    EFI_STATUS closed=GuBootClose();
+    return closed==EFI_SUCCESS?EFI_ABORTED:closed;
+  }
+#endif
+  return EFI_SUCCESS;
+}

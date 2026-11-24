@@ -44,16 +44,24 @@ class RecoveryPolicy(unittest.TestCase):
         self.assertIn("GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)", APP)
 
     def test_preparation_recovery_refuses_without_persistent_write(self):
+        helper = BOOT_IO.split("EFI_STATUS GuBootReadPriorState(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)", helper)
+        self.assertIn("GuBootStateRequiresRecovery(*present?state:NULL)", helper)
+        self.assertIn("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE", helper)
+        self.assertIn("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE", helper)
+        self.assertIn("return closed==EFI_SUCCESS?EFI_ABORTED:closed;", helper)
+        for forbidden in ("GuRemoveDriverOption", "GuDisableDriverOption", "GuBootWindows", "GuBootStateWrite", "SetVariable"):
+            self.assertNotIn(forbidden, helper)
         for name, source, mutation in (("app", APP, "GuRemoveDriverOption(t)"),
                                        ("dxe", DXE, "GuDisableDriverOption(t)")):
-            recovery = source.index("GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)")
-            guard = source.index("#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)", recovery)
-            branch = source.index("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE", guard)
-            refused = source.index("return closed==EFI_SUCCESS?EFI_ABORTED:closed;", branch)
-            alternate = source.index("#else", refused)
-            self.assertLess(alternate, source.index(mutation, recovery), name)
-            self.assertNotIn(mutation, source[guard:alternate], name)
-            self.assertNotIn("GuBootWindows()", source[guard:alternate], name)
+            read = source.index("s=GuBootReadPriorState(t,&boot_state,&boot_state_present);")
+            refusal = source.index("if(s!=EFI_SUCCESS)return s;", read)
+            guard = source.index("#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)", refusal)
+            recovery = source.index("GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)", guard)
+            end = source.index("#endif", recovery)
+            self.assertLess(read, refusal, name)
+            self.assertLess(recovery, source.index(mutation, recovery), name)
+            self.assertLess(source.index(mutation, recovery), end, name)
         maintenance = (SRC / "boot_state_maintenance.c").read_text(encoding="utf-8")
         self.assertIn("if(!GuBootStateRequiresRecovery(&reviewed))", maintenance)
         self.assertIn("if(!GuBootStateRequiresRecovery(Reviewed))", STATE)
@@ -81,7 +89,7 @@ class TwoPhaseWrites(unittest.TestCase):
         boot_open = BOOT_IO.split("EFI_STATUS GuBootOpen", 1)[1].split("EFI_STATUS GuBootLoadAssets", 1)[0]
         self.assertIn("GuBootStateRead(Table,&previous)", boot_open)
         for name, text in (("app.c", APP), ("dxe_main.c", DXE)):
-            self.assertLess(text.index("GuBootStateRead"), text.index("GuDiscoverSingleGpu"), name)
+            self.assertLess(text.index("GuBootReadPriorState"), text.index("GuDiscoverSingleGpu"), name)
 
     def test_record_failures_block_active_execution_or_handover(self):
         for name, text in (("app.c", APP), ("dxe_main.c", DXE)):
@@ -95,7 +103,7 @@ class TwoPhaseWrites(unittest.TestCase):
             cancel = text.index("EFI_STATUS cancelled=GuBootWatchdogCancel()", sequence)
             self.assertLess(cancel, close, name)
             self.assertNotIn("(VOID)GuBootStateRecord", text, name)
-            self.assertIn("boot_state_status!=EFI_NOT_FOUND", text[:intent], name)
+            self.assertIn("s=GuBootReadPriorState(t,&boot_state,&boot_state_present);\n  if(s!=EFI_SUCCESS)return s;", text[:intent], name)
         self.assertIn("GuBootStateRead(Table,&confirmed)", STATE)
         self.assertIn("memcmp(&confirmed,State,sizeof(confirmed))==0", STATE)
 
@@ -125,8 +133,10 @@ class TwoPhaseWrites(unittest.TestCase):
         self.assertIn("BOOT_STATE WARNING=previous attempt interrupted or awaiting owner acceptance", BOOT_IO)
         # A corrupt record is reported; active entry independently refuses it.
         self.assertIn("BOOT_STATE PRESENT=0 READ_STATUS=%#llx VALID=0", BOOT_IO)
-        self.assertIn("boot_state_status!=EFI_NOT_FOUND", APP)
-        self.assertIn("boot_state_status!=EFI_NOT_FOUND", DXE)
+        helper = BOOT_IO.split("EFI_STATUS GuBootReadPriorState(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("GuBootStateRead(table,state)", helper)
+        self.assertIn("if(!*present&&status!=EFI_NOT_FOUND)", helper)
+        self.assertIn("return closed==EFI_SUCCESS?status:closed;", helper)
 
 
 class Validation(unittest.TestCase):
@@ -153,6 +163,91 @@ class Validation(unittest.TestCase):
             done = subprocess.run([str(binary)], capture_output=True, text=True)
             self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
             self.assertIn("checks OK", done.stdout)
+
+
+    def test_actual_shared_admission_read_and_refusal(self):
+        cc = shutil.which("gcc") or shutil.which("clang")
+        if not cc:
+            self.skipTest("A host C compiler is required")
+        helper = "EFI_STATUS GuBootReadPriorState(" + BOOT_IO.split("EFI_STATUS GuBootReadPriorState(", 1)[1].split("\n}", 1)[0] + "\n}\n"
+        predicate = "int GuBootStateRequiresRecovery(" + STATE.split("int GuBootStateRequiresRecovery(", 1)[1].split("\n}", 1)[0] + "\n}\n"
+        source = r"""
+#include <stddef.h>
+#include <string.h>
+#include <wchar.h>
+typedef int EFI_STATUS;
+typedef int BOOLEAN;
+typedef struct { int unused; } EFI_SYSTEM_TABLE;
+typedef struct { unsigned Phase; EFI_STATUS Status; } GU_BOOT_STATE;
+#define EFI_SUCCESS 0
+#define EFI_DEVICE_ERROR 7
+#define EFI_NOT_FOUND 14
+#define EFI_ABORTED 21
+#define EFI_COMPROMISED_DATA 33
+#define GU_BOOT_STATE_IDLE 0U
+#define GU_BOOT_STATE_INTENT 1U
+#define GU_BOOT_STATE_OUTCOME 2U
+static EFI_STATUS read_status,close_status;
+static GU_BOOT_STATE record;
+static EFI_SYSTEM_TABLE table;
+static int reads,closes,says;
+static const char *logged;
+static EFI_STATUS GuBootStateRead(EFI_SYSTEM_TABLE *t,GU_BOOT_STATE *out) {
+  if(t!=&table)return EFI_DEVICE_ERROR;
+  reads++;*out=record;return read_status;
+}
+static void GuLog(const char *text,...) {logged=text;}
+static void GuBootSay(const wchar_t *text) {(void)text;says++;}
+static EFI_STATUS GuBootClose(void) {closes++;return close_status;}
+""" + predicate + helper + r"""
+#define CHECK(x) do {if(!(x))return __LINE__;} while(0)
+static int Run(EFI_STATUS read, unsigned phase, EFI_STATUS previous,
+               EFI_STATUS close, EFI_STATUS expected, int expect_close,
+               int expect_say,const char *token) {
+  GU_BOOT_STATE out={0};BOOLEAN present=-1;
+  reads=closes=says=0;logged=NULL;read_status=read;close_status=close;
+  record.Phase=phase;record.Status=previous;
+  CHECK(GuBootReadPriorState(&table,&out,&present)==expected);
+  CHECK(reads==1&&closes==expect_close&&says==expect_say);
+  CHECK(present==(read==EFI_SUCCESS));
+  if(present)CHECK(out.Phase==phase&&out.Status==previous);
+  if(token)CHECK(logged&&strstr(logged,token));else CHECK(!logged);
+  return 0;
+}
+int main(void) {
+  CHECK(!Run(EFI_NOT_FOUND,GU_BOOT_STATE_INTENT,EFI_DEVICE_ERROR,EFI_DEVICE_ERROR,EFI_SUCCESS,0,0,NULL));
+  CHECK(!Run(EFI_SUCCESS,GU_BOOT_STATE_IDLE,EFI_SUCCESS,EFI_DEVICE_ERROR,EFI_SUCCESS,0,0,NULL));
+  CHECK(!Run(EFI_SUCCESS,GU_BOOT_STATE_OUTCOME,EFI_SUCCESS,EFI_SUCCESS,EFI_SUCCESS,0,0,NULL));
+  CHECK(!Run(EFI_COMPROMISED_DATA,GU_BOOT_STATE_IDLE,EFI_SUCCESS,EFI_SUCCESS,EFI_COMPROMISED_DATA,1,0,"BOOT_STATE=REFUSED"));
+  CHECK(!Run(EFI_DEVICE_ERROR,GU_BOOT_STATE_IDLE,EFI_SUCCESS,EFI_ABORTED,EFI_ABORTED,1,0,"BOOT_STATE=REFUSED"));
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_STOP_RELEASE_ONLY_BENCH)
+#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
+  const char *token="PREPARATION_ONLY=REFUSED";
+#else
+  const char *token="STOP_RELEASE_ONLY=REFUSED";
+#endif
+  CHECK(!Run(EFI_SUCCESS,GU_BOOT_STATE_INTENT,EFI_SUCCESS,EFI_SUCCESS,EFI_ABORTED,1,1,token));
+  CHECK(!Run(EFI_SUCCESS,GU_BOOT_STATE_OUTCOME,EFI_DEVICE_ERROR,EFI_DEVICE_ERROR,EFI_DEVICE_ERROR,1,1,token));
+#else
+  CHECK(!Run(EFI_SUCCESS,GU_BOOT_STATE_INTENT,EFI_SUCCESS,EFI_DEVICE_ERROR,EFI_SUCCESS,0,0,NULL));
+  CHECK(!Run(EFI_SUCCESS,GU_BOOT_STATE_OUTCOME,EFI_DEVICE_ERROR,EFI_DEVICE_ERROR,EFI_SUCCESS,0,0,NULL));
+#endif
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            code = Path(tmp) / "prior_state.c"
+            code.write_text(source, encoding="utf-8")
+            for flag in (None, "GU_ACTIVE_SEQUENCE_PREPARE_ONLY", "GU_STOP_RELEASE_ONLY_BENCH"):
+                with self.subTest(flag=flag):
+                    binary = Path(tmp) / "prior_state"
+                    args = [cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function"]
+                    if flag:
+                        args.append("-D" + flag)
+                    result = subprocess.run(args + [str(code), "-o", str(binary)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    done = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(done.returncode, 0, done.stdout + done.stderr + f" line {done.returncode}")
 
 
 class BuildWiring(unittest.TestCase):

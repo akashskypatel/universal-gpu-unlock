@@ -132,7 +132,8 @@ class DiagnosticContract(unittest.TestCase):
         self.assertEqual(variant["switches"],{"SaveLog":True,"CycleGopText":True})
         self.assertEqual(variant["binary"],
                          "GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI")
-        self.assertIn("-Only diag-topology-gop-text-cycle",candidate["command"])
+        self.assertEqual(candidate["command"],
+                         r".\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe GopTextCycle -StageDrive G")
         self.assertIn(candidate["command"],doc)
         self.assertIn("GOP_TEXT_CYCLE_END ATTEMPTED=%zu API_SUCCEEDED=%zu",
                       candidate["evidence"][-1]["token"])

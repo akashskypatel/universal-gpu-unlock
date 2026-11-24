@@ -558,7 +558,8 @@ int main(void) {
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertNotIn("GuBootWindows()", stop_branch)
         self.assertIn("OS_HANDOFF=NONE", stop_branch)
-        self.assertIn("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE", self.app)
+        self.assertIn("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE", self.boot)
+        self.assertIn("s=GuBootReadPriorState(t,&boot_state,&boot_state_present);", self.app)
 
     def test_bootable_application_variant_excludes_unlock_and_stages_as_application(self):
         self.assertIn("[switch]$StopReleaseOnlyBench", self.app_builder)

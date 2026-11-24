@@ -230,30 +230,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   s=GuBootOpen(image,t);if(s!=EFI_SUCCESS)return s;
 
-  /* boot_io reported the previous boot's record when it opened; this read
-   * carries it forward and selects the recovery-only path when needed. */
+  /* Read again after GuBootOpen. The earlier log observation is not admission. */
   GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
-  EFI_STATUS boot_state_status=GuBootStateRead(t,&boot_state);
-  boot_state_present=(boot_state_status==EFI_SUCCESS);
-  if(!boot_state_present&&boot_state_status!=EFI_NOT_FOUND) {
-    GuLog("BOOT_STATE=REFUSED READ_STATUS=%#llx GPU_ACTION=0\n",(unsigned long long)boot_state_status);
-    EFI_STATUS closed=GuBootClose();
-    return closed==EFI_SUCCESS?boot_state_status:closed;
-  }
+  s=GuBootReadPriorState(t,&boot_state,&boot_state_present);
+  if(s!=EFI_SUCCESS)return s;
 
-  /* The shared predicate selects recovery before discovery. Observation and
-   * Stop-only profiles never change the previous record or boot registration. */
+#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
   if(GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)) {
-#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
-#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY
-    GuLog("PREPARATION_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
-#else
-    GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
-#endif
-    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete or awaits acceptance; no GPU action was taken.\r\n");
-    EFI_STATUS closed=GuBootClose();
-    return closed==EFI_SUCCESS?EFI_ABORTED:closed;
-#else
     /* Remove only the owned DXE option and preserve the record. */
     GuLog("USB_RECOVERY=FAILED_OR_INTERRUPTED ACTION=REMOVE_DXE_AND_SKIP_GPU\n");
     GuBootSay(L"\r\n[RECOVERY] An earlier GPU/DXE attempt failed or awaits owner acceptance.\r\n"
@@ -274,8 +257,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
       return remove!=EFI_SUCCESS?remove:(closed!=EFI_SUCCESS?closed:load);
     }
     return GuBootWindows();
-#endif /* observation/Stop-only versus recovery */
   }
+#endif
 
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   GuLog("STOP_ONLY_SCOPE=DRIVER_STOP_REATTACH FIRMWARE_ASSET_FILES_READ=0 "
