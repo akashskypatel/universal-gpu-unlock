@@ -715,6 +715,25 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertIn("$stagedPath = $deployment.Path", SCRIPT)
 
 
+    def test_firmware_asset_stage_is_restricted_to_firmware_transactions(self):
+        self.assertIn("if ($deployVariant.profile -eq 'firmware-transaction')", SCRIPT)
+        self.assertEqual(SCRIPT.count("-FirmwareAssetRepo $assetRepoForStage"), 2)
+        stage = SCRIPT[SCRIPT.index("function Stage-SignedEfi"):SCRIPT.index("# --- catalogue")]
+        self.assertLess(stage.index("Stage-FirmwareAssets -AssetRepo"), stage.index("$replacementStarted = $true"))
+
+    def test_firmware_asset_paths_match_the_reference_verifier(self):
+        import verify_reference_assets
+        stage = SCRIPT.split("function Stage-FirmwareAssets {", 1)[1].split("function Stage-SignedEfi", 1)[0]
+        paths = stage.split("$assetPaths = @(", 1)[1].split(")", 1)[0]
+        self.assertEqual(set(re.findall(r"'([^']+\.bin)'", paths)), set(verify_reference_assets.PINS))
+        provenance = json.loads((ROOT / "docs" / "asset_provenance.json").read_text(encoding="utf-8"))
+        pins = {record["asset"].rsplit("/", 1)[-1]: (record["bytes"], record["sha256"])
+                for record in provenance["records"]}
+        for path, pin in verify_reference_assets.PINS.items():
+            self.assertEqual(pins[Path(path).name], pin)
+
+
+
 class TheDocumentIsRendered(unittest.TestCase):
     def test_the_matrix_block_is_exactly_the_rendered_catalogue(self):
         start = DOC.index(renderer.BEGIN)
@@ -762,6 +781,48 @@ class CanonicalProfileResolution(unittest.TestCase):
             return None
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout.strip())
+
+
+    def test_firmware_asset_staging_on_temporary_media(self):
+        import subprocess
+        import verify_reference_assets
+        with tempfile.TemporaryDirectory() as directory:
+            media = Path(directory) / "media"
+            media.mkdir()
+            (media / "keep.txt").write_text("preserve", encoding="utf-8")
+            harness = Path(directory) / "stage.ps1"
+            helpers = SCRIPT[SCRIPT.index("function Get-Sha256"):SCRIPT.index("function Assert-EfiImage")]
+            helpers += SCRIPT[SCRIPT.index("function Assert-FirmwareAssetFile"):SCRIPT.index("function Stage-SignedEfi")]
+            harness.write_text(
+                "param([string]$Repo, [string]$Media)\n"
+                "$ErrorActionPreference = 'Stop'\nSet-StrictMode -Version Latest\n"
+                "function Assert-UsbVolume([string]$Drive) { return $Media }\n"
+                "function Get-Volume { param($DriveLetter, $ErrorAction) return [pscustomobject]@{ UniqueId = 'fixture' } }\n"
+                "function Say([string]$Text) { [Console]::Out.WriteLine($Text) }\n"
+                + helpers + "\n"
+                "$result = @(Stage-FirmwareAssets -AssetRepo $Repo -Root $Media -Drive X -ExpectedVolumeId fixture)\n"
+                "if ($result.Count -ne 9) { throw 'Unexpected asset count' }\n",
+                encoding="utf-8")
+            command = [self.shell, "-NoProfile", "-NonInteractive", "-File", str(harness), str(ROOT), str(media)]
+            result = subprocess.run(command, text=True, capture_output=True, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for name, (size, digest) in verify_reference_assets.PINS.items():
+                self.assertEqual(verify_reference_assets.check_file(media / name, size, digest), "MATCHED")
+            self.assertFalse((media / "GA102-ASSETS" / "gsp_ga10x.bin").exists())
+            result = subprocess.run(command, text=True, capture_output=True, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            # A corrupt Ampere GSP would shadow the good shared copy. Do not replace it.
+            bad = media / "GA102-ASSETS" / "gsp_ga10x.bin"
+            bad.write_bytes(b"wrong")
+            missing = media / "AD102-ASSETS" / "booter_load_ad102.bin"
+            missing.unlink()
+            result = subprocess.run(command, text=True, capture_output=True, timeout=90)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Firmware asset does not match the reference", result.stdout + result.stderr)
+            self.assertFalse(missing.exists())
+            self.assertEqual(bad.read_bytes(), b"wrong")
+            self.assertEqual((media / "keep.txt").read_text(encoding="utf-8"), "preserve")
+            self.assertFalse(list(media.rglob(".new-asset-*.tmp")))
 
     def test_canonical_configs_preserve_builder_contracts(self):
         one = ["-SelectionBdf", "'0000:01:00.0'"]
