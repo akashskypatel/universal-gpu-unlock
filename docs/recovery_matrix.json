@@ -7,7 +7,7 @@
       "title": "Power lost during the transaction",
       "symptoms": [
         {
-          "token": "BOOT_STATE WARNING=previous boot stopped during a transaction",
+          "token": "BOOT_STATE WARNING=previous attempt interrupted or awaiting owner acceptance",
           "file": "src/boot_io.c"
         }
       ],
@@ -17,7 +17,7 @@
         "DeviceId",
         "Armed"
       ],
-      "record_state": "Phase == INTENT (1) with no OUTCOME: the record was written before the first mutation and the sequence never returned.",
+      "record_state": "Phase == INTENT (1): the record was written before mutation. The attempt may have stopped early or completed preboot and still await owner acceptance. Read the saved log to distinguish these cases.",
       "card_state": "Unknown. The selection write, the WPR2 window, or an engine reset may have been applied; the card may still be executing or may be halted with reset released.",
       "machine_state": "Unknown. The host may have been mid-DMA; firmware state is whatever it was when power dropped.",
       "steps": [
@@ -28,7 +28,7 @@
         "If the diagnostic cannot read configuration space, treat the card as faulty and stop."
       ],
       "proof": [
-        "BOOT_STATE PRESENT=1 with PHASE=2 (OUTCOME) on a later boot",
+        "BOOT_STATE PRESENT=1 with PHASE=1 (INTENT) and no automatic repeat",
         "the read-only diagnostic completes with STABLE=1",
         "a subsequent normal boot reaches Windows with the card present"
       ],
@@ -50,17 +50,17 @@
         "Status",
         "Armed"
       ],
-      "record_state": "OUTCOME with a failure Status and Armed == 0: the sequence returned, but the engine may still read the buffers.",
+      "record_state": "INTENT remains on failure; the saved log records the failed transaction and retained buffers.",
       "card_state": "Firmware may still be running. The unlock was not verified and the stock driver must not bind while it is active.",
       "machine_state": "The image retains the DMA buffers and the device reference on purpose; freeing them would be a use-after-free from the card's point of view.",
       "steps": [
         "Do not start Windows on this boot. The image already refuses to hand over in this state.",
         "Remove power at the wall; the retained buffers die with the boot.",
-        "Next boot, check BOOT_STATE PRESENT=1 PHASE=2 STATUS for the recorded failure.",
+        "Next boot, check BOOT_STATE PRESENT=1 PHASE=1 and the previous transaction log for the recorded failure.",
         "Run the read-only diagnostic only; it does not touch firmware state."
       ],
       "proof": [
-        "the next boot shows no INTENT record",
+        "the next boot retains INTENT and does not repeat the transaction",
         "the diagnostic reads a valid PMC, SS0/SS1 and PROM digest"
       ],
       "sim_scenario": "transaction flr-refused",
@@ -81,7 +81,7 @@
         "Status",
         "Armed"
       ],
-      "record_state": "OUTCOME with a failure Status and Armed == 0.",
+      "record_state": "INTENT remains on failure; see the previous transaction log for the reset result.",
       "card_state": "The permission window is still open: the selectors were written and the reset that closes it did not happen.",
       "machine_state": "Bus master is clear and the image keeps the buffers it allocated.",
       "steps": [
@@ -110,7 +110,7 @@
         "Phase",
         "Status"
       ],
-      "record_state": "OUTCOME with a busy or error Status.",
+      "record_state": "INTENT remains on failure; see the previous transaction log for the error.",
       "card_state": "FWSEC did not close its window. The stock driver rejects a preexisting WPR2 on this path, so it will not bind.",
       "machine_state": "The image stops before any further write and retains its buffers.",
       "steps": [
@@ -180,7 +180,7 @@
         "DeviceId",
         "Status"
       ],
-      "record_state": "No INTENT record is written: the refusal happens before the first mutation, so nothing was in flight.",
+      "record_state": "No mutation was attempted. INTENT may already have been stored before the active preflight, so its presence alone does not prove hardware work.",
       "card_state": "Untouched. Zero BAR0 writes, zero FLRs, WPR2 not opened.",
       "machine_state": "Windows boots normally, or the diagnostic runs. Nothing to recover.",
       "steps": [
@@ -191,7 +191,7 @@
       ],
       "proof": [
         "the diagnostic completes with STABLE=1 and the digest printed",
-        "no BOOT_STATE INTENT record exists for the boot"
+        "the saved log confirms refusal before GPU mutation"
       ],
       "sim_scenario": "prepare stock-mismatch",
       "verified": false,
@@ -243,7 +243,7 @@
         "Device",
         "Function"
       ],
-      "record_state": "OUTCOME names the card that was being driven; the steps logged before it name the cards that already completed.",
+      "record_state": "INTENT identifies the original attempted sequence; the saved log identifies the current target and the earlier completed targets.",
       "card_state": "The completed cards are in their post-transaction state; the next card was never touched.",
       "machine_state": "Peers are unchanged, because the coordinator verifies them before and after each card.",
       "steps": [
@@ -253,7 +253,7 @@
       ],
       "proof": [
         "each card's own class proof holds",
-        "the next boot reports no INTENT record"
+        "the next boot preserves INTENT and does not repeat the transaction"
       ],
       "sim_scenario": null,
       "verified": false,
@@ -282,19 +282,20 @@
         "Device",
         "Function"
       ],
-      "record_state": "An unmatched INTENT or an OUTCOME whose Status is not EFI_SUCCESS is treated as a persistent recovery latch.",
+      "record_state": "INTENT (interrupted or awaiting owner acceptance) or an OUTCOME whose Status is not EFI_SUCCESS blocks another transaction.",
       "card_state": "Unknown until separately diagnosed. Recovery changes only AdaUnlock boot registration; it does not reset or repair GPU state.",
       "machine_state": "The next DXE invocation performs no GPU discovery or mutation and removes the owned option from DriverOrder. The USB recovery route removes the owned Driver#### entry entirely before handing off to Windows.",
       "steps": [
         "Without USB, allow the next boot to reach the DXE recovery check; it skips GPU work, disables the owned DriverOrder entry, and continues normal boot.",
-        "With USB, launch the app; it detects the failed/interrupted record before GPU discovery, removes the owned DXE entry, and boots Windows without touching PCI.",
+        "With USB, launch the app; it detects the failed/interrupted or pending-acceptance record before GPU discovery, removes the owned DXE entry, and boots Windows without touching PCI.",
         "If the NVRAM operation fails, stop and use the firmware boot picker to choose Windows Boot Manager; do not select an unlock/transaction mode.",
         "After recovery, use only the read-only diagnostic until GPU state is independently confirmed."
       ],
       "proof": [
         "the recovery log reports DXE_RECOVERY or USB_RECOVERY and no transaction is attempted",
         "the owned AdaUnlock option is absent from DriverOrder (no-USB route) or removed from Driver#### and DriverOrder (USB route)",
-        "the system reaches Windows without another DXE transaction"
+        "the system reaches Windows without another DXE transaction",
+        "the persistent failure or pending-acceptance record is not automatically cleared"
       ],
       "sim_scenario": null,
       "verified": false,

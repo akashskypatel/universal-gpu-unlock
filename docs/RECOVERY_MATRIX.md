@@ -33,9 +33,9 @@ no-GPU recovery path; the code does not attempt to repair GPU firmware state.
 
 | | |
 | --- | --- |
-| Symptom | `BOOT_STATE WARNING=previous boot stopped during a transaction` (src/boot_io.c) |
+| Symptom | `BOOT_STATE WARNING=previous attempt interrupted or awaiting owner acceptance` (src/boot_io.c) |
 | Record | `Phase`, `BootCount`, `DeviceId`, `Armed` |
-| Record state | Phase == INTENT (1) with no OUTCOME: the record was written before the first mutation and the sequence never returned. |
+| Record state | Phase == INTENT (1): the record was written before mutation. The attempt may have stopped early or completed preboot and still await owner acceptance. Read the saved log to distinguish these cases. |
 | Card state | Unknown. The selection write, the WPR2 window, or an engine reset may have been applied; the card may still be executing or may be halted with reset released. |
 | Machine state | Unknown. The host may have been mid-DMA; firmware state is whatever it was when power dropped. |
 | Simulator | none |
@@ -50,7 +50,7 @@ Steps:
 
 Recovered when:
 
-* BOOT_STATE PRESENT=1 with PHASE=2 (OUTCOME) on a later boot
+* BOOT_STATE PRESENT=1 with PHASE=1 (INTENT) and no automatic repeat
 * the read-only diagnostic completes with STABLE=1
 * a subsequent normal boot reaches Windows with the card present
 
@@ -66,7 +66,7 @@ Not verified: No hardware run has ever lost power mid-transaction; the software-
 | --- | --- |
 | Symptom | `firmware did not stop; keeping its DMA buffers until power off` (src/vendor/unlock_610.c) |
 | Record | `Phase`, `Status`, `Armed` |
-| Record state | OUTCOME with a failure Status and Armed == 0: the sequence returned, but the engine may still read the buffers. |
+| Record state | INTENT remains on failure; the saved log records the failed transaction and retained buffers. |
 | Card state | Firmware may still be running. The unlock was not verified and the stock driver must not bind while it is active. |
 | Machine state | The image retains the DMA buffers and the device reference on purpose; freeing them would be a use-after-free from the card's point of view. |
 | Simulator | `transaction flr-refused` |
@@ -75,12 +75,12 @@ Steps:
 
 1. Do not start Windows on this boot. The image already refuses to hand over in this state.
 2. Remove power at the wall; the retained buffers die with the boot.
-3. Next boot, check BOOT_STATE PRESENT=1 PHASE=2 STATUS for the recorded failure.
+3. Next boot, check BOOT_STATE PRESENT=1 PHASE=1 and the previous transaction log for the recorded failure.
 4. Run the read-only diagnostic only; it does not touch firmware state.
 
 Recovered when:
 
-* the next boot shows no INTENT record
+* the next boot retains INTENT and does not repeat the transaction
 * the diagnostic reads a valid PMC, SS0/SS1 and PROM digest
 
 Not verified: The simulator shows the image retaining buffers and refusing handover; no card has been observed continuing to DMA.
@@ -95,7 +95,7 @@ Not verified: The simulator shows the image retaining buffers and refusing hando
 | --- | --- |
 | Symptom | `PCIe FLR returned: result=` (src/vendor/unlock_610.c) |
 | Record | `Phase`, `Status`, `Armed` |
-| Record state | OUTCOME with a failure Status and Armed == 0. |
+| Record state | INTENT remains on failure; see the previous transaction log for the reset result. |
 | Card state | The permission window is still open: the selectors were written and the reset that closes it did not happen. |
 | Machine state | Bus master is clear and the image keeps the buffers it allocated. |
 | Simulator | `transaction flr-refused` |
@@ -123,7 +123,7 @@ Not verified: Modelled, never observed on silicon.
 | --- | --- |
 | Symptom | `post-FLR WPR2 remains enabled` (src/vendor/unlock_610.c) |
 | Record | `Phase`, `Status` |
-| Record state | OUTCOME with a busy or error Status. |
+| Record state | INTENT remains on failure; see the previous transaction log for the error. |
 | Card state | FWSEC did not close its window. The stock driver rejects a preexisting WPR2 on this path, so it will not bind. |
 | Machine state | The image stops before any further write and retains its buffers. |
 | Simulator | none |
@@ -179,7 +179,7 @@ Not verified: No Stop bound has been measured, which is why the timer is opt-in 
 | --- | --- |
 | Symptom | `STOCK_PROFILE=REFUSED` (src/profile.c)<br>`SKU_GEOMETRY=REFUSED` (src/profile.c)<br>`PROM_IDENTITY=%s` (src/profile.c) |
 | Record | `DeviceId`, `Status` |
-| Record state | No INTENT record is written: the refusal happens before the first mutation, so nothing was in flight. |
+| Record state | No mutation was attempted. INTENT may already have been stored before the active preflight, so its presence alone does not prove hardware work. |
 | Card state | Untouched. Zero BAR0 writes, zero FLRs, WPR2 not opened. |
 | Machine state | Windows boots normally, or the diagnostic runs. Nothing to recover. |
 | Simulator | `prepare stock-mismatch` |
@@ -194,7 +194,7 @@ Steps:
 Recovered when:
 
 * the diagnostic completes with STABLE=1 and the digest printed
-* no BOOT_STATE INTENT record exists for the boot
+* the saved log confirms refusal before GPU mutation
 
 Not verified: The refusal semantics are simulated; the digests and cold values of real cards are not captured.
 
@@ -236,7 +236,7 @@ Not verified: Install and resume are simulated; no ESP has been written by this 
 | --- | --- |
 | Symptom | `SELECTED_GPU_STEP=` (src/gpu_discovery.c) |
 | Record | `Phase`, `Status`, `DeviceId`, `Segment`, `Bus`, `Device`, `Function` |
-| Record state | OUTCOME names the card that was being driven; the steps logged before it name the cards that already completed. |
+| Record state | INTENT identifies the original attempted sequence; the saved log identifies the current target and the earlier completed targets. |
 | Card state | The completed cards are in their post-transaction state; the next card was never touched. |
 | Machine state | Peers are unchanged, because the coordinator verifies them before and after each card. |
 | Simulator | none |
@@ -250,7 +250,7 @@ Steps:
 Recovered when:
 
 * each card's own class proof holds
-* the next boot reports no INTENT record
+* the next boot preserves INTENT and does not repeat the transaction
 
 Not verified: Only one card has ever been driven, and not on hardware; the two-target run in the plan has not happened.
 
@@ -264,7 +264,7 @@ Not verified: Only one card has ever been driven, and not on hardware; the two-t
 | --- | --- |
 | Symptom | `DXE_RECOVERY=FAILED_OR_INTERRUPTED` (src/dxe_main.c)<br>`USB_RECOVERY=FAILED_OR_INTERRUPTED` (src/app.c) |
 | Record | `Phase`, `Status`, `BootCount`, `DeviceId`, `Segment`, `Bus`, `Device`, `Function` |
-| Record state | An unmatched INTENT or an OUTCOME whose Status is not EFI_SUCCESS is treated as a persistent recovery latch. |
+| Record state | INTENT (interrupted or awaiting owner acceptance) or an OUTCOME whose Status is not EFI_SUCCESS blocks another transaction. |
 | Card state | Unknown until separately diagnosed. Recovery changes only AdaUnlock boot registration; it does not reset or repair GPU state. |
 | Machine state | The next DXE invocation performs no GPU discovery or mutation and removes the owned option from DriverOrder. The USB recovery route removes the owned Driver#### entry entirely before handing off to Windows. |
 | Simulator | none |
@@ -272,7 +272,7 @@ Not verified: Only one card has ever been driven, and not on hardware; the two-t
 Steps:
 
 1. Without USB, allow the next boot to reach the DXE recovery check; it skips GPU work, disables the owned DriverOrder entry, and continues normal boot.
-2. With USB, launch the app; it detects the failed/interrupted record before GPU discovery, removes the owned DXE entry, and boots Windows without touching PCI.
+2. With USB, launch the app; it detects the failed/interrupted or pending-acceptance record before GPU discovery, removes the owned DXE entry, and boots Windows without touching PCI.
 3. If the NVRAM operation fails, stop and use the firmware boot picker to choose Windows Boot Manager; do not select an unlock/transaction mode.
 4. After recovery, use only the read-only diagnostic until GPU state is independently confirmed.
 
@@ -281,6 +281,7 @@ Recovered when:
 * the recovery log reports DXE_RECOVERY or USB_RECOVERY and no transaction is attempted
 * the owned AdaUnlock option is absent from DriverOrder (no-USB route) or removed from Driver#### and DriverOrder (USB route)
 * the system reaches Windows without another DXE transaction
+* the persistent failure or pending-acceptance record is not automatically cleared
 
 Not verified: Source contract tests cover ordering and ownership of the recovery actions; these new firmware paths have not been tested on hardware. The user separately reported full recovery after a 60-second cold boot with USB removed.
 
