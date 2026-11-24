@@ -16,11 +16,10 @@ try {
     $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $flags -ObjectDirectory 'build_boot_state_maintenance' -VcVars $VcVars -SourceDirectory $PSScriptRoot -QuotePaths
     $commands = $compilePlan.Commands
     $objects = $compilePlan.Objects
-    $joined=($objects | ForEach-Object { '"'+$_+'"' }) -join ' '
     $binary='BOOT-STATE-MAINTENANCE.EFI'
     $path=Join-Path $output $binary
     if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
-    $commands+=('link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_boot_state_maintenance\'+$binary+' '+$joined)
+    $commands += New-GuLinkCommand -ImageFlags '/subsystem:efi_application /entry:UefiMain' -OutputFile "build_boot_state_maintenance\$binary" -Objects $objects -QuotePaths
     $commands+='if errorlevel 1 exit /b 1'
     $batch=Join-Path $output 'build-maintenance.cmd'
     Set-Content -LiteralPath $batch -Encoding ascii -Value $commands

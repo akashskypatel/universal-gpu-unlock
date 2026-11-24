@@ -404,7 +404,8 @@
         "PREPARATION_ONLY=0",
         "SYNTHETIC_PROFILE=1",
         "MULTI_GPU_MUTATION_ALLOWED=0",
-        "ACTUATION_VERIFIED=0"
+        "ACTUATION_VERIFIED=0",
+        "SELECTED_COUNT=<selection-count>"
       ],
       "requires_selection": "single",
       "note": "the CI-equivalent compile check for an operator's own selection",
@@ -423,7 +424,8 @@
         "PREPARATION_ONLY=0",
         "SYNTHETIC_PROFILE=1",
         "ORDERED_SEQUENCE_COMPILE_ONLY=1",
-        "MULTI_GPU_MUTATION_ALLOWED=0"
+        "MULTI_GPU_MUTATION_ALLOWED=0",
+        "SELECTED_COUNT=<selection-count>"
       ],
       "requires_selection": "sequence",
       "note": "two or more targets, one active at a time",
@@ -814,7 +816,8 @@
       "safety": "compile-only",
       "attestations": [
         "SYNTHETIC_PROFILE=1",
-        "MULTI_GPU_MUTATION_ALLOWED=0"
+        "MULTI_GPU_MUTATION_ALLOWED=0",
+        "SELECTED_COUNT=<selection-count>"
       ],
       "requires_selection": "single",
       "note": "proves the DXE entrypoint links for this selection",
@@ -832,7 +835,8 @@
       "attestations": [
         "SYNTHETIC_PROFILE=1",
         "ORDERED_SEQUENCE_COMPILE_ONLY=1",
-        "MULTI_GPU_MUTATION_ALLOWED=0"
+        "MULTI_GPU_MUTATION_ALLOWED=0",
+        "SELECTED_COUNT=<selection-count>"
       ],
       "requires_selection": "sequence",
       "note": "two or more targets, compile-checked only",

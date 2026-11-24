@@ -224,6 +224,36 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
         capture = diagnostic.split("foreach ($captureSource", 1)[1].split("$joined =", 1)[0]
         self.assertNotIn("$objects +=", capture)
 
+    def test_common_link_command_preserves_subsystem_and_object_order(self):
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable")
+        helper = str(ROOT / "src" / "Gpu-Execution-Sources.ps1").replace("'", "''")
+        cases = (
+            ("Build-Experimental-MSVC.ps1", "efi_application", "UefiMain", False),
+            ("Build-Dxe-Driver.ps1", "efi_boot_service_driver", "AdaUnlockDriverEntryPoint", False),
+            ("Build-Gpu-Topology-Diagnostic.ps1", "efi_application", "UefiMain", True),
+            ("Build-Msi-Stop-Observation.ps1", "efi_application", "UefiMain", True),
+            ("Build-Boot-State-Maintenance.ps1", "efi_application", "UefiMain", True),
+        )
+        for name, subsystem, entry, quoted in cases:
+            with self.subTest(builder=name):
+                text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
+                flags = f"/subsystem:{subsystem} /entry:{entry}"
+                line = next(line for line in text.splitlines() if "New-GuLinkCommand" in line)
+                self.assertIn(f"-ImageFlags '{flags}'", line)
+                self.assertEqual("-QuotePaths" in line, quoted)
+                cmd = (f". '{helper}'; New-GuLinkCommand -ImageFlags '{flags}' "
+                       r"-OutputFile 'build\image.efi' -Objects @('build\a.obj','build\b.obj')")
+                if quoted:
+                    cmd += " -QuotePaths"
+                result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
+                                        capture_output=True, text=True, check=True, timeout=30)
+                objects = r'"build\a.obj" "build\b.obj"' if quoted else r"build\a.obj build\b.obj"
+                expected = (f"link /nologo {flags} /machine:x64 /nodefaultlib /incremental:no "
+                            r"/fixed:no /dynamicbase:no /nxcompat:no /out:build\image.efi " + objects)
+                self.assertEqual(result.stdout.strip(), expected)
+
     def test_no_builder_list_silently_skips_a_unit(self):
         for builder in BUILDERS:
             listed = builder_sources(builder)

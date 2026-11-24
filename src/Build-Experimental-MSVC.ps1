@@ -194,7 +194,6 @@ try {
     $compileCmds = $compilePlan.Commands
     $objFiles = $compilePlan.Objects
 
-    $linkObjs = $objFiles -join ' '
     $binaryName = if ($StopReleaseWindowsHandoff) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI' } elseif ($StopReleaseOnlyBench -and $RuntimeSelection) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI' } elseif ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-' + $selection.Label + '.EFI' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP.EFI' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
     if ($FirmwareReattach) {
         $binaryName = 'GPU-RUNTIME-FIRMWARE-REATTACH.EFI'
@@ -202,7 +201,7 @@ try {
         $operationLabel = ($ApplicationOperation -creplace '([a-z])([A-Z])','$1-$2').ToUpperInvariant()
         $binaryName = $binaryName -replace '\.EFI$',"-$operationLabel.EFI"
     }
-    $compileCmds += "link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build\$binaryName $linkObjs"
+    $compileCmds += New-GuLinkCommand -ImageFlags '/subsystem:efi_application /entry:UefiMain' -OutputFile "build\$binaryName" -Objects $objFiles
     $compileCmds += 'if errorlevel 1 exit /b 1'
 
     $batchFile = Join-Path $buildDir 'build-msvc.cmd'

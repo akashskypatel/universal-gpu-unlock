@@ -67,3 +67,16 @@ function New-GuSourceCompilePlan {
     }
     return @{ Commands = $commands; Objects = $objects }
 }
+
+# Use the same linker options for every EFI image. The caller chooses the
+# subsystem and entrypoint and supplies only the objects it intends to link.
+function New-GuLinkCommand {
+    param(
+        [string]$ImageFlags,
+        [string]$OutputFile,
+        [string[]]$Objects,
+        [switch]$QuotePaths
+    )
+    $joined = if ($QuotePaths) { ($Objects | ForEach-Object { '"' + $_ + '"' }) -join ' ' } else { $Objects -join ' ' }
+    "link /nologo $ImageFlags /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:$OutputFile $joined"
+}

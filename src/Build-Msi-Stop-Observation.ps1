@@ -52,11 +52,10 @@ try {
     $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $flags -ObjectDirectory 'build_stop_observation' -VcVars $VcVars -SourceDirectory $PSScriptRoot -QuotePaths
     $commands = $compilePlan.Commands
     $objects = $compilePlan.Objects
-    $joined=($objects | ForEach-Object { '"'+$_+'"' }) -join ' '
     $targetName=if ($BothNvidia) { 'DUAL-NVIDIA' } elseif ($Target3080) { 'RTX3080' } else { 'RTX4090' }
     $binary=if ($WindowsEspGuid) { "MSI-$targetName-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI" }
         else { "MSI-$targetName-STOP-ONCE-EXPERIMENT.EFI" }
-    $commands+=('link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_stop_observation\'+$binary+' '+$joined)
+    $commands += New-GuLinkCommand -ImageFlags '/subsystem:efi_application /entry:UefiMain' -OutputFile "build_stop_observation\$binary" -Objects $objects -QuotePaths
     $commands+='if errorlevel 1 exit /b 1'
     $batch=Join-Path $output 'build-stop-only.cmd'
     Set-Content -LiteralPath $batch -Encoding ascii -Value $commands
