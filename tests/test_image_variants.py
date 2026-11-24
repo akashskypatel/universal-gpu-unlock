@@ -914,6 +914,24 @@ ConvertTo-Json -InputObject @($results) -Compress
             self.assertEqual(row["app"], row["renamedApp"], row["id"])
             self.assertEqual(row["dxe"], row["renamedDxe"], row["id"])
 
+    def test_legacy_alias_notice_preserves_machine_readable_resolution(self):
+        import subprocess
+        script = str(SCRIPT_PATH).replace("'", "''")
+        for selector, expected_alias in (("diag-topology-log", "diag-topology-log"),
+                                          ("diagnostic", None)):
+            command = f"& '{script}' -ResolveOnly -Only {selector}"
+            result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                                    capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            resolved = json.loads(result.stdout)
+            self.assertEqual(resolved["VariantId"], "diag-topology-log")
+            self.assertEqual(resolved["CanonicalProfile"], "diagnostic")
+            self.assertEqual(resolved["RequestedLegacyAlias"], expected_alias)
+            if expected_alias:
+                self.assertIn("DEPRECATED_ALIAS diag-topology-log: use -Only diagnostic ", result.stderr)
+            else:
+                self.assertNotIn("DEPRECATED_ALIAS", result.stderr)
+
     def test_generated_profile_summary_matches_manifest(self):
         generated = renderer.render(MANIFEST)
         self.assertIn("5 canonical profiles. 41 compatibility configurations", generated)

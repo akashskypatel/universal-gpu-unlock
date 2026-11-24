@@ -72,7 +72,7 @@ exact match. DXE, R, and other profiles retain their existing admission policy.
 Use `-Only <profile>` with the operation-specific arguments below. The five
 public profiles resolve to 41 supported compatibility configurations.
 `-List` displays the public profiles. `-ListLegacy` displays the complete
-compatibility matrix. The old IDs remain valid for existing scripts.
+compatibility matrix. The old IDs remain valid for existing scripts, but explicit legacy `-Only` requests print a deprecation notice on standard error. `-ResolveOnly` still emits only its JSON result on standard output. Use canonical selectors for new commands. Configuration IDs in receipts and evidence do not change.
 `-ResolveOnly` reports the selected configuration without a build, signature
 or deployment.
 
@@ -195,11 +195,11 @@ See [the migration tracker](EFI_IMAGE_PROFILE_CONSOLIDATION_PLAN.md).
 | `maintenance` | 3 |
 | `compile-check` | 4 |
 
-Compatibility matrix (also available with `-ListLegacy`). `Safety` is what the image may do to the system, not what it has been shown to do.
+Compatibility matrix (also available with `-ListLegacy`). Legacy selectors are deprecated; configuration IDs remain stable for receipts and evidence. `Safety` is what the image may do to the system, not what it has been shown to do.
 
 ### Read-only diagnostic — `src/Build-Gpu-Topology-Diagnostic.ps1` (PE subsystem 10, `STATUS=COMPLETE`)
 
-| `-Only` id | Output | Safety | Needs | What it is |
+| Deprecated `-Only` alias / configuration ID | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
 | `diag-topology` | `GPU-TOPOLOGY-DIAGNOSTIC.EFI` | `read-only` | nothing | the smallest read-only image: it prints to the console and writes nothing |
 | `diag-topology-log` | `GPU-TOPOLOGY-DIAGNOSTIC.EFI` | `read-only` | nothing | stage 1 of the donor session: the log this build writes is what tools/verify_run_log.py scores |
@@ -217,7 +217,7 @@ Compatibility matrix (also available with `-ListLegacy`). `Safety` is what the i
 
 ### Active preparation (application) — `src/Build-Experimental-MSVC.ps1` (PE subsystem 10, `STATUS=COMPLETE`)
 
-| `-Only` id | Output | Safety | Needs | What it is |
+| Deprecated `-Only` alias / configuration ID | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
 | `prep-selected` | `GPU-ACTIVE-PREP-<label>.EFI` | `refuses-before-mutation` | one or more BDFs | stage 2 of the donor session: runs the whole preflight, then refuses before GuInit |
 | `compile-one-target` | `GPU-ONE-TARGET-COMPILE-ONLY-<label>.EFI` | `compile-only` | one BDF | the CI-equivalent compile check for an operator's own selection |
@@ -237,7 +237,7 @@ Compatibility matrix (also available with `-ListLegacy`). `Safety` is what the i
 
 ### Active preparation (DXE driver) — `src/Build-Dxe-Driver.ps1` (PE subsystem 11, `STATUS=COMPLETE`)
 
-| `-Only` id | Output | Safety | Needs | What it is |
+| Deprecated `-Only` alias / configuration ID | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
 | `dxe-prep-selected` | `GPU-ACTIVE-PREP-DXE-<label>.efi` | `refuses-before-mutation` | one or more BDFs | the same preparation as a boot-service driver; it cannot be staged as BOOTX64.EFI |
 | `dxe-compile-one-target` | `GPU-ONE-TARGET-COMPILE-ONLY-DXE-<label>.efi` | `compile-only` | one BDF | proves the DXE entrypoint links for this selection |
@@ -249,7 +249,7 @@ Compatibility matrix (also available with `-ListLegacy`). `Safety` is what the i
 
 ### Original vendor Stop experiment — `src/Build-Msi-Stop-Observation.ps1` (PE subsystem 10, `STATUS=BUILT`)
 
-| `-Only` id | Output | Safety | Needs | What it is |
+| Deprecated `-Only` alias / configuration ID | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
 | `stop-4090-once` | `MSI-RTX4090-STOP-ONCE-EXPERIMENT.EFI` | `stop-only` | nothing | halts after the Stop; the vendor callback can hang without a timeout |
 | `stop-4090-handoff` | `MSI-RTX4090-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI` | `stop-only` | reviewed ESP GUID | starts the pinned Windows Boot Manager after the Stop returns |
@@ -259,7 +259,7 @@ Compatibility matrix (also available with `-ListLegacy`). `Safety` is what the i
 
 ### Boot-state maintenance — `src/Build-Boot-State-Maintenance.ps1` (PE subsystem 10, `STATUS=BUILT`)
 
-| `-Only` id | Output | Safety | Needs | What it is |
+| Deprecated `-Only` alias / configuration ID | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
 | `boot-state-maintenance` | `BOOT-STATE-MAINTENANCE.EFI` | `maintenance` | nothing | Independent maintenance application. Requires explicit deployment consent and isolated USB media. Displays the exact record, requires REARM confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified. |
 

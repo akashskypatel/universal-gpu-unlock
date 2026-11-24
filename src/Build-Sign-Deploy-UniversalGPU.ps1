@@ -789,9 +789,16 @@ function Select-Variants {
         }
         $known = @($catalogue.variants | ForEach-Object { $_.id })
         foreach ($name in $wanted) {
-            if ($known -notcontains $name) { throw "Unknown variant id: $name (see -List)." }
+            if ($known -notcontains $name) { throw "Unknown profile or compatibility ID: $name (see -List or -ListLegacy)." }
         }
         $selected = @($selected | Where-Object { $wanted -contains $_.id })
+        if (-not $script:RequestedCanonicalProfile) {
+            foreach ($variant in $selected) {
+                # Keep ResolveOnly stdout as one JSON object and do not add
+                # a PowerShell pipeline value to Select-Variants.
+                [Console]::Error.WriteLine(("DEPRECATED_ALIAS {0}: use -Only {1} with its profile arguments (see -List)." -f $variant.id, $variant.profile))
+            }
+        }
     }
     if (-not $Only -and $script:ExplicitProfileOptions.Count) { throw 'Canonical profile options require a canonical -Only value.' }
     if ($Family) { $selected = @($selected | Where-Object { $_.family -eq $Family }) }

@@ -384,8 +384,7 @@ staged, or hardware-tested in this Linux workspace. The catalogue attests
 For a bootable USB test image, use the separate application variant
 `app-stop-release-sequence-bench` (PE subsystem 10), not the DXE driver above.
 The catalogue stages it as `EFI\\BOOT\\BOOTX64.EFI` with
-`-Only app-stop-release-sequence-bench -StageDrive G
--AcceptActuatingDeploy`
+`-Only driver-transition -Operation StopReattach -StageDrive G -AcceptActuatingDeploy`
 (after verifying G: is the intended USB). With no BDF arguments, the application
 selects every supported NVIDIA GPU discovered at boot. To restrict it to a
 specific target or ordered subset, supply `-SelectionBdf '<BDF>'` or the

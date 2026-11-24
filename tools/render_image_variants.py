@@ -47,13 +47,13 @@ def render(manifest: dict) -> str:
     for profile in manifest["profiles"]:
         count = sum(v["profile"] == profile["id"] for v in manifest["variants"])
         blocks.append(f"| `{profile['id']}` | {count} |\n")
-    blocks.append("\nCompatibility matrix (also available with `-ListLegacy`). "
+    blocks.append("\nCompatibility matrix (also available with `-ListLegacy`). Legacy selectors are deprecated; configuration IDs remain stable for receipts and evidence. "
                   "`Safety` is what the image may do to the system, not what it has been shown to do.\n")
     for family in manifest["families"]:
         variants = [v for v in manifest["variants"] if v["family"] == family["id"]]
         blocks.append(f"\n### {family['title']} — `{family['builder']}` (PE subsystem "
                       f"{family['subsystem']}, `{family['status_token']}`)\n\n")
-        blocks.append("| `-Only` id | Output | Safety | Needs | What it is |\n")
+        blocks.append("| Deprecated `-Only` alias / configuration ID | Output | Safety | Needs | What it is |\n")
         blocks.append("| --- | --- | --- | --- | --- |\n")
         for variant in variants:
             blocks.append(f"| `{variant['id']}` | `{variant['binary']}` | "
