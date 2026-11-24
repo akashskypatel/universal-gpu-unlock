@@ -821,6 +821,52 @@ class CanonicalProfileResolution(unittest.TestCase):
                 self.assertEqual(new, old)
                 self.assertEqual(new["VariantId"], alias)
 
+    def test_stop_selection_and_combined_esp_follow_builder_configuration(self):
+        two = ["-SelectionBdfs", "'0000:04:00.0,0000:01:00.0'"]
+        for kind, expected, runtime in (
+            ("Application", "GPU-SEQUENCE-STOP-RELEASE-BENCH-0000-04-00-0--0000-01-00-0.EFI",
+             "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI"),
+            ("Dxe", "GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-0000-04-00-0--0000-01-00-0.efi",
+             "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi"),
+        ):
+            args = ["-Only", "driver-transition", "-Operation", "StopReattach", "-ImageKind", kind]
+            result = self.resolve(args + two)
+            self.assertEqual(result["Binary"], expected)
+            self.assertEqual(result["Selection"], ["0000:04:00.0", "0000:01:00.0"])
+            self.assertNotIn("RuntimeSelection", result["Switches"])
+            self.assertEqual(result["Switches"]["SelectionBdfs"], "0000:04:00.0,0000:01:00.0")
+            self.assertIn("RUNTIME_SELECTION=0", result["ResolvedAttestations"])
+            self.assertIn("TARGET_ORDER=0000:04:00.0,0000:01:00.0", result["ResolvedAttestations"])
+            self.assertNotIn("RUNTIME_SELECTION=1", result["ResolvedAttestations"])
+            result = self.resolve(args)
+            self.assertEqual(result["Binary"], runtime)
+            self.assertEqual(result["Selection"], [])
+            self.assertTrue(result["Switches"]["RuntimeSelection"])
+            self.assertIn("RUNTIME_SELECTION=1", result["ResolvedAttestations"])
+            self.assertIn("TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION", result["ResolvedAttestations"])
+        handoff = self.resolve(["-Only", "driver-transition", "-Operation", "StopReattach",
+                                "-Handoff", "WindowsAfterSuccess"])
+        self.assertEqual(handoff["Binary"], "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI")
+        self.assertTrue(handoff["Switches"]["StopReleaseWindowsHandoff"])
+        self.assertIn("OS_HANDOFF=WINDOWS_AFTER_SUCCESS", handoff["ResolvedAttestations"])
+        self.resolve(["-Only", "app-stop-release-sequence-handoff"] + two, valid=False)
+        self.resolve(["-Only", "driver-transition", "-Operation", "StopReattach",
+                      "-Handoff", "WindowsAfterSuccess"] + two, valid=False)
+        guid = "a005858c-4487-4ee2-976e-1710ff484c31"
+        combined = ["-Only", "firmware-transaction", "-Operation", "UnlockReattach"]
+        result = self.resolve(combined + ["-WindowsEspGuid", guid])
+        self.assertEqual(result["Switches"]["WindowsEspGuid"], guid)
+        self.assertIn("WINDOWS_ESP_GUID=" + guid, result["ResolvedAttestations"])
+        result = self.resolve(combined)
+        self.assertNotIn("WindowsEspGuid", result["Switches"])
+        self.assertIn("WINDOWS_ESP_GUID=NONE", result["ResolvedAttestations"])
+        for operation in ("Unlock", "UnlockWithResume"):
+            args = ["-Only", "firmware-transaction", "-Operation", operation]
+            result = self.resolve(args)
+            self.assertNotIn("WindowsEspGuid", result["Switches"])
+            self.assertFalse(any(a.startswith("WINDOWS_ESP_GUID=") for a in result["ResolvedAttestations"]))
+            self.resolve(args + ["-WindowsEspGuid", guid], valid=False)
+
     def test_generated_profile_summary_matches_manifest(self):
         generated = renderer.render(MANIFEST)
         self.assertIn("5 canonical profiles. 41 compatibility configurations", generated)
@@ -988,7 +1034,9 @@ class TheReviewedProfileSkipSaysWhatToCreate(unittest.TestCase):
         self.assertIn("if (-not $FirmwareReattach -or -not $RuntimeEsp) { throw '-WindowsEspGuid", builder)
         self.assertLess(builder.index("if (-not $FirmwareReattach -or -not $RuntimeEsp)"),
                         builder.index("Push-Location"))
-        self.assertIn("if ($Variant.id -eq 'app-firmware-reattach' -and $WindowsEspGuid)", SCRIPT)
+        self.assertIn("if ((Test-VariantSwitch $Variant 'FirmwareReattach') -and $WindowsEspGuid)", SCRIPT)
+        self.assertEqual([v["id"] for v in MANIFEST["variants"] if v["switches"].get("FirmwareReattach")],
+                         ["app-firmware-reattach"])
         dxe = (ROOT / "src" / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
         self.assertNotIn("WindowsEspGuid", dxe)
         profile = (ROOT / "src" / "boot_profile.h").read_text(encoding="utf-8")

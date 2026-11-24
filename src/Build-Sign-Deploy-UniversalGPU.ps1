@@ -803,13 +803,26 @@ function Get-SelectionCount {
     return $script:SelectionSpec.Count
 }
 
+# Behavior follows the configured builder switches, not the compatibility ID.
+function Test-VariantSwitch($Variant, [string]$Name) {
+    $property = $Variant.switches.PSObject.Properties[$Name]
+    return ($null -ne $property -and $property.Value -is [bool] -and $property.Value)
+}
+
+function Test-CompiledStopSelection($Variant) {
+    return ((Get-SelectionCount) -ge 1 -and
+            (Test-VariantSwitch $Variant 'StopReleaseOnlyBench') -and
+            (Test-VariantSwitch $Variant 'RuntimeSelection') -and
+            -not (Test-VariantSwitch $Variant 'StopReleaseWindowsHandoff'))
+}
+
 function Test-VariantSelection($Variant) {
     # Returns a skip reason when the operator's arguments cannot build this
     # variant, or $null when they can. A single-target variant under a two-target
     # selection is a skip, not a failure: the builder would produce the sequence
     # image under a name this catalogue gives to a different variant.
     $count = Get-SelectionCount
-    if ($Variant.id -eq 'app-stop-release-sequence-handoff' -and $count -gt 0) { return 'NEEDS_RUNTIME_SELECTION' }
+    if ((Test-VariantSwitch $Variant 'StopReleaseWindowsHandoff') -and $count -gt 0) { return 'NEEDS_RUNTIME_SELECTION' }
     $needs = $null
     if ($Variant.PSObject.Properties.Name -contains 'requires_selection') { $needs = $Variant.requires_selection }
     if ($needs -eq 'single' -and $count -ne 1) {
@@ -833,8 +846,7 @@ function Test-VariantSelection($Variant) {
 }
 
 function Get-VariantBinary($Variant) {
-    if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
-        (Get-SelectionCount) -ge 1) {
+    if (Test-CompiledStopSelection $Variant) {
         $label = [string]$script:SelectionSpec.Label
         if ($Variant.family -eq 'prepare-dxe') {
             return "GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-$label.efi"
@@ -851,8 +863,7 @@ function Get-VariantBinary($Variant) {
 function Get-ResolvedAttestations($Variant) {
     foreach ($declared in $Variant.attestations) {
         $attestation = $declared.Replace('<selection-count>', [string](Get-SelectionCount))
-        if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
-            (Get-SelectionCount) -ge 1) {
+        if (Test-CompiledStopSelection $Variant) {
             $attestation = $attestation.Replace('RUNTIME_SELECTION=1', 'RUNTIME_SELECTION=0')
             $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION',
                 ('TARGET_ORDER=' + ($script:SelectionSpec.Locations -join ',')))
@@ -862,7 +873,7 @@ function Get-ResolvedAttestations($Variant) {
         }
         $attestation
     }
-    if ($Variant.id -eq 'app-firmware-reattach') {
+    if (Test-VariantSwitch $Variant 'FirmwareReattach') {
         $expectedEsp = if ($WindowsEspGuid) { ([guid]$WindowsEspGuid).ToString('D') } else { 'NONE' }
         "WINDOWS_ESP_GUID=$expectedEsp"
     }
@@ -882,8 +893,7 @@ function Build-VariantArguments($Variant) {
             $arguments[$name] = $value
         }
     }
-    if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
-        (Get-SelectionCount) -ge 1) {
+    if (Test-CompiledStopSelection $Variant) {
         [void]$arguments.Remove('RuntimeSelection')
         if ($SelectionBdf) { $arguments['SelectionBdf'] = $SelectionBdf }
         else { $arguments['SelectionBdfs'] = $SelectionBdfs }
@@ -894,7 +904,7 @@ function Build-VariantArguments($Variant) {
         elseif ($SelectionBdfs) { $arguments['SelectionBdfs'] = $SelectionBdfs }
         else { throw 'SELECTION_REQUIRED' }
     }
-    if ($Variant.id -eq 'app-firmware-reattach' -and $WindowsEspGuid) {
+    if ((Test-VariantSwitch $Variant 'FirmwareReattach') -and $WindowsEspGuid) {
         $arguments['WindowsEspGuid'] = $WindowsEspGuid
     }
     if ($CapturedPromReference) {
@@ -1318,7 +1328,7 @@ try {
             $verifiedAttestations = @()
             foreach ($attestation in @(Get-ResolvedAttestations $variant)) {
                 if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape($attestation) + '(?:\s|$)')) {
-                    if ($variantId -eq 'app-firmware-reattach' -and $attestation -like 'WINDOWS_ESP_GUID=*') {
+                    if ((Test-VariantSwitch $variant 'FirmwareReattach') -and $attestation -like 'WINDOWS_ESP_GUID=*') {
                         throw 'Combined image Windows ESP GUID attestation mismatch.'
                     }
                     throw "Build attestation missing or wrong for $($variantId): $attestation"
