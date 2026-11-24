@@ -322,6 +322,12 @@ static UINT64 TraceDelayShown;
 static UINT8 TraceSpinnerDots;
 static BOOLEAN TraceSpinnerActive;
 static BOOLEAN TraceAssetReadActive;
+/* Learned only from exact successful reads on the retained launch root. */
+static UINTN AssetReadSize=1048576U;
+static UINTN AssetReadBestBytes,AssetReadBestSeconds;
+static BOOLEAN AssetReadSizeSettled;
+static UINTN TraceBootStartSeconds;
+static BOOLEAN TraceBootClockStarted;
 
 static BOOLEAN TraceClock(UINTN *seconds) {
   EFI_RUNTIME_SERVICES *rt=Table?Table->RuntimeServices:NULL;
@@ -444,11 +450,19 @@ VOID GuTracePhase(const char *phase) {
   TraceSpinnerActive=FALSE;
   TraceSpinnerDots=0;
   ++TraceSteps;
+  if(!TraceBootClockStarted)TraceBootClockStarted=TraceClock(&TraceBootStartSeconds);
   GuLog("TRACE STEP=%u ELAPSED=%s PHASE=%s\n",(unsigned)TraceSteps,
         TraceElapsedText(elapsed,sizeof(elapsed)),phase?phase:"?");
   TraceFormat(line,sizeof(line),"[gu] %u %s (%s)\r\n",(unsigned)TraceSteps,
            phase?phase:"?",TraceElapsedText(elapsed,sizeof(elapsed)));
   TraceSay(line);
+  if(TraceBootClockStarted&&phase) {
+    const char *a=phase,*b="close-USB-log";
+    while(*a&&*a==*b){a++;b++;}
+    UINTN now=0;
+    if(!*a&&!*b&&TraceClock(&now))GuLog("TRACE_BOOT TOTAL_SECONDS=%u\n",
+        (unsigned)((now+86400U-TraceBootStartSeconds)%86400U));
+  }
 }
 
 VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
@@ -747,20 +761,87 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
 
   if(s==EFI_SUCCESS){p=GuAlloc(expected);if(!p)s=EFI_OUT_OF_RESOURCES;}
 
+  /* Only the read-only firmware load uses adaptive requests. Keep installer
+   * readback and other file users at their original request size. The launch
+   * root stays open for the boot; temporary fallback roots learn locally. */
+  const BOOLEAN adaptive=TraceAssetReadActive;
+  const BOOLEAN learn=adaptive&&root==Root;
+  UINTN chunk=learn?AssetReadSize:1048576U;
+  UINTN best_bytes=learn?AssetReadBestBytes:0,best_seconds=learn?AssetReadBestSeconds:0;
+  BOOLEAN settled=learn&&AssetReadSizeSettled;
+  UINTN reads=0,read_seconds=0,progress_seconds=0,reported=0,last_report=0;
+  BOOLEAN timing=adaptive&&TraceClock(&last_report);
   for(UINTN at=0;s==EFI_SUCCESS&&at<expected;) {
-
-    UINTN n=expected-at;if(n>1048576)n=1048576;UINTN wanted=n;
-
-    s=f->Read(f,&n,(UINT8 *)p+at);if(s==EFI_SUCCESS&&n!=wanted)s=EFI_DEVICE_ERROR;at+=n;
-    if(s==EFI_SUCCESS&&TraceAssetReadActive)GuTraceProgress("asset-read-bytes",at,expected);
-
+    UINTN n=expected-at;if(n>chunk)n=chunk;UINTN wanted=n;
+    UINTN before=0,after=0;
+    BOOLEAN measured=adaptive&&TraceClock(&before);
+    s=f->Read(f,&n,(UINT8 *)p+at);reads++;
+    measured=measured&&TraceClock(&after);
+    UINTN elapsed=measured?(after+86400U-before)%86400U:0;
+    read_seconds+=elapsed;
+    /* A generic device error or short read is not a size rejection. Only
+     * BAD_BUFFER_SIZE permits a bounded retry, at a proved original offset. */
+    if(adaptive&&s==EFI_BAD_BUFFER_SIZE&&wanted>1048576U&&
+       f->SetPosition&&f->GetPosition&&BootFileStatus==EFI_SUCCESS) {
+      UINT64 pos=0;
+      s=f->SetPosition(f,(UINT64)at);
+      if(s==EFI_SUCCESS)s=f->GetPosition(f,&pos);
+      if(s!=EFI_SUCCESS||pos!=(UINT64)at){s=EFI_DEVICE_ERROR;break;}
+      do {chunk/=2U;} while(chunk>=wanted&&chunk>1048576U);
+      settled=TRUE;best_bytes=0;best_seconds=0;
+      GuTraceDetail("asset-read-size","REJECTED=%u RETRY=%u",(unsigned)wanted,(unsigned)chunk);
+      if(BootFileStatus!=EFI_SUCCESS){s=BootFileStatus;break;}
+      continue;
+    }
+    if(s!=EFI_SUCCESS)break;
+    if(n!=wanted){s=EFI_DEVICE_ERROR;break;}
+    at+=n;
+    if(adaptive&&!settled&&wanted==chunk) {
+      /* RTC seconds are coarse. Require two sufficiently long measurements
+       * and a material regression before reducing; otherwise grow on exact
+       * success. The finite cap also works without a clock. */
+      if(measured&&elapsed>=2U) {
+        if(best_seconds&&((UINT64)n*best_seconds*4U <
+                          (UINT64)best_bytes*elapsed*3U)) {
+          if(chunk>1048576U)chunk/=2U;
+          settled=TRUE;
+        } else if(!best_seconds||(UINT64)n*best_seconds>(UINT64)best_bytes*elapsed) {
+          best_bytes=n;best_seconds=elapsed;
+        }
+      }
+      if(!settled&&chunk<16777216U)chunk*=2U;
+    }
+    if(adaptive) {
+      UINTN now=0,finished=0;
+      BOOLEAN clock=timing&&TraceClock(&now);
+      /* Preserve first, final and time/byte heartbeats; do not change GuLog
+       * durability or suppress phase/intent/result records. */
+      if(!reported||at==expected||at-reported>=4194304U||
+         (clock&&(now+86400U-last_report)%86400U>=2U)) {
+        GuTraceProgress("asset-read-bytes",at,expected);
+        reported=at;
+        if(clock&&TraceClock(&finished)) {
+          progress_seconds+=(finished+86400U-now)%86400U;
+          last_report=finished;
+        }
+        if(BootFileStatus!=EFI_SUCCESS){s=BootFileStatus;break;}
+      }
+    }
   }
+  if(adaptive)GuTraceDetail("asset-read-timing",
+    "READ_CALLS=%u READ_SECONDS=%u PROGRESS_SECONDS=%u NEXT_BYTES=%u CLOCK=%u STATUS=%#llx",
+    (unsigned)reads,(unsigned)read_seconds,(unsigned)progress_seconds,(unsigned)chunk,
+    (unsigned)timing,(unsigned long long)s);
+  if(s==EFI_SUCCESS&&BootFileStatus!=EFI_SUCCESS)s=BootFileStatus;
 
   if(s==EFI_SUCCESS){UINT8 tail;UINTN n=1;s=f->Read(f,&n,&tail);if(s==EFI_SUCCESS&&n)s=EFI_COMPROMISED_DATA;}
 
   EFI_STATUS closed=CloseBootFile(&f);if(closed!=EFI_SUCCESS)s=closed;
 
-  if(s!=EFI_SUCCESS){GuFree(p);return s;}*data=p;return EFI_SUCCESS;
+  if(s!=EFI_SUCCESS){GuFree(p);return s;}
+  if(learn&&expected>=1048576U){AssetReadSize=chunk;AssetReadBestBytes=best_bytes;
+    AssetReadBestSeconds=best_seconds;AssetReadSizeSettled=settled;}
+  *data=p;return EFI_SUCCESS;
 
 }
 
