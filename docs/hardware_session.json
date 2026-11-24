@@ -671,6 +671,10 @@
         "why": "writes the GPU, resident, target at boot: `actuate` stage."
       },
       {
+        "id": "app-firmware-reattach",
+        "why": "Runs the existing firmware transaction and original driver reattachment. It is outside read-only scope."
+      },
+      {
         "id": "app-unlock",
         "why": "Build-selected U operation uses the existing firmware transaction; it is not a read-only candidate."
       },

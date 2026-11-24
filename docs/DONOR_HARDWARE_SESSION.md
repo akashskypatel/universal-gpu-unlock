@@ -479,6 +479,7 @@ The same preparation as a boot-service driver, loaded from a `Driver####` entry 
 * `actuate-one-target-resident` — writes the GPU from the ESP: `actuate` stage, and it is the only image that could observe B9's ESP-resident half.
 * `actuate-runtime-selection` — writes the GPU with the target chosen at boot: `actuate` stage.
 * `actuate-runtime-selection-resident` — writes the GPU, resident, target at boot: `actuate` stage.
+* `app-firmware-reattach` — Runs the existing firmware transaction and original driver reattachment. It is outside read-only scope.
 * `app-unlock` — Build-selected U operation uses the existing firmware transaction; it is not a read-only candidate.
 * `app-unlock-with-resume` — Build-selected P operation uses the existing firmware transaction and resume policy; it is not a read-only candidate.
 * `app-install-driver` — Build-selected I operation can change owned firmware boot registration; it is outside read-only scope and requires the reviewed companion.
