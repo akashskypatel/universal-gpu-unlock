@@ -58,6 +58,23 @@ int GuWindowsEspPathCandidate(const uint8_t *path, size_t bound) {
   return partitions==1U;
 }
 
+int GuWindowsEspPathGuid(const uint8_t *path, size_t bound, uint8_t guid[16]) {
+  if(!guid||!GuWindowsEspPathCandidate(path,bound))return 0;
+  size_t length=GuWindowsPathLength(path,bound);
+  for(size_t at=0;at+4<=length;) {
+    size_t n=(size_t)path[at+2]|((size_t)path[at+3]<<8);
+    if(path[at]==4U&&path[at+1]==1U) {
+      unsigned nonzero=0;
+      for(size_t i=0;i<16U;i++)nonzero|=path[at+24U+i];
+      if(!nonzero)return 0;
+      memcpy(guid,path+at+24U,16U);
+      return 1;
+    }
+    at+=n;
+  }
+  return 0;
+}
+
 /* The device-node prefix both sides have in common, or zero for a mismatch. */
 static size_t DevicePrefix(const uint8_t *path, size_t bound) {
   size_t at=0;

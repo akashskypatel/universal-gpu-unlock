@@ -89,7 +89,7 @@ class BootIoWiring(unittest.TestCase):
         self.assertIn("RuntimeEspPathCandidate(dp,bytes)&&", BOOT_IO)
         self.assertIn("RuntimeEspPathCandidate(p,bytes)", BOOT_IO)
         self.assertEqual(BOOT_IO.count("GuWindowsEspPathCandidate((const uint8_t *)"), 1)
-        self.assertEqual(BOOT_IO.count("GuWindowsEspPathMatches("), 3)
+        self.assertEqual(BOOT_IO.count("GuWindowsEspPathMatches("), 4)
         self.assertIn("EspCarriesWindowsManager(b,handles[i])", BOOT_IO)
 
     def test_explicit_pin_filters_both_runtime_candidates_without_fallback(self):
@@ -109,6 +109,10 @@ class BootIoWiring(unittest.TestCase):
 typedef uint8_t EFI_DEVICE_PATH_PROTOCOL;
 typedef size_t UINTN;
 typedef int BOOLEAN;
+#ifdef GU_INTERACTIVE_WINDOWS_ESP
+static void *SelectedEspHandle;
+static uint8_t SelectedEspGuid[16];
+#endif
 #ifdef GU_RUNTIME_ESP_PIN
 static const uint8_t RuntimeEspPin[16]={0x8c,0x85,0x05,0xa0,0x87,0x44,0xe2,0x4e,
                                        0x97,0x6e,0x17,0x10,0xff,0x48,0x4c,0x31};
@@ -121,8 +125,11 @@ int main(void) {
     memcpy(path+24,guid,16);
     path[16]=1;path[40]=2;path[41]=2;path[42]=0x7f;path[43]=0xff;path[44]=4;
     assert(RuntimeEspPathCandidate(path,sizeof(path)));
+#ifdef GU_INTERACTIVE_WINDOWS_ESP
+    SelectedEspHandle=path;memcpy(SelectedEspGuid,guid,16);
+#endif
     path[24]^=0xff;
-#ifdef GU_RUNTIME_ESP_PIN
+#if defined(GU_RUNTIME_ESP_PIN) || defined(GU_INTERACTIVE_WINDOWS_ESP)
     assert(!RuntimeEspPathCandidate(path,sizeof(path)));
 #else
     assert(RuntimeEspPathCandidate(path,sizeof(path)));
@@ -132,7 +139,7 @@ int main(void) {
     return 0;
 }
 """
-        for flags in ((), ("-DGU_RUNTIME_ESP_PIN",)):
+        for flags in ((), ("-DGU_RUNTIME_ESP_PIN",), ("-DGU_INTERACTIVE_WINDOWS_ESP",)):
             with self.subTest(flags=flags), tempfile.TemporaryDirectory() as tmp:
                 src = Path(tmp) / "pin.c"
                 binary = Path(tmp) / "pin"
@@ -150,6 +157,95 @@ int main(void) {
         self.assertIn('$espPin.ToByteArray()', MSVC)
         self.assertIn('WINDOWS_ESP_GUID=$espPinText', MSVC)
         self.assertIn('policy=explicit_runtime_guid GUID=%s', BOOT_IO)
+
+    def test_boot_menu_requires_fresh_valid_choice_when_multiple(self):
+        cc = compiler()
+        if not cc:
+            self.skipTest("A host C compiler is required")
+        start = BOOT_IO.index("static EFI_STATUS ShowWindowsEspChoice(")
+        end = BOOT_IO.index("/* Do not hold open files", start)
+        actual = BOOT_IO[start:end]
+        mock = r"""
+#include <assert.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+typedef uint16_t CHAR16;
+typedef uint8_t UINT8;
+typedef size_t UINTN;
+typedef int EFI_STATUS;
+typedef int BOOLEAN;
+#define GU_ESP_MENU_MAX 9U
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 2
+#define EFI_DEVICE_ERROR 7
+#define EFI_UNSUPPORTED 3
+#define EFI_NOT_READY 6
+#define EFI_ABORTED 21
+#define EFI_TIMEOUT 18
+typedef struct { void *handle; uint8_t guid[16]; } GU_ESP_CHOICE;
+typedef struct { CHAR16 UnicodeChar; unsigned ScanCode; } EFI_INPUT_KEY;
+typedef struct OUT OUT;
+struct OUT { EFI_STATUS (*OutputString)(OUT *,CHAR16 *); };
+typedef struct IN IN;
+struct IN { EFI_STATUS (*ReadKeyStroke)(IN *,EFI_INPUT_KEY *); };
+typedef struct { EFI_STATUS (*Stall)(UINTN); } BS;
+typedef struct { OUT *ConOut; IN *ConIn; BS *BootServices; } EFI_SYSTEM_TABLE;
+static int displays,reads,fail,log_ok=1;
+static CHAR16 key;
+static char output[160];
+static void GuLog(const char *format,...){(void)format;}
+static int GuBootLogOpen(void){return log_ok;}
+static EFI_STATUS Output(OUT *out,CHAR16 *text){
+    (void)out;displays++;
+    size_t n=0;while(text[n]&&n<sizeof(output)-1){output[n]=(char)text[n];n++;}
+    output[n]=0;return fail?EFI_DEVICE_ERROR:EFI_SUCCESS;
+}
+static EFI_STATUS Read(IN *in,EFI_INPUT_KEY *k){
+    (void)in;reads++;
+    if(!key)return EFI_NOT_READY;
+    k->UnicodeChar=key;k->ScanCode=0;return EFI_SUCCESS;
+}
+static EFI_STATUS Stall(UINTN n){(void)n;return EFI_SUCCESS;}
+""" + actual + r"""
+int main(void){
+    OUT out={Output};IN in={Read};BS bs={Stall};EFI_SYSTEM_TABLE t={&out,&in,&bs};
+    GU_ESP_CHOICE choices[2]={{NULL,{0x8c,0x85,0x05,0xa0,0x87,0x44,0xe2,0x4e,
+        0x97,0x6e,0x17,0x10,0xff,0x48,0x4c,0x31}},{NULL,{1}}};
+    UINTN selected=99;
+    assert(ShowWindowsEspChoice(&t,1,choices[0].guid,1)==0);
+    assert(!strcmp(output,"1: Windows Boot Manager a005858c-4487-4ee2-976e-1710ff484c31\r\n"));
+    assert(ChooseWindowsEsp(&t,choices,1,&selected)==0&&selected==0&&reads==0);
+    key='2';assert(ChooseWindowsEsp(&t,choices,2,&selected)==0&&selected==1);
+    key='1';assert(ChooseWindowsEsp(&t,choices,2,&selected)==0&&selected==0);
+    key='S';assert(ChooseWindowsEsp(&t,choices,2,&selected)==EFI_ABORTED&&selected==2);
+    key=0;assert(ChooseWindowsEsp(&t,choices,2,&selected)==EFI_TIMEOUT&&selected==2);
+    key='9';assert(ChooseWindowsEsp(&t,choices,2,&selected)==EFI_TIMEOUT&&selected==2);
+    fail=1;key='1';assert(ChooseWindowsEsp(&t,choices,2,&selected)==EFI_DEVICE_ERROR&&selected==2);
+    fail=0;log_ok=0;assert(ChooseWindowsEsp(&t,choices,2,&selected)==EFI_DEVICE_ERROR&&selected==2);
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "menu.c"
+            binary = Path(tmp) / "menu"
+            src.write_text(mock, encoding="utf-8")
+            built = subprocess.run([cc, "-std=c11", "-fshort-wchar", "-Wall", "-Wextra",
+                                    "-Werror", str(src), "-o", str(binary)],
+                                   capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            run = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+        app = (SRC / "app.c").read_text(encoding="utf-8")
+        early = app.index("/* Resolve the boot destination before firmware asset")
+        self.assertLess(app.index("s=GuBootLoadWindows();", early),
+                        app.index("s=GuPrepareBoundGpu(owner,&stage)"))
+        self.assertIn("if(volume!=SelectedEspHandle)", BOOT_IO)
+        self.assertIn("if(!SelectedEspHandle||matched!=SelectedEspHandle)", BOOT_IO)
+        self.assertIn("if(matches==GU_ESP_MENU_MAX)", BOOT_IO)
+        self.assertIn("if(!memcmp(choices[k].guid,guid,sizeof(guid))", BOOT_IO)
+        self.assertIn("GU_APP_OPERATION == 85 || GU_APP_OPERATION == 73 || GU_APP_OPERATION == 80",
+                      (SRC / "boot_io.h").read_text(encoding="utf-8"))
 
     def test_single_esp_refusal_survives(self):
         self.assertIn("if(matches!=1U)return matches?EFI_UNSUPPORTED:EFI_NOT_FOUND;", BOOT_IO)

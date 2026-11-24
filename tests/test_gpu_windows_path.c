@@ -88,6 +88,16 @@ int main(void) {
   /* The runtime policy's structural test accepts the same shape without a
    * pin, and rejects everything the pinned test rejects structurally. */
   CHECK(GuWindowsEspPathCandidate(path,58));
+  {
+    uint8_t got[16];
+    CHECK(GuWindowsEspPathGuid(path,58,got));
+    CHECK(!memcmp(got,guid,sizeof(got)));
+    CHECK(!GuWindowsEspPathGuid(path,57,got));
+    CHECK(!GuWindowsEspPathGuid(path,58,NULL));
+    memset(path+12+24,0,16);
+    CHECK(!GuWindowsEspPathGuid(path,58,got));
+    memcpy(path,save,58);
+  }
   CHECK(GuWindowsEspPathCandidate(path,sizeof(path)));
   CHECK(!GuWindowsEspPathCandidate(path,57));
   CHECK(!GuWindowsEspPathCandidate(NULL,58));

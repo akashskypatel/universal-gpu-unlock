@@ -18,6 +18,8 @@ int GuWindowsEspPathMatches(const uint8_t *path, size_t bound,
  * "exactly one volume carries the Windows boot manager" rule instead of a
  * compiled GUID. */
 int GuWindowsEspPathCandidate(const uint8_t *path, size_t bound);
+/* Copy the nonzero unique GPT partition identity from a validated path. */
+int GuWindowsEspPathGuid(const uint8_t *path, size_t bound, uint8_t guid[16]);
 
 /* A2's missing half: does the boot option's file-path list name this volume?
  *

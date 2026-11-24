@@ -337,6 +337,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   /* Pin the discovered owner through preparation and transaction entry. */
   GU_PLATFORM *owner=GuPlatformActive;
   if(!owner){s=EFI_NOT_READY;goto failed;}
+#ifdef GU_INTERACTIVE_WINDOWS_ESP
+  /* Resolve the boot destination before firmware asset fallback or any
+   * actuation. Keep the loaded image and boot-local choice for handover. */
+  stage="stage-windows-image";GuTracePhase(stage);
+  s=GuBootLoadWindows();
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault||!GuBootLogOpen())goto failed;
+  GuBootSay(L"\r\nWindows boot destination accepted. Preparing GPU firmware assets.\r\n");
+#endif
   if (owner->is_ampere) {
     GuLog("Ampere GPU detected: Device ID 0x%04x\n", (unsigned)owner->device_id);
 #ifndef GU_STOP_RELEASE_ONLY_BENCH
@@ -422,7 +430,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   return EFI_SUCCESS;
 #endif
 #else
+#ifndef GU_INTERACTIVE_WINDOWS_ESP
   stage="stage-windows-image";GuTracePhase(stage);s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+#endif
 
 #ifdef GU_APP_OPERATION
   stage="build-selected-operation";GuTracePhase(stage);

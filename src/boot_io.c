@@ -771,10 +771,18 @@ static EFI_STATUS LocateBootFilesystems(EFI_BOOT_SERVICES *bs,EFI_HANDLE **handl
 static const uint8_t RuntimeEspPin[16]=GU_WINDOWS_ESP_PIN_BYTES;
 #endif
 /* The same exact optional pin constrains firmware fallback and Windows staging. */
+#if defined(GU_INTERACTIVE_WINDOWS_ESP) && !defined(GU_RUNTIME_ESP_PIN)
+static EFI_HANDLE SelectedEspHandle;
+static uint8_t SelectedEspGuid[16];
+#endif
 static BOOLEAN RuntimeEspPathCandidate(const EFI_DEVICE_PATH_PROTOCOL *path,UINTN bytes) {
 #ifdef GU_RUNTIME_ESP_PIN
   return GuWindowsEspPathMatches((const uint8_t *)path,bytes,RuntimeEspPin);
 #else
+#if defined(GU_INTERACTIVE_WINDOWS_ESP)
+  if(SelectedEspHandle)
+    return GuWindowsEspPathMatches((const uint8_t *)path,bytes,SelectedEspGuid);
+#endif
   return GuWindowsEspPathCandidate((const uint8_t *)path,bytes);
 #endif
 }
@@ -849,6 +857,138 @@ static EFI_STATUS BootOrderNamesVolume(const EFI_DEVICE_PATH_PROTOCOL *dp,UINTN 
 }
 #endif
 
+#if defined(GU_INTERACTIVE_WINDOWS_ESP) && !defined(GU_RUNTIME_ESP_PIN)
+#define GU_ESP_MENU_MAX 9U
+typedef struct {
+  EFI_HANDLE handle;
+  uint8_t guid[16];
+} GU_ESP_CHOICE;
+
+/* Probe using the same file names and confirmed close accounting as staging. */
+static EFI_STATUS ProbeWindowsManager(EFI_BOOT_SERVICES *b,EFI_HANDLE handle,BOOLEAN *found) {
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
+  EFI_FILE_PROTOCOL *root=NULL;
+  *found=FALSE;
+  EFI_STATUS s=b->HandleProtocol(handle,&FsGuid,(VOID **)&fs);
+  if(s!=EFI_SUCCESS||!fs)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+  if(!fs->OpenVolume)return EFI_UNSUPPORTED;
+  s=fs->OpenVolume(fs,&root);
+  s=BootFileOpenResult(s,&root);
+  if(s!=EFI_SUCCESS||!root)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+  if(!root->Open)s=EFI_UNSUPPORTED;
+  for(UINTN i=0;s==EFI_SUCCESS&&i<sizeof(WindowsCandidates)/sizeof(WindowsCandidates[0]);i++) {
+    EFI_FILE_PROTOCOL *file=NULL;
+    EFI_STATUS opened=root->Open(root,&file,(CHAR16 *)WindowsCandidates[i],EFI_FILE_MODE_READ,0);
+    opened=BootFileOpenResult(opened,&file);
+    if(opened==EFI_NOT_FOUND)continue;
+    if(opened!=EFI_SUCCESS||!file){s=opened==EFI_SUCCESS?EFI_DEVICE_ERROR:opened;break;}
+    s=CloseBootFile(&file);
+    if(s==EFI_SUCCESS)*found=TRUE;
+    break;
+  }
+  EFI_STATUS closed=CloseBootFile(&root);
+  return closed==EFI_SUCCESS?s:closed;
+}
+
+static EFI_STATUS ShowWindowsEspChoice(EFI_SYSTEM_TABLE *t,UINTN number,
+                                      const uint8_t guid[16],BOOLEAN show) {
+  static const CHAR16 hex[]=L"0123456789abcdef";
+  static const UINT8 order[]={3,2,1,0,5,4,7,6,8,9,10,11,12,13,14,15};
+  CHAR16 row[]=L"0: Windows Boot Manager 00000000-0000-0000-0000-000000000000\r\n";
+  UINTN at=sizeof(L"0: Windows Boot Manager ")/sizeof(CHAR16)-1U;
+  if(!guid||number<1U||number>GU_ESP_MENU_MAX)return EFI_INVALID_PARAMETER;
+  row[0]=(CHAR16)('0'+number);
+  for(UINTN i=0;i<16U;i++) {
+    if(i==4U||i==6U||i==8U||i==10U)at++;
+    row[at++]=hex[guid[order[i]]>>4U];
+    row[at++]=hex[guid[order[i]]&15U];
+  }
+  GuLog("WINDOWS_ESP_CANDIDATE %ls",row);
+  if(!show)return EFI_SUCCESS;
+  if(!t||!t->ConOut||!t->ConOut->OutputString)return EFI_UNSUPPORTED;
+  return t->ConOut->OutputString(t->ConOut,row);
+}
+
+/* A single candidate needs no question. Multiple candidates require fresh
+ * input; no timeout or cancellation can publish a default choice. */
+static EFI_STATUS ChooseWindowsEsp(EFI_SYSTEM_TABLE *t,const GU_ESP_CHOICE *choices,
+                                   UINTN count,UINTN *selected) {
+  if(!t||!choices||!selected||!count||count>GU_ESP_MENU_MAX)return EFI_INVALID_PARAMETER;
+  *selected=count;
+  for(UINTN i=0;i<count;i++) {
+    EFI_STATUS s=ShowWindowsEspChoice(t,i+1U,choices[i].guid,count>1U);
+    if(s!=EFI_SUCCESS||!GuBootLogOpen())return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+  }
+  if(count==1U){*selected=0;return EFI_SUCCESS;}
+  if(!t->ConIn||!t->ConIn->ReadKeyStroke||!t->ConOut||!t->ConOut->OutputString||
+     !t->BootServices||!t->BootServices->Stall)return EFI_UNSUPPORTED;
+  EFI_STATUS s=t->ConOut->OutputString(t->ConOut,
+    L"\r\nSelect Windows boot partition (1-9), or ESC to cancel.\r\n"
+    L"No GPU transaction has started. Selection expires in 30 seconds.\r\n");
+  if(s!=EFI_SUCCESS)return s;
+  for(UINTN i=0;i<3000U;i++) {
+    EFI_INPUT_KEY key;
+    s=t->ConIn->ReadKeyStroke(t->ConIn,&key);
+    if(s==EFI_SUCCESS) {
+      if(key.ScanCode==0x17||key.UnicodeChar=='s'||key.UnicodeChar=='S')return EFI_ABORTED;
+      if(key.UnicodeChar>='1'&&key.UnicodeChar<=(CHAR16)('0'+count)) {
+        *selected=(UINTN)(key.UnicodeChar-'1');
+        return EFI_SUCCESS;
+      }
+    } else if(s!=EFI_NOT_READY)return s;
+    s=t->BootServices->Stall(10000U);
+    if(s!=EFI_SUCCESS)return s;
+  }
+  return EFI_TIMEOUT;
+}
+
+/* Do not hold open files or a filesystem handle buffer across user input.
+ * The loader repeats its exact unique-match census before LoadImage. */
+static EFI_STATUS SelectRuntimeWindowsEsp(VOID) {
+  if(SelectedEspHandle||!Table||!Table->BootServices||!GuBootLogOpen())return EFI_NOT_READY;
+  EFI_BOOT_SERVICES *b=Table->BootServices;
+  EFI_HANDLE *handles=NULL;
+  UINTN count=0,matches=0,selected=0;
+  GU_ESP_CHOICE choices[GU_ESP_MENU_MAX];
+  EFI_STATUS s=LocateBootFilesystems(b,&handles,&count);
+  if(s!=EFI_SUCCESS)return s;
+  for(UINTN i=0;s==EFI_SUCCESS&&i<count;i++) {
+    if(handles[i]==OwnVolume)continue;
+    EFI_DEVICE_PATH_PROTOCOL *dp=NULL;
+    UINTN bytes=0;BOOLEAN usb=FALSE,media=FALSE,found=FALSE;
+    uint8_t guid[16];
+    if(b->HandleProtocol(handles[i],&PathGuid,(VOID **)&dp)!=EFI_SUCCESS||
+       !Inspect(dp,&bytes,&usb,&media)||usb||
+       !GuWindowsEspPathGuid((const uint8_t *)dp,bytes,guid))continue;
+    s=ProbeWindowsManager(b,handles[i],&found);
+    if(s!=EFI_SUCCESS||!found)continue;
+    if(matches==GU_ESP_MENU_MAX){s=EFI_UNSUPPORTED;break;}
+    for(UINTN k=0;k<matches;k++)
+      if(!memcmp(choices[k].guid,guid,sizeof(guid))||choices[k].handle==handles[i]) {
+        s=EFI_COMPROMISED_DATA;break;
+      }
+    if(s!=EFI_SUCCESS)break;
+    choices[matches].handle=handles[i];
+    memcpy(choices[matches++].guid,guid,sizeof(guid));
+  }
+  EFI_STATUS freed=ReleaseBootFilesystemHandles(b,&handles);
+  if(freed!=EFI_SUCCESS)return freed;
+  if(s!=EFI_SUCCESS)return s;
+  if(!matches)return EFI_NOT_FOUND;
+  s=ChooseWindowsEsp(Table,choices,matches,&selected);
+  if(s!=EFI_SUCCESS||!GuBootLogOpen()||selected>=matches) {
+    GuLog("WINDOWS_ESP_SELECTION=REFUSED STATUS=%#llx CANDIDATES=%zu\n",
+          (unsigned long long)s,(size_t)matches);
+    return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+  }
+  memcpy(SelectedEspGuid,choices[selected].guid,sizeof(SelectedEspGuid));
+  SelectedEspHandle=choices[selected].handle;
+  GuLog("WINDOWS_ESP_SELECTION=ACCEPTED CHOICE=%zu CANDIDATES=%zu SOURCE=%s NVRAM=UNCHANGED\n",
+        (size_t)selected+1U,(size_t)matches,matches==1U?"UNIQUE":"OPERATOR");
+  return GuBootLogOpen()?EFI_SUCCESS:EFI_DEVICE_ERROR;
+}
+#endif
+
 static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {
   if(!out||!Table||!Table->BootServices)return EFI_INVALID_PARAMETER;
   *out=NULL;
@@ -880,6 +1020,9 @@ static EFI_STATUS ConfiguredEspVolume(EFI_HANDLE *out) {
   EFI_STATUS freed=ReleaseBootFilesystemHandles(b,&handles);
   if(freed!=EFI_SUCCESS)return freed;
   if(matches!=1U)return matches?EFI_UNSUPPORTED:EFI_NOT_FOUND;
+#if defined(GU_INTERACTIVE_WINDOWS_ESP) && !defined(GU_RUNTIME_ESP_PIN)
+  if(!SelectedEspHandle||matched!=SelectedEspHandle)return EFI_NOT_READY;
+#endif
 #ifdef GU_RUNTIME_ESP
   {
     /* The volume that carries the boot manager is not necessarily the one the
@@ -1057,6 +1200,9 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   const CHAR16 *selected_name=NULL;
 #ifdef GU_RUNTIME_ESP_PIN
   GuLog("WINDOWS_ESP_GUID=%s POLICY=EXPLICIT_GUID\n",GU_WINDOWS_ESP_PIN_TEXT);
+#elif defined(GU_INTERACTIVE_WINDOWS_ESP)
+  EFI_STATUS selection=SelectRuntimeWindowsEsp();
+  if(selection!=EFI_SUCCESS)return selection;
 #endif
   EFI_STATUS s=LocateBootFilesystems(b,&h,&count);
   if(s!=EFI_SUCCESS)return s;
@@ -1123,6 +1269,12 @@ EFI_STATUS GuBootLoadWindows(VOID) {
     EFI_STATUS closed=CloseBootFile(&matched_root);
     return closed==EFI_SUCCESS?EFI_UNSUPPORTED:closed;
   }
+#if defined(GU_INTERACTIVE_WINDOWS_ESP) && !defined(GU_RUNTIME_ESP_PIN)
+  if(volume!=SelectedEspHandle) {
+    EFI_STATUS closed=CloseBootFile(&matched_root);
+    return closed==EFI_SUCCESS?EFI_NOT_READY:closed;
+  }
+#endif
   EFI_FILE_PROTOCOL *root=matched_root;
   VOID *bytes=NULL;UINTN actual_size=0;
   s=ReadWindowsBinary(b,root,selected_name,&actual_size,&bytes);
@@ -1152,6 +1304,8 @@ EFI_STATUS GuBootLoadWindows(VOID) {
   if(s==EFI_SUCCESS)TargetEspVolume=volume;
 #ifdef GU_RUNTIME_ESP_PIN
   GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=1 policy=explicit_runtime_guid GUID=%s path='%ls'\n",(unsigned long long)s,(size_t)matches,GU_WINDOWS_ESP_PIN_TEXT,selected_name);
+#elif defined(GU_INTERACTIVE_WINDOWS_ESP)
+  GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=0 policy=boot_local_choice path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
 #elif defined(GU_RUNTIME_ESP)
   GuLog("Windows image staged: status=%#llx matches=%zu pinned_GPT=0 policy=runtime_marker path='%ls'\n",(unsigned long long)s,(size_t)matches,selected_name);
 #else
