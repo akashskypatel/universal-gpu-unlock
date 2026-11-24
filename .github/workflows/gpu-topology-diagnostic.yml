@@ -670,6 +670,9 @@ jobs:
             & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime app compilation failed'}
             if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI)){throw 'Stop-only runtime EFI missing'}
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -StopReleaseWindowsHandoff -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime Windows handover compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI)){throw 'Stop-only runtime Windows handover EFI missing'}
             & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp -SelectionBdf '0000:09:02.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only one-card app compilation failed'}
             & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append

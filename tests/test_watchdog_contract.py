@@ -115,7 +115,8 @@ class WatchdogContract(unittest.TestCase):
         marker = APP.index("STOP_RELEASE_ONLY_IMAGE=1")
         start = APP.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, marker)
         end = APP.index('#else\n  stage="stage-windows-image"', marker)
-        branch = APP[start:end]
+        from test_unsafe_bench_experiment import without_windows_handoff
+        branch = without_windows_handoff(APP[start:end])
         execution = branch.index("GuExecuteStopReleaseSequence(")
         cancel = branch.index("GuBootWatchdogCancel()")
         close = branch.index("GuBootClose()", cancel)

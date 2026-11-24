@@ -14,6 +14,10 @@
 
 #include "boot_io.h"
 
+#if defined(GU_STOP_RELEASE_WINDOWS_HANDOFF) && (!defined(GU_STOP_RELEASE_ONLY_BENCH) || !defined(GU_RUNTIME_SELECTION) || !defined(GU_RUNTIME_ESP) || !defined(GU_DXE_FILE_ONLY_OUTPUT))
+#error Stop-only Windows handover requires runtime selection, runtime ESP discovery and file-only Stop scope
+#endif
+
 #include "compat/compat.h"
 
 #ifndef GU_STOP_RELEASE_ONLY_BENCH
@@ -168,8 +172,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   boot_state_present=(GuBootStateRead(t,&boot_state)==EFI_SUCCESS);
 
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
-  /* This image must not repair another image's state, change NVRAM, or launch
-   * another EFI program. A prior failed transaction makes this test refuse. */
+  /* Never repair another image's state or change NVRAM in this test.
+   * A prior failed transaction also blocks the optional Windows handover. */
   if(boot_state_present&&
      (boot_state.Phase==GU_BOOT_STATE_INTENT||
       (boot_state.Phase==GU_BOOT_STATE_OUTCOME&&boot_state.Status!=EFI_SUCCESS))) {
@@ -298,21 +302,50 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 #endif
   GuLog("ASPM_ADMISSION=BYPASSED INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=CONDITIONAL "
         "FIRMWARE_TRANSACTION=0 UNLOCK=0 FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 "
+#ifdef GU_STOP_RELEASE_WINDOWS_HANDOFF
+        "OS_HANDOFF=WINDOWS_AFTER_SUCCESS HARDWARE_VERIFIED=0\n");
+#else
         "OS_HANDOFF=NONE HARDWARE_VERIFIED=0\n");
+#endif
   GuBootSilence();
   s=GuExecuteStopReleaseSequence(owner,t,image,&stage);
-  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  if(s!=EFI_SUCCESS)goto failed;
+  /* A successful sequence leaves the last GPU bound, not the first. */
+  owner=GuPlatformActive;
+  if(!owner||owner->fault){s=EFI_NOT_READY;goto failed;}
   s=GuBootWatchdogCancel();if(s!=EFI_SUCCESS)goto failed;
   GuLog("STOP_RELEASE_ONLY=COMPLETE FIRMWARE_TRANSACTION=0 UNLOCK=0 "
+#ifdef GU_STOP_RELEASE_WINDOWS_HANDOFF
+        "REATTACH_VERIFIED=1 OS_HANDOFF=WINDOWS_AFTER_SUCCESS\n");
+#else
         "REATTACH_VERIFIED=1 OS_HANDOFF=NONE\n");
+#endif
   GuBootUnsilence();
   s=GuBootBenchReportCompletion();
   if(s!=EFI_SUCCESS)
     GuLog("BENCH_COMPLETION_DISPLAY=FAILED STATUS=%#llx GPU_SEQUENCE=COMPLETE\n",
           (unsigned long long)s);
+#ifdef GU_STOP_RELEASE_WINDOWS_HANDOFF
+  stage="stage-stop-only-windows";GuTracePhase(stage);
+  s=GuBootLoadWindows();
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  /* Loading the image is not starting it. Verify the complete sequence
+   * again after staging Windows and after the completion display. */
+  stage="verify-stop-only-windows";GuTracePhase(stage);
+  s=GuVerifySelectedSequence(t);
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+  GuLog("STOP_RELEASE_WINDOWS_HANDOFF=READY FINAL_GRAPH_VERIFIED=1 "
+        "FIRMWARE_TRANSACTION=0 WINDOWS_START_ATTEMPTED=0 WINDOWS_BOOT_VERIFIED=0\n");
+#endif
   stage="close-USB-log";GuTracePhase(stage);
-  s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
+  s=GuBootClose();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+#ifdef GU_STOP_RELEASE_WINDOWS_HANDOFF
+  s=GuBootWindows();
+  /* A returned Windows image is not a successful handover. */
+  GuBootHalt();return s==EFI_SUCCESS?EFI_ABORTED:s;
+#else
   return EFI_SUCCESS;
+#endif
 #else
   stage="stage-windows-image";GuTracePhase(stage);s=GuBootLoadWindows();if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
 

@@ -647,6 +647,7 @@ function Test-VariantSelection($Variant) {
     # selection is a skip, not a failure: the builder would produce the sequence
     # image under a name this catalogue gives to a different variant.
     $count = Get-SelectionCount
+    if ($Variant.id -eq 'app-stop-release-sequence-handoff' -and $count -gt 0) { return 'NEEDS_RUNTIME_SELECTION' }
     $needs = $null
     if ($Variant.PSObject.Properties.Name -contains 'requires_selection') { $needs = $Variant.requires_selection }
     if ($needs -eq 'single' -and $count -ne 1) {

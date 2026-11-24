@@ -1,10 +1,19 @@
 """Contracts for the explicitly opted-in, unverified DXE bench variant."""
 import json
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
+
+
+def without_windows_handoff(branch):
+    """Select the existing return-to-firmware compile-time branches."""
+    return re.sub(r"#ifdef GU_STOP_RELEASE_WINDOWS_HANDOFF\n(.*?)(?:#else\n(.*?))?#endif\n",
+                  lambda match: match.group(2) or "", branch, flags=re.S)
 
 
 class UnsafeBenchVariantContract(unittest.TestCase):
@@ -396,7 +405,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
     def test_stop_only_app_does_not_load_windows_image_or_handoff(self):
         branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
         branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
-        stop_branch = self.app[branch_start:branch_end]
+        stop_branch = without_windows_handoff(self.app[branch_start:branch_end])
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertNotIn("GuBootWindows()", stop_branch)
         self.assertIn("OS_HANDOFF=NONE", stop_branch)
@@ -415,7 +424,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("[switch]$FileOnlyBootLog", self.app_builder)
         branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
         branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
-        stop_branch = self.app[branch_start:branch_end]
+        stop_branch = without_windows_handoff(self.app[branch_start:branch_end])
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertNotIn("GuBootBenchCountdown(", stop_branch)
         self.assertIn("GuBootBenchReportCompletion()", stop_branch)
@@ -445,6 +454,97 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         for token in ("FIRMWARE_TRANSACTION=0", "UNLOCK=0", "STOP_RELEASE_ONLY=1",
                       "ASPM_ADMISSION_BYPASSED=1", "REATTACH_ATTEMPTED=1"):
             self.assertIn(token, variant["attestations"])
+
+    def test_stop_only_handoff_executes_only_after_success(self):
+        start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0,
+                               self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
+        end = self.app.index('#else\n  stage="stage-windows-image"', start)
+        branch = self.app[start:end] + "\n#endif\n"
+        # Compile and execute the actual application success block with mock
+        # services. A second GPU replaces the first active context. Failures
+        # at each gate must prevent StartImage.
+        harness = r'''
+#include <assert.h>
+#include <stddef.h>
+typedef int EFI_STATUS;
+typedef struct { int fault; } GU_PLATFORM;
+typedef void EFI_SYSTEM_TABLE;
+typedef void *EFI_HANDLE;
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 7
+#define EFI_ABORTED 21
+#define GU_STOP_RELEASE_ONLY_BENCH 1
+#define GU_RUNTIME_SELECTION 1
+static GU_PLATFORM first,last,*GuPlatformActive;
+static int fail_at, calls[8], n;
+static void GuLog(const char *fmt, ...) {(void)fmt;}
+static void GuTracePhase(const char *stage) {(void)stage;}
+static void GuBootSilence(void) {}
+static void GuBootUnsilence(void) {}
+static int check(int step) {calls[n++]=step;return fail_at==step?EFI_NOT_READY:0;}
+static int GuExecuteStopReleaseSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *t,EFI_HANDLE image,const char **stage) {
+  (void)t;(void)image;(void)stage;assert(owner==&first);
+  GuPlatformActive=&last;return check(1);
+}
+static int GuBootWatchdogCancel(void) {return check(2);}
+static int GuBootBenchReportCompletion(void) {return 0;}
+static int GuBootLoadWindows(void) {return check(3);}
+static int GuVerifySelectedSequence(EFI_SYSTEM_TABLE *t) {(void)t;return check(4);}
+static int GuBootClose(void) {return check(5);}
+static int GuBootWindows(void) {return check(6);}
+static void GuBootHalt(void) {(void)check(7);}
+static int run(void) {
+  EFI_STATUS s=0;GU_PLATFORM *owner=GuPlatformActive;
+  EFI_SYSTEM_TABLE *t=NULL;EFI_HANDLE image=NULL;const char *stage=NULL;
+''' + branch + r'''
+failed: return s==0?EFI_NOT_READY:s;
+}
+static void reset(int fail) {n=0;fail_at=fail;first.fault=last.fault=0;GuPlatformActive=&first;}
+int main(void) {
+  reset(0);
+#ifdef GU_STOP_RELEASE_WINDOWS_HANDOFF
+  assert(run()==EFI_ABORTED && n==7);
+  for(int i=0;i<7;i++)assert(calls[i]==i+1);
+  for(int failure=1;failure<=5;failure++) {
+    reset(failure);assert(run()!=EFI_SUCCESS && n==failure);
+    for(int i=0;i<n;i++)assert(calls[i]==i+1);
+  }
+  reset(6);assert(run()==EFI_NOT_READY && n==7 && calls[6]==7);
+  reset(0);last.fault=1;assert(run()!=EFI_SUCCESS && n==1);
+#else
+  assert(run()==EFI_SUCCESS && n==3 && calls[0]==1 && calls[1]==2 && calls[2]==5);
+  reset(5);assert(run()!=EFI_SUCCESS && n==3);
+#endif
+  return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "stop_app.c"
+            source.write_text(harness, encoding="utf-8")
+            for enabled in (False, True):
+                with self.subTest(handoff=enabled):
+                    executable = Path(tmp) / ("handoff" if enabled else "return")
+                    args = ["cc", "-std=c11", str(source), "-o", str(executable)]
+                    if enabled:
+                        args.insert(1, "-DGU_STOP_RELEASE_WINDOWS_HANDOFF")
+                    subprocess.run(args, check=True, capture_output=True, text=True)
+                    subprocess.run([str(executable)], check=True, capture_output=True, text=True)
+
+    def test_handoff_variant_is_runtime_stop_only(self):
+        variant = next(v for v in self.catalog["variants"]
+                       if v["id"] == "app-stop-release-sequence-handoff")
+        for switch in ("StopReleaseOnlyBench", "StopReleaseWindowsHandoff",
+                       "FileOnlyBootLog", "RuntimeEsp", "RuntimeSelection",
+                       "AcceptUnverifiedActuation"):
+            self.assertTrue(variant["switches"][switch])
+        self.assertEqual(variant["family"], "prepare")
+        self.assertIn("OS_HANDOFF=WINDOWS_AFTER_SUCCESS", variant["attestations"])
+        self.assertIn("FIRMWARE_TRANSACTION=0", variant["attestations"])
+        self.assertIn("UNLOCK=0", variant["attestations"])
+        self.assertIn("NEEDS_RUNTIME_SELECTION", self.sign_deploy)
+        self.assertIn("/DGU_STOP_RELEASE_WINDOWS_HANDOFF", self.app_builder)
+        self.assertIn("-StopReleaseWindowsHandoff requires the runtime Stop-only USB profile",
+                      self.app_builder)
 
     def test_catalogue_keeps_override_as_a_separate_actuating_variant(self):
         matches = [v for v in self.catalog["variants"] if v["id"] == "dxe-stop-release-sequence-bench"]

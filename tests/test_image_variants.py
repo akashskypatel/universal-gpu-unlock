@@ -104,6 +104,8 @@ def expected_binary(variant: dict) -> str:
     if family in ("prepare", "prepare-dxe"):
         dxe = "-DXE" if family == "prepare-dxe" else ""
         ext = ".efi" if family == "prepare-dxe" else ".EFI"
+        if switches.get("StopReleaseWindowsHandoff"):
+            return "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI"
         if switches.get("StopReleaseOnlyBench"):
             return f"GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME{dxe}{ext}"
         if switches.get("RuntimeSelection") and switches.get("AcceptUnverifiedActuation"):
@@ -247,7 +249,7 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "REATTACH_VERIFIED": 0,
             "FIRMWARE_ASSET_FILES_READ": 0 if unsafe_bench else None,
             "PROM_READ": 0 if unsafe_bench else None,
-            "OS_HANDOFF": "NONE" if unsafe_bench else None,
+            "OS_HANDOFF": ("WINDOWS_AFTER_SUCCESS" if switches.get("StopReleaseWindowsHandoff") else "NONE") if unsafe_bench else None,
             "TARGET_ORDER": "RUNTIME_SUPPORTED_NVIDIA_ENUMERATION" if unsafe_bench else "",
             "MULTI_GPU_MUTATION_ALLOWED": accept,
             "SYNTHETIC_PROFILE": synthetic,
