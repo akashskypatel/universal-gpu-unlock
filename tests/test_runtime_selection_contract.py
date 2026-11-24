@@ -89,6 +89,72 @@ class SelectionUnit(unittest.TestCase):
                 self.assertIn("checks OK", done.stdout)
 
 
+
+class LiveSelectionMenu(unittest.TestCase):
+    def test_live_choice_display_uses_the_same_location_and_reports_output_failure(self):
+        app = (SRC / "app.c").read_text(encoding="utf-8")
+        start = app.index("static EFI_STATUS ShowTargetChoice(")
+        actual = app[start:app.index("#endif", start)]
+        menu = app.split("static EFI_STATUS ResolveTargetsOnConsole(", 1)[1]
+        self.assertLess(menu.index("s=ShowTargetChoice(t,i+1U,record);"),
+                        menu.index("ReadKeyStroke(t->ConIn,&key)"))
+        self.assertIn("if(s!=EFI_SUCCESS||!GuBootLogOpen())", menu)
+        mock = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+typedef uint16_t CHAR16;
+typedef size_t UINTN;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 2
+typedef struct { unsigned segment,bus,device,function; uint32_t pci_id; } GU_GPU_RECORD;
+typedef struct OUT OUT;
+struct OUT { EFI_STATUS (*OutputString)(OUT *,CHAR16 *); };
+typedef struct { OUT *ConOut; } EFI_SYSTEM_TABLE;
+static int calls,fail;
+static char shown[128];
+static EFI_STATUS Output(OUT *self,CHAR16 *row) {
+  (void)self;calls++;
+  size_t n=0;while(row[n]&&n<sizeof(shown)-1U){shown[n]=(char)row[n];n++;}
+  shown[n]=0;return fail?7:EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void) {
+  OUT output={Output};EFI_SYSTEM_TABLE table={&output};
+  GU_GPU_RECORD first={0,4,0,0,0x220a10de},second={0,1,0,0,0x268410de};
+  GU_GPU_RECORD varied={0x1234,0xab,0x1c,7,0x56781234};
+  CHECK(ShowTargetChoice(&table,1,&first)==EFI_SUCCESS);
+  CHECK(!strcmp(shown,"1: 0000:04:00.0 PCI=10de:220a\r\n"));
+  CHECK(ShowTargetChoice(&table,2,&second)==EFI_SUCCESS);
+  CHECK(!strcmp(shown,"2: 0000:01:00.0 PCI=10de:2684\r\n"));
+  CHECK(ShowTargetChoice(&table,9,&varied)==EFI_SUCCESS);
+  CHECK(!strcmp(shown,"9: 1234:ab:1c.7 PCI=1234:5678\r\n"));
+  CHECK(calls==3);
+  CHECK(ShowTargetChoice(&table,0,&second)==EFI_INVALID_PARAMETER);
+  CHECK(ShowTargetChoice(&table,10,&second)==EFI_INVALID_PARAMETER);
+  CHECK(calls==3);
+  fail=1;CHECK(ShowTargetChoice(&table,2,&second)==7&&calls==4);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "choice.c"
+            src.write_text(mock, encoding="utf-8")
+            for compiler in compilers():
+                with self.subTest(compiler=compiler):
+                    binary = Path(tmp) / "choice"
+                    build = subprocess.run([compiler, "-std=c11", "-fshort-wchar",
+                                            "-Wall", "-Wextra", "-Werror", "-pedantic",
+                                            str(src), "-o", str(binary)],
+                                           capture_output=True, text=True)
+                    self.assertEqual(build.returncode, 0, build.stderr)
+                    run = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+
 class ProfileGates(unittest.TestCase):
     """``port.h`` keeps runtime selection inside a real execution profile."""
 

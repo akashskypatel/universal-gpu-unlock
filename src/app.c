@@ -44,6 +44,28 @@
 static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
 
 #ifdef GU_RUNTIME_SELECTION
+#ifndef GU_STOP_RELEASE_ONLY_BENCH
+/* The logged enumeration order can change on the next boot. Display the
+ * exact live GPU identity before accepting a numeric choice. */
+static EFI_STATUS ShowTargetChoice(EFI_SYSTEM_TABLE *t,size_t choice,
+                                   const GU_GPU_RECORD *record) {
+  if(!t||!t->ConOut||!t->ConOut->OutputString||!record||
+     choice<1U||choice>9U||record->segment>0xffffU||record->bus>255U||
+     record->device>31U||record->function>7U)return EFI_INVALID_PARAMETER;
+  CHAR16 row[]=L"0: 0000:00:00.0 PCI=0000:0000\r\n";
+  static const CHAR16 hex[]=L"0123456789abcdef";
+  row[0]=(CHAR16)('0'+choice);
+  for(UINTN i=0;i<4U;i++) {
+    row[6U-i]=hex[(record->segment>>(4U*i))&15U];
+    row[23U-i]=hex[(record->pci_id>>(4U*i))&15U];
+    row[28U-i]=hex[(record->pci_id>>(16U+4U*i))&15U];
+  }
+  row[8]=hex[(record->bus>>4U)&15U];row[9]=hex[record->bus&15U];
+  row[11]=hex[(record->device>>4U)&15U];row[12]=hex[record->device&15U];
+  row[14]=hex[record->function];
+  return t->ConOut->OutputString(t->ConOut,row);
+}
+#endif
 /* The image carries no compiled target list. The Stop/release-only profile
  * sets an in-memory select-all policy before discovery; ordinary runtime
  * selection profiles continue to acquire operator policy through GuTargets. */
@@ -102,6 +124,11 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
           (unsigned)record->segment,(unsigned)record->bus,
           (unsigned)record->device,(unsigned)record->function,
           (unsigned)(record->pci_id&0xffffU),(unsigned)(record->pci_id>>16));
+    s=ShowTargetChoice(t,i+1U,record);
+    if(s!=EFI_SUCCESS||!GuBootLogOpen()) {
+      GuLog("ACTIVE_SELECTION=DISPLAY_REFUSED STATUS=%#llx\n",(unsigned long long)s);
+      return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+    }
   }
   GuBootSay(L"\r\nMultiple NVIDIA GPUs found.\r\n"
             L"Press 1-9 to select a target, A for all supported cards, "
