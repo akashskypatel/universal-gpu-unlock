@@ -241,8 +241,13 @@ class UnsafeBenchVariantContract(unittest.TestCase):
                      "GuDevicePathUnchanged(", "Equal(g->Mode,", "Equal(g->Mode->Info,"):
             self.assertIn(gate, notice)
         self.assertIn("EfiBltVideoFill,0,0,12,12,580,198,0", notice)
-        self.assertIn('BenchGopLine(g,24,26,scale,"GPU REATTACHMENT VERIFIED")', notice)
-        self.assertIn('BenchGopLine(g,24,67,scale,target)', notice)
+        self.assertIn("background={24,96,16,0}", notice)
+        self.assertIn('BenchGopLine(g,24,26,scale,background,"GPU REATTACHMENT VERIFIED")', notice)
+        self.assertIn('BenchGopLine(g,24,67,scale,background,target)', notice)
+        glyph_line = self.release.split("static EFI_STATUS BenchGopLine(", 1)[1].split(
+            "static char BenchHex", 1)[0]
+        self.assertIn("EFI_GRAPHICS_OUTPUT_BLT_PIXEL background", glyph_line)
+        self.assertIn("white:background", glyph_line)
         self.assertIn("Gu.discovery_identity.segment", notice)
         self.assertLess(notice.index("GuDevicePathUnchanged("), notice.index("EfiBltVideoFill"))
         self.assertLess(notice.index("EfiBltVideoFill"), notice.index("BenchGopLine("))

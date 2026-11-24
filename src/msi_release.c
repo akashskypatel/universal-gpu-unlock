@@ -2087,10 +2087,10 @@ static const UINT8 *BenchGlyph(char symbol) {
 }
 static EFI_STATUS BenchGopLine(EFI_GRAPHICS_OUTPUT_PROTOCOL *g,
                                UINTN x,UINTN y,UINTN scale,
+                               EFI_GRAPHICS_OUTPUT_BLT_PIXEL background,
                                const char *line) {
   EFI_GRAPHICS_OUTPUT_BLT_PIXEL pixels[15U*21U];
   const EFI_GRAPHICS_OUTPUT_BLT_PIXEL white={255,255,255,0};
-  const EFI_GRAPHICS_OUTPUT_BLT_PIXEL dark={24,16,80,0};
   if(!g||!g->Blt||!g->Mode||!g->Mode->Info||!line||
      scale<1U||scale>3U)return EFI_INVALID_PARAMETER;
   UINTN width=5U*scale,height=7U*scale,advance=6U*scale;
@@ -2103,7 +2103,7 @@ static EFI_STATUS BenchGopLine(EFI_GRAPHICS_OUTPUT_PROTOCOL *g,
     for(UINTN dy=0;dy<height;dy++)
       for(UINTN dx=0;dx<width;dx++)
         pixels[dy*width+dx]=(rows[dy/scale]&(1u<<(4U-dx/scale)))?
-                             white:dark;
+                             white:background;
     EFI_STATUS s=g->Blt(g,pixels,EfiBltBufferToVideo,0,0,x,y,
                         width,height,width*sizeof(*pixels));
     if(s!=EFI_SUCCESS)return s;
@@ -2157,13 +2157,14 @@ static EFI_STATUS BenchShowReattachSuccess(VOID) {
   BenchHexAt(target,15U,2U,Gu.discovery_identity.device);
   BenchHexAt(target,18U,1U,Gu.discovery_identity.function);
   const UINTN scale=width>=1000U?3U:2U;
-  EFI_GRAPHICS_OUTPUT_BLT_PIXEL background={24,16,80,0};
+  /* GOP pixels are blue, green, red, reserved. Match glyph and fill. */
+  EFI_GRAPHICS_OUTPUT_BLT_PIXEL background={24,96,16,0};
   /* Cover the entire warning and the optional post-Stop status line. */
   s=g->Blt(g,&background,EfiBltVideoFill,0,0,12,12,580,198,0);
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,"GPU REATTACHMENT VERIFIED");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,67,scale,target);
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,"STOP RELEASE COMPLETE");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,"FIRMWARE DRIVERS RESTORED");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,background,"GPU REATTACHMENT VERIFIED");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,67,scale,background,target);
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,background,"STOP RELEASE COMPLETE");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,background,"FIRMWARE DRIVERS RESTORED");
   return s;
 }
 
@@ -2210,7 +2211,7 @@ EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
   const UINTN scale=width>=1000U?3U:2U;
   EFI_GRAPHICS_OUTPUT_BLT_PIXEL dark={24,16,80,0};
   s=g->Blt(g,&dark,EfiBltVideoFill,0,0,12,12,580,180,0);
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,"WARNING GPU DRIVER STOP TEST");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,dark,"WARNING GPU DRIVER STOP TEST");
   char target[]="TARGET 0000:00:00.0";
   if(s==EFI_SUCCESS) {
     if(Gu.discovery_identity.segment>0xffffU||
@@ -2221,10 +2222,10 @@ EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
     BenchHexAt(target,12U,2U,Gu.discovery_identity.bus);
     BenchHexAt(target,15U,2U,Gu.discovery_identity.device);
     BenchHexAt(target,18U,1U,Gu.discovery_identity.function);
-    s=BenchGopLine(g,24,67,scale,target);
+    s=BenchGopLine(g,24,67,scale,dark,target);
   }
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,"DISPLAY MAY GO DARK");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,"RECOVERY MAY NEED POWER OFF");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,dark,"DISPLAY MAY GO DARK");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,dark,"RECOVERY MAY NEED POWER OFF");
   GuLog("STOP_RELEASE_WARNING_GOP=%s TARGET=%04x:%02x:%02x.%x "
         "PEER=%04x:%02x:%02x.%x DISPLAY_API_STATUS=%#llx "
         "PHYSICAL_PIXELS_VERIFIED=0 CONSOLE_IO=0\n",
@@ -2308,8 +2309,9 @@ EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
   }
   const UINTN width=g->Mode->Info->HorizontalResolution;
   const UINTN height=g->Mode->Info->VerticalResolution;
+  const EFI_GRAPHICS_OUTPUT_BLT_PIXEL background={24,16,80,0};
   EFI_STATUS draw=width>=600U&&height>=210U?
-    BenchGopLine(g,24U,183U,width>=1000U?3U:2U,
+    BenchGopLine(g,24U,183U,width>=1000U?3U:2U,background,
                  "TARGET RELEASED REATTACH NEXT"):EFI_UNSUPPORTED;
   GuLog("STOP_RELEASE_PEER_CONOUT=TEXT_UNAVAILABLE "
         "TEXT_STATUS=%#llx GRAPH_TEXT_OWNER=%u "
@@ -2354,12 +2356,12 @@ EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID) {
   const UINTN scale=width>=1000U?3U:2U;
   EFI_GRAPHICS_OUTPUT_BLT_PIXEL background={16,16,128,0};
   s=g->Blt(g,&background,EfiBltVideoFill,0,0,12,12,580,190,0);
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,22,scale,"REATTACHMENT FAILED");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,52,scale,"SYSTEM WILL REBOOT");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,82,scale,"IN 30 SECONDS");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,112,scale,"USB BOOT MAY REPEAT THE TEST");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,142,scale,"ENTER BIOS SELECT OTHER DRIVE");
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,172,scale,"BREAK BOOT LOOP IN BIOS");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,22,scale,background,"REATTACHMENT FAILED");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,52,scale,background,"SYSTEM WILL REBOOT");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,82,scale,background,"IN 30 SECONDS");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,112,scale,background,"USB BOOT MAY REPEAT THE TEST");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,142,scale,background,"ENTER BIOS SELECT OTHER DRIVE");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,172,scale,background,"BREAK BOOT LOOP IN BIOS");
   GuLog("STOP_RELEASE_REATTACH_FAILURE_NOTICE STATUS=%#llx "
         "CHANNEL=ORIGINAL_NON_TARGET_GOP SYSTEM_REBOOT=REQUESTED "
         "DELAY_SECONDS=30 USB_BOOT_LOOP_RISK=1 "
