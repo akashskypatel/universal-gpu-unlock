@@ -2,7 +2,7 @@
 
 ## 1. Situation and objective
 
-Status: AUDIT COMPLETE / MIGRATION NOT STARTED. Baseline [arena commit `2cbff8a6e5638555353288dda584bc44b3fc0731`](https://github.com/akashskypatel/universal-gpu-unlock/tree/2cbff8a6e5638555353288dda584bc44b3fc0731). Covers all 41 catalogue entries, five builders, application and driver entrypoints, signing wrapper and generated documents. Host and Windows EFI jobs for [run 45338664023](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/45338664023) passed for the existing maintenance integration. This is not migration verification.
+Status: OWNER APPROVED / MIGRATION IN PROGRESS. The five canonical selectors now resolve 39 legacy configurations. Both preparation configurations remain separate. The original 41-entry regression catalogue remains intact. No hardware execution source or admission condition changed. Baseline [arena commit `2cbff8a6e5638555353288dda584bc44b3fc0731`](https://github.com/akashskypatel/universal-gpu-unlock/tree/2cbff8a6e5638555353288dda584bc44b3fc0731). Covers all 41 catalogue entries, five builders, application and driver entrypoints, signing wrapper and generated documents. Host and Windows EFI jobs for [run 45338664023](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/45338664023) passed for the existing maintenance integration. This is not migration verification.
 
 Reduce 41 public variant IDs to five canonical profile IDs (87.8% reduction). Three describe GPU operations, two cover administration and compile validation. This is a reduction in public names, not a claim that all configurations produce identical binaries. Retain distinct execution modes and evidence. Use verified hardware tests as the authoritative experimental admission baseline. Remove restrictions that are stricter than the applicable verified hardware test, where the evidence establishes that the restriction is unnecessary. Do not add new precaution-only requirements, re-open closed leads, or require repeat hardware tests solely to reconfirm an unchanged path. This is a plan, not authorization to change hardware or production readiness.
 
@@ -67,17 +67,31 @@ For every migrated gate, record original predicate and call site, actual verifie
 | G10 | Maintenance DriverOrder absence, typed record review and independent removal readback | KEEP current requirements; maintenance physical execution not verified. No evidence supports relaxing them. | RETAIN |
 | G11 | Legacy Stop vs reattach, detached U/P vs combined, DXE vs app, resume vs RAM-only | Do not propagate a verified exception across distinct untested lifecycle boundaries. Classify and preserve independently; retire redundant modes only after documented evidence equivalence. | INVESTIGATE |
 
+### First migration predicate audit (source review)
+
+| Gate | Current implementation and disposition |
+| --- | --- |
+| G1/G6 | `msi_release.c:1558–1676`, GuMsiPreflight, uses live peer/GOP observation. The combined mode admits the target-console path with a survivor and retains the independent peer warning. Stop-only permits sole GOP, while combined refuses it. The successful dual-display run already uses this path. No new relaxation is necessary. |
+| G2 | `checks.c:203–211`, GuLinkAccepted, accepts the ASPM-enabled verdict in Stop-only and combined builds. `gpu_discovery.c:698–727`, CheckSelectedLink, applies the verdict before binding. No new exception or predicate change. |
+| G3 | `app.c:101–184` and `gpu_discovery.c:274–300`: combined selection is boot-local. The fresh selection and order remain in the existing runner. The resolver does not force BDFs on it. |
+| G4 | `boot_io.c:1196–1285`: runtime selection or exact pin must resolve to one destination. The combined wrapper already supports optional pin without the local profile. Preserve exact selected handle, read and load checks. |
+| G5/G8 | No new research or hardware prerequisites in the resolver. Production qualification gaps remain separate. |
+| G7/G10 | `app.c:233–282`, `dxe_main.c:49–83`, and the independent maintenance source retain recovery, refusal and reviewed removal. No automatic retry. |
+| G9/G11 | Keep I/R preparation and distinct execution lifecycles during this change. Review their actual dependencies before further source changes. |
+
+The resolver maps requests to existing catalogue entries. It cannot add an exception or change compiled hardware policy. No evidence in this audit shows that an existing predicate excludes the already verified combined configuration. Retain the predicates that passed. Further preparation and administration review remains open.
+
 Production CAN_DETACH=false, CAN_UNLOCK=false, CAN_FLASH=false, RECOVERY_VERIFIED=false remain unchanged. A completed experimental run is not production approval. No additional physical execution is necessary for the catalogue migration itself.
 
-## 4. Proposed canonical interface (not implemented)
+## 4. Canonical interface (resolver implemented; migration in progress)
 
-Keep -Only as the existing selector. Use existing builder arguments and a small typed profile resolver, not a second compiler or arbitrary switch passthrough. These are conceptual option names, not current runnable commands. Explicit action selection is required for any mutating profile. Invalid combinations fail before compile/sign/stage. Preserve the old profile IDs temporarily as exact compatibility aliases.
+Keep -Only as the existing selector. Use existing builder arguments and a small typed profile resolver, not a second compiler or arbitrary switch passthrough. The wrapper implements the five canonical selectors through existing catalogue entries. The proposed preparation submode is not implemented. `-ResolveOnly` reports the selected configuration without building, signing or staging. See [BUILD_SIGN_DEPLOY.md](BUILD_SIGN_DEPLOY.md) for current options. Explicit action selection is required for any mutating profile. Invalid combinations fail before compile/sign/stage. Preserve the old profile IDs temporarily as exact compatibility aliases.
 
 | ID | Role | Optional arguments and restrictions |
 | --- | --- | --- |
-| diagnostic | GPU/firmware observation only | Probe = Topology/GopTextCycle/MsiRom/MsiFuse/MsiSec2/VramBlocks; SaveLog; SelectionBdf(s); WindowsEspGuid where already supported. Preflight only after D2 verifies no persistent writes. Default topology with file evidence; alias preserves old console-only behavior. |
+| diagnostic | GPU/firmware observation only | Probe = Topology/GopTextCycle/MsiRom/MsiFuse/MsiSec2/VramBlocks; file log by default, `-SaveLog:$false` for console-only topology; SelectionBdf(s); WindowsEspGuid where already supported. Preflight only after D2 verifies no persistent writes. Default topology with file evidence; alias preserves old console-only behavior. |
 | driver-transition | Driver Stop/release/reconnect, no firmware transaction | Operation = StopReattach/LegacyStopObservation; ImageKind = Application/Dxe where supported; explicit BDFs or existing live-all policy; handoff choice; legacy hardware target and pinned ESP only for legacy observer. Requires existing mutating deployment consent. |
-| firmware-transaction | Experimental full firmware transaction | Operation = UnlockReattach/Unlock/UnlockWithResume/Menu (explicit legacy menu); ImageKind = Application/Dxe (DXE existing operation policy, not app menu); compiled BDF list or existing runtime selection; EspPolicy = Pinned/Runtime/Resident where supported; optional WindowsEspGuid for combined runtime app; existing supported CapturedPromReference option. Prefer the verified combined application in documentation; no implicit firmware actuation. |
+| firmware-transaction | Experimental full firmware transaction | Operation = UnlockReattach/Unlock/UnlockWithResume/Menu (explicit legacy menu)/DxeTransaction (existing optional S3 policy); ImageKind = Application/Dxe; compiled BDF list or existing runtime selection; EspPolicy = Pinned/Runtime/Resident where supported; optional WindowsEspGuid for combined runtime app; existing supported CapturedPromReference option. Prefer the verified combined application in documentation; no implicit firmware actuation. |
 | maintenance | Administrative NVRAM changes, not read-only | Operation = InstallDriver/RemoveDriver/ReviewBootState. Keep I/R semantics until A1. ReviewBootState links separate maintenance binary, requires isolated media and existing interactive confirmation; reject target/ESP/companion options. |
 | compile-check | Synthetic build validation | ImageKind = Application/Dxe; explicit BDF list. Derive count, never stage or execute; no active/ESP/resume options. |
 
@@ -92,67 +106,67 @@ Status values: NOT STARTED, IN PROGRESS, BLOCKED, IMPLEMENTED, VERIFIED, COMPLET
 | Task | Scope / acceptance | Depends on | Status | Evidence |
 | --- | --- | --- | --- | --- |
 | B0 | Enumerate all 41 entries; verify builders and current hardware baseline | None | COMPLETE | Baseline commit and physical evidence in sections 2–3; existing CI pass |
-| G0 | Audit every affected admission predicate and classify using G1–G11. Remove duplicate or over-restrictive experimental conditions only within their proven scope; document unchanged negative cases. | B0 | NOT STARTED | Pending |
-| R1 | Implement small profile resolver with typed options, exact alias mappings, strict illegal-option rejection and one effective configuration | G0 | NOT STARTED | Pending |
-| D1 | Consolidate 13 diagnostics; preserve all existing evidence shapes, probe limits and handoff rules | R1 | NOT STARTED | Pending |
+| G0 | Audit every affected admission predicate and classify using G1–G11. Remove duplicate or over-restrictive experimental conditions only within their proven scope; document unchanged negative cases. | B0 | IN PROGRESS | Reviewed combined, Stop-only and preparation entry conditions. See predicate audit below. |
+| R1 | Implement small profile resolver with typed options, exact alias mappings, strict illegal-option rejection and one effective configuration | G0 | IMPLEMENTED | 6dd22b4, 90f1f6b; final test run pending |
+| D1 | Consolidate 13 diagnostics; preserve all existing evidence shapes, probe limits and handoff rules | R1 | IMPLEMENTED | 13 mappings use original diagnostic builder |
 | D2 | Split passive preparation from recovery writes; only then migrate two preparation IDs to diagnostic Preflight. Retain DXE timing distinction and old compatibility until proved. | D1,G0 | NOT STARTED | Pending |
-| C1 | Consolidate four compile-only IDs; validate count, app/DXE, non-stageable contract and no execution | R1 | NOT STARTED | Pending |
-| T1 | Consolidate three Stop/reattach IDs, retaining actual warning, release, reattach, no firmware link, lifecycle and mode-specific handoff | R1,G0 | NOT STARTED | Pending |
-| T2 | Consolidate five legacy raw Stop IDs as explicit legacy observer options; review necessity before any deletion | R1,G0 | NOT STARTED | Pending |
-| F1 | Consolidate eight menu/legacy DXE transaction IDs; preserve compiled/runtime and ESP policies, event lifecycle and INTENT | R1,G0 | NOT STARTED | Pending |
-| F2 | Consolidate three fixed U/P/combined IDs; preserve separate modes and verified combined default recommendation; never imply S3 qualification | F1,G0 | NOT STARTED | Pending |
-| A1 | Consolidate three administrative IDs; preserve independent reviewed maintenance image, recovery path and owned entry semantics | R1,G0 | NOT STARTED | Pending |
-| V1 | Compare all 41 old configurations with alias resolution; builder switch, image identity, attestations, safety, target order and negative cases. Run existing host and Windows EFI CI; verify actual outcomes. | D1,D2,C1,T1,T2,F1,F2,A1 | NOT STARTED | Pending |
-| V2 | Update generated catalogue, user guide, donor guide, readiness/log scoring consumers, CI scripts and command references; prove coverage and receipt compatibility | V1 | NOT STARTED | Pending |
+| C1 | Consolidate four compile-only IDs; validate count, app/DXE, non-stageable contract and no execution | R1 | IMPLEMENTED | Four mappings preserve synthetic build and stage refusal |
+| T1 | Consolidate three Stop/reattach IDs, retaining actual warning, release, reattach, no firmware link, lifecycle and mode-specific handoff | R1,G0 | IMPLEMENTED | Three mappings preserve existing Stop-only builders |
+| T2 | Consolidate five legacy raw Stop IDs as explicit legacy observer options; review necessity before any deletion | R1,G0 | IMPLEMENTED | Five mappings retain raw legacy Stop behavior. No archive. |
+| F1 | Consolidate eight menu/legacy DXE transaction IDs; preserve compiled/runtime and ESP policies, event lifecycle and INTENT | R1,G0 | IMPLEMENTED | Eight existing menu/DXE configurations |
+| F2 | Consolidate three fixed U/P/combined IDs; preserve separate modes and verified combined default recommendation; never imply S3 qualification | F1,G0 | IMPLEMENTED | Three existing fixed application configurations |
+| A1 | Consolidate three administrative IDs; preserve independent reviewed maintenance image, recovery path and owned entry semantics | R1,G0 | IN PROGRESS | Three mappings implemented. Administrative dependency review remains open. |
+| V1 | Compare all 41 old configurations with alias resolution; builder switch, image identity, attestations, safety, target order and negative cases. Run existing host and Windows EFI CI; verify actual outcomes. | D1,D2,C1,T1,T2,F1,F2,A1 | IN PROGRESS | 8fde00b5 adds actual PowerShell resolution tests; CI 45345437502 pending. |
+| V2 | Update generated catalogue, user guide, donor guide, readiness/log scoring consumers, CI scripts and command references; prove coverage and receipt compatibility | V1 | IN PROGRESS | fdf57303 documents canonical commands. Downstream consumers and complete receipts pending. |
 | V3 | Remove redundant public IDs from canonical catalogue only after alias migration; retain documented compatibility where needed. Archive legacy observer only if distinct evidence use is closed. | V2 | NOT STARTED | Pending |
 
-### Per-variant tracker (41 of 41 mapped; 0 migrated)
+### Per-variant tracker (41 of 41 mapped; 39 resolver mappings implemented; 0 fully migrated)
 
-The following mappings are proposed. Each row requires an independently verified equivalent configuration before marking COMPLETE.
+Each IMPLEMENTED row now resolves to the original catalogue entry. Independent regression results and downstream migration remain necessary before COMPLETE. The two preparation rows remain NOT STARTED because their recovery paths can modify NVRAM.
 
 | Existing ID | Task | Target profile | Effective options / semantics | Status |
 | --- | --- | --- | --- | --- |
-| `diag-topology` | D1 | diagnostic | Topology; console only | NOT STARTED |
-| `diag-topology-log` | D1 | diagnostic | Topology; SaveLog | NOT STARTED |
-| `diag-topology-gop-text-cycle` | D1 | diagnostic | GopTextCycle; SaveLog; no handoff | NOT STARTED |
-| `diag-topology-handoff` | D1 | diagnostic | Topology; SaveLog; pinned WindowsEspGuid | NOT STARTED |
-| `diag-selection` | D1 | diagnostic | Topology; SaveLog; SelectionBdf(s); no handoff | NOT STARTED |
-| `diag-msi-rom` | D1 | diagnostic | MsiRom; SaveLog | NOT STARTED |
-| `diag-msi-rom-handoff` | D1 | diagnostic | MsiRom; SaveLog; pinned WindowsEspGuid | NOT STARTED |
-| `diag-msi-fuse` | D1 | diagnostic | MsiFuse; SaveLog | NOT STARTED |
-| `diag-msi-fuse-handoff` | D1 | diagnostic | MsiFuse; SaveLog; pinned WindowsEspGuid | NOT STARTED |
-| `diag-msi-sec2` | D1 | diagnostic | MsiSec2; SaveLog | NOT STARTED |
-| `diag-msi-sec2-handoff` | D1 | diagnostic | MsiSec2; SaveLog; pinned WindowsEspGuid | NOT STARTED |
-| `diag-vram-blocks` | D1 | diagnostic | VramBlocks; SaveLog | NOT STARTED |
-| `diag-vram-blocks-handoff` | D1 | diagnostic | VramBlocks; SaveLog; pinned WindowsEspGuid | NOT STARTED |
+| `diag-topology` | D1 | diagnostic | Topology; console only | IMPLEMENTED |
+| `diag-topology-log` | D1 | diagnostic | Topology; SaveLog | IMPLEMENTED |
+| `diag-topology-gop-text-cycle` | D1 | diagnostic | GopTextCycle; SaveLog; no handoff | IMPLEMENTED |
+| `diag-topology-handoff` | D1 | diagnostic | Topology; SaveLog; pinned WindowsEspGuid | IMPLEMENTED |
+| `diag-selection` | D1 | diagnostic | Topology; SaveLog; SelectionBdf(s); no handoff | IMPLEMENTED |
+| `diag-msi-rom` | D1 | diagnostic | MsiRom; SaveLog | IMPLEMENTED |
+| `diag-msi-rom-handoff` | D1 | diagnostic | MsiRom; SaveLog; pinned WindowsEspGuid | IMPLEMENTED |
+| `diag-msi-fuse` | D1 | diagnostic | MsiFuse; SaveLog | IMPLEMENTED |
+| `diag-msi-fuse-handoff` | D1 | diagnostic | MsiFuse; SaveLog; pinned WindowsEspGuid | IMPLEMENTED |
+| `diag-msi-sec2` | D1 | diagnostic | MsiSec2; SaveLog | IMPLEMENTED |
+| `diag-msi-sec2-handoff` | D1 | diagnostic | MsiSec2; SaveLog; pinned WindowsEspGuid | IMPLEMENTED |
+| `diag-vram-blocks` | D1 | diagnostic | VramBlocks; SaveLog | IMPLEMENTED |
+| `diag-vram-blocks-handoff` | D1 | diagnostic | VramBlocks; SaveLog; pinned WindowsEspGuid | IMPLEMENTED |
 | `prep-selected` | D2 | diagnostic (conditional) | Preflight; Application; explicit BDFs | NOT STARTED |
-| `compile-one-target` | C1 | compile-check | Application; one BDF | NOT STARTED |
-| `compile-sequence` | C1 | compile-check | Application; ordered BDFs | NOT STARTED |
-| `actuate-one-target` | F1 | firmware-transaction | Menu; Application; one compiled BDF; Pinned | NOT STARTED |
-| `actuate-sequence` | F1 | firmware-transaction | Menu; Application; ordered compiled BDFs; Pinned | NOT STARTED |
-| `app-stop-release-sequence-bench` | T1 | driver-transition | StopReattach; Application; live-all or compiled BDFs; Return | NOT STARTED |
-| `app-stop-release-sequence-handoff` | T1 | driver-transition | StopReattach; Application; live-all; WindowsAfterSuccess | NOT STARTED |
-| `actuate-one-target-resident` | F1 | firmware-transaction | Menu; Application; one compiled BDF; Resident | NOT STARTED |
-| `actuate-runtime-selection` | F1 | firmware-transaction | Menu; Application; Operator; Pinned | NOT STARTED |
-| `actuate-runtime-selection-resident` | F1 | firmware-transaction | Menu; Application; Operator; Resident | NOT STARTED |
-| `app-firmware-reattach` | F2 | firmware-transaction | UnlockReattach; Application; Operator; Runtime; optional WindowsEspGuid | NOT STARTED |
-| `app-unlock` | F2 | firmware-transaction | Unlock; Application; Operator; Runtime | NOT STARTED |
-| `app-unlock-with-resume` | F2 | firmware-transaction | UnlockWithResume; Application; Operator; Runtime | NOT STARTED |
-| `app-install-driver` | A1 | maintenance | InstallDriver; Application; Operator; Runtime | NOT STARTED |
-| `app-remove-driver` | A1 | maintenance | RemoveDriver; Application; Operator; Runtime | NOT STARTED |
+| `compile-one-target` | C1 | compile-check | Application; one BDF | IMPLEMENTED |
+| `compile-sequence` | C1 | compile-check | Application; ordered BDFs | IMPLEMENTED |
+| `actuate-one-target` | F1 | firmware-transaction | Menu; Application; one compiled BDF; Pinned | IMPLEMENTED |
+| `actuate-sequence` | F1 | firmware-transaction | Menu; Application; ordered compiled BDFs; Pinned | IMPLEMENTED |
+| `app-stop-release-sequence-bench` | T1 | driver-transition | StopReattach; Application; live-all or compiled BDFs; Return | IMPLEMENTED |
+| `app-stop-release-sequence-handoff` | T1 | driver-transition | StopReattach; Application; live-all; WindowsAfterSuccess | IMPLEMENTED |
+| `actuate-one-target-resident` | F1 | firmware-transaction | Menu; Application; one compiled BDF; Resident | IMPLEMENTED |
+| `actuate-runtime-selection` | F1 | firmware-transaction | Menu; Application; Operator; Pinned | IMPLEMENTED |
+| `actuate-runtime-selection-resident` | F1 | firmware-transaction | Menu; Application; Operator; Resident | IMPLEMENTED |
+| `app-firmware-reattach` | F2 | firmware-transaction | UnlockReattach; Application; Operator; Runtime; optional WindowsEspGuid | IMPLEMENTED |
+| `app-unlock` | F2 | firmware-transaction | Unlock; Application; Operator; Runtime | IMPLEMENTED |
+| `app-unlock-with-resume` | F2 | firmware-transaction | UnlockWithResume; Application; Operator; Runtime | IMPLEMENTED |
+| `app-install-driver` | A1 | maintenance | InstallDriver; Application; Operator; Runtime | IMPLEMENTED |
+| `app-remove-driver` | A1 | maintenance | RemoveDriver; Application; Operator; Runtime | IMPLEMENTED |
 | `dxe-prep-selected` | D2 | diagnostic (conditional) | Preflight; Dxe; explicit BDFs; event lifecycle retained | NOT STARTED |
-| `dxe-compile-one-target` | C1 | compile-check | Dxe; one BDF | NOT STARTED |
-| `dxe-compile-sequence` | C1 | compile-check | Dxe; ordered BDFs | NOT STARTED |
-| `dxe-actuate-one-target` | F1 | firmware-transaction | Dxe; one compiled BDF; Pinned | NOT STARTED |
-| `dxe-actuate-sequence` | F1 | firmware-transaction | Dxe; ordered compiled BDFs; Pinned | NOT STARTED |
-| `dxe-stop-release-sequence-bench` | T1 | driver-transition | StopReattach; Dxe; live-all or compiled BDFs; existing local profile; Return | NOT STARTED |
-| `dxe-actuate-runtime-selection` | F1 | firmware-transaction | Dxe; existing runtime selection policy; Pinned | NOT STARTED |
-| `stop-4090-once` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX4090; Halt | NOT STARTED |
-| `stop-4090-handoff` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX4090; pinned WindowsEspGuid | NOT STARTED |
-| `stop-3080-once` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX3080; Halt | NOT STARTED |
-| `stop-3080-handoff` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX3080; pinned WindowsEspGuid | NOT STARTED |
-| `stop-dual-handoff` | T2 | driver-transition (legacy test) | LegacyStopObservation; BothNvidia; fixed order; pinned WindowsEspGuid | NOT STARTED |
-| `boot-state-maintenance` | A1 | maintenance | ReviewBootState; separate isolated Application | NOT STARTED |
+| `dxe-compile-one-target` | C1 | compile-check | Dxe; one BDF | IMPLEMENTED |
+| `dxe-compile-sequence` | C1 | compile-check | Dxe; ordered BDFs | IMPLEMENTED |
+| `dxe-actuate-one-target` | F1 | firmware-transaction | Dxe; one compiled BDF; Pinned | IMPLEMENTED |
+| `dxe-actuate-sequence` | F1 | firmware-transaction | Dxe; ordered compiled BDFs; Pinned | IMPLEMENTED |
+| `dxe-stop-release-sequence-bench` | T1 | driver-transition | StopReattach; Dxe; live-all or compiled BDFs; existing local profile; Return | IMPLEMENTED |
+| `dxe-actuate-runtime-selection` | F1 | firmware-transaction | Dxe; existing runtime selection policy; Pinned | IMPLEMENTED |
+| `stop-4090-once` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX4090; Halt | IMPLEMENTED |
+| `stop-4090-handoff` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX4090; pinned WindowsEspGuid | IMPLEMENTED |
+| `stop-3080-once` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX3080; Halt | IMPLEMENTED |
+| `stop-3080-handoff` | T2 | driver-transition (legacy test) | LegacyStopObservation; RTX3080; pinned WindowsEspGuid | IMPLEMENTED |
+| `stop-dual-handoff` | T2 | driver-transition (legacy test) | LegacyStopObservation; BothNvidia; fixed order; pinned WindowsEspGuid | IMPLEMENTED |
+| `boot-state-maintenance` | A1 | maintenance | ReviewBootState; separate isolated Application | IMPLEMENTED |
 
 ### Previously refused combinations
 
@@ -176,9 +190,18 @@ Test the resolved options through actual PowerShell entrypoints using controlled
 
 For unchanged verified combined execution, preserve the recorded physical result as the reference; no repeated hardware operation needed for mechanical wrapper/alias consolidation. If a proposed source change alters a real admission or execution boundary beyond the proven scope, isolate it and require applicable evidence before claiming equivalent physical behavior. Numerical reference-output qualification remains a separate open task. Do not force a repeat transaction or clear INTENT to test catalogue changes.
 
+### Migration evidence
+
+- Owner approval: current conversation, 2026-11-23 local date.
+- `6dd22b4730da834bbe042c387bc2ba89ceee0251`: initial resolver. Host CI 45345335862 failed two existing parameter assignment assertions. The new default parameter declarations matched those checks.
+- `90f1f6b3ef492ea6862ba97ddf4eb4e02040a9b9`: moved default selection into local resolver values. Did not weaken tests.
+- `8fde00b5007e61e688f0568d83138161f96675a0`: added actual PowerShell tests for all 39 eligible configurations and negative combinations. CI 45345437502 in progress at last check. No result claimed.
+- `fdf573037ef47b22af2c6bba0c3cd0f49816562b`: documented options and resolution-only inspection.
+- No physical build, sign, deployment, firmware operation or numerical qualification performed.
+
 ## 7. Recommendation: execution order and owner / agent
 
-Agent: complete G0 and R1 first, then diagnostic and compile migrations, followed by driver-transition, full firmware and maintenance. Keep changes small and retain working aliases until V1/V2 pass. Update status in place with commit and test evidence.
+Agent: verify resolver CI and actual PowerShell test coverage. Correct any demonstrated defect without weakening assertions. Then complete the preparation and administration dependency review, receipt and downstream migration, and final catalogue reduction. Keep existing IDs until V1/V2 pass. Update this tracker with commit and test evidence.
 
 Owner: no hardware action for the audit or migration. Preserve existing logs, receipts and INTENT until a separately reviewed experiment. Use only presently implemented commands until migration is verified.
 
