@@ -5,6 +5,8 @@ can produce, signs each one inside WSL with your personal Secure Boot certificat
 (the one already enrolled in the BIOS `db`), and - only when you name a single
 image and a stick - stages it as `EFI\BOOT\BOOTX64.EFI`.
 
+When you stage the `firmware-transaction` profile, the script also stages the required reference firmware files in `AD102-ASSETS` and `GA102-ASSETS` at the USB root. It checks the source and destination file sizes and SHA-256 digests against `docs/asset_provenance.json` before it replaces the boot image. Both architectures share the existing `AD102-ASSETS/gsp_ga10x.bin` file. If an older Ampere copy exists, the script checks that copy too. It refuses a mismatch and preserves existing files. A failed copy can leave verified new asset files on the USB, but does not replace the boot image. The `FirmwareAssets` receipt field records each verified destination. `-SignOnly`, `-ResolveOnly`, diagnostics, driver transitions and maintenance do not stage assets. This procedure does not authenticate NVIDIA firmware or prove hardware compatibility.
+
 The list of images is data: [`image_variants.json`](image_variants.json). The
 script executes that catalogue, so "all combinations" is not a hand-maintained
 list that rots, and this page's matrix is rendered from the same file.
