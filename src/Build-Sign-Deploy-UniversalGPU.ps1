@@ -800,9 +800,7 @@ function Select-Variants {
 }
 
 function Get-SelectionCount {
-    if ($SelectionBdf) { return 1 }
-    if ($SelectionBdfs) { return @(($SelectionBdfs -split ',') | Where-Object { $_.Trim() }).Count }
-    return 0
+    return $script:SelectionSpec.Count
 }
 
 function Test-VariantSelection($Variant) {
@@ -1021,12 +1019,33 @@ try {
     if ($Deploy -and -not $StageDrive) { throw '-Deploy names the image to stage, so it needs -StageDrive <letter>. Add the drive, or drop -Deploy.' }
     if ($Deploy -and $SignOnly) { throw '-SignOnly and -Deploy are mutually exclusive: a sign-only run never touches a USB stick.' }
     if ($SelectionBdf -and $SelectionBdfs) { throw '-SelectionBdf and -SelectionBdfs are mutually exclusive.' }
+    # Use the builder's parser before resolving a profile. Inspection never
+    # creates a build directory or writes a selection header.
+    $selectionHelper = Join-Path (Join-Path $RepoRoot 'src') 'Gpu-Selection-Build.ps1'
+    if (-not (Test-Path -LiteralPath $selectionHelper -PathType Leaf)) {
+        throw "GPU selection helper missing: $selectionHelper"
+    }
+    . $selectionHelper
+    $script:SelectionSpec = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs
+    $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
+    $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
     $variants = @(Select-Variants)
     if ($ResolveOnly) {
         if (-not $Only -or $variants.Count -ne 1 -or $StageDrive -or $Deploy -or $StageDxeCompanion) {
             throw '-ResolveOnly requires one explicit selection and does not permit deployment.'
         }
         $resolvedVariant = $variants[0]
+        $resolutionPrerequisite = Test-VariantSelection $resolvedVariant
+        if ($resolutionPrerequisite -and $resolutionPrerequisite -ne 'NEEDS_LOCAL_BOOT_PROFILE') {
+            throw "Cannot resolve $($resolvedVariant.id): $resolutionPrerequisite"
+        }
+        $resolvedArguments = Build-VariantArguments $resolvedVariant
+        if ($resolvedArguments.ContainsKey('WindowsEspGuid')) {
+            $parsedEsp = [guid]::Empty
+            if (-not [guid]::TryParse([string]$resolvedArguments['WindowsEspGuid'], [ref]$parsedEsp) -or $parsedEsp -eq [guid]::Empty) {
+                throw 'Invalid or empty Windows ESP partition GUID.'
+            }
+        }
         Say ([ordered]@{
             CanonicalProfile = $resolvedVariant.profile
             RequestedCanonicalProfile = $script:RequestedCanonicalProfile
@@ -1035,7 +1054,10 @@ try {
             Safety = $resolvedVariant.safety
             Subsystem = $familyById[$resolvedVariant.family].subsystem
             Builder = $familyById[$resolvedVariant.family].builder
-            Switches = (Build-VariantArguments $resolvedVariant)
+            Switches = $resolvedArguments
+            Binary = (Get-VariantBinary $resolvedVariant)
+            Selection = @(if ($resolvedArguments.ContainsKey('SelectionBdf') -or $resolvedArguments.ContainsKey('SelectionBdfs')) { $script:SelectionSpec.Locations })
+            BuildPrerequisite = $resolutionPrerequisite
             ExpectedAttestations = @($resolvedVariant.attestations)
         } | ConvertTo-Json -Depth 6 -Compress)
         exit 0
@@ -1157,19 +1179,7 @@ try {
     # Prove the WSL target can sign before spending a whole matrix of builds on it.
     [void](Test-WslSigningReady -PublicCer $PublicCertificate)
 
-    # The builders derive their output label from the repository's own helper, so
-    # probe it once and let the catalogue's expected filename use the same label.
-    $script:SelectionSpec = $null
-    if ($SelectionBdf -or $SelectionBdfs) {
-        $selectionHelper = Join-Path (Join-Path $RepoRoot 'src') 'Gpu-Selection-Build.ps1'
-        if (-not (Test-Path -LiteralPath $selectionHelper -PathType Leaf)) {
-            throw "GPU selection helper missing: $selectionHelper"
-        }
-        . $selectionHelper
-        $probeDirectory = Join-Path $OutputDirectory '.selection-probe'
-        [void](New-Item -ItemType Directory -Path $probeDirectory -Force -ErrorAction Stop)
-        $script:SelectionSpec = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf `
-            -SelectionBdfs $SelectionBdfs -OutputDirectory $probeDirectory
+    if ($script:SelectionSpec.Count) {
         Say ("SELECTION label={0} count={1} bdfs={2}" -f $script:SelectionSpec.Label,
              $script:SelectionSpec.Count, ($script:SelectionSpec.Locations -join ','))
     }
@@ -1184,8 +1194,6 @@ try {
     $stagedPath = $null
     $pendingBootImage = $null
     $pendingDxeImage = $null
-    $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
-    $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
     $localProfileSkips = 0
 
     foreach ($variant in $variants) {

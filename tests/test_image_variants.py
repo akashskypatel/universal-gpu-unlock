@@ -866,6 +866,30 @@ class CanonicalProfileResolution(unittest.TestCase):
         self.assertEqual(result["Builder"], "src/Build-Experimental-MSVC.ps1")
         self.assertTrue(result["Switches"]["CapturedPromReference"])
 
+    def test_resolution_validates_selection_and_predicts_output(self):
+        result = self.resolve(["-Only", "compile-check", "-SelectionBdfs",
+                               "'0000:01:00.0,0000:0a:00.0'"])
+        self.assertEqual(result["Selection"], ["0000:01:00.0", "0000:0A:00.0"])
+        self.assertEqual(result["Binary"], "GPU-SEQUENCE-COMPILE-ONLY-0000-01-00-0--0000-0A-00-0.EFI")
+        result = self.resolve(["-Only", "diagnostic"])
+        self.assertEqual(result["Selection"], [])
+        self.assertEqual(result["Binary"], "GPU-TOPOLOGY-DIAGNOSTIC.EFI")
+        result = self.resolve(["-Only", "driver-transition", "-Operation", "StopReattach",
+                               "-SelectionBdf", "'0000:04:00.0'"])
+        self.assertEqual(result["Selection"], ["0000:04:00.0"])
+        self.assertEqual(result["Binary"], "GPU-SEQUENCE-STOP-RELEASE-BENCH-0000-04-00-0.EFI")
+        for args in (
+            ["-Only", "compile-check", "-SelectionBdf", "'bad'"],
+            ["-Only", "compile-check", "-SelectionBdf", "'0000:01:20.0'"],
+            ["-Only", "compile-check", "-SelectionBdfs", "'0000:01:00.0,0000:01:00.0'"],
+            ["-Only", "compile-check", "-SelectionBdfs", "'0000:01:00.0,'"],
+            ["-Only", "compile-one-target", "-SelectionBdfs", "'0000:01:00.0,0000:04:00.0'"],
+            ["-Only", "diagnostic", "-WindowsEspGuid", "'bad'"],
+            ["-Only", "diagnostic", "-WindowsEspGuid", "'00000000-0000-0000-0000-000000000000'"],
+        ):
+            with self.subTest(args=args):
+                self.resolve(args, valid=False)
+
     def test_invalid_combinations_refuse_resolution(self):
         one = ["-SelectionBdf", "'0000:01:00.0'"]
         esp = ["-WindowsEspGuid", "'a005858c-4487-4ee2-976e-1710ff484c31'"]
