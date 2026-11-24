@@ -388,9 +388,15 @@ class TheReadOnlyGuideIsGrounded(unittest.TestCase):
 
     def test_every_switch_in_a_candidate_command_exists_in_the_builder(self):
         text = (ROOT / "src" / "Build-Sign-Deploy-UniversalGPU.ps1").read_text(encoding="utf-8")
+        # Inspect declared parameters, not occurrences of switch names in comments.
+        parameters = re.search(r"(?ms)^param\(\s*\n(.*?)^\)", text)
+        self.assertIsNotNone(parameters)
+        declared = set(re.findall(r"(?m)^\s*\[(?:string(?:\[\])?|switch)\]\$(\w+)\b",
+                                  parameters.group(1)))
         for candidate in self.guide["candidates"]:
-            for switch in re.findall(r"(?:^|\s)(-[A-Z][\w]*)", candidate["command"]):
-                self.assertIn(switch, text, f"{candidate['id']}: {switch}")
+            for item in [candidate] + candidate.get("commands", []):
+                for switch in re.findall(r"(?:^|\s)-([A-Z][\w]*)", item["command"]):
+                    self.assertIn(switch, declared, f"{candidate['id']}: -{switch}")
 
     def test_a_candidate_that_cannot_be_staged_does_not_ask_to_be_staged(self):
         for candidate in self.guide["candidates"]:
