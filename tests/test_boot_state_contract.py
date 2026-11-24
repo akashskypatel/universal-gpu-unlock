@@ -37,7 +37,7 @@ class RecoveryPolicy(unittest.TestCase):
         discover = APP.index("GuDiscoverSingleGpu(image,t)")
         self.assertLess(recovery, discover)
         self.assertLess(remove, discover)
-        self.assertNotIn("GuBootStateDelete(t)", APP)
+        self.assertNotIn("GuBootStateDeleteReviewed(", APP)
         self.assertIn("BOOT_STATE_PRESERVED=1 AUTO_RETRY=0", APP)
         self.assertNotIn("ResetSystem(", APP[recovery:discover])
         self.assertIn("GuBootWindows()", APP)
@@ -103,8 +103,8 @@ class TwoPhaseWrites(unittest.TestCase):
         self.assertIn("#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION", returned)
         self.assertLess(returned.index("GuBootHalt();return s;"), returned.index("recorded=GuBootStateRecord("))
         self.assertIn("#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_UNVERIFIED_ACTUATION)", DXE)
-        self.assertNotIn("GuBootStateDelete(t)", APP)
-        self.assertNotIn("GuBootStateDelete(t)", DXE)
+        self.assertNotIn("GuBootStateDeleteReviewed(", APP)
+        self.assertNotIn("GuBootStateDeleteReviewed(", DXE)
 
     def test_interrupted_boot_is_reported(self):
         self.assertIn("BOOT_STATE WARNING=previous attempt interrupted or awaiting owner acceptance", BOOT_IO)
@@ -118,7 +118,8 @@ class Validation(unittest.TestCase):
     def test_short_or_corrupt_records_are_refused(self):
         self.assertIn("if (size != sizeof(buffer)) return EFI_COMPROMISED_DATA;", STATE)
         self.assertIn("if (!Valid(&buffer)) return EFI_COMPROMISED_DATA;", STATE)
-        self.assertIn("return s == EFI_NOT_FOUND ? EFI_SUCCESS : s", STATE)
+        self.assertIn("if(s==EFI_NOT_FOUND)return EFI_SUCCESS;", STATE)
+        self.assertIn("return s==EFI_SUCCESS?EFI_COMPROMISED_DATA:s;", STATE)
 
     def test_host_unit_passes(self):
         cc = shutil.which("gcc") or shutil.which("clang")

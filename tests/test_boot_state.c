@@ -14,10 +14,18 @@ static unsigned checks;
 static unsigned char store[64];
 static UINTN store_len;
 static int store_present, writes, deletes, fail_write, drop_write;
+static int order_present, order_unreadable, drop_delete, delete_read_error;
 
 static EFI_STATUS FakeGetVariable(const void *Name, EFI_GUID *Vendor, UINT32 *Attributes,
                                   UINTN *Size, VOID *Data) {
   if (!Name || !Vendor || !Size) return EFI_INVALID_PARAMETER;
+  if(Vendor->a==0x8be4df61U) {
+    if(order_unreadable)return EFI_DEVICE_ERROR;
+    if(order_present)return EFI_BUFFER_TOO_SMALL;
+    return EFI_NOT_FOUND;
+  }
+  if(Vendor->a!=0x2a7d54c1U)return EFI_INVALID_PARAMETER;
+  if(delete_read_error&&deletes)return EFI_DEVICE_ERROR;
   if (!store_present) return EFI_NOT_FOUND;
   if (*Size < store_len) {
     *Size = store_len;
@@ -33,10 +41,11 @@ static EFI_STATUS FakeGetVariable(const void *Name, EFI_GUID *Vendor, UINT32 *At
 
 static EFI_STATUS FakeSetVariable(const void *Name, EFI_GUID *Vendor, UINT32 Attributes,
                                   UINTN Size, VOID *Data) {
-  if (!Name || !Vendor) return EFI_INVALID_PARAMETER;
+  if (!Name || !Vendor || Vendor->a!=0x2a7d54c1U) return EFI_INVALID_PARAMETER;
   if (fail_write) return EFI_DEVICE_ERROR;
   if (!Data || !Size) {
     if (!store_present) return EFI_NOT_FOUND;
+    if(drop_delete)return EFI_SUCCESS;
     store_present = 0;
     store_len = 0;
     deletes++;
@@ -69,6 +78,7 @@ static void Reset(void) {
   store_present = 0;
   writes = deletes = 0;
   fail_write = drop_write = 0;
+  order_present=order_unreadable=drop_delete=delete_read_error=0;
 }
 
 static GU_BOOT_STATE Sample(void) {
@@ -154,7 +164,7 @@ static int CheckReadValidation(void) {
   EFI_SYSTEM_TABLE bare = {0};
   CHECK(GuBootStateRead(&bare, &out) == EFI_UNSUPPORTED);
   CHECK(GuBootStateWrite(&bare, &sample) == EFI_UNSUPPORTED);
-  CHECK(GuBootStateDelete(&bare) == EFI_UNSUPPORTED);
+  CHECK(GuBootStateDeleteReviewed(&bare,&sample) == EFI_UNSUPPORTED);
   return 0;
 }
 
@@ -202,14 +212,46 @@ static int CheckTransitions(void) {
   CHECK(GuBootStateRead(&table, &out) == EFI_SUCCESS);
   CHECK(out.Phase == GU_BOOT_STATE_OUTCOME && out.BootCount == 2);
 
-  /* The documented reset path (and a delete that fails while the variable
-   * service is refusing writes changes nothing). */
-  CHECK(GuBootStateDelete(&table) == EFI_DEVICE_ERROR);
-  CHECK(store_present == 1 && deletes == 0);
-  fail_write = 0;
-  CHECK(GuBootStateDelete(&table) == EFI_SUCCESS);
-  CHECK(store_present == 0 && deletes == 1);
-  CHECK(GuBootStateRead(&table, &out) == EFI_NOT_FOUND);
+  fail_write=0;
+  return 0;
+}
+
+static int CheckReviewedDeletion(void) {
+  GU_BOOT_STATE reviewed,current,stale;
+  Reset();
+  CHECK(GuBootStateDeleteReviewed(&table,NULL)==EFI_INVALID_PARAMETER);
+  reviewed=Sample();
+  CHECK(GuBootStateWrite(&table,&reviewed)==EFI_SUCCESS);
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_NOT_READY);
+  reviewed.Phase=GU_BOOT_STATE_INTENT;reviewed.Armed=0;
+  CHECK(GuBootStateWrite(&table,&reviewed)==EFI_SUCCESS);
+  stale=reviewed;stale.BootCount++;
+  CHECK(GuBootStateDeleteReviewed(&table,&stale)==EFI_COMPROMISED_DATA);
+  CHECK(store_present&&deletes==0);
+  order_present=1;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_NOT_READY);
+  order_present=0;order_unreadable=1;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_DEVICE_ERROR);
+  order_unreadable=0;
+  store[0]^=1;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_COMPROMISED_DATA);
+  store[0]^=1;
+  fail_write=1;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_DEVICE_ERROR);
+  fail_write=0;drop_delete=1;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_COMPROMISED_DATA);
+  CHECK(GuBootStateRead(&table,&current)==EFI_SUCCESS);
+  CHECK(memcmp(&current,&reviewed,sizeof(current))==0&&deletes==0);
+  drop_delete=0;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_SUCCESS);
+  CHECK(!store_present&&deletes==1);
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_NOT_FOUND);
+  CHECK(deletes==1);
+  reviewed.Phase=GU_BOOT_STATE_OUTCOME;reviewed.Status=EFI_DEVICE_ERROR;
+  CHECK(GuBootStateWrite(&table,&reviewed)==EFI_SUCCESS);
+  delete_read_error=1;deletes=0;
+  CHECK(GuBootStateDeleteReviewed(&table,&reviewed)==EFI_DEVICE_ERROR);
+  CHECK(!store_present&&deletes==1); /* mutation occurred, confirmation failed */
   return 0;
 }
 
@@ -223,6 +265,7 @@ int main(void) {
 
   if (CheckReadValidation()) return 1;
   if (CheckTransitions()) return 1;
+  if (CheckReviewedDeletion()) return 1;
   printf("test_boot_state: %u checks OK\n", checks);
   return 0;
 }

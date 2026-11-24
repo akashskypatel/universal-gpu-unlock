@@ -56,10 +56,15 @@ EFI_STATUS GuBootStateRead(EFI_SYSTEM_TABLE *Table, GU_BOOT_STATE *Out);
 /* Replace the record and verify the stored bytes and attributes. A successful
  * service return alone is not sufficient evidence of a restart barrier. */
 EFI_STATUS GuBootStateWrite(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *State);
-EFI_STATUS GuBootStateDelete(EFI_SYSTEM_TABLE *Table);
+/* Only the separate maintenance application may call this after review and
+ * explicit confirmation. Refuse any DriverOrder, invalid/stale/non-latched
+ * record or unconfirmed deletion. No GPU or boot-entry changes. */
+EFI_STATUS GuBootStateDeleteReviewed(EFI_SYSTEM_TABLE *Table,
+                                    const GU_BOOT_STATE *Reviewed);
 
 /* Build and verify one phase transition. Active entry requires confirmed
- * INTENT before mutation and a confirmed OUTCOME before normal handover. */
+ * INTENT before mutation. Waived active builds keep INTENT through handover;
+ * only legacy builds record a successful OUTCOME before handover. */
 EFI_STATUS GuBootStateRecord(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *Previous,
                              UINT32 Phase, UINT64 Status, UINT16 DeviceId,
                              UINT16 Segment, UINT16 Bus, UINT8 Device, UINT8 Function,

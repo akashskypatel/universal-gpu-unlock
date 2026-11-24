@@ -49,7 +49,7 @@ EFI_STATUS GuBootStateRead(EFI_SYSTEM_TABLE *Table, GU_BOOT_STATE *Out) {
   if (size != sizeof(buffer)) return EFI_COMPROMISED_DATA;
   if (!Valid(&buffer)) return EFI_COMPROMISED_DATA;
   if (attributes != GU_BOOT_STATE_ATTRIBUTES) return EFI_COMPROMISED_DATA;
-  *Out = buffer;
+  memcpy(Out,&buffer,sizeof(buffer));
   return EFI_SUCCESS;
 }
 
@@ -67,12 +67,33 @@ EFI_STATUS GuBootStateWrite(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *State)
   return memcmp(&confirmed,State,sizeof(confirmed))==0?EFI_SUCCESS:EFI_COMPROMISED_DATA;
 }
 
-EFI_STATUS GuBootStateDelete(EFI_SYSTEM_TABLE *Table) {
-  if (!Table || !Table->RuntimeServices || !Table->RuntimeServices->SetVariable)
-    return EFI_UNSUPPORTED;
-  EFI_STATUS s = Table->RuntimeServices->SetVariable(
-      GU_BOOT_STATE_VARIABLE_NAME, &StateGuid, 0, 0, NULL);
-  return s == EFI_NOT_FOUND ? EFI_SUCCESS : s;
+/* Maintenance only. Refuse any ordered driver registration, including an
+ * unrelated one: do not guess whether a boot entry can invoke an old image.
+ * This routine is not a proof of physical recovery or owner acceptance. */
+EFI_STATUS GuBootStateDeleteReviewed(EFI_SYSTEM_TABLE *Table,
+                                    const GU_BOOT_STATE *Reviewed) {
+  if(!Valid(Reviewed))return EFI_INVALID_PARAMETER;
+  if(!Usable(Table))return EFI_UNSUPPORTED;
+  if(Reviewed->Phase!=GU_BOOT_STATE_INTENT &&
+     !(Reviewed->Phase==GU_BOOT_STATE_OUTCOME&&Reviewed->Status!=EFI_SUCCESS))
+    return EFI_NOT_READY;
+  EFI_GUID global = {0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0x00,0xe0,0x98,0x03,0x2b,0x8c}};
+  UINT16 order;
+  UINTN size=sizeof(order);
+  UINT32 attributes=0;
+  EFI_STATUS s=Table->RuntimeServices->GetVariable(L"DriverOrder",&global,
+                                                    &attributes,&size,&order);
+  if(s==EFI_SUCCESS||s==EFI_BUFFER_TOO_SMALL)return EFI_NOT_READY;
+  if(s!=EFI_NOT_FOUND)return s;
+  GU_BOOT_STATE current;
+  s=GuBootStateRead(Table,&current);
+  if(s!=EFI_SUCCESS)return s;
+  if(memcmp(&current,Reviewed,sizeof(current)))return EFI_COMPROMISED_DATA;
+  s=Table->RuntimeServices->SetVariable(GU_BOOT_STATE_VARIABLE_NAME,&StateGuid,0,0,NULL);
+  if(s!=EFI_SUCCESS)return s;
+  s=GuBootStateRead(Table,&current);
+  if(s==EFI_NOT_FOUND)return EFI_SUCCESS;
+  return s==EFI_SUCCESS?EFI_COMPROMISED_DATA:s;
 }
 
 EFI_STATUS GuBootStateRecord(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *Previous,
