@@ -1,4 +1,4 @@
-# Build, sign and deploy every image kind
+# Build, sign and deploy GPU profiles
 
 `src/Build-Sign-Deploy-UniversalGPU.ps1` builds every EFI image this repository
 can produce, signs each one inside WSL with your personal Secure Boot certificate
@@ -46,13 +46,13 @@ If the firmware has no way to enroll a personal certificate, you are running wit
 Secure Boot off, and the signature is then only an integrity record - say so: use
 `-SkipDbCheck`, which records `DB_ENROLLED=UNKNOWN` rather than pretending.
 
-For `app-firmware-reattach`, `-WindowsEspGuid` is optional. Supply the unique GPT
+For `firmware-transaction -Operation UnlockReattach`, `-WindowsEspGuid` is optional. Supply the unique GPT
 partition GUID of the current Windows EFI System Partition, not a disk GUID or
 a partition type GUID, when more than one internal volume contains Windows Boot
 Manager. The same exact GUID constrains firmware asset fallback and Windows
 image staging. The builder rejects an invalid or zero GUID and the wrapper
-checks the `WINDOWS_ESP_GUID` receipt before signing. Without this option, the
-existing single matching volume rule applies. The image does not change either
+checks the `WINDOWS_ESP_GUID` receipt before signing. Without this option, one candidate is selected automatically. If there are
+multiple candidates, the application asks you to select one. The image does not change either
 partition or the firmware boot order.
 
 The fixed U (`app-unlock`), I (`app-install-driver`), P
@@ -67,22 +67,101 @@ companion DXE driver and halts; P still requests the existing S3 resume policy.
 The explicit combined `-WindowsEspGuid` option bypasses the menu and requires one
 exact match. DXE, R, and other profiles retain their existing admission policy.
 
-## Canonical profile selectors (migration)
+## Canonical profiles and arguments
 
-The wrapper accepts five canonical profile names with `-Only`. It resolves
-each supported request to an existing catalogue entry. The builder, execution
-policy, safety class and staging checks stay the same. The old IDs and
-`-All` matrix remain available during migration. Use `-List` for the five public profiles.
-Use `-ListLegacy` for the full compatibility matrix. Neither command builds,
-signs or stages an image.
+Use `-Only <profile>` with the operation-specific arguments below. The five
+public profiles resolve to 41 supported compatibility configurations.
+`-List` displays the public profiles. `-ListLegacy` displays the complete
+compatibility matrix. The old IDs remain valid for existing scripts.
+`-ResolveOnly` reports the selected configuration without a build, signature
+or deployment.
 
-| Profile | Options |
+### Diagnostic
+
+Default: `-Probe Topology`, with a file log.
+
+| Probe | Optional arguments | Restrictions |
+| --- | --- | --- |
+| `Topology` | `-SaveLog:$false`, `-SelectionBdf`, `-SelectionBdfs`, `-WindowsEspGuid` | Console-only output cannot include selection or handoff. Selection and handoff cannot combine. |
+| `GopTextCycle` | File log (default) | No compiled selection or Windows handoff. GOP = Graphics Output Protocol. |
+| `MsiRom`, `MsiFuse`, `MsiSec2`, `VramBlocks` | `-WindowsEspGuid` for pinned Windows handoff | No compiled selection. Requires a file log. |
+| `Preflight` | `-ImageKind Application/Dxe`, `-CapturedPromReference` (application only) | Requires explicit GPU addresses and a file log. No Windows handoff. DXE cannot stage as BOOTX64.EFI. |
+
+Preflight checks preparation and refuses before GPU mutation. A prior latched
+state refuses before discovery without changing boot registration.
+
+### Driver transition
+
+Choose an explicit `-Operation`. These modes do not perform the firmware
+transaction.
+
+| Operation | Arguments | Restrictions |
+| --- | --- | --- |
+| `StopReattach` | `-ImageKind Application/Dxe`, `-SelectionBdf` or `-SelectionBdfs`, `-Handoff Return/WindowsAfterSuccess` | Without selection, uses live supported GPU enumeration. Default handoff is Return. WindowsAfterSuccess requires the live-all application. No explicit ESP pin. The DXE form needs the private ESP profile. |
+| `LegacyStopObservation` | `-LegacyTarget RTX4090/RTX3080/BothNvidia`, `-Handoff Halt/WindowsAfterSuccess`, `-WindowsEspGuid` | Application only. No compiled BDF selection. Single-card default without ESP pin is Halt; with pin, Windows handoff. BothNvidia requires pinned handoff. |
+
+LegacyStopObservation is not a reattachment test. StopReattach retains the
+existing driver release, reattachment and final device graph checks.
+
+### Firmware transaction
+
+Choose an explicit `-Operation`. RAM-only and resume configurations are
+distinct. ESP = EFI System Partition. DXE = Driver Execution Environment.
+
+| Operation | Arguments | Restrictions |
+| --- | --- | --- |
+| `UnlockReattach` | Optional `-WindowsEspGuid`, `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list. Combined transaction and original-driver reattachment. No resume writes. |
+| `Unlock` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. RAM-only. |
+| `UnlockWithResume` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. Requests the existing S3 resume policy. Physical resume verification is pending. |
+| `Menu` | `-SelectionBdf` or `-SelectionBdfs`, `-EspPolicy Pinned/Resident` | Application only. Omit selection for runtime selection. Pinned is default and needs private ESP profile. Resident supports zero or one compiled target, not a sequence. No explicit ESP pin. |
+| `DxeTransaction` | `-ImageKind Dxe`, `-SelectionBdf` or `-SelectionBdfs`, `-EspPolicy Pinned` | Pinned private ESP profile required. No explicit ESP pin or captured reference. Cannot stage as BOOTX64.EFI. |
+
+The combined operation has a historical physical PASS on the RTX 4090 and
+RTX 3080 with displays connected. Manual cold-power recovery after a failed
+transaction is owner-confirmed. Numerical accuracy and sleep-resume
+persistence are pending physical tests. A new signed image receipt is not
+proof of a new physical test.
+
+### Maintenance
+
+Choose `-Operation InstallDriver`, `RemoveDriver` or `ReviewBootState`.
+All three use an application. Compiled GPU selection, ESP pin, captured
+reference and companion staging are not applicable. InstallDriver and
+RemoveDriver retain their existing preparation and recovery behavior.
+ReviewBootState remains a separate image with its existing isolation,
+record review and confirmation checks.
+
+### Compile validation
+
+`compile-check` requires `-SelectionBdf` or `-SelectionBdfs`.
+`-ImageKind Application` is the default. Use `-ImageKind Dxe` for a
+boot-service driver build. This profile cannot stage or execute. No ESP or
+captured reference options apply.
+
+### Common arguments
+
+| Argument | Function |
 | --- | --- |
-| `diagnostic` | `-Probe Topology/GopTextCycle/MsiRom/MsiFuse/MsiSec2/VramBlocks/Preflight`. Saves a log by default. Use `-SaveLog:$false` for topology without selection or handoff. Use `-SelectionBdf` or `-SelectionBdfs` for selected topology. Use `-WindowsEspGuid` for supported pinned handoff. |
-| `compile-check` | `-ImageKind Application/Dxe` (default Application). Requires a compiled GPU selection. Cannot stage. |
-| `driver-transition` | Requires `-Operation StopReattach/LegacyStopObservation`. StopReattach uses live inventory or an ordered compiled selection. `-ImageKind Dxe` selects the existing driver. `-Handoff WindowsAfterSuccess` requires the live-all application. LegacyStopObservation requires `-LegacyTarget RTX4090/RTX3080/BothNvidia`. Legacy handoff requires a pinned ESP GUID. |
-| `firmware-transaction` | Requires `-Operation UnlockReattach/Unlock/UnlockWithResume/Menu/DxeTransaction`. Fixed application operations use runtime selection and runtime ESP policy. Only UnlockReattach accepts an explicit ESP GUID. Menu supports the existing pinned or resident configurations. DxeTransaction requires `-ImageKind Dxe` and the existing pinned policy. |
-| `maintenance` | Requires `-Operation InstallDriver/RemoveDriver/ReviewBootState`. InstallDriver and RemoveDriver retain their existing preparation and recovery behavior. ReviewBootState remains a separate image with its existing confirmation and isolation checks. |
+| `-Only <profile>` | Select one canonical profile with its arguments. |
+| `-List`, `-ListLegacy` | List public profiles or compatibility configurations. |
+| `-ResolveOnly` | Inspect one configuration. Does not build or stage. |
+| `-SignOnly` | Build and sign. Do not stage. |
+| `-StageDrive <letter>` | Stage one EFI application to the verified USB volume. Cannot combine with SignOnly or All. |
+| `-AcceptActuatingDeploy` | Explicit consent required for deployment of driver-transition, firmware-transaction and maintenance images. |
+| `-Deploy <id>` | Optional assertion of the selected image, with StageDrive. |
+| `-All`, `-Family <builder-family>` | Compatibility build matrix controls. No canonical operation options with a matrix request. |
+| `-SelectionBdf`, `-SelectionBdfs` | One compiled PCI bus/device/function address (BDF), or a comma-separated ordered list, where supported. Do not combine them. |
+| `-WindowsEspGuid` | Unique GPT partition GUID, where supported. Not the disk GUID or ESP type GUID. |
+| `-CapturedPromReference` | Include existing captured references for supported application-builder configurations. Not a signature-authentication claim. |
+| `-StageDxeCompanion` | Existing paired one-target menu application and DXE driver deployment only. |
+| `-VcVars` | Explicit path to the Visual Studio x64 environment script. All five builders use shared environment discovery when omitted. |
+| `-RepoRoot`, `-OutputDirectory` | Repository path and local signed output path. |
+| `-PublicCertificate`, `-WslDistribution`, `-WslUser` | Select signing certificate and Windows Subsystem for Linux (WSL) signing environment. |
+| `-SkipDbCheck` | Sign without confirming certificate enrollment. Records UNKNOWN. |
+
+The default image kind is Application. The supported options are combinations,
+not independent switches that can always combine. The resolver rejects
+unsupported canonical combinations before compilation.
 
 Inspect a configuration without compiling, signing or staging:
 
@@ -90,25 +169,13 @@ Inspect a configuration without compiling, signing or staging:
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe MsiFuse -ResolveOnly
 ```
 
-```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -ResolveOnly
-```
+`-ResolveOnly` reports the canonical profile, compatibility ID, request
+origin, builder, switches, safety class, PE subsystem and expected
+attestations. It does not check the compiler, signing certificate, physical
+hardware or firmware execution. The signed build receipt records actual
+verified attestations separately from the expected templates.
 
-`-ResolveOnly` reports the canonical profile, selected compatibility ID,
-requested profile or legacy alias, builder, switches, safety class, PE
-subsystem and expected attestations. Build receipts retain the actual verified
-attestation values separately from their templates. They identify the effective
-profile even when the request uses a legacy ID. It does not check the build
-environment, certificate, physical hardware or actual firmware execution.
-It does not permit deployment.
-
-The Preflight probe resolves the two existing preparation configurations.
-It requires explicit GPU addresses and a file log. Use `-ImageKind Dxe`
-for the driver. A prior latched state now refuses before discovery without
-changing boot registration. The active recovery path stays separate.
-Preflight does not perform the firmware transaction. The DXE image cannot
-stage as BOOTX64.EFI. Do not use a new profile name to infer new hardware
-qualification. See [the migration tracker](EFI_IMAGE_PROFILE_CONSOLIDATION_PLAN.md).
+See [the migration tracker](EFI_IMAGE_PROFILE_CONSOLIDATION_PLAN.md).
 
 ## 2. The catalogue
 
@@ -156,7 +223,7 @@ Compatibility matrix (also available with `-ListLegacy`). `Safety` is what the i
 | `actuate-one-target-resident` | `GPU-ONE-TARGET-UNVERIFIED-ACTUATION-<label>.EFI` | `actuates` | one BDF | the B9 relaxation combined with the waiver: the riskiest image this repository can build |
 | `actuate-runtime-selection` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI` | `actuates` | private `src/local/boot_profile.h` | no compiled BDF, so the operator picks the target at the machine instead of at the build |
 | `actuate-runtime-selection-resident` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI` | `actuates` | nothing | no compiled BDF and no compiled ESP GUID: both are resolved at boot |
-| `app-firmware-reattach` | `GPU-RUNTIME-FIRMWARE-REATTACH.EFI` | `actuates` | nothing | Combined firmware transaction and driver reattachment application. Uses runtime target selection and existing firmware admission. Requires a verified non-target NVIDIA display warning before each Stop. Verifies the existing firmware transaction and resource cleanup before closing exclusive ownership. Reconnects the original driver and verifies the restored device, child, display and peer graph. Stops the sequence on failure. Starts Windows only after all targets pass and the log closes. Retains the one-use restart record. CUDA verification is manual after Windows starts. No resume writes. Explicitly waives ASPM admission only; retains link training, negotiated width/speed and uncorrected error refusals. Historical physical PASS: RUN0002(1).TXT on RTX 4090 and RTX 3080 with connected displays, followed by Windows driver 617.42 and CUDA execution. Numerical accuracy, failed-transaction recovery and other configurations remain unverified. |
+| `app-firmware-reattach` | `GPU-RUNTIME-FIRMWARE-REATTACH.EFI` | `actuates` | nothing | Combined firmware transaction and driver reattachment application. Uses runtime target selection and existing firmware admission. Requires a verified non-target NVIDIA display warning before each Stop. Verifies the existing firmware transaction and resource cleanup before closing exclusive ownership. Reconnects the original driver and verifies the restored device, child, display and peer graph. Stops the sequence on failure. Starts Windows only after all targets pass and the log closes. Retains the one-use restart record. CUDA verification is manual after Windows starts. No resume writes. Explicitly waives ASPM admission only; retains link training, negotiated width/speed and uncorrected error refusals. Historical physical PASS: RUN0002(1).TXT on RTX 4090 and RTX 3080 with connected displays, followed by Windows driver 617.42 and CUDA execution. Manual failed-transaction cold-power recovery is owner-confirmed. Numerical accuracy, sleep-resume persistence and other configurations remain unverified. |
 | `app-unlock` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-UNLOCK.EFI` | `actuates` | nothing | Existing U handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. RAM-only; no new S3 script requested. Not a combined reattachment/persistence profile. |
 | `app-unlock-with-resume` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-UNLOCK-WITH-RESUME.EFI` | `actuates` | nothing | Existing P handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Existing S3 resume policy is requested. Not a combined reattachment/persistence profile. |
 | `app-install-driver` | `GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-INSTALL-DRIVER.EFI` | `actuates` | nothing | Existing I handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Registers only the existing companion driver path; the correctly reviewed companion must already be present. Stops after the operation instead of rebooting into itself. Not a combined reattachment/persistence profile. |
@@ -206,16 +273,16 @@ Compatibility matrix (also available with `-ListLegacy`). `Safety` is what the i
 
 **One-use active experiment:** Explicitly waived firmware transaction images retain the readback-verified `GuBootState` INTENT through successful preboot completion and Windows handover. The next boot refuses another GPU transaction while this record remains. A successful preboot result is not owner acceptance. No automatic record deletion or rearm is provided. The Stop-only profiles remain separate and do not create an active transaction record.
 
-**Administrative maintenance image:** The separate `src/Build-Boot-State-Maintenance.ps1` still builds only `src/build_boot_state_maintenance/BOOT-STATE-MAINTENANCE.EFI`. The `boot-state-maintenance` catalogue profile signs it through the existing workflow. Staging requires `-Only boot-state-maintenance -StageDrive <letter> -AcceptActuatingDeploy`. The USB drive must contain no other EFI executable apart from the boot image that the script replaces after a verified backup. Use isolated maintenance media and disconnect other experimental boot media before booting. The script never registers the image. It links only the boot-record, console and CPU formatting/runtime source. The image displays the exact record and requires an explicit typed confirmation. It checks the reviewed record again, refuses any existing or unreadable `DriverOrder` (including unrelated entries), and verifies absence after removing the owned record. It cannot accept a GPU result or verify stock recovery. Owner review and separately authorized next experiment are prerequisites; no automatic reactivation. Do not remove unrelated firmware boot entries to satisfy this restriction. The utility stops after a deletion attempt, including uncertain readback, and does not start an image or request a reset. Physical qualification remains outstanding. Run it only for a separately authorized experiment.
+**Administrative maintenance image:** The separate `src/Build-Boot-State-Maintenance.ps1` still builds only `src/build_boot_state_maintenance/BOOT-STATE-MAINTENANCE.EFI`. The `maintenance -Operation ReviewBootState` profile signs it through the existing workflow. Staging requires `-Only maintenance -Operation ReviewBootState -StageDrive <letter> -AcceptActuatingDeploy`. The USB drive must contain no other EFI executable apart from the boot image that the script replaces after a verified backup. Use isolated maintenance media and disconnect other experimental boot media before booting. The script never registers the image. It links only the boot-record, console and CPU formatting/runtime source. The image displays the exact record and requires an explicit typed confirmation. It checks the reviewed record again, refuses any existing or unreadable `DriverOrder` (including unrelated entries), and verifies absence after removing the owned record. It cannot accept a GPU result or verify stock recovery. Owner review and separately authorized next experiment are prerequisites; no automatic reactivation. Do not remove unrelated firmware boot entries to satisfy this restriction. The utility stops after a deletion attempt, including uncertain readback, and does not start an image or request a reset. Physical qualification remains outstanding. Run it only for a separately authorized experiment.
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only boot-state-maintenance -SignOnly
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only maintenance -Operation ReviewBootState -SignOnly
 ```
 
 For an explicitly authorized maintenance deployment, replace `G` with the isolated USB drive letter:
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only boot-state-maintenance -StageDrive G -AcceptActuatingDeploy
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only maintenance -Operation ReviewBootState -StageDrive G -AcceptActuatingDeploy
 ```
 
 Before confirmation, photograph the reviewed record. Type `REARM` and press Enter only if the prerequisites are met. On success, record `REACTIVATION=RECORD_REMOVAL_VERIFIED`. Power off and remove the maintenance media. Do not remove unrelated DriverOrder entries or retry after uncertain readback.
@@ -236,8 +303,7 @@ refusal. Two cards have been captured on this bench, and `-CapturedPromReference
 compiles their two rows into the image that asks for them:
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected `
-    -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -SignOnly
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe Preflight -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -SignOnly
 ```
 
 It is a switch rather than a catalogue variant on purpose. A variant that
@@ -267,9 +333,9 @@ That is deliberate: an image allowed to write is pinned to one partition an
 operator read out and reviewed, and a compiled-in GUID is the only way the image
 can tell that partition from any other.
 
-`-WindowsEspGuid` is not a substitute. It belongs to the diagnostic handoff
-builders, which emit a read-only or stop-observation image; the `prepare` family
-has no such parameter, so passing it changes nothing about this skip.
+`-WindowsEspGuid` is not a substitute for the private profile in pinned configurations.
+The combined UnlockReattach application accepts an explicit pin without that
+private file. The other pinned configurations retain their existing build policy.
 
 Read the current identifier, then write the file:
 
@@ -316,51 +382,81 @@ value in the session log next to `M1_RECOVERY_TOOLKIT_READY`.
 
 ## 3. Commands
 
+Run these commands from the repository root. Each example is independent.
+Use `-ResolveOnly` first to inspect any supported configuration. Replace the
+example addresses and GUID with those for the applicable hardware.
+
+**List the profiles and the compatibility configurations:**
+
 ```powershell
-# What can this repository build? Nothing is built, signed or staged.
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -List
-
-# Every run starts with one line naming the WSL side that will sign:
-# WSL_SIGNING_READY distro=… user=… home=… key=… cert=… tools=…
-# If it reads WSL_SIGNING_BROKEN, nothing is built and nothing is staged.
-
-# Stage 1 of the donor session: the read-only image that saves its numbered log.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -SignOnly
-
-# One family, signed, not staged.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Family diagnostic -SignOnly
-
-# Everything the machine can build with the arguments you gave. Variants that
-# need a selection or an ESP GUID are skipped, and the reason is recorded.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -All -SelectionBdfs '0000:01:00.0,0000:04:00.0' `
-    -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -SignOnly
-
-# Stage one image onto G:. -StageDrive is the staging switch; -Only names the image.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G
-
-# A handoff diagnostic needs the reviewed GUID as well.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-handoff `
-    -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -StageDrive G
-
-# The sequential DXE variant is a driver, not a boot image; sign only.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only dxe-stop-release-sequence-bench `
-    -SelectionBdfs '0000:01:00.0,0000:04:00.0' -SignOnly
-
-# The requested bootable EFI application: builds, signs, and stages as
-# EFI\\BOOT\\BOOTX64.EFI on G: after checking USB identity and making a backup.
-# Confirm G: is the intended USB. Runtime ESP discovery needs no private boot profile; personal signing still requires WSL key/certificate and enrolled db.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only app-stop-release-sequence-bench `
-    -StageDrive G -AcceptActuatingDeploy
-
-# Local source/contract tests (not a firmware build or hardware test).
-python -m unittest tests.test_unsafe_bench_experiment tests.test_image_variants -v
-
-# The waived application transaction, staged deliberately on a donor card.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only actuate-one-target `
-    -SelectionBdf '0000:01:00.0' -StageDrive G -AcceptActuatingDeploy -StageDxeCompanion
 ```
 
-`-All` never stages, and it is bounded: 33 variants, one `VARIANT_BEGIN` and one
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -ListLegacy
+```
+
+**Diagnostic, file log (sign only):**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -SignOnly
+```
+
+**Preparation check with explicit selection (sign only):**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe Preflight -SelectionBdfs '0000:01:00.0,0000:04:00.0' -SignOnly
+```
+
+**Compile check (sign only):**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only compile-check -SelectionBdf '0000:01:00.0' -SignOnly
+```
+
+**Inspect driver-transition configurations:**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only driver-transition -Operation StopReattach -ResolveOnly
+```
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only driver-transition -Operation StopReattach -ImageKind Dxe -SelectionBdfs '0000:01:00.0,0000:04:00.0' -ResolveOnly
+```
+
+**Inspect the combined firmware transaction and resume configuration:**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -ResolveOnly
+```
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockWithResume -ResolveOnly
+```
+
+**Inspect the separate maintenance configuration:**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only maintenance -Operation ReviewBootState -ResolveOnly
+```
+
+**Stage a read-only diagnostic to the intended USB drive (G in this example):**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -StageDrive G
+```
+
+**Compatibility matrix (sign only):**
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -All -SelectionBdfs '0000:01:00.0,0000:04:00.0' -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -SignOnly
+```
+
+Build and sign runs report WSL_SIGNING_READY before the first build. A failed
+signing preflight stops the run. A successful ResolveOnly operation does not
+run signing preflight.
+
+`-All` never stages, and it is bounded: 41 compatibility configurations, one `VARIANT_BEGIN` and one
 `SIGNED`/`FAILED`/`SKIPPED` line each - it is not a retry loop, so a long scroll
 is expected and a failing variant does not stop the rest.
 
@@ -379,7 +475,7 @@ signs the matching `dxe-actuate-one-target` variant first, stages that image at
 `EFI\Drivers\AdaUnlockDxe.efi` (the path the I/NVRAM installer opens), then
 stages the application at `EFI\BOOT\BOOTX64.EFI`. Both artifacts are hash
 verified and replacements receive local backups. It is restricted to
-`-Only actuate-one-target`, a single BDF, `-StageDrive`, and
+the application configuration `-Only firmware-transaction -Operation Menu` with the pinned ESP policy (legacy ID `actuate-one-target`), a single BDF, `-StageDrive`, and
 `-AcceptActuatingDeploy`; the driver is never renamed to BOOTX64.EFI. The output
 includes `STAGED_DXE_COMPANION` and `STAGED actuate-one-target` receipts. The
 bench-override sequence is a standalone DXE image, not a paired one-target
@@ -430,7 +526,13 @@ Each signed image gets `<signed>.efi.json` and the run gets
 ```json
 {
   "VariantId": "diag-topology-log",
+  "CanonicalProfile": "diagnostic",
+  "RequestedCanonicalProfile": "diagnostic",
+  "RequestedLegacyAlias": null,
   "Family": "diagnostic",
+  "Switches": {"SaveLog": true},
+  "ExpectedAttestations": ["READ_ONLY=1"],
+  "AttestationsVerified": ["READ_ONLY=1"],
   "Safety": "read-only",
   "WritesGpu": false,
   "SourceSha256": "…",
@@ -508,10 +610,9 @@ case for this fork; two *different* lists between stages is not.
 
 ## 8. What this document does not claim
 
-No variant in the catalogue has been booted by this repository. Signing proves
-the image is yours and that the firmware trusts the certificate. It does not
-prove the firmware accepts the image, that a card survives it, that Windows
-starts the device, that the vendor Stop is bounded, or that the Windows 617.42
-Booter ever selected this descriptor. Those are the readings in
-[`DONOR_HARDWARE_SESSION.md`](DONOR_HARDWARE_SESSION.md) and, for the Booter,
-external evidence that has never existed here.
+The combined firmware transaction and reattachment have passed physical testing
+on the two recorded GPUs. The owner also confirmed recovery from a failed
+transaction after a 60-second power-off. These results are specific to the tested
+configuration. Signing a new image does not qualify its physical operation,
+numerical accuracy, resume behavior, every failure class, or Windows Booter
+provenance. See the [execution map](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia_unlock_evidence_to_execution_map.md) for current physical evidence.
