@@ -799,14 +799,14 @@ class CanonicalProfileResolution(unittest.TestCase):
             ("app-install-driver", ["maintenance", "-Operation", "InstallDriver"], []),
             ("app-remove-driver", ["maintenance", "-Operation", "RemoveDriver"], []),
             ("boot-state-maintenance", ["maintenance", "-Operation", "ReviewBootState"], []),
-            ("stop-dual-handoff", ["driver-transition", "-Operation", "LegacyStopObservation", "-LegacyTarget", "BothNvidia"], esp),
+            ("stop-dual-handoff", ["driver-transition", "-Operation", "ObserveStop", "-ObservationTarget", "BothNvidia"], esp),
         ]
         for suffix, probe in (("msi-rom", "MsiRom"), ("msi-fuse", "MsiFuse"),
                               ("msi-sec2", "MsiSec2"), ("vram-blocks", "VramBlocks")):
             cases.append(("diag-" + suffix, ["diagnostic", "-Probe", probe], []))
             cases.append(("diag-" + suffix + "-handoff", ["diagnostic", "-Probe", probe], esp))
         for card in ("4090", "3080"):
-            opts = ["driver-transition", "-Operation", "LegacyStopObservation", "-LegacyTarget", "RTX" + card]
+            opts = ["driver-transition", "-Operation", "ObserveStop", "-ObservationTarget", "RTX" + card]
             cases.append(("stop-" + card + "-once", opts, []))
             cases.append(("stop-" + card + "-handoff", opts, esp))
         self.assertEqual({alias for alias, _, _ in cases},
@@ -1054,7 +1054,7 @@ ConvertTo-Json -InputObject @($results) -Compress
             ["-Only", "compile-check"] + one + esp,
             ["-Only", "driver-transition"],
             ["-Only", "driver-transition", "-Operation", "StopReattach", "-Handoff", "WindowsAfterSuccess"] + one,
-            ["-Only", "driver-transition", "-Operation", "LegacyStopObservation", "-LegacyTarget", "BothNvidia"],
+            ["-Only", "driver-transition", "-Operation", "ObserveStop", "-ObservationTarget", "BothNvidia"],
             ["-Only", "firmware-transaction"],
             ["-Only", "firmware-transaction", "-Operation", "UnlockReattach", "-EspPolicy", "Pinned"],
             ["-Only", "firmware-transaction", "-Operation", "UnlockWithResume"] + esp,

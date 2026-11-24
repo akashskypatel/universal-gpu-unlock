@@ -21,10 +21,8 @@ $ErrorActionPreference = 'Stop'
 $espPinText = 'NONE'
 if ($WindowsEspGuid) {
     if (-not $FirmwareReattach -or -not $RuntimeEsp) { throw '-WindowsEspGuid requires -FirmwareReattach and -RuntimeEsp in this builder.' }
-    $espPin = [guid]::Empty
-    if (-not [guid]::TryParse($WindowsEspGuid, [ref]$espPin) -or $espPin -eq [guid]::Empty) {
-        throw 'Invalid or empty Windows ESP partition GUID.'
-    }
+    . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
+    $espPin = ConvertTo-GuWindowsEspGuid $WindowsEspGuid
     $espPinText = $espPin.ToString('D')
 }
 if ($FirmwareReattach -and (-not $AcceptUnverifiedActuation -or -not $EnableSingleTargetExecution -or -not $RuntimeSelection -or -not $RuntimeEsp -or $EspResident -or $StopReleaseOnlyBench -or $SyntheticCompileProfile -or $ApplicationOperation -ne 'Unlock')) {

@@ -36,14 +36,9 @@ try {
     if ($Target3080) { $flags+=' /DGU_STOP_TARGET_3080' }
     if ($BothNvidia) { $flags+=' /DGU_STOP_BOTH_NVIDIA' }
     if ($WindowsEspGuid) {
-        $parsed=[guid]::Empty
-        if (-not [guid]::TryParse($WindowsEspGuid,[ref]$parsed) -or $parsed -eq [guid]::Empty) {
-            throw 'Invalid or empty Windows ESP unique partition GUID.'
-        }
-        $parts=$parsed.ToString('D').Split('-')
-        $last=$parts[3]+$parts[4]
-        $octets=@(0..7 | ForEach-Object { '0x'+$last.Substring(2*$_,2) })
-        $initializer='{0x'+$parts[0]+',0x'+$parts[1]+',0x'+$parts[2]+',{' + ($octets -join ',') + '}}'
+        . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
+        $parsed = ConvertTo-GuWindowsEspGuid $WindowsEspGuid
+        $initializer = New-GuWindowsEspGuidInitializer $parsed
         Set-Content -LiteralPath (Join-Path $output 'windows-esp-guid.h') -Encoding ascii -Value ('#define GU_WINDOWS_ESP_GUID_INITIALIZER '+$initializer)
         $sources+=@('gpu_windows_handoff.c','gpu_windows_path.c')
         $flags+=' /DGU_STOP_WINDOWS_HANDOFF'

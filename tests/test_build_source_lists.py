@@ -254,6 +254,50 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
                             r"/fixed:no /dynamicbase:no /nxcompat:no /out:build\image.efi " + objects)
                 self.assertEqual(result.stdout.strip(), expected)
 
+    def test_shared_windows_esp_guid_conversion(self):
+        import json
+        import uuid
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable")
+        helper = str(ROOT / "src" / "Windows-Esp-Build.ps1").replace("'", "''")
+        for value in ("A005858C-4487-4EE2-976E-1710FF484C31",
+                      "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                      "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"):
+            with self.subTest(value=value):
+                cmd = (f"$ErrorActionPreference='Stop'; . '{helper}'; "
+                       f"$g=ConvertTo-GuWindowsEspGuid '{value}'; "
+                       "[ordered]@{Text=$g.ToString('D'); Bytes=@($g.ToByteArray()); "
+                       "Initializer=(New-GuWindowsEspGuidInitializer $g)} | ConvertTo-Json -Compress")
+                result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                actual = json.loads(result.stdout)
+                guid = uuid.UUID(value)
+                fields = guid.fields
+                tail = ", ".join(f"0x{x:02x}" for x in guid.bytes[8:]).replace(" ", "")
+                expected = "{0x%08x,0x%04x,0x%04x,{%s}}" % (*fields[:3], tail)
+                self.assertEqual(actual, {"Text": str(guid), "Bytes": list(guid.bytes_le),
+                                          "Initializer": expected})
+        for value in ("", "bad", "00000000-0000-0000-0000-000000000000"):
+            with self.subTest(invalid=value):
+                cmd = (f"$ErrorActionPreference='Stop'; . '{helper}'; "
+                       f"ConvertTo-GuWindowsEspGuid '{value}'")
+                result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Invalid or empty Windows ESP partition GUID.", result.stderr)
+        for name in ("Build-Experimental-MSVC.ps1", "Build-Gpu-Topology-Diagnostic.ps1",
+                     "Build-Msi-Stop-Observation.ps1", "Build-Sign-Deploy-UniversalGPU.ps1"):
+            text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
+            self.assertIn("'Windows-Esp-Build.ps1'", text)
+            self.assertIn("ConvertTo-GuWindowsEspGuid", text)
+            self.assertNotIn("[guid]::TryParse(", text)
+        for name in ("Build-Gpu-Topology-Diagnostic.ps1", "Build-Msi-Stop-Observation.ps1"):
+            text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
+            self.assertIn("New-GuWindowsEspGuidInitializer $parsed", text)
+            self.assertIn("GU_WINDOWS_ESP_GUID_INITIALIZER", text)
+
     def test_no_builder_list_silently_skips_a_unit(self):
         for builder in BUILDERS:
             listed = builder_sources(builder)

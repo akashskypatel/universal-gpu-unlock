@@ -1117,7 +1117,7 @@
     },
     {
       "id": "driver-transition",
-      "usage": "-Operation StopReattach|LegacyStopObservation [-ImageKind] [-Handoff] [-LegacyTarget]",
+      "usage": "-Operation StopReattach|ObserveStop [-ImageKind] [-Handoff] [-ObservationTarget]",
       "note": "Retains the distinct driver-transition configurations."
     },
     {

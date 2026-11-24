@@ -97,9 +97,9 @@ transaction.
 | Operation | Arguments | Restrictions |
 | --- | --- | --- |
 | `StopReattach` | `-ImageKind Application/Dxe`, `-SelectionBdf` or `-SelectionBdfs`, `-Handoff Return/WindowsAfterSuccess` | Without selection, uses live supported GPU enumeration. Default handoff is Return. WindowsAfterSuccess requires the live-all application. No explicit ESP pin. The DXE form needs the private ESP profile. |
-| `LegacyStopObservation` | `-LegacyTarget RTX4090/RTX3080/BothNvidia`, `-Handoff Halt/WindowsAfterSuccess`, `-WindowsEspGuid` | Application only. No compiled BDF selection. Single-card default without ESP pin is Halt; with pin, Windows handoff. BothNvidia requires pinned handoff. |
+| `ObserveStop` | `-ObservationTarget RTX4090/RTX3080/BothNvidia`, `-Handoff Halt/WindowsAfterSuccess`, `-WindowsEspGuid` | Application only. No compiled BDF selection. Single-card default without ESP pin is Halt; with pin, Windows handoff. BothNvidia requires pinned handoff. |
 
-LegacyStopObservation is not a reattachment test. StopReattach retains the
+ObserveStop is not a reattachment test. StopReattach retains the
 existing driver release, reattachment and final device graph checks.
 
 ### Firmware transaction

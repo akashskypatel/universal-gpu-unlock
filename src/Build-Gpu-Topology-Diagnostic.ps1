@@ -37,14 +37,9 @@ try {
     $sources = @('gpu_inventory.c','gpu_topology.c','gpu_pci_observation.c','gpu_topology_efi.c','gpu_windows_path.c','sha256.c','gpu_loaded_pe_text.c','format.c','runtime.c')
     if ($WindowsEspGuid) {
         if (-not $SaveLog) { throw '-WindowsEspGuid requires -SaveLog to preserve diagnostic evidence before handoff.' }
-        $parsed = [guid]::Empty
-        if (-not [guid]::TryParse($WindowsEspGuid, [ref]$parsed) -or $parsed -eq [guid]::Empty) {
-            throw 'Invalid or empty Windows ESP partition GUID.'
-        }
-        $parts = $parsed.ToString('D').Split('-')
-        $last = $parts[3] + $parts[4]
-        $octets = @(0..7 | ForEach-Object { '0x' + $last.Substring(2*$_, 2) })
-        $initializer = '{0x' + $parts[0] + ',0x' + $parts[1] + ',0x' + $parts[2] + ',{' + ($octets -join ',') + '}}'
+        . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
+        $parsed = ConvertTo-GuWindowsEspGuid $WindowsEspGuid
+        $initializer = New-GuWindowsEspGuidInitializer $parsed
         $header = Join-Path $output 'windows-esp-guid.h'
         Set-Content -LiteralPath $header -Encoding ascii -Value ('#define GU_WINDOWS_ESP_GUID_INITIALIZER ' + $initializer)
         $sources += 'gpu_windows_handoff.c'

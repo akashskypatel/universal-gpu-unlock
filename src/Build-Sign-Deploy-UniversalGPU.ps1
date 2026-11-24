@@ -160,14 +160,14 @@ param(
     [ValidateSet('Topology','GopTextCycle','MsiRom','MsiFuse','MsiSec2','VramBlocks','Preflight')]
     [string]$Probe,
     [switch]$SaveLog,
-    [ValidateSet('StopReattach','LegacyStopObservation','UnlockReattach','Unlock','UnlockWithResume','Menu','DxeTransaction','InstallDriver','RemoveDriver','ReviewBootState')]
+    [ValidateSet('StopReattach','ObserveStop','UnlockReattach','Unlock','UnlockWithResume','Menu','DxeTransaction','InstallDriver','RemoveDriver','ReviewBootState')]
     [string]$Operation,
     [ValidateSet('Application','Dxe')]
     [string]$ImageKind,
     [ValidateSet('Return','WindowsAfterSuccess','Halt')]
     [string]$Handoff,
     [ValidateSet('RTX4090','RTX3080','BothNvidia')]
-    [string]$LegacyTarget,
+    [string]$ObservationTarget,
     [ValidateSet('Pinned','Runtime','Resident')]
     [string]$EspPolicy,
     [switch]$ResolveOnly,
@@ -186,7 +186,7 @@ param(
 Set-StrictMode -Version Latest
 # Record explicit profile options before entering functions.
 $script:ExplicitProfileOptions = @()
-foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','LegacyTarget','EspPolicy')) {
+foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','ObservationTarget','EspPolicy')) {
     if ($PSBoundParameters.ContainsKey($optionName)) { $script:ExplicitProfileOptions += $optionName }
 }
 $script:RequestedCanonicalProfile = $null
@@ -715,21 +715,21 @@ function Resolve-ProfileVariant([string]$ProfileName) {
                 if ($isDxe) { return 'dxe-stop-release-sequence-bench' }
                 return 'app-stop-release-sequence-bench'
             }
-            if ($Operation -eq 'LegacyStopObservation') {
-                Assert-ProfileOptions @('Operation','ImageKind','Handoff','LegacyTarget')
-                if ($isDxe -or $targetCount -or -not $LegacyTarget) { throw 'Legacy Stop requires an application and an explicit legacy target, not a BDF list.' }
+            if ($Operation -eq 'ObserveStop') {
+                Assert-ProfileOptions @('Operation','ImageKind','Handoff','ObservationTarget')
+                if ($isDxe -or $targetCount -or -not $ObservationTarget) { throw 'Stop observation requires an application and an explicit observation target, not a BDF list.' }
                 if ($Handoff -eq 'Return' -or ($Handoff -eq 'Halt' -and $hasEsp) -or ($Handoff -eq 'WindowsAfterSuccess' -and -not $hasEsp)) {
                     throw 'Legacy Stop handoff requires a pinned ESP GUID. Halt does not accept an ESP GUID.'
                 }
-                if ($LegacyTarget -eq 'BothNvidia') {
+                if ($ObservationTarget -eq 'BothNvidia') {
                     if (-not $hasEsp) { throw 'Legacy dual Stop requires pinned Windows handoff.' }
                     return 'stop-dual-handoff'
                 }
-                $legacyId = if ($LegacyTarget -eq 'RTX4090') { 'stop-4090' } else { 'stop-3080' }
-                if ($hasEsp) { return "$legacyId-handoff" }
-                return "$legacyId-once"
+                $observationId = if ($ObservationTarget -eq 'RTX4090') { 'stop-4090' } else { 'stop-3080' }
+                if ($hasEsp) { return "$observationId-handoff" }
+                return "$observationId-once"
             }
-            throw 'Driver transition requires -Operation StopReattach or LegacyStopObservation.'
+            throw 'Driver transition requires -Operation StopReattach or ObserveStop.'
         }
         'firmware-transaction' {
             Assert-ProfileOptions @('Operation','ImageKind','EspPolicy')
@@ -877,7 +877,7 @@ function Get-ResolvedAttestations($Variant) {
         $attestation
     }
     if (Test-VariantSwitch $Variant 'FirmwareReattach') {
-        $expectedEsp = if ($WindowsEspGuid) { ([guid]$WindowsEspGuid).ToString('D') } else { 'NONE' }
+        $expectedEsp = if ($WindowsEspGuid) { (ConvertTo-GuWindowsEspGuid $WindowsEspGuid).ToString('D') } else { 'NONE' }
         "WINDOWS_ESP_GUID=$expectedEsp"
     }
 }
@@ -1057,6 +1057,7 @@ try {
         throw "GPU selection helper missing: $selectionHelper"
     }
     . $selectionHelper
+    . (Join-Path (Join-Path $RepoRoot 'src') 'Windows-Esp-Build.ps1')
     $script:SelectionSpec = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs
     $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
     $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
@@ -1072,10 +1073,7 @@ try {
         }
         $resolvedArguments = Build-VariantArguments $resolvedVariant
         if ($resolvedArguments.ContainsKey('WindowsEspGuid')) {
-            $parsedEsp = [guid]::Empty
-            if (-not [guid]::TryParse([string]$resolvedArguments['WindowsEspGuid'], [ref]$parsedEsp) -or $parsedEsp -eq [guid]::Empty) {
-                throw 'Invalid or empty Windows ESP partition GUID.'
-            }
+            [void](ConvertTo-GuWindowsEspGuid ([string]$resolvedArguments['WindowsEspGuid']))
         }
         Say ([ordered]@{
             CanonicalProfile = $resolvedVariant.profile
