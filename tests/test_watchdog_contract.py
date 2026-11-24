@@ -133,7 +133,7 @@ class WatchdogContract(unittest.TestCase):
     def test_stop_release_application_cancels_timer_and_returns_to_firmware(self):
         marker = APP.index("STOP_RELEASE_ONLY_IMAGE=1")
         start = APP.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, marker)
-        end = APP.index('#else\n  stage="stage-windows-image"', marker)
+        end = APP.index('#else\n#ifndef GU_INTERACTIVE_WINDOWS_ESP\n  stage="stage-windows-image"', marker)
         from test_unsafe_bench_experiment import without_windows_handoff
         branch = without_windows_handoff(APP[start:end])
         execution = branch.index("GuExecuteStopReleaseSequence(")

@@ -553,7 +553,7 @@ int main(void) {
 
     def test_stop_only_app_does_not_load_windows_image_or_handoff(self):
         branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
-        branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
+        branch_end = self.app.index('#else\n#ifndef GU_INTERACTIVE_WINDOWS_ESP\n  stage="stage-windows-image"', branch_start)
         stop_branch = without_windows_handoff(self.app[branch_start:branch_end])
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertNotIn("GuBootWindows()", stop_branch)
@@ -572,7 +572,7 @@ int main(void) {
         self.assertIn("/DGU_STOP_RELEASE_ONLY_BENCH", self.app_builder)
         self.assertIn("[switch]$FileOnlyBootLog", self.app_builder)
         branch_start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0, self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
-        branch_end = self.app.index('#else\n  stage="stage-windows-image"', branch_start)
+        branch_end = self.app.index('#else\n#ifndef GU_INTERACTIVE_WINDOWS_ESP\n  stage="stage-windows-image"', branch_start)
         stop_branch = without_windows_handoff(self.app[branch_start:branch_end])
         self.assertNotIn("GuBootLoadWindows()", stop_branch)
         self.assertNotIn("GuBootBenchCountdown(", stop_branch)
@@ -607,7 +607,7 @@ int main(void) {
     def test_stop_only_handoff_executes_only_after_success(self):
         start = self.app.rfind("#ifdef GU_STOP_RELEASE_ONLY_BENCH", 0,
                                self.app.index("STOP_RELEASE_ONLY_IMAGE=1"))
-        end = self.app.index('#else\n  stage="stage-windows-image"', start)
+        end = self.app.index('#else\n#ifndef GU_INTERACTIVE_WINDOWS_ESP\n  stage="stage-windows-image"', start)
         branch = self.app[start:end] + "\n#endif\n"
         # Compile and execute the actual application success block with mock
         # services. A second GPU replaces the first active context. Failures

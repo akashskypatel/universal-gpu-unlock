@@ -342,7 +342,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
    * actuation. Keep the loaded image and boot-local choice for handover. */
   stage="stage-windows-image";GuTracePhase(stage);
   s=GuBootLoadWindows();
-  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault||!GuBootLogOpen())goto failed;
+  if(s!=EFI_SUCCESS)goto failed;
+  if(owner!=GuPlatformActive||owner->fault||!GuBootLogOpen()){s=EFI_NOT_READY;goto failed;}
   GuBootSay(L"\r\nWindows boot destination accepted. Preparing GPU firmware assets.\r\n");
 #endif
   if (owner->is_ampere) {
