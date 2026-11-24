@@ -272,9 +272,8 @@ VOID GuLog(const char *format,...) {
 
   size_t n=GuFormatV(buffer,sizeof(buffer),format,args);va_end(args);
 
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
-  /* A file-only image cannot treat an incomplete or unwritten event as proof
-   * of its Stop attempt. Keep the first durable I/O failure sticky. */
+  /* Never treat an incomplete or unwritten event as transaction evidence.
+   * Keep the first durable I/O failure sticky in every image. */
   if(n==(size_t)-1||n>=sizeof(buffer)) {
     BootFileStatus=EFI_DEVICE_ERROR;
     return;
@@ -288,13 +287,7 @@ VOID GuLog(const char *format,...) {
   }
   s=Log->Flush?Log->Flush(Log):EFI_UNSUPPORTED;
   if(s!=EFI_SUCCESS)BootFileStatus=EFI_DEVICE_ERROR;
-#else
-  if(n==(size_t)-1||n>=sizeof(buffer))return;
 
-  UINTN bytes=n;EFI_STATUS s=Log->Write(Log,&bytes,buffer);
-
-  if(s==EFI_SUCCESS&&bytes==n)Log->Flush(Log);
-#endif
 
 }
 
@@ -451,11 +444,7 @@ VOID GuTraceDelay(UINT64 ticks) {
 }
 
 BOOLEAN GuBootLogOpen(VOID){
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
   return Log!=NULL&&BootFileStatus==EFI_SUCCESS;
-#else
-  return Log!=NULL;
-#endif
 }
 EFI_HANDLE GuBootGetTargetEspVolume(VOID){return TargetEspVolume;}
 const CHAR16 *GuBootGetLogPath(VOID){return Log?ActiveLogPath:NULL;}

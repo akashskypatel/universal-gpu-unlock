@@ -37,6 +37,7 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
   GU_PHASE("driver-release");
+  if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
   s=GuMsiRelease();
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
@@ -171,8 +172,10 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
   EFI_STATUS s;
   for(;;) {
     GU_PHASE("selected-gpu-execution");
+    if(!GuBootLogOpen()){s=EFI_DEVICE_ERROR;goto failed;}
     s=GuExecuteUnlock(owner,table,image,stage);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
+    if(!GuBootLogOpen()){s=EFI_DEVICE_ERROR;goto failed;}
     if(policy!=GU_S3_DISABLED) {
       GU_PHASE("s3-registration");
       EFI_STATUS s3=GuRegisterS3(owner,table);
@@ -191,6 +194,7 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
     s=GuSelectedSequenceHasNext(table,&more);
     if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)goto failed;
     if(more) {
+      if(!GuBootLogOpen()){s=EFI_DEVICE_ERROR;goto failed;}
       s=GuSelectNextGpu(table);
       if(s!=EFI_SUCCESS)goto failed;
       /* Only the checked selection operation can publish a successor. */

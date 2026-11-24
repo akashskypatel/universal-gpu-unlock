@@ -164,7 +164,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
 
     def test_stop_only_file_write_or_flush_failure_remains_sticky(self):
         logging = self.boot.split("VOID GuLog(const char *format,...)", 1)[1].split("VOID GuLogText", 1)[0]
-        for token in ("#ifdef GU_STOP_RELEASE_ONLY_BENCH", "Log->Write?", "Log->Flush?",
+        for token in ("Log->Write?", "Log->Flush?",
                       "BootFileStatus=EFI_DEVICE_ERROR",
                       "if(BootFileStatus!=EFI_SUCCESS)return;"):
             self.assertIn(token, logging)
