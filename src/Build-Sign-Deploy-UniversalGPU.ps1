@@ -161,12 +161,12 @@ param(
     [string]$VcVars,
     [string[]]$Only,
     [ValidateSet('Topology','GopTextCycle','MsiRom','MsiFuse','MsiSec2','VramBlocks')]
-    [string]$Probe = 'Topology',
-    [switch]$SaveLog = $true,
+    [string]$Probe,
+    [switch]$SaveLog,
     [ValidateSet('StopReattach','LegacyStopObservation','UnlockReattach','Unlock','UnlockWithResume','Menu','DxeTransaction','InstallDriver','RemoveDriver','ReviewBootState')]
     [string]$Operation,
     [ValidateSet('Application','Dxe')]
-    [string]$ImageKind = 'Application',
+    [string]$ImageKind,
     [ValidateSet('Return','WindowsAfterSuccess','Halt')]
     [string]$Handoff,
     [ValidateSet('RTX4090','RTX3080','BothNvidia')]
@@ -668,22 +668,23 @@ function Resolve-ProfileVariant([string]$ProfileName) {
         'diagnostic' {
             Assert-ProfileOptions @('Probe','SaveLog')
             if ($CapturedPromReference) { throw 'Diagnostic does not accept firmware reference options.' }
-            if (-not $SaveLog) {
-                if ($Probe -ne 'Topology' -or $targetCount -or $hasEsp) { throw 'Console-only diagnostic supports topology without selection or handoff.' }
+            $probeMode = if ($Probe) { $Probe } else { 'Topology' }
+            if ($script:ExplicitProfileOptions -contains 'SaveLog' -and -not $SaveLog) {
+                if ($probeMode -ne 'Topology' -or $targetCount -or $hasEsp) { throw 'Console-only diagnostic supports topology without selection or handoff.' }
                 return 'diag-topology'
             }
-            if ($Probe -eq 'Topology') {
+            if ($probeMode -eq 'Topology') {
                 if ($targetCount -and $hasEsp) { throw 'Selected diagnostic cannot include Windows handoff.' }
                 if ($targetCount) { return 'diag-selection' }
                 if ($hasEsp) { return 'diag-topology-handoff' }
                 return 'diag-topology-log'
             }
             if ($targetCount) { throw 'Special diagnostic probes do not accept a compiled GPU selection.' }
-            if ($Probe -eq 'GopTextCycle') {
+            if ($probeMode -eq 'GopTextCycle') {
                 if ($hasEsp) { throw 'GOP text cycle cannot include Windows handoff.' }
                 return 'diag-topology-gop-text-cycle'
             }
-            $probeId = @{MsiRom='diag-msi-rom'; MsiFuse='diag-msi-fuse'; MsiSec2='diag-msi-sec2'; VramBlocks='diag-vram-blocks'}[$Probe]
+            $probeId = (@{MsiRom='diag-msi-rom'; MsiFuse='diag-msi-fuse'; MsiSec2='diag-msi-sec2'; VramBlocks='diag-vram-blocks'}[$probeMode])
             if ($hasEsp) { return "$probeId-handoff" }
             return $probeId
         }
@@ -731,7 +732,7 @@ function Resolve-ProfileVariant([string]$ProfileName) {
                     throw 'Fixed firmware operations require the runtime-selection application and runtime ESP policy.'
                 }
                 if ($hasEsp -and $Operation -ne 'UnlockReattach') { throw 'Only UnlockReattach accepts an explicit ESP GUID.' }
-                return @{UnlockReattach='app-firmware-reattach'; Unlock='app-unlock'; UnlockWithResume='app-unlock-with-resume'}[$Operation]
+                return (@{UnlockReattach='app-firmware-reattach'; Unlock='app-unlock'; UnlockWithResume='app-unlock-with-resume'}[$Operation])
             }
             if (($Operation -eq 'Menu' -and -not $isDxe) -or ($Operation -eq 'DxeTransaction' -and $isDxe)) {
                 if ($hasEsp -or $EspPolicy -eq 'Runtime' -or ($isDxe -and ($EspPolicy -eq 'Resident' -or $CapturedPromReference))) {
