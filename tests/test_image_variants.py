@@ -769,6 +769,9 @@ class CanonicalProfileResolution(unittest.TestCase):
             ("diag-topology-gop-text-cycle", ["diagnostic", "-Probe", "GopTextCycle"], []),
             ("diag-topology-handoff", ["diagnostic"], esp),
             ("diag-selection", ["diagnostic"], one),
+            ("prep-selected", ["diagnostic", "-Probe", "Preflight"], one),
+            ("prep-selected", ["diagnostic", "-Probe", "Preflight"], two + ["-CapturedPromReference"]),
+            ("dxe-prep-selected", ["diagnostic", "-Probe", "Preflight", "-ImageKind", "Dxe"], two),
             ("compile-one-target", ["compile-check"], one),
             ("compile-sequence", ["compile-check"], two),
             ("dxe-compile-one-target", ["compile-check", "-ImageKind", "Dxe"], one),
@@ -804,7 +807,7 @@ class CanonicalProfileResolution(unittest.TestCase):
             cases.append(("stop-" + card + "-once", opts, []))
             cases.append(("stop-" + card + "-handoff", opts, esp))
         self.assertEqual({alias for alias, _, _ in cases},
-                         {v["id"] for v in MANIFEST["variants"]} - {"prep-selected", "dxe-prep-selected"})
+                         {v["id"] for v in MANIFEST["variants"]})
         for alias, canonical, extra in cases:
             with self.subTest(alias=alias, canonical=canonical, extra=extra):
                 old = self.resolve(["-Only", alias] + extra)
@@ -822,6 +825,10 @@ class CanonicalProfileResolution(unittest.TestCase):
             ["-Only", "diagnostic", "-Probe", "MsiRom"] + one,
             ["-Only", "diagnostic", "-SaveLog:$false"] + one,
             ["-Only", "diagnostic", "-Operation", "Unlock"],
+            ["-Only", "diagnostic", "-Probe", "Preflight"],
+            ["-Only", "diagnostic", "-Probe", "Preflight"] + one + esp,
+            ["-Only", "diagnostic", "-Probe", "Preflight", "-SaveLog:$false"] + one,
+            ["-Only", "diagnostic", "-Probe", "Preflight", "-ImageKind", "Dxe", "-CapturedPromReference"] + one,
             ["-Only", "compile-check"],
             ["-Only", "compile-check"] + one + esp,
             ["-Only", "driver-transition"],

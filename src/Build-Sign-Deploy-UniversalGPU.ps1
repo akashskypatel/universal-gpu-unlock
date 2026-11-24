@@ -160,7 +160,7 @@ param(
     [string]$WslUser,
     [string]$VcVars,
     [string[]]$Only,
-    [ValidateSet('Topology','GopTextCycle','MsiRom','MsiFuse','MsiSec2','VramBlocks')]
+    [ValidateSet('Topology','GopTextCycle','MsiRom','MsiFuse','MsiSec2','VramBlocks','Preflight')]
     [string]$Probe,
     [switch]$SaveLog,
     [ValidateSet('StopReattach','LegacyStopObservation','UnlockReattach','Unlock','UnlockWithResume','Menu','DxeTransaction','InstallDriver','RemoveDriver','ReviewBootState')]
@@ -666,6 +666,15 @@ function Resolve-ProfileVariant([string]$ProfileName) {
     $hasEsp = [bool]$WindowsEspGuid
     switch ($ProfileName) {
         'diagnostic' {
+            if ($Probe -eq 'Preflight') {
+                Assert-ProfileOptions @('Probe','SaveLog','ImageKind')
+                if (-not $targetCount -or $hasEsp -or ($isDxe -and $CapturedPromReference) -or
+                    ($script:ExplicitProfileOptions -contains 'SaveLog' -and -not $SaveLog)) {
+                    throw 'Preflight requires explicit GPU selection and file logging, without Windows handoff. Firmware references require the application.'
+                }
+                if ($isDxe) { return 'dxe-prep-selected' }
+                return 'prep-selected'
+            }
             Assert-ProfileOptions @('Probe','SaveLog')
             if ($CapturedPromReference) { throw 'Diagnostic does not accept firmware reference options.' }
             $probeMode = if ($Probe) { $Probe } else { 'Topology' }
@@ -882,7 +891,8 @@ function Build-VariantArguments($Variant) {
 }
 
 if ($List) {
-    Say 'PROFILE diagnostic -Probe Topology|GopTextCycle|MsiRom|MsiFuse|MsiSec2|VramBlocks [-SaveLog:$false] [selection or ESP where supported]'
+    Say 'PROFILE diagnostic -Probe Topology|GopTextCycle|MsiRom|MsiFuse|MsiSec2|VramBlocks|Preflight [-SaveLog:$false] [selection or ESP where supported]'
+    Say '  Preflight requires explicit GPU selection and file logging; supports -ImageKind Application|Dxe.'
     Say 'PROFILE compile-check -ImageKind Application|Dxe -SelectionBdf(s) <BDFs>'
     Say 'PROFILE driver-transition -Operation StopReattach|LegacyStopObservation [-ImageKind] [-Handoff] [-LegacyTarget]'
     Say 'PROFILE firmware-transaction -Operation UnlockReattach|Unlock|UnlockWithResume|Menu|DxeTransaction [-ImageKind] [-EspPolicy]'

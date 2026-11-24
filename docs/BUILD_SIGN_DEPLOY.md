@@ -76,7 +76,7 @@ policy, safety class and staging checks stay the same. The old IDs and
 
 | Profile | Options |
 | --- | --- |
-| `diagnostic` | `-Probe Topology/GopTextCycle/MsiRom/MsiFuse/MsiSec2/VramBlocks`. Saves a log by default. Use `-SaveLog:$false` for topology without selection or handoff. Use `-SelectionBdf` or `-SelectionBdfs` for selected topology. Use `-WindowsEspGuid` for supported pinned handoff. |
+| `diagnostic` | `-Probe Topology/GopTextCycle/MsiRom/MsiFuse/MsiSec2/VramBlocks/Preflight`. Saves a log by default. Use `-SaveLog:$false` for topology without selection or handoff. Use `-SelectionBdf` or `-SelectionBdfs` for selected topology. Use `-WindowsEspGuid` for supported pinned handoff. |
 | `compile-check` | `-ImageKind Application/Dxe` (default Application). Requires a compiled GPU selection. Cannot stage. |
 | `driver-transition` | Requires `-Operation StopReattach/LegacyStopObservation`. StopReattach uses live inventory or an ordered compiled selection. `-ImageKind Dxe` selects the existing driver. `-Handoff WindowsAfterSuccess` requires the live-all application. LegacyStopObservation requires `-LegacyTarget RTX4090/RTX3080/BothNvidia`. Legacy handoff requires a pinned ESP GUID. |
 | `firmware-transaction` | Requires `-Operation UnlockReattach/Unlock/UnlockWithResume/Menu/DxeTransaction`. Fixed application operations use runtime selection and runtime ESP policy. Only UnlockReattach accepts an explicit ESP GUID. Menu supports the existing pinned or resident configurations. DxeTransaction requires `-ImageKind Dxe` and the existing pinned policy. |
@@ -97,11 +97,13 @@ class, PE subsystem and expected attestations. It does not check the build
 environment, certificate, physical hardware or actual firmware execution.
 It does not permit deployment.
 
-The two legacy preparation IDs remain separate. Their recovery paths can
-modify firmware variables before the preparation refusal. They are not
-canonical read-only diagnostics yet. Do not use a new profile name to
-infer a new hardware qualification. See
-[the migration tracker](EFI_IMAGE_PROFILE_CONSOLIDATION_PLAN.md).
+The Preflight probe resolves the two existing preparation configurations.
+It requires explicit GPU addresses and a file log. Use `-ImageKind Dxe`
+for the driver. A prior latched state now refuses before discovery without
+changing boot registration. The active recovery path stays separate.
+Preflight does not perform the firmware transaction. The DXE image cannot
+stage as BOOTX64.EFI. Do not use a new profile name to infer new hardware
+qualification. See [the migration tracker](EFI_IMAGE_PROFILE_CONSOLIDATION_PLAN.md).
 
 ## 2. The catalogue
 
