@@ -221,8 +221,8 @@ class TheBundleMatchesWhatLoads(unittest.TestCase):
 class TheWiringIsComplete(unittest.TestCase):
     def test_image_builds_compile_the_record(self):
         for script in ("Build-Dxe-Driver.ps1", "Build-Experimental-MSVC.ps1"):
-            text = (SRC / script).read_text(encoding="utf-8")
-            self.assertIn("asset_install.c", text, script)
+            from test_build_source_lists import builder_sources
+            self.assertIn("asset_install.c", builder_sources(script), script)
 
     def test_simulator_compiles_and_exercises_it(self):
         self.assertIn('"asset_install.c"', RUN_SIM)

@@ -19,8 +19,9 @@ class BootBinding(unittest.TestCase):
         self.assertNotIn('L"\\\\EFI\\\\Boot\\\\bootx64.efi"',BOOT)
         self.assertNotIn('L"EFI\\\\Boot\\\\bootx64.efi"',BOOT)
     def test_reuse_existing_bounded_parser_in_both_builds(self):
-        for s in (APP,DXE):
-            self.assertIn("'gpu_windows_path.c'",s)
+        from test_build_source_lists import builder_sources
+        for name in ("Build-Experimental-MSVC.ps1", "Build-Dxe-Driver.ps1"):
+            self.assertIn("gpu_windows_path.c", builder_sources(name))
     def test_only_report_selected_volume_after_success(self):
         self.assertIn("if(s==EFI_SUCCESS)TargetEspVolume=volume;",BOOT)
         self.assertIn("EFI_HANDLE GuBootGetTargetEspVolume(VOID)",BOOT)

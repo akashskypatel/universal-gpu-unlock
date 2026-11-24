@@ -100,36 +100,8 @@ try {
         }
     }
 
-    $sources = @(
-        'dxe_main.c',
-        'boot_io.c',
-        'msi_release.c',
-        'stop_contract.c',
-        'launch_source.c',
-        'unlock_execution.c',
-        'port.c',
-        'compat.c',
-        'checks.c',
-        'gpu_inventory.c',
-        'gpu_discovery.c',
-        'gpu_selection.c',
-        'boot_state.c',
-        'driver_nvram.c',
-        'asset_install.c',
-        'gpu_execution_state.c',
-        'gpu_windows_path.c',
-        'profile.c',
-        'prom_reference.c',
-        'gpu_sku_geometry.c',
-        'sha256.c',
-        'runtime.c',
-        'format.c',
-        'vendor\unlock_610.c',
-        'vendor\prep_610.c',
-        'vendor\layout_610.c',
-        'vendor\vbios_610.c',
-        'vendor\gfw_eval.c'
-    )
+    . (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
+    $sources = @('dxe_main.c') + $executionCoreSources + @('driver_nvram.c') + $executionSupportSources
     if ($StopReleaseOnlyBench) {
         # The release-only image must not even link the firmware-unlock
         # implementation; unlock_execution.c is compiled to the dedicated

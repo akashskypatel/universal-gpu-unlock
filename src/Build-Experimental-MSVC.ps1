@@ -137,36 +137,8 @@ try {
         throw '-StopReleaseOnlyBench with compiled targets requires at least one BDF; omit BDFs for live inventory selection.'
     }
 
-    $sources = @(
-        'app.c',
-        'driver_nvram.c',
-        'boot_io.c',
-        'msi_release.c',
-        'stop_contract.c',
-        'launch_source.c',
-        'unlock_execution.c',
-        'port.c',
-        'compat.c',
-        'checks.c',
-        'gpu_inventory.c',
-        'gpu_discovery.c',
-        'gpu_selection.c',
-        'boot_state.c',
-        'asset_install.c',
-        'gpu_execution_state.c',
-        'gpu_windows_path.c',
-        'profile.c',
-        'prom_reference.c',
-        'gpu_sku_geometry.c',
-        'sha256.c',
-        'runtime.c',
-        'format.c',
-        'vendor\unlock_610.c',
-        'vendor\prep_610.c',
-        'vendor\layout_610.c',
-        'vendor\vbios_610.c',
-        'vendor\gfw_eval.c'
-    )
+    . (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
+    $sources = @('app.c', 'driver_nvram.c') + $executionCoreSources + $executionSupportSources
     if ($StopReleaseOnlyBench) {
         # This application can Stop/release and reconnect only; do not link the
         # vendor implementation that performs the firmware-unlock transaction.

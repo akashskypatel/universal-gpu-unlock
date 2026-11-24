@@ -158,8 +158,8 @@ class Validation(unittest.TestCase):
 class BuildWiring(unittest.TestCase):
     def test_both_builders_and_the_simulator_compile_the_module(self):
         for name in ("Build-Experimental-MSVC.ps1", "Build-Dxe-Driver.ps1"):
-            text = (SRC / name).read_text(encoding="utf-8")
-            self.assertIn("'boot_state.c'", text, name)
+            from test_build_source_lists import builder_sources
+            self.assertIn("boot_state.c", builder_sources(name), name)
         self.assertIn('"boot_state.c"', (ROOT / "tools" / "run_simulation.py").read_text(
             encoding="utf-8"))
 

@@ -360,7 +360,8 @@ class BuilderWiring(unittest.TestCase):
             "-RuntimeSelection replaces the compiled target list", MSVC)
 
     def test_msvc_builder_links_the_selection_module(self):
-        self.assertIn("'gpu_selection.c'", MSVC)
+        from test_build_source_lists import builder_sources
+        self.assertIn("gpu_selection.c", builder_sources("Build-Experimental-MSVC.ps1"))
         self.assertIn("RUNTIME_SELECTION=$([int][bool]$RuntimeSelection)", MSVC)
 
     def test_simulator_builds_without_a_compiled_list(self):

@@ -40,9 +40,20 @@ QUOTED = re.compile(r"'([^']+\.c)'")
 
 def builder_sources(name: str) -> list[str]:
     text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
-    block = SOURCES_BLOCK.search(text)
-    assert block, f"{name}: no $sources array"
-    return [entry.replace("\\", "/") for entry in QUOTED.findall(block.group(1))]
+    shared = (ROOT / "src" / "Gpu-Execution-Sources.ps1").read_text(encoding="utf-8-sig")
+    assert ". (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')" in text, name
+    def units(variable):
+        block = re.search(r"\$" + variable + r"\s*=\s*@\((.*?)\n\s*\)", shared, re.S)
+        assert block, f"missing shared {variable}"
+        return [entry.replace("\\", "/") for entry in QUOTED.findall(block.group(1))]
+    core = units("executionCoreSources")
+    support = units("executionSupportSources")
+    if name == BUILDERS[0]:
+        assert "$sources = @('app.c', 'driver_nvram.c') + $executionCoreSources + $executionSupportSources" in text
+        return ["app.c", "driver_nvram.c"] + core + support
+    assert name == BUILDERS[1], name
+    assert "$sources = @('dxe_main.c') + $executionCoreSources + @('driver_nvram.c') + $executionSupportSources" in text
+    return ["dxe_main.c"] + core + ["driver_nvram.c"] + support
 
 
 def app_sources() -> list[str]:
@@ -78,6 +89,26 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
         for builder in BUILDERS:
             self.assertIn("prom_reference.c", builder_sources(builder),
                           f"{builder} would fail to link profile.c")
+
+    def test_powershell_source_inventory_matches_independent_simulator(self):
+        import json
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable")
+        for name in BUILDERS:
+            text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
+            assignment = next(line.strip() for line in text.splitlines()
+                              if line.strip().startswith("$sources = @("))
+            helper = str(ROOT / "src" / "Gpu-Execution-Sources.ps1").replace("'", "''")
+            cmd = f". '{helper}'; {assignment}; ConvertTo-Json -InputObject $sources -Compress"
+            result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
+                                    capture_output=True, text=True, check=True, timeout=30)
+            actual = [unit.replace("\\", "/") for unit in json.loads(result.stdout)]
+            expected = set(app_sources())
+            extra, absent = ALLOWED_DELTA[name]
+            self.assertEqual(set(actual), (expected - absent) | extra)
+            self.assertEqual(len(actual), len(set(actual)))
+            self.assertEqual(actual, builder_sources(name))
 
     def test_no_builder_list_silently_skips_a_unit(self):
         for builder in BUILDERS:
