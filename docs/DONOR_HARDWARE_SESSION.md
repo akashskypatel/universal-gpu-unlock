@@ -78,15 +78,15 @@ Archived captures now include waived actuating boots as well as read-only and pr
 **Step 1 — confirm the catalogue accepts the candidate**
 
 ```powershell
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -List
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -ListLegacy
 ```
 
-*Expect:* one `CATALOGUE ... variants=31 families=4` line, then a `VARIANT <id> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.
+*Expect:* one `CATALOGUE ... variants=41 families=5` line, then a `VARIANT <id> PROFILE=<profile> SAFETY=<class> BINARY=<name>` line per image; `NOT_BUILDABLE` lines say what this tree cannot produce and why. The candidate must be listed with the safety class in the table below.
 
 *Look for:*
 
 * `CATALOGUE {0} variants={1} families={2}` — printed by `src/Build-Sign-Deploy-UniversalGPU.ps1`
-* `VARIANT {0} SAFETY={1} BINARY={2}` — printed by `src/Build-Sign-Deploy-UniversalGPU.ps1`
+* `VARIANT {0} PROFILE={1} SAFETY={2} BINARY={3}` — printed by `src/Build-Sign-Deploy-UniversalGPU.ps1`
 
 *If it does not:* a missing id is a catalogue problem, not a bench problem: fix the tree before touching the stick.
 
