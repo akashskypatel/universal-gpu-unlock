@@ -31,7 +31,7 @@
 #include <Protocol/LoadedImage.h>
 
 #include <Protocol/SimpleFileSystem.h>
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 #include <Protocol/SimpleTextOut.h>
 #endif
 
@@ -298,9 +298,9 @@ VOID GuLogText(const char *text){GuLog("%s",text);}
  * See port.h. Two properties matter more than the format:
  *
  * 1. Legacy console traces bypass Silent. The combined firmware/reattach
- *    application mirrors preparation progress only before GuBootSilence;
- *    after that boundary its global console may be stale, so the existing
- *    verified peer GOP notices and the file log remain authoritative.
+ *    application keeps global output silent after GuBootSilence.
+ *    Successor preparation can mirror traces through the verified direct
+ *    peer text interface. The file log remains authoritative.
  *    File-only DXE images never mirror traces to the console.
  * 2. Nothing here can block or allocate. GetTime is used when the firmware offers
  *    it and the elapsed field reads NA when it does not, so a model world without
@@ -346,22 +346,61 @@ static const char *TraceElapsedText(char *buffer,UINTN size) {
   return buffer;
 }
 
+#ifdef GU_FIRMWARE_REATTACH
+/* The previous transaction verified this direct peer text interface. Never
+ * substitute the system console or retain a route across another Stop. */
+static EFI_HANDLE TracePeerHandle;
+static EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *TracePeerText;
+static UINTN TracePeerOutput;
+static BOOLEAN TraceSuccessorPreparation;
+
+VOID GuBootTraceRememberPeer(EFI_HANDLE handle,EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text) {
+  TracePeerHandle=handle;
+  TracePeerText=text;
+  TracePeerOutput=text?(UINTN)text->OutputString:0;
+}
+
+VOID GuBootTraceSuccessorPreparation(BOOLEAN enable) {
+  TraceSuccessorPreparation=enable;
+  if(!enable)GuBootTraceRememberPeer(NULL,NULL);
+}
+
+static VOID TracePeerSay(CHAR16 *wide) {
+  static EFI_GUID text_guid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *live=NULL;
+  if(!TraceSuccessorPreparation||!TracePeerHandle||!TracePeerText||
+     !Table||!Table->BootServices||!Table->BootServices->HandleProtocol)return;
+  EFI_STATUS s=Table->BootServices->HandleProtocol(TracePeerHandle,&text_guid,(VOID **)&live);
+  if(s!=EFI_SUCCESS||live!=TracePeerText||!live||
+     !live->OutputString||(UINTN)live->OutputString!=TracePeerOutput) {
+    GuBootTraceRememberPeer(NULL,NULL);
+    GuLog("SUCCESSOR_TRACE_CONSOLE=UNAVAILABLE FILE_LOG=AUTHORITATIVE\n");
+    return;
+  }
+  if(live->OutputString(live,wide)!=EFI_SUCCESS) {
+    GuBootTraceRememberPeer(NULL,NULL);
+    GuLog("SUCCESSOR_TRACE_CONSOLE=OUTPUT_FAILED FILE_LOG=AUTHORITATIVE\n");
+  }
+}
+#endif
+
 static VOID TraceSay(const char *text) {
 #ifdef GU_DXE_FILE_ONLY_OUTPUT
   /* GuTracePhase/Detail/Progress also call GuLog, which writes the file. */
   (void)text;
 #else
-#ifdef GU_FIRMWARE_REATTACH
-  /* Preparation has not released any driver. Keep the global console
-   * silent from the existing actuation boundary through all successors. */
-  if(Silent)return;
-#endif
   CHAR16 wide[96];
   UINTN i=0;
-  if(!Table||!Table->ConOut||!Table->ConOut->OutputString||!text)return;
+  if(!text)return;
   for(;i+1U<sizeof(wide)/sizeof(wide[0])&&text[i];i++)
     wide[i]=(CHAR16)(unsigned char)text[i];
   wide[i]=0;
+#ifdef GU_FIRMWARE_REATTACH
+  /* The global console remains silent after the first release. A successor
+   * may mirror read-only preparation through the verified direct peer. */
+  if(Silent){TracePeerSay(wide);return;}
+#endif
+  if(!Table||!Table->ConOut||!Table->ConOut->OutputString)return;
   Table->ConOut->OutputString(Table->ConOut,wide);
 #endif
 }

@@ -43,6 +43,11 @@ EFI_STATUS GuBootBenchReportCompletion(VOID);
 #endif
 VOID GuBootSilence(VOID);
 VOID GuBootUnsilence(VOID);
+#ifdef GU_FIRMWARE_REATTACH
+/* A verified direct peer can show successor preparation only. */
+VOID GuBootTraceRememberPeer(EFI_HANDLE,EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *);
+VOID GuBootTraceSuccessorPreparation(BOOLEAN);
+#endif
 VOID GuBootHalt(VOID);
 /* v0.5.4: diagnostics log only while the USB log is open (GuLog faults otherwise). */
 BOOLEAN GuBootLogOpen(VOID);

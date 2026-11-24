@@ -13,7 +13,7 @@ These tests pin the properties that make that impossible to reintroduce:
     moment the stage is entered rather than after it returns;
   * the trace line is flushed through GuLog. Legacy console traces bypass
     silence; combined preparation traces stop at the actuation boundary;
-    file-only traces never call the global console;
+    successor preparation uses the verified direct peer; file-only traces never call the global console;
   * the calls that can block -- config space, BAR0, the 1 MiB PROM copy, the
     vendor's delay loop -- name themselves first;
   * the vendor wait is rate-limited by accumulated delay, so tracing it cannot
@@ -66,9 +66,16 @@ class TheTraceNamesThePhaseBeforeItBlocks(unittest.TestCase):
                         app.index("s=GuDiscoverSingleGpu(image,t)"))
         self.assertLess(app.index("GuBootSilence();", app.index("Operator U/P")),
                         app.index("s=GuExecutePreparedSequence("))
-        self.assertNotIn("GuBootUnsilence", read("unlock_execution.c"))
+        execution = read("unlock_execution.c")
+        self.assertNotIn("GuBootUnsilence", execution)
+        advance = execution.split("static EFI_STATUS GuPrepareNextSelectedGpu(", 1)[1].split("#endif\n\n#ifndef", 1)[0]
+        self.assertLess(advance.index("GuSelectNextGpu("), advance.index("GuBootTraceSuccessorPreparation(TRUE)"))
+        self.assertLess(advance.index("GuBootTraceSuccessorPreparation(TRUE)"), advance.index("GuPrepareBoundGpu(next,stage)"))
+        self.assertLess(advance.index("GuPrepareBoundGpu(next,stage)"), advance.index("GuBootTraceSuccessorPreparation(FALSE)"))
+        peer = read("msi_release.c").split("EFI_STATUS GuMsiStopReleaseTryPeerConsole(", 1)[1]
+        self.assertIn("if(verified==EFI_SUCCESS)GuBootTraceRememberPeer(survivor->handle,peer_text);", peer)
         # Execute the actual output function for each profile. A file-only
-        # image must not print; combined must print before, never after silence.
+        # image must not print; combined must not use the global console after silence.
         harness = r"""
 #include <stdint.h>
 #include <stddef.h>
@@ -83,6 +90,13 @@ typedef struct { OUT *ConOut; } SYS;
 static SYS *Table;
 static unsigned Silent;
 static unsigned calls;
+#ifdef GU_FIRMWARE_REATTACH
+static unsigned peer_calls, preparing;
+static void TracePeerSay(CHAR16 *wide) {
+    assert(wide[0]=='p');
+    if(preparing)peer_calls++;
+}
+#endif
 static int Output(OUT *out,CHAR16 *text) {
     (void)out;assert(text[0]=='p');calls++;return 0;
 }
@@ -99,7 +113,11 @@ int main(void) {
 #if defined(GU_DXE_FILE_ONLY_OUTPUT)
     assert(calls==0);
 #elif defined(GU_FIRMWARE_REATTACH)
-    assert(calls==1);
+    assert(calls==1 && peer_calls==0);
+    preparing=1;TraceSay("preparation");
+    assert(calls==1 && peer_calls==1);
+    preparing=0;TraceSay("post-release");
+    assert(calls==1 && peer_calls==1);
 #else
     assert(calls==2);
 #endif
@@ -124,6 +142,84 @@ int main(void) {
                         self.assertEqual(built.returncode, 0, built.stderr)
                         run = subprocess.run([str(binary)], capture_output=True, text=True)
                         self.assertEqual(run.returncode, 0, run.stderr)
+
+
+    def test_successor_trace_validates_direct_peer_and_disables_on_failure(self):
+        start = self.boot.index("static EFI_HANDLE TracePeerHandle;")
+        end = self.boot.index("#endif\n\nstatic VOID TraceSay", start)
+        actual = self.boot[start:end]
+        harness = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <assert.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef uintptr_t UINTN;
+typedef uint16_t CHAR16;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+typedef int EFI_GUID;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID 1
+typedef struct OUT OUT;
+struct OUT { int (*OutputString)(OUT *,CHAR16 *); };
+typedef OUT EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
+typedef struct { int (*HandleProtocol)(EFI_HANDLE,EFI_GUID *,VOID **); } BS;
+typedef struct { BS *BootServices; } SYS;
+static SYS *Table;
+static unsigned lookups,calls,fail,logs;
+static OUT *reported;
+static int lookup(EFI_HANDLE h,EFI_GUID *g,VOID **out) {
+    assert(h==(void *)1 && *g==1); lookups++; *out=reported;
+    return fail==1?2:0;
+}
+static int output(OUT *o,CHAR16 *text) {
+    assert(o==reported && text[0]=='x'); calls++; return fail==2?2:0;
+}
+static int other_output(OUT *o,CHAR16 *text) { (void)o;(void)text;assert(0);return 1; }
+static void GuLog(const char *s) { assert(s);logs++; }
+""" + actual + r"""
+int main(void) {
+    OUT peer={output},other={other_output};BS bs={lookup};SYS sys={&bs};Table=&sys;
+    CHAR16 text[]={'x',0};
+    GuBootTraceRememberPeer((void *)1,&peer);reported=&peer;
+    TracePeerSay(text);assert(!lookups&&!calls);
+    GuBootTraceSuccessorPreparation(TRUE);
+    TracePeerSay(text);assert(lookups==1&&calls==1);
+    GuBootTraceSuccessorPreparation(FALSE);
+    TracePeerSay(text);assert(lookups==1&&calls==1);
+    GuBootTraceSuccessorPreparation(TRUE);
+    TracePeerSay(text);assert(lookups==1&&calls==1);
+    for(int mode=0;mode<4;mode++) {
+        GuBootTraceRememberPeer((void *)1,&peer);
+        reported=mode==0?&other:&peer;
+        fail=mode==1?1:mode==2?2:0;
+        if(mode==3)peer.OutputString=other_output;
+        unsigned before=calls, before_lookup=lookups;
+        TracePeerSay(text);assert(lookups==before_lookup+1);
+        assert(calls==before+(mode==2));
+        TracePeerSay(text);assert(lookups==before_lookup+1);
+        peer.OutputString=output;
+    }
+    assert(logs==4);
+    return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = pathlib.Path(tmp) / "peer.c"
+            binary = pathlib.Path(tmp) / "peer"
+            src.write_text(harness, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                if not shutil.which(compiler):
+                    continue
+                built = subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                                        str(src), "-o", str(binary)], capture_output=True, text=True)
+                self.assertEqual(built.returncode, 0, built.stderr)
+                ran = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertEqual(ran.returncode, 0, ran.stderr)
+
 
     def test_combined_peer_completion_warns_about_next_preparation(self):
         release = read("msi_release.c")

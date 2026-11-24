@@ -195,7 +195,16 @@ static EFI_STATUS GuPrepareNextSelectedGpu(GU_PLATFORM **owner,EFI_SYSTEM_TABLE 
   if(!next||next==previous||previous->fault||previous->retained||next->fault)
     return EFI_NOT_READY;
   *owner=next;
+#ifdef GU_FIRMWARE_REATTACH
+  /* The previous step is complete and the successor is bound. Only this
+   * read-only preparation window may reuse the verified direct peer. */
+  GuBootTraceSuccessorPreparation(TRUE);
+  GuTraceScreen("\r\n[gu] Preparing next selected GPU\r\n");
+#endif
   s=GuPrepareBoundGpu(next,stage);
+#ifdef GU_FIRMWARE_REATTACH
+  GuBootTraceSuccessorPreparation(FALSE);
+#endif
   return s!=EFI_SUCCESS?s:(next!=GuPlatformActive||next->fault)?EFI_DEVICE_ERROR:EFI_SUCCESS;
 }
 #endif

@@ -2280,6 +2280,9 @@ EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
  * draw a short status directly through the same verified GOP instead.
  * This intentionally does not change the firmware-owned system table. */
 EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
+#ifdef GU_FIRMWARE_REATTACH
+  GuBootTraceRememberPeer(NULL,NULL);
+#endif
   if(!ReleaseOwnerMatches()||!Plan.target_console_experiment||
      !Plan.ready||!Plan.mutated||Plan.stage!=3||!Plan.claimed||
      !Plan.warning_peer_gop||!GuBootLogOpen())
@@ -2332,7 +2335,11 @@ EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
         GuLog("STOP_RELEASE_PEER_CONOUT=ACQUIRED "
               "CHANNEL=PEER_SIMPLE_TEXTOUT DIRECT_HANDLE=1 "
               "GLOBAL_CONOUT_CHANGED=0 PHYSICAL_PIXELS_VERIFIED=0\n");
-        return GuVerifyActivePeers(Plan.table);
+        EFI_STATUS verified=GuVerifyActivePeers(Plan.table);
+#ifdef GU_FIRMWARE_REATTACH
+        if(verified==EFI_SUCCESS)GuBootTraceRememberPeer(survivor->handle,peer_text);
+#endif
+        return verified;
       }
     }
   }
