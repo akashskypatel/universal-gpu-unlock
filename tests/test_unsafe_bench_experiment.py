@@ -218,7 +218,8 @@ class UnsafeBenchVariantContract(unittest.TestCase):
                    "DISPLAY MAY GO DARK", "RECOVERY MAY NEED POWER OFF",
                    "REATTACHMENT FAILED", "SYSTEM WILL REBOOT", "IN 30 SECONDS",
                    "USB BOOT MAY REPEAT THE TEST", "ENTER BIOS SELECT OTHER DRIVE",
-                   "BREAK BOOT LOOP IN BIOS"]
+                   "BREAK BOOT LOOP IN BIOS", "GPU REATTACHMENT VERIFIED",
+                   "STOP RELEASE COMPLETE", "FIRMWARE DRIVERS RESTORED"]
         for char in "".join(phrases):
             if char != " ":
                 self.assertIn(char, glyphs)
@@ -226,6 +227,35 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("Gu.discovery_identity.bus", warning)
         self.assertIn("Gu.discovery_identity.device", warning)
         self.assertIn("Gu.discovery_identity.function", warning)
+
+    def test_verified_reattach_replaces_only_the_original_peer_warning(self):
+        notice = self.release.split("static EFI_STATUS BenchShowReattachSuccess(VOID)", 1)[1].split(
+            "EFI_STATUS GuMsiStopReleaseWarnSurvivor", 1)[0]
+        reattach = self.release.split("EFI_STATUS GuMsiReattachAfterStop(VOID)", 1)[1].split(
+            "#endif", 1)[0]
+        for gate in ("!ReleaseOwnerMatches()", "!Plan.reattach_verified",
+                     "!Plan.reconnecting", "Plan.stage", "Plan.claimed", "Gu.owned",
+                     "Gu.fault", "!Plan.warning_peer_gop", "!GuBootLogOpen()",
+                     "Plan.survivors[i].handle==Plan.warning_peer_gop",
+                     "!survivor->seen", "g!=survivor->interface",
+                     "GuDevicePathUnchanged(", "Equal(g->Mode,", "Equal(g->Mode->Info,"):
+            self.assertIn(gate, notice)
+        self.assertIn("EfiBltVideoFill,0,0,12,12,580,198,0", notice)
+        self.assertIn('BenchGopLine(g,24,26,scale,"GPU REATTACHMENT VERIFIED")', notice)
+        self.assertIn('BenchGopLine(g,24,67,scale,target)', notice)
+        self.assertIn("Gu.discovery_identity.segment", notice)
+        self.assertLess(notice.index("GuDevicePathUnchanged("), notice.index("EfiBltVideoFill"))
+        self.assertLess(notice.index("EfiBltVideoFill"), notice.index("BenchGopLine("))
+        for check in ("ReattachedGraphExpected()", "ReattachedDriversVerified()",
+                      "BenchTargetConsoleRestored()", "GuVerifyActivePeers(Plan.table)",
+                      "Plan.reattach_verified=TRUE"):
+            self.assertLess(reattach.index(check), reattach.index("BenchShowReattachSuccess()"))
+        self.assertIn("if(Plan.warning_peer_gop)", reattach)
+        self.assertIn("STOP_RELEASE_SUCCESS_GOP=%s", reattach)
+        self.assertIn("PHYSICAL_PIXELS_VERIFIED=0 CONSOLE_IO=0", reattach)
+        self.assertNotIn("return display", reattach)
+        self.assertNotIn("->ConOut", notice)
+        self.assertNotIn("SetMode(", notice)
 
     def test_failed_reattach_warns_on_peer_gop_before_thirty_second_reboot(self):
         notice = self.release.split(

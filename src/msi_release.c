@@ -2118,6 +2118,55 @@ static VOID BenchHexAt(char *text,UINTN at,UINTN digits,UINTN value) {
   for(UINTN i=0;i<digits;i++)
     text[at+i]=BenchHex(value>>((digits-1U-i)*4U));
 }
+/* Replace the warning on exactly the peer that displayed it. The target
+ * has reattached; the peer must still match the captured path and mode.
+ * This is best-effort display output, not a new reattachment criterion. */
+static EFI_STATUS BenchShowReattachSuccess(VOID) {
+  if(!ReleaseOwnerMatches()||!Plan.reattach_verified||!Plan.reconnecting||
+     Plan.stage||Plan.claimed||Gu.owned||Gu.fault||!Plan.warning_peer_gop||
+     !Plan.survivor_baseline_valid||!GuBootLogOpen())return EFI_NOT_READY;
+  SURVIVOR_GOP *survivor=NULL;
+  for(UINTN i=0;i<Plan.survivor_count;i++)
+    if(Plan.survivors[i].handle==Plan.warning_peer_gop) {
+      if(survivor)return EFI_COMPROMISED_DATA;
+      survivor=&Plan.survivors[i];
+    }
+  if(!survivor||!survivor->seen||!survivor->interface||!survivor->path_bytes)
+    return EFI_NOT_READY;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *g=NULL;
+  EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+  EFI_STATUS s=Interface(survivor->handle,&GopGuid,(VOID **)&g);
+  if(s==EFI_SUCCESS)s=Interface(survivor->handle,&PathGuid,(VOID **)&path);
+  if(s!=EFI_SUCCESS||g!=survivor->interface||!g||!g->Mode||
+     !g->Mode->Info||g->Mode->SizeOfInfo<sizeof(*g->Mode->Info)||!g->Blt||!path||
+     !GuDevicePathUnchanged(survivor->path,survivor->path_bytes,
+                            (const unsigned char *)path,4096U)||
+     !Equal(g->Mode,&survivor->mode,sizeof(survivor->mode))||
+     !Equal(g->Mode->Info,&survivor->info,sizeof(survivor->info)))
+    return EFI_NOT_READY;
+  const UINTN width=g->Mode->Info->HorizontalResolution;
+  const UINTN height=g->Mode->Info->VerticalResolution;
+  if(width<600U||height<210U)return EFI_UNSUPPORTED;
+  if(Gu.discovery_identity.segment>0xffffU||
+     Gu.discovery_identity.bus>255U||
+     Gu.discovery_identity.device>31U||
+     Gu.discovery_identity.function>7U)return EFI_NOT_READY;
+  char target[]="TARGET 0000:00:00.0";
+  BenchHexAt(target,7U,4U,Gu.discovery_identity.segment);
+  BenchHexAt(target,12U,2U,Gu.discovery_identity.bus);
+  BenchHexAt(target,15U,2U,Gu.discovery_identity.device);
+  BenchHexAt(target,18U,1U,Gu.discovery_identity.function);
+  const UINTN scale=width>=1000U?3U:2U;
+  EFI_GRAPHICS_OUTPUT_BLT_PIXEL background={24,16,80,0};
+  /* Cover the entire warning and the optional post-Stop status line. */
+  s=g->Blt(g,&background,EfiBltVideoFill,0,0,12,12,580,198,0);
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,"GPU REATTACHMENT VERIFIED");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,67,scale,target);
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,"STOP RELEASE COMPLETE");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,"FIRMWARE DRIVERS RESTORED");
+  return s;
+}
+
 EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
   if(!ReleaseOwnerMatches()||!Plan.ready||Plan.mutated||Plan.stage||
      !Plan.survivor_baseline_valid||!GuBootLogOpen()||
@@ -2369,6 +2418,18 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
        "DISPLAY_OUTPUT_TESTED=0 FIRMWARE_TRANSACTION=0\n",
        (unsigned)!Plan.headless,(size_t)Plan.target_child_count,
        (size_t)Plan.survivor_count);
+  if(Plan.warning_peer_gop) {
+    EFI_STATUS display=BenchShowReattachSuccess();
+    NOTE("STOP_RELEASE_SUCCESS_GOP=%s TARGET=%04x:%02x:%02x.%x "
+         "DISPLAY_API_STATUS=%#llx REATTACH_VERIFIED=1 "
+         "PHYSICAL_PIXELS_VERIFIED=0 CONSOLE_IO=0\n",
+         display==EFI_SUCCESS?"BLT_SUCCESS":"BLT_FAILED",
+         (unsigned)Gu.discovery_identity.segment,
+         (unsigned)Gu.discovery_identity.bus,
+         (unsigned)Gu.discovery_identity.device,
+         (unsigned)Gu.discovery_identity.function,
+         (unsigned long long)display);
+  }
   return EFI_SUCCESS;
 }
 #endif

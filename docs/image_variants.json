@@ -525,7 +525,7 @@
         "PROM_READ=0",
         "OS_HANDOFF=WINDOWS_AFTER_SUCCESS"
       ],
-      "note": "Uses the same runtime GPU selection, Stop/release and verified reattachment sequence as the Stop-only application. After all targets complete, loads the Windows Boot Manager from exactly one detected non-USB EFI system partition. Rechecks the complete GPU sequence, closes the USB log, then starts Windows without a reset. A failed check blocks explicit handover. No fixed BDFs, firmware unlock, flash or NVRAM writes. Windows boot and physical recovery remain unverified."
+      "note": "Uses the same runtime GPU selection, Stop/release and verified reattachment sequence as the Stop-only application. After each verified reattachment, the application makes a best-effort attempt to replace the warning on its original peer display with a success message and target address. After all targets complete, loads the Windows Boot Manager from exactly one detected non-USB EFI system partition. Rechecks the complete GPU sequence, closes the USB log, then starts Windows without a reset. A failed check blocks explicit handover. No fixed BDFs, firmware unlock, flash or NVRAM writes. Windows boot and physical recovery remain unverified."
     },
     {
       "id": "actuate-one-target-resident",
