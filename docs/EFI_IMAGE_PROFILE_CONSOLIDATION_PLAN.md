@@ -2,7 +2,7 @@
 
 ## 1. Situation and objective
 
-Status: OWNER APPROVED / MIGRATION IN PROGRESS. The five canonical selectors now resolve 39 legacy configurations. Both preparation configurations remain separate. The original 41-entry regression catalogue remains intact. No hardware execution source or admission condition changed. Baseline [arena commit `2cbff8a6e5638555353288dda584bc44b3fc0731`](https://github.com/akashskypatel/universal-gpu-unlock/tree/2cbff8a6e5638555353288dda584bc44b3fc0731). Covers all 41 catalogue entries, five builders, application and driver entrypoints, signing wrapper and generated documents. Host and Windows EFI jobs for [run 45338664023](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/45338664023) passed for the existing maintenance integration. This is not migration verification.
+Status: OWNER APPROVED / MIGRATION IN PROGRESS. The five canonical selectors now resolve all 41 legacy configurations. The original 41-entry regression catalogue remains intact. Preparation recovery no longer writes boot registration. The new mappings and numerical tests await final CI. Baseline [arena commit `2cbff8a6e5638555353288dda584bc44b3fc0731`](https://github.com/akashskypatel/universal-gpu-unlock/tree/2cbff8a6e5638555353288dda584bc44b3fc0731). Covers all 41 catalogue entries, five builders, application and driver entrypoints, signing wrapper and generated documents. Host and Windows EFI jobs for [run 45338664023](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/45338664023) passed for the existing maintenance integration. This is not migration verification.
 
 Reduce 41 public variant IDs to five canonical profile IDs (87.8% reduction). Three describe GPU operations, two cover administration and compile validation. This is a reduction in public names, not a claim that all configurations produce identical binaries. Retain distinct execution modes and evidence. Use verified hardware tests as the authoritative experimental admission baseline. Remove restrictions that are stricter than the applicable verified hardware test, where the evidence establishes that the restriction is unnecessary. Do not add new precaution-only requirements, re-open closed leads, or require repeat hardware tests solely to reconfirm an unchanged path. This is a plan, not authorization to change hardware or production readiness.
 
@@ -48,6 +48,7 @@ Authoritative physical evidence: [Windows-GPU-UNLOCK execution map](https://gith
 | Original Stop 4090/3080/dual captures | Separate raw Stop evidence; AMD-only console and pinned Windows handoff in those experiments. Do not infer reattachment proof from an unbound-device result. |
 | RUN0003.TXT and post-removal measurements | Recovery path returns normalized removal success, preserves INTENT and does not retry; direct Windows load refused on two ESPs, owner reports normal firmware fallback boot. Stock-like repeated throughput and healthy devices. Not proof of actual entry deletion, dedicated R dispatch or failed-transaction recovery. |
 | 45338664023 | Host and EFI CI pass; software verification, not physical maintenance test. |
+| Owner-confirmed cold-power recovery | HARDWARE AND FIRMWARE VERIFIED (owner report): failed firmware transaction, system powered off for 60 seconds, USB removed, successful cold boot and restored operation. No repeat required. This is manual physical recovery, not proof of every automated recovery branch. |
 
 ### Gate disposition tracker
 
@@ -62,7 +63,7 @@ For every migrated gate, record original predicate and call site, actual verifie
 | G5 | Windows SEC2 Booter research, repeated unchanged identity audits, repeat healthy-stock recovery test, independent slot-power precaution | Do not make these prerequisites for the already verified experimental UEFI route. Keep unresolved production/provenance facts separate. Respect previous owner risk acceptance and do not repeat closed tests. | READY TO MIGRATE |
 | G6 | Independent survivor and peer warning, console identity, claim/release proof, per-card result, cleanup, final restored graph, sequential ordering, log close, containment | KEEP for the applicable combined route. These checks participated in the successful run. Remove duplicate checks only if the same live predicate at the same lifecycle boundary is preserved; earlier observations do not substitute for post-transition verification. | RETAIN |
 | G7 | One-use INTENT, explicit recovery/refusal, no automatic retry, separate reviewed removal | KEEP. RUN0002(1) retained INTENT; RUN0003 proves the protective path was used. No general record reset or bypass. Keep explicit deployment consent, maintenance isolation and unrelated-variable preservation. | RETAIN |
-| G8 | Firmware provenance, independent DMA isolation, numeric accuracy, S3 persistence, actual failed-transaction recovery | Track separately as qualification gaps. Do not block the already verified experimental route with new production-only prerequisites; do not claim qualification or remove the existing live correctness/authentication/containment checks. | OPEN QUALIFICATION |
+| G8 | Firmware provenance, independent DMA isolation, numeric accuracy, S3 persistence, automatic recovery verification | Manual failed-transaction cold-power recovery is complete on owner evidence. Track the remaining distinct qualifications. Do not block the already verified experimental route with new production-only prerequisites; do not claim qualification or remove the existing live correctness/authentication/containment checks. | OPEN QUALIFICATION |
 | G9 | Fixed I/R operations run active preparation and recovery before dispatch | Review exact dependencies. Remove unnecessary prerequisites only after source and tests prove the administrative path has equivalent ownership, refusal, logging and no GPU mutation. RUN0003 did not reach R dispatch; no physical equivalence claim. | INVESTIGATE |
 | G10 | Maintenance DriverOrder absence, typed record review and independent removal readback | KEEP current requirements; maintenance physical execution not verified. No evidence supports relaxing them. | RETAIN |
 | G11 | Legacy Stop vs reattach, detached U/P vs combined, DXE vs app, resume vs RAM-only | Do not propagate a verified exception across distinct untested lifecycle boundaries. Classify and preserve independently; retire redundant modes only after documented evidence equivalence. | INVESTIGATE |
@@ -89,9 +90,9 @@ Keep -Only as the existing selector. Use existing builder arguments and a small 
 
 | ID | Role | Optional arguments and restrictions |
 | --- | --- | --- |
-| diagnostic | GPU/firmware observation only | Probe = Topology/GopTextCycle/MsiRom/MsiFuse/MsiSec2/VramBlocks; file log by default, `-SaveLog:$false` for console-only topology; SelectionBdf(s); WindowsEspGuid where already supported. Preflight only after D2 verifies no persistent writes. Default topology with file evidence; alias preserves old console-only behavior. |
+| diagnostic | GPU/firmware observation only | Probe = Topology/GopTextCycle/MsiRom/MsiFuse/MsiSec2/VramBlocks; file log by default, `-SaveLog:$false` for console-only topology; SelectionBdf(s); WindowsEspGuid where already supported. Preflight uses explicit BDF selection and file logging, with application or DXE entrypoint. Prior-state refusal does not write boot registration. Default topology with file evidence; alias preserves old console-only behavior. |
 | driver-transition | Driver Stop/release/reconnect, no firmware transaction | Operation = StopReattach/LegacyStopObservation; ImageKind = Application/Dxe where supported; explicit BDFs or existing live-all policy; handoff choice; legacy hardware target and pinned ESP only for legacy observer. Requires existing mutating deployment consent. |
-| firmware-transaction | Experimental full firmware transaction | Operation = UnlockReattach/Unlock/UnlockWithResume/Menu (explicit legacy menu)/DxeTransaction (existing optional S3 policy); ImageKind = Application/Dxe; compiled BDF list or existing runtime selection; EspPolicy = Pinned/Runtime/Resident where supported; optional WindowsEspGuid for combined runtime app; existing supported CapturedPromReference option. Prefer the verified combined application in documentation; no implicit firmware actuation. |
+| firmware-transaction | Full firmware transaction | Operation = UnlockReattach/Unlock/UnlockWithResume/Menu (explicit legacy menu)/DxeTransaction (existing optional S3 policy); ImageKind = Application/Dxe; compiled BDF list or existing runtime selection; EspPolicy = Pinned/Runtime/Resident where supported; optional WindowsEspGuid for combined runtime app; existing supported CapturedPromReference option. Prefer the verified combined application in documentation; no implicit firmware actuation. |
 | maintenance | Administrative NVRAM changes, not read-only | Operation = InstallDriver/RemoveDriver/ReviewBootState. Keep I/R semantics until A1. ReviewBootState links separate maintenance binary, requires isolated media and existing interactive confirmation; reject target/ESP/companion options. |
 | compile-check | Synthetic build validation | ImageKind = Application/Dxe; explicit BDF list. Derive count, never stage or execute; no active/ESP/resume options. |
 
@@ -109,7 +110,7 @@ Status values: NOT STARTED, IN PROGRESS, BLOCKED, IMPLEMENTED, VERIFIED, COMPLET
 | G0 | Audit every affected admission predicate and classify using G1–G11. Remove duplicate or over-restrictive experimental conditions only within their proven scope; document unchanged negative cases. | B0 | IN PROGRESS | Reviewed combined, Stop-only and preparation entry conditions. See predicate audit below. |
 | R1 | Implement small profile resolver with typed options, exact alias mappings, strict illegal-option rejection and one effective configuration | G0 | IMPLEMENTED | 6dd22b4, 90f1f6b; CI 45345437502 host and EFI PASS |
 | D1 | Consolidate 13 diagnostics; preserve all existing evidence shapes, probe limits and handoff rules | R1 | IMPLEMENTED | 13 mappings use original diagnostic builder |
-| D2 | Split passive preparation from recovery writes; only then migrate two preparation IDs to diagnostic Preflight. Retain DXE timing distinction and old compatibility until proved. | D1,G0 | NOT STARTED | Pending |
+| D2 | Split passive preparation from recovery writes; migrate both preparation IDs to diagnostic Preflight. Retain DXE timing and old compatibility. | D1,G0 | IMPLEMENTED | bc664c7 recovery source CI host/EFI PASS. cd8dd09 adds both mappings and actual resolver checks; new CI pending. |
 | C1 | Consolidate four compile-only IDs; validate count, app/DXE, non-stageable contract and no execution | R1 | IMPLEMENTED | Four mappings preserve synthetic build and stage refusal |
 | T1 | Consolidate three Stop/reattach IDs, retaining actual warning, release, reattach, no firmware link, lifecycle and mode-specific handoff | R1,G0 | IMPLEMENTED | Three mappings preserve existing Stop-only builders |
 | T2 | Consolidate five legacy raw Stop IDs as explicit legacy observer options; review necessity before any deletion | R1,G0 | IMPLEMENTED | Five mappings retain raw legacy Stop behavior. No archive. |
@@ -120,9 +121,9 @@ Status values: NOT STARTED, IN PROGRESS, BLOCKED, IMPLEMENTED, VERIFIED, COMPLET
 | V2 | Update generated catalogue, user guide, donor guide, readiness/log scoring consumers, CI scripts and command references; prove coverage and receipt compatibility | V1 | IN PROGRESS | fdf57303 documents canonical commands. Downstream consumers and complete receipts pending. |
 | V3 | Remove redundant public IDs from canonical catalogue only after alias migration; retain documented compatibility where needed. Archive legacy observer only if distinct evidence use is closed. | V2 | NOT STARTED | Pending |
 
-### Per-variant tracker (41 of 41 mapped; 39 resolver mappings implemented; 0 fully migrated)
+### Per-variant tracker (41 of 41 mapped; 41 resolver mappings implemented; final catalogue retirement pending)
 
-Each IMPLEMENTED row now resolves to the original catalogue entry. Independent regression results and downstream migration remain necessary before COMPLETE. The two preparation rows remain NOT STARTED because their recovery paths can modify NVRAM.
+Each IMPLEMENTED row now resolves to the original catalogue entry. Independent regression results and downstream migration remain necessary before COMPLETE. Both preparation rows now use the isolated recovery refusal and canonical Preflight mapping. Final regression results are pending.
 
 | Existing ID | Task | Target profile | Effective options / semantics | Status |
 | --- | --- | --- | --- | --- |
@@ -139,7 +140,7 @@ Each IMPLEMENTED row now resolves to the original catalogue entry. Independent r
 | `diag-msi-sec2-handoff` | D1 | diagnostic | MsiSec2; SaveLog; pinned WindowsEspGuid | IMPLEMENTED |
 | `diag-vram-blocks` | D1 | diagnostic | VramBlocks; SaveLog | IMPLEMENTED |
 | `diag-vram-blocks-handoff` | D1 | diagnostic | VramBlocks; SaveLog; pinned WindowsEspGuid | IMPLEMENTED |
-| `prep-selected` | D2 | diagnostic (conditional) | Preflight; Application; explicit BDFs | NOT STARTED |
+| `prep-selected` | D2 | diagnostic | Preflight; Application; explicit BDFs | IMPLEMENTED |
 | `compile-one-target` | C1 | compile-check | Application; one BDF | IMPLEMENTED |
 | `compile-sequence` | C1 | compile-check | Application; ordered BDFs | IMPLEMENTED |
 | `actuate-one-target` | F1 | firmware-transaction | Menu; Application; one compiled BDF; Pinned | IMPLEMENTED |
@@ -154,7 +155,7 @@ Each IMPLEMENTED row now resolves to the original catalogue entry. Independent r
 | `app-unlock-with-resume` | F2 | firmware-transaction | UnlockWithResume; Application; Operator; Runtime | IMPLEMENTED |
 | `app-install-driver` | A1 | maintenance | InstallDriver; Application; Operator; Runtime | IMPLEMENTED |
 | `app-remove-driver` | A1 | maintenance | RemoveDriver; Application; Operator; Runtime | IMPLEMENTED |
-| `dxe-prep-selected` | D2 | diagnostic (conditional) | Preflight; Dxe; explicit BDFs; event lifecycle retained | NOT STARTED |
+| `dxe-prep-selected` | D2 | diagnostic | Preflight; Dxe; explicit BDFs; event lifecycle retained | IMPLEMENTED |
 | `dxe-compile-one-target` | C1 | compile-check | Dxe; one BDF | IMPLEMENTED |
 | `dxe-compile-sequence` | C1 | compile-check | Dxe; ordered BDFs | IMPLEMENTED |
 | `dxe-actuate-one-target` | F1 | firmware-transaction | Dxe; one compiled BDF; Pinned | IMPLEMENTED |
@@ -202,9 +203,20 @@ Owner direction: consolidate overlapping implementations, not only profile IDs. 
 | Common application/DXE source inventory | BLOCKED | Draft shared source-list refactor not published. Connector rejected the associated test-update operation. Existing branch source lists remain unchanged. |
 | Remaining source overlap and naming | NOT STARTED | Review shared execution orchestration and current versus historical identifiers; do not merge distinct firmware, resume, driver lifecycle or recovery semantics solely by name. |
 
-CI run 45345437502 completed successfully (host job 138278726356, Windows EFI job 138278726067). Host log confirms both canonical profile tests actually ran and passed. New source changes: CI 45350039751 and 45350306343 in progress at last check.
+CI run 45345437502 completed successfully (host job 138278726356, Windows EFI job 138278726067). Host log confirms both canonical profile tests actually ran and passed. CI 45350039751 host/EFI PASS. CI 45350306343 EFI PASS, host FAIL: the existing identity test required the old experimental banner. b364da20 updates that test to require the neutral name and explicitly reject a parent release claim. Assertions for the other image labels remain unchanged. New CI 45352743476 in progress at last check.
 
 The hardware-passed combined path already admits the verified dual-display and runtime selection configuration. No further redundant live hardware admission predicate was established in this increment. Do not mark other modes or production qualification as passed on the basis of this result.
+
+### Hardware verification tracker
+
+| Requirement | Status | Evidence / next action |
+| --- | --- | --- |
+| Failed firmware transaction: manual cold-power recovery | COMPLETE — HARDWARE AND FIRMWARE VERIFIED (owner report) | Power off for 60 seconds, remove USB, cold boot, restored operation. No repeat or induced failure requested. Exact failing-stage receipt and automated recovery branch evidence are separate. |
+| Numerical accuracy | IMPLEMENTED / HARDWARE TEST PENDING | b364da208690eba2b21ffcedb0b9aea519a9340e updates quick_check.py, benchmark_all_gpus.py and benchmark_4090.py with one shared check. Run both stock and modified sessions only when already available. |
+| Sleep-resume persistence | PENDING HARDWARE VERIFICATION | First record available sleep states with `powercfg /a`. For a separately reviewed supported resume test, record the exact image, GPU UUIDs, Windows driver, pre-sleep and post-resume throughput/accuracy, sleep state, and device health. A sleep-script registration log alone is not persistence proof. Do not equate Modern Standby with S3 or change power settings solely to force S3. |
+| Automatic recovery / independent containment | OPEN | Owner-confirmed cold-power recovery does not certify each automated recovery branch or independent DMA isolation. |
+
+Numerical test contract: three fixed cases per supported mode (512 exact signed-integer matrix and two 1024 random matrices), three repetitions each, FP16, BF16, TF32 permitted, FP32 control. The CPU FP64 reference uses the same rounded input values. The exact case requires zero error. Random limits are relative L2 / peak absolute error divided by reference RMS: FP16 0.001/0.008; BF16 0.005/0.03; TF32 0.002/0.012; FP32 control 0.00002/0.0002. A result must be finite and pass both limits. The script reports equality and maximum difference across repetitions. A failed case or execution error gives nonzero exit. Unsupported native BF16 is reported separately. These are fixed screening tolerances, not universal accuracy certification. No GPU execution was performed by the agent.
 
 ### Migration evidence
 
@@ -217,7 +229,7 @@ The hardware-passed combined path already admits the verified dual-display and r
 
 ## 7. Recommendation: execution order and owner / agent
 
-Agent: verify new source CI, assess the preparation no-write contract, review remaining overlapping source paths and naming, and complete receipt and catalogue migration when the required edits are available. Keep existing IDs until V1/V2 pass. Update this tracker with commit and test evidence.
+Agent: verify benchmark and full 41-configuration resolver CI. Continue remaining source overlap and naming review, receipt and catalogue migration when the required edits are available. Do not repeat the manual cold-power recovery test. Keep existing IDs until V1/V2 pass. Update this tracker with commit and test evidence.
 
 Owner: no hardware action for the audit or migration. Preserve existing logs, receipts and INTENT until a separately reviewed experiment. Use only presently implemented commands until migration is verified.
 

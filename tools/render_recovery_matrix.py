@@ -22,11 +22,13 @@ DOCUMENT = ROOT / "docs" / "RECOVERY_MATRIX.md"
 
 HEADER = """# Recovery matrix
 
-What to do when a boot did not end the way it should, and what proves you are
-back. This is a plan checked against the code. The recovery routes are covered by
-source/host contracts but have **not** been verified on hardware. The user reported
-full recovery after a 60-second cold boot with USB removed; that does not validate
-the new firmware recovery routes. Eligibility gates still read
+What to do when a boot did not end the way it should, and what proves recovery.
+**Manual cold-power recovery: HARDWARE AND FIRMWARE VERIFIED (owner report).**
+The owner confirms recovery from a failed firmware transaction after 60 seconds
+powered off, with USB removed, followed by successful cold boot. Do not repeat
+the test. This verifies the observed manual recovery, not every automated
+recovery branch or failure class. The source/host contracts for those branches
+remain separate. Production eligibility gates still read
 `CAN_DETACH=false`, `CAN_UNLOCK=false`, `CAN_FLASH=false`, `RECOVERY_VERIFIED=false`.
 
 Every class below is grounded in something this repository prints or stores:

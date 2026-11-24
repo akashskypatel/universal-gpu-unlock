@@ -299,7 +299,7 @@
       ],
       "sim_scenario": null,
       "verified": false,
-      "why_unverified": "Source contract tests cover ordering and ownership of the recovery actions; these new firmware paths have not been tested on hardware. The user separately reported full recovery after a 60-second cold boot with USB removed."
+      "why_unverified": "Source contract tests cover ordering and ownership of the recovery actions. Manual failed-transaction cold-power recovery passed on owner evidence (60 seconds powered off, USB removed). Independent verification of these specific automatic boot-registration actions remains open."
     }
   ]
 }
