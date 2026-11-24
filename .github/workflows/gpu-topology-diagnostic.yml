@@ -693,7 +693,7 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Combined firmware reattachment compilation failed'}
             if(-not (Test-Path .\src\build\GPU-RUNTIME-FIRMWARE-REATTACH.EFI)){throw 'Combined firmware reattachment EFI missing'}
             $combinedStatus = @($combined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
-            if($combinedStatus.Count -ne 1 -or "$($combinedStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=0' -or "$($combinedStatus[0])" -notmatch 'FIRMWARE_TRANSACTION=1 UNLOCK=1 REATTACH_ATTEMPTED=1 REATTACH_VERIFIED=0 FIRMWARE_REATTACH=1'){throw 'Combined firmware reattachment attestation mismatch'}
+            if($combinedStatus.Count -ne 1 -or "$($combinedStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=0 INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1' -or "$($combinedStatus[0])" -notmatch 'FIRMWARE_TRANSACTION=1 UNLOCK=1 REATTACH_ATTEMPTED=1 REATTACH_VERIFIED=0 FIRMWARE_REATTACH=1'){throw 'Combined firmware reattachment attestation mismatch'}
             & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime app compilation failed'}
             if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI)){throw 'Stop-only runtime EFI missing'}

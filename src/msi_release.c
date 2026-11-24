@@ -4,8 +4,8 @@
  * require independent Stop/console/peer/recovery evidence before live use.
  * Snapshot/delta checks derive controller paths and driver agents at runtime.
  * No firmware variables are written by this adapter. Normal transaction
- * builds do not reconnect controllers; the explicitly scoped Stop-only bench
- * adds ConnectController and graph checks. Its app-level failure handler may
+ * builds do not reconnect controllers. The Stop-only and combined experimental
+ * builds share ConnectController and graph checks. The Stop-only failure handler may
  * request a warm reboot only after a verified peer-GOP failure notice.
  */
 #include "msi_release.h"
@@ -1588,7 +1588,11 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   /* Each selected GPU is checked when it becomes the current target.
    * Only a target-owned ConOut with an independent surviving GOP permits
    * this file-only Stop path. The peer warning is still mandatory. */
-  if(Plan.gop&&Plan.survivor_count) {
+  if(Plan.gop&&Plan.survivor_count
+#ifndef GU_FIRMWARE_REATTACH
+     &&GuSelectedGpuCount()>1U
+#endif
+     ) {
     EFI_STATUS console_owner=BenchSelectedTargetConsole();
     if(console_owner==EFI_SUCCESS) {
       Plan.target_console_experiment=TRUE;
@@ -2420,9 +2424,9 @@ static EFI_STATUS PrepareReconnect(VOID) {
 #endif
 }
 #ifdef GU_FIRMWARE_REATTACH
-#define GU_REATTACH_TRANSACTION_LOG "1"
+#define GU_REATTACH_TRANSACTION_LOG "FIRMWARE_TRANSACTION=1"
 #else
-#define GU_REATTACH_TRANSACTION_LOG "0"
+#define GU_REATTACH_TRANSACTION_LOG "FIRMWARE_TRANSACTION=0"
 #endif
 EFI_STATUS GuMsiReattachAfterStop(VOID) {
   EFI_STATUS s=PrepareReconnect();
@@ -2460,7 +2464,7 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
   NOTE("MSI reattach verification passed GRAPH_RESTORED=1 "
        "TARGET_GOP_RECOGNIZED=%u TARGET_CHILD_PATHS_MATCHED=%zu "
        "DRIVERS_VERIFIED=1 SURVIVOR_GOPS_MATCHED=%zu "
-       "DISPLAY_OUTPUT_TESTED=0 FIRMWARE_TRANSACTION=" GU_REATTACH_TRANSACTION_LOG "\n",
+       "DISPLAY_OUTPUT_TESTED=0 " GU_REATTACH_TRANSACTION_LOG "\n",
        (unsigned)!Plan.headless,(size_t)Plan.target_child_count,
        (size_t)Plan.survivor_count);
   if(Plan.warning_peer_gop) {

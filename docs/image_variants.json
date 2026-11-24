@@ -592,6 +592,45 @@
       "note": "no compiled BDF and no compiled ESP GUID: both are resolved at boot"
     },
     {
+      "id": "app-firmware-reattach",
+      "family": "prepare",
+      "title": "Sequential firmware transaction and original driver reattachment",
+      "switches": {
+        "RuntimeSelection": true,
+        "RuntimeEsp": true,
+        "EnableSingleTargetExecution": true,
+        "AcceptUnverifiedActuation": true,
+        "ApplicationOperation": "Unlock",
+        "FirmwareReattach": true
+      },
+      "binary": "GPU-RUNTIME-FIRMWARE-REATTACH.EFI",
+      "safety": "actuates",
+      "attestations": [
+        "ORDERED_SEQUENCE=1",
+        "RUNTIME_SELECTION=1",
+        "RUNTIME_ESP=1",
+        "SELECTED_COUNT=RUNTIME",
+        "TARGET_ORDER=RUNTIME_OPERATOR_SELECTION",
+        "ASPM_ADMISSION_BYPASSED=0",
+        "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
+        "STOP_RELEASE_ONLY=0",
+        "FIRMWARE_TRANSACTION=1",
+        "UNLOCK=1",
+        "REATTACH_ATTEMPTED=1",
+        "REATTACH_VERIFIED=0",
+        "FIRMWARE_REATTACH=1",
+        "APP_OPERATION=Unlock",
+        "FIXED_OPERATION=1",
+        "UNVERIFIED_ACTUATION=1",
+        "ACTUATION_VERIFIED=0",
+        "CAN_DETACH=0",
+        "CAN_UNLOCK=0",
+        "CAN_FLASH=0",
+        "RECOVERY_VERIFIED=0"
+      ],
+      "note": "Separate experimental application. Uses runtime target selection and existing firmware admission. Requires a verified non-target NVIDIA display warning before each Stop. Verifies the existing firmware transaction and resource cleanup before closing exclusive ownership. Reconnects the original driver and verifies the restored device, child, display and peer graph. Stops the sequence on failure. Starts Windows only after all targets pass and the log closes. Retains the one-use restart record. CUDA verification is manual after Windows starts. No resume writes or ASPM waiver. Physical combined execution is unverified."
+    },
+    {
       "id": "app-unlock",
       "family": "prepare",
       "title": "Build-selected RAM-only firmware transaction",

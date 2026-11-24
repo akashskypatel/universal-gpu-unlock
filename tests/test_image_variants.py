@@ -104,6 +104,8 @@ def expected_binary(variant: dict) -> str:
     if family in ("prepare", "prepare-dxe"):
         dxe = "-DXE" if family == "prepare-dxe" else ""
         ext = ".efi" if family == "prepare-dxe" else ".EFI"
+        if switches.get("FirmwareReattach"):
+            return "GPU-RUNTIME-FIRMWARE-REATTACH.EFI"
         if switches.get("StopReleaseWindowsHandoff"):
             return "GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI"
         if switches.get("StopReleaseOnlyBench"):
@@ -211,7 +213,7 @@ class TheCatalogueMatchesTheBuilders(unittest.TestCase):
         expected = {"app-unlock": "Unlock", "app-unlock-with-resume": "UnlockWithResume",
                     "app-install-driver": "InstallDriver", "app-remove-driver": "RemoveDriver"}
         found = {v["id"]: v for v in MANIFEST["variants"]
-                 if v["switches"].get("ApplicationOperation")}
+                 if v["switches"].get("ApplicationOperation") and not v["switches"].get("FirmwareReattach")}
         self.assertEqual({key: v["switches"]["ApplicationOperation"] for key, v in found.items()}, expected)
         self.assertEqual(len({v["binary"] for v in found.values()}), 4)
         for v in found.values():
@@ -221,6 +223,20 @@ class TheCatalogueMatchesTheBuilders(unittest.TestCase):
             self.assertTrue(v["switches"]["RuntimeSelection"])
             self.assertTrue(v["switches"]["RuntimeEsp"])
             self.assertIn("FIXED_OPERATION=1", v["attestations"])
+
+    def test_combined_profile_is_separate_from_fixed_detached_operations(self):
+        variants = [v for v in MANIFEST["variants"] if v["switches"].get("FirmwareReattach")]
+        self.assertEqual(len(variants), 1)
+        v = variants[0]
+        self.assertEqual(v["id"], "app-firmware-reattach")
+        self.assertEqual(v["family"], "prepare")
+        self.assertEqual(v["safety"], "actuates")
+        for switch in ("RuntimeSelection", "RuntimeEsp", "EnableSingleTargetExecution", "AcceptUnverifiedActuation"):
+            self.assertTrue(v["switches"][switch])
+        self.assertEqual(v["switches"]["ApplicationOperation"], "Unlock")
+        self.assertNotIn("StopReleaseOnlyBench", v["switches"])
+        self.assertNotIn("EspResident", v["switches"])
+        self.assertIn("ASPM_ADMISSION_BYPASSED=0", v["attestations"])
 
     def test_every_attestation_names_a_field_the_builder_prints(self):
         for variant in MANIFEST["variants"]:
@@ -249,31 +265,33 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
         runtime = 1 if switches.get("RuntimeSelection") else 0
         runtime_esp = 1 if switches.get("RuntimeEsp") else 0
         unsafe_bench = 1 if switches.get("StopReleaseOnlyBench") else 0
+        combined = 1 if switches.get("FirmwareReattach") else 0
         operation = switches.get("ApplicationOperation", "Menu")
         firmware_transaction = int(accept and not unsafe_bench and operation not in ("InstallDriver", "RemoveDriver"))
         count = {"single": 1, "sequence": 2, "any": 1}.get(variant.get("requires_selection") or "", 0)
         return count, {
-            "SELECTED_COUNT": count,
+            "SELECTED_COUNT": "RUNTIME" if combined else count,
             "RUNTIME_SELECTION": runtime,
             "RUNTIME_ESP": runtime_esp,
             "PREPARATION_ONLY": int(count > 0 and not synthetic and not accept),
             "SINGLE_TARGET_ACTIVE": int((synthetic or accept) and (runtime or count == 1)),
             "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
-            "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench),
+            "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench or combined),
             "ASPM_ADMISSION_BYPASSED": unsafe_bench,
-            "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": "CONDITIONAL" if unsafe_bench else 0,
+            "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": 1 if combined else "CONDITIONAL" if unsafe_bench else 0,
             "FILE_ONLY_OUTPUT": unsafe_bench,
             "STOP_RELEASE_ONLY": unsafe_bench,
             "APP_OPERATION": operation,
             "FIXED_OPERATION": int(operation != "Menu"),
             "FIRMWARE_TRANSACTION": firmware_transaction,
             "UNLOCK": firmware_transaction,
-            "REATTACH_ATTEMPTED": unsafe_bench,
+            "REATTACH_ATTEMPTED": int(unsafe_bench or combined),
+            "FIRMWARE_REATTACH": combined,
             "REATTACH_VERIFIED": 0,
             "FIRMWARE_ASSET_FILES_READ": 0 if unsafe_bench else None,
             "PROM_READ": 0 if unsafe_bench else None,
             "OS_HANDOFF": ("WINDOWS_AFTER_SUCCESS" if switches.get("StopReleaseWindowsHandoff") else "NONE") if unsafe_bench else None,
-            "TARGET_ORDER": "RUNTIME_SUPPORTED_NVIDIA_ENUMERATION" if unsafe_bench else "",
+            "TARGET_ORDER": "RUNTIME_OPERATOR_SELECTION" if combined else "RUNTIME_SUPPORTED_NVIDIA_ENUMERATION" if unsafe_bench else "",
             "MULTI_GPU_MUTATION_ALLOWED": accept,
             "SYNTHETIC_PROFILE": synthetic,
             "UNVERIFIED_ACTUATION": accept,

@@ -55,7 +55,7 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
   EFI_STATUS peer_console=GuMsiStopReleaseTryPeerConsole();
   GuLog("FIRMWARE_PEER_CONSOLE_ATTEMPT STATUS=%#llx GLOBAL_CONOUT_CHANGED=0\n",
         (unsigned long long)peer_console);
-  if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
+  if(GuVerifyActivePeers(table)!=EFI_SUCCESS||!GuBootLogOpen())return EFI_DEVICE_ERROR;
 #endif
   GU_PHASE("cold-entry");
   if(!GuMsiReleased()||owner!=GuPlatformActive||

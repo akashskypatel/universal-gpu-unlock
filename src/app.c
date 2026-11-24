@@ -534,13 +534,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");
 #ifdef GU_FIRMWARE_REATTACH
   if(!GuExecutionReadyForWindows(t)||!GuBootLogOpen()){s=EFI_NOT_READY;goto failed;}
-#endif
+#else
   GuBootUnsilence();
   GuBootSay(
     L" [3/4] GPU Driver/Display Handover ......... [ OK ]\r\n"
     L" [4/4] Hardware SEC2 and MSR Unlock ........ [ OK ]\r\n"
     L" Launching Windows Boot Manager; post-boot benchmark required.\r\n\r\n"
   );
+#endif
 
 #ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
   /* The experimental attempt is one-use. Keep the original verified INTENT

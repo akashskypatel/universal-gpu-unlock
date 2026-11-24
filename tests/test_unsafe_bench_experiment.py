@@ -284,6 +284,80 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("GU_UNVERIFIED_BENCH_CONDITIONS", self.port.split("#ifdef GU_FIRMWARE_REATTACH", 1)[1])
         self.assertIn("FUNCTIONAL_PERSISTENCE=PENDING_WINDOWS", core)
 
+    def test_combined_reconnect_and_completion_require_independent_proofs(self):
+        prepare = self.release.split("static EFI_STATUS PrepareReconnect(VOID)", 1)[1].split("#ifdef GU_FIRMWARE_REATTACH\n#define GU_REATTACH_TRANSACTION_LOG", 1)[0]
+        completion = self.release.split("BOOLEAN GuMsiCompletedPlatform(", 1)[1].split("/* Check the live graph", 1)[0]
+        harness = r'''
+#include <assert.h>
+#include <stddef.h>
+#include <string.h>
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+typedef void VOID;
+#define FALSE 0
+#define TRUE 1
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 7
+typedef struct {
+  void *table,*pci,*self;
+  int ready,mutated,stage,claimed,survivor_baseline_valid,master_normalized,hardware_verified,reattach_verified;
+} PLAN;
+typedef struct { PLAN plan; } STATE;
+typedef struct {
+  STATE *release_state;
+  void *handle,*image;
+  int owned,fault,quiesced,flrs,retained,allocations,dma_count,master_attributes_pending;
+} GU_PLATFORM;
+static STATE state;
+#define Plan state.plan
+static GU_PLATFORM Gu;
+static int owner_ok, log_ok;
+static int ReleaseOwnerMatches(void) {return owner_ok;}
+static int ReleaseStateMatches(const GU_PLATFORM *p) {return owner_ok&&p==&Gu&&p->release_state==&state;}
+static int GuBootLogOpen(void) {return log_ok;}
+static int GuSafeToReturnFor(const GU_PLATFORM *p) {
+  return !p->retained&&!p->allocations&&!p->dma_count&&!p->master_attributes_pending&&p->quiesced&&!p->fault;
+}
+static int GuSafeToReturn(void) {return GuSafeToReturnFor(&Gu);}
+''' + "static EFI_STATUS PrepareReconnect(VOID)" + prepare + "\nBOOLEAN GuMsiCompletedPlatform(" + completion + r'''
+static void baseline(void) {
+  memset(&state,0,sizeof(state));memset(&Gu,0,sizeof(Gu));
+  owner_ok=log_ok=1;
+  Gu.release_state=&state;Gu.handle=&Gu;Gu.image=&state;
+  Plan.table=&state;Plan.pci=Gu.handle;Plan.self=Gu.image;
+  Plan.ready=Plan.mutated=Plan.survivor_baseline_valid=Plan.master_normalized=Plan.hardware_verified=1;
+  Plan.stage=3;Gu.quiesced=Gu.flrs=1;
+}
+int main(void) {
+  baseline();assert(PrepareReconnect()==EFI_SUCCESS);
+  assert(!GuMsiCompletedPlatform(&Gu,&state));
+  #define REFUSE_RECONNECT(x) do {baseline();x;assert(PrepareReconnect()!=EFI_SUCCESS);} while(0)
+  REFUSE_RECONNECT(owner_ok=0);REFUSE_RECONNECT(log_ok=0);
+  REFUSE_RECONNECT(Plan.claimed=1);REFUSE_RECONNECT(Gu.owned=1);
+  REFUSE_RECONNECT(Plan.hardware_verified=0);REFUSE_RECONNECT(Gu.quiesced=0);
+  REFUSE_RECONNECT(Gu.flrs=0);REFUSE_RECONNECT(Gu.flrs=2);
+  REFUSE_RECONNECT(Gu.dma_count=1);REFUSE_RECONNECT(Gu.retained=1);
+  REFUSE_RECONNECT(Gu.fault=1);REFUSE_RECONNECT(Gu.allocations=1);
+  REFUSE_RECONNECT(Gu.master_attributes_pending=1);
+  baseline();Plan.stage=0;Plan.reattach_verified=1;
+  assert(GuMsiCompletedPlatform(&Gu,&state));
+  Plan.reattach_verified=0;assert(!GuMsiCompletedPlatform(&Gu,&state));
+  Plan.reattach_verified=1;Plan.hardware_verified=0;assert(!GuMsiCompletedPlatform(&Gu,&state));
+  Plan.hardware_verified=1;Gu.dma_count=1;assert(!GuMsiCompletedPlatform(&Gu,&state));
+  Gu.dma_count=0;assert(!GuMsiCompletedPlatform(&Gu,&Gu));
+  Gu.fault=1;assert(!GuMsiCompletedPlatform(&Gu,&state));
+  return 0;
+}
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "combined.c"
+            binary = Path(tmp) / "combined"
+            source.write_text(harness, encoding="utf-8")
+            subprocess.run(["cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                            "-DGU_FIRMWARE_REATTACH", str(source), "-o", str(binary)],
+                           check=True, capture_output=True, text=True)
+            subprocess.run([str(binary)], check=True, capture_output=True, text=True)
+
     def test_failed_reattach_warns_on_peer_gop_before_thirty_second_reboot(self):
         notice = self.release.split(
             "EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID)", 1)[1].split(
