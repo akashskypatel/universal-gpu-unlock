@@ -101,7 +101,7 @@ Print the complete compatibility matrix and exit. Nothing is built, signed or st
 
 .EXAMPLE
 # Stage 1 of the donor session: read-only diagnostic that saves its log.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -SignOnly
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -SignOnly
 
 .EXAMPLE
 # Everything buildable without a selection or an ESP GUID, signed, not staged.
@@ -113,11 +113,11 @@ Print the complete compatibility matrix and exit. Nothing is built, signed or st
     -WindowsEspGuid 'a005858c-4487-4ee2-976e-1710ff484c31' -SignOnly
 
 # Stage one image on G: -StageDrive is the staging switch, -Only names the image.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diag-topology-log -StageDrive G
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -StageDrive G
 
 .EXAMPLE
 # The dual preparation image, carrying the two captured references.
-.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only prep-selected `
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only diagnostic -Probe Preflight `
     -SelectionBdfs '0000:01:00.0,0000:04:00.0' -CapturedPromReference -SignOnly
 
 .EXAMPLE

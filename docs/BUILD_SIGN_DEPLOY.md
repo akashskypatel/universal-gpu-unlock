@@ -473,8 +473,8 @@ the sequence ones build; with one BDF it is the other way round
 `-Only` for the images you actually need.
 
 Staging takes two things, and neither is a duplicate of the other:
-`-StageDrive <letter>` is the intent to write a stick, and `-Only <id>` is which
-image - exactly one, because a stick holds one `BOOTX64.EFI`. `-SignOnly` is
+`-StageDrive <letter>` selects the USB drive. `-Only <profile>` and its
+arguments select exactly one image because the drive holds one `BOOTX64.EFI`. `-SignOnly` is
 exclusive with `-StageDrive`, and `-All` can never stage. The ordinary staging run replaces only `EFI\BOOT\BOOTX64.EFI`. For the waived
 one-target image, `-StageDxeCompanion` is an explicit paired build: it builds and
 signs the matching `dxe-actuate-one-target` variant first, stages that image at
@@ -569,7 +569,7 @@ skipped and why.
 | WSL exit 3 | `wslpath` could not map a Windows path | Check `[automount] enabled = true` in `/etc/wsl.conf`, and that the repository is not on an unmounted drive |
 | WSL exit 4 | Key, certificate or `.cer` disagree, or the certificate is expired | Re-export the `.cer` from the same certificate; check `openssl x509 -noout -dates` |
 | WSL exit 5 | The unsigned image changed, or the signed file already existed | Re-run; if it repeats, something else is writing the build directory |
-| `-StageDrive stages exactly one image, but N variants are selected` | `-StageDrive` was given with a selection that names more than one image (or none) | Add `-Only <id>` naming one variant, e.g. `-Only diag-topology-log -StageDrive G` |
+| `-StageDrive stages exactly one image, but N variants are selected` | `-StageDrive` was given with a selection that names more than one image (or none) | Select one configuration, for example `-Only diagnostic -StageDrive G` |
 | `-Deploy X is not the selected variant Y` | `-Deploy` disagrees with `-Only` | Drop `-Deploy` (the selection decides), or make both flags name one image |
 | `-Deploy names the image to stage, so it needs -StageDrive <letter>` | `-Deploy` was given without a destination | Add `-StageDrive G`, or drop `-Deploy` to sign only |
 | `VARIANT_SKIPPED … REASON=NEEDS_SELECTION` | `-All` was run without a BDF | Pass `-SelectionBdf` or `-SelectionBdfs` |
