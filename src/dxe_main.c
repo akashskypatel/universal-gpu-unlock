@@ -68,14 +68,14 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
        (boot_state.Phase == GU_BOOT_STATE_OUTCOME && boot_state.Status != EFI_SUCCESS))) {
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
     GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
-    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete; no GPU action was taken.\r\n");
+    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete or awaits acceptance; no GPU action was taken.\r\n");
     EFI_STATUS closed=GuBootClose();
     return closed==EFI_SUCCESS?EFI_ABORTED:closed;
 #else
     EFI_STATUS disabled = GuDisableDriverOption(t);
     GuLog("DXE_RECOVERY=FAILED_OR_INTERRUPTED DRIVER_ORDER_DISABLE=%#llx ACTION=SKIP_GPU\n",
           (unsigned long long)disabled);
-    GuBootSay(L"\r\n[RECOVERY] An earlier DXE attempt did not complete.\r\n"
+    GuBootSay(L"\r\n[RECOVERY] An earlier DXE attempt failed or awaits owner acceptance.\r\n"
               L"The GPU transaction is disabled for this boot; continuing normally.\r\n");
     EFI_STATUS closed = GuBootClose();
     return closed == EFI_SUCCESS ? EFI_SUCCESS : closed;

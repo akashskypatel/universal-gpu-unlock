@@ -625,12 +625,12 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
             (unsigned)previous.Device,(unsigned)previous.Function,
             (unsigned)previous.Armed);
       if(previous.Phase==GU_BOOT_STATE_INTENT)
-        GuLog("BOOT_STATE WARNING=previous boot stopped during a transaction\n");
+        GuLog("BOOT_STATE WARNING=previous attempt interrupted or awaiting owner acceptance\n");
       OpenBootCount=previous.BootCount;
     } else if(read==EFI_NOT_FOUND) {
       GuLog("BOOT_STATE PRESENT=0\n");
     } else {
-      GuLog("BOOT_STATE PRESENT=0 READ_STATUS=%#llx IGNORED=1\n",
+      GuLog("BOOT_STATE PRESENT=0 READ_STATUS=%#llx VALID=0\n",
             (unsigned long long)read);
     }
   }

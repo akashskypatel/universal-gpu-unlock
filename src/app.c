@@ -184,7 +184,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
      (boot_state.Phase==GU_BOOT_STATE_INTENT||
       (boot_state.Phase==GU_BOOT_STATE_OUTCOME&&boot_state.Status!=EFI_SUCCESS))) {
     GuLog("STOP_RELEASE_ONLY=REFUSED REASON=PRIOR_FAILED_GPU_STATE NVRAM_MUTATION=0 GPU_ACTION=0\n");
-    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete; no GPU action was taken.\r\n");
+    GuBootSay(L"\r\n[REFUSED] Prior GPU state is incomplete or awaits acceptance; no GPU action was taken.\r\n");
     EFI_STATUS closed=GuBootClose();
     return closed==EFI_SUCCESS?EFI_ABORTED:closed;
   }
@@ -198,7 +198,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
      (boot_state.Phase==GU_BOOT_STATE_INTENT||
       (boot_state.Phase==GU_BOOT_STATE_OUTCOME&&boot_state.Status!=EFI_SUCCESS))) {
     GuLog("USB_RECOVERY=FAILED_OR_INTERRUPTED ACTION=REMOVE_DXE_AND_SKIP_GPU\n");
-    GuBootSay(L"\r\n[RECOVERY] An earlier GPU/DXE attempt did not complete.\r\n"
+    GuBootSay(L"\r\n[RECOVERY] An earlier GPU/DXE attempt failed or awaits owner acceptance.\r\n"
               L"Removing the AdaUnlock DXE boot entry; no GPU will be touched.\r\n");
     EFI_STATUS load=GuBootLoadWindows();
     EFI_STATUS remove=GuRemoveDriverOption(t);

@@ -107,9 +107,9 @@ class TwoPhaseWrites(unittest.TestCase):
         self.assertNotIn("GuBootStateDelete(t)", DXE)
 
     def test_interrupted_boot_is_reported(self):
-        self.assertIn("BOOT_STATE WARNING=previous boot stopped during a transaction", BOOT_IO)
+        self.assertIn("BOOT_STATE WARNING=previous attempt interrupted or awaiting owner acceptance", BOOT_IO)
         # A corrupt record is reported; active entry independently refuses it.
-        self.assertIn("BOOT_STATE PRESENT=0 READ_STATUS=%#llx IGNORED=1", BOOT_IO)
+        self.assertIn("BOOT_STATE PRESENT=0 READ_STATUS=%#llx VALID=0", BOOT_IO)
         self.assertIn("boot_state_status!=EFI_NOT_FOUND", APP)
         self.assertIn("boot_state_status!=EFI_NOT_FOUND", DXE)
 
