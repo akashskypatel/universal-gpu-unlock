@@ -169,7 +169,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   /* boot_io reported the previous boot's record when it opened; this read
    * carries it forward and selects the recovery-only path when needed. */
   GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
-  boot_state_present=(GuBootStateRead(t,&boot_state)==EFI_SUCCESS);
+  EFI_STATUS boot_state_status=GuBootStateRead(t,&boot_state);
+  boot_state_present=(boot_state_status==EFI_SUCCESS);
+  if(!boot_state_present&&boot_state_status!=EFI_NOT_FOUND) {
+    GuLog("BOOT_STATE=REFUSED READ_STATUS=%#llx GPU_ACTION=0\n",(unsigned long long)boot_state_status);
+    EFI_STATUS closed=GuBootClose();
+    return closed==EFI_SUCCESS?boot_state_status:closed;
+  }
 
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   /* Never repair another image's state or change NVRAM in this test.
@@ -186,7 +192,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   /* USB recovery is intentionally before GPU discovery/preparation: those
    * stages may be exactly what failed on the previous boot. An unfinished
    * INTENT or failed OUTCOME means the prior transaction did not complete
-   * safely, so remove our owned DXE option, clear the latch when possible,
+   * safely, so remove our owned DXE option, preserve the failure latch,
    * and continue to Windows without touching PCI. */
   if(boot_state_present&&
      (boot_state.Phase==GU_BOOT_STATE_INTENT||
@@ -200,16 +206,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     GuLog("USB_RECOVERY DRIVER_REMOVE=%#llx WINDOWS_LOAD=%#llx\n",
           (unsigned long long)remove,(unsigned long long)load);
     if(remove==EFI_SUCCESS) {
-      EFI_STATUS deleted=GuBootStateDelete(t);
-      GuLog("USB_RECOVERY BOOT_STATE_DELETE=%#llx\n",(unsigned long long)deleted);
-      GuBootSay(L"[RECOVERY] DXE entry removed. Continuing without GPU changes.\r\n");
+      GuLog("USB_RECOVERY BOOT_STATE_PRESERVED=1 AUTO_RETRY=0\n");
+      GuBootSay(L"[RECOVERY] DXE entry removed. Failure record preserved. Continuing without GPU changes.\r\n");
     } else {
       GuBootSay(L"[ERROR] Could not remove the DXE boot entry. See USB log.\r\n");
     }
     EFI_STATUS closed=GuBootClose();
     if(remove!=EFI_SUCCESS||closed!=EFI_SUCCESS||load!=EFI_SUCCESS) {
-      if(t->RuntimeServices&&t->RuntimeServices->ResetSystem)
-        t->RuntimeServices->ResetSystem(EfiResetWarm,EFI_ABORTED,0,NULL);
       return remove!=EFI_SUCCESS?remove:(closed!=EFI_SUCCESS?closed:load);
     }
     return GuBootWindows();
@@ -458,20 +461,28 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
       GuLog("WATCHDOG BOUND=0 SECONDS ACTIVE=0 REASON=NO_BUILD_THRESHOLD\n");
   }
   /* Name the card before the first mutation so a power loss leaves evidence. */
-  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+  s=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_INTENT,0,owner->device_id,
                           (UINT16)owner->discovery_identity.segment,
                           (UINT16)owner->discovery_identity.bus,
                           (UINT8)owner->discovery_identity.device,
                           (UINT8)owner->discovery_identity.function,0);
+  if(s!=EFI_SUCCESS||!GuBootLogOpen()) {
+    if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+    goto failed;
+  }
   s=GuExecutePreparedSequence(owner,t,image,enable_s3?GU_S3_REQUIRED:GU_S3_DISABLED,&stage);
-  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+  owner=GuPlatformActive;
+  if(!owner){s=EFI_NOT_READY;goto failed;}
+  if(s==EFI_SUCCESS&&!GuBootLogOpen())s=EFI_DEVICE_ERROR;
+  EFI_STATUS recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
                           (UINT16)owner->discovery_identity.segment,
                           (UINT16)owner->discovery_identity.bus,
                           (UINT8)owner->discovery_identity.device,
                           (UINT8)owner->discovery_identity.function,
                           (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
+  if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;
   /* The outcome is known and recorded: nothing may reset from here on, and the
    * timer must not survive into Windows. */
   EFI_STATUS cancelled=GuBootWatchdogCancel();

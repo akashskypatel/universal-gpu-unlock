@@ -37,7 +37,9 @@ class RecoveryPolicy(unittest.TestCase):
         discover = APP.index("GuDiscoverSingleGpu(image,t)")
         self.assertLess(recovery, discover)
         self.assertLess(remove, discover)
-        self.assertIn("GuBootStateDelete(t)", APP)
+        self.assertNotIn("GuBootStateDelete(t)", APP)
+        self.assertIn("BOOT_STATE_PRESERVED=1 AUTO_RETRY=0", APP)
+        self.assertNotIn("ResetSystem(", APP[recovery:discover])
         self.assertIn("GuBootWindows()", APP)
         self.assertIn("boot_state.Status!=EFI_SUCCESS", APP)
 
@@ -66,15 +68,24 @@ class TwoPhaseWrites(unittest.TestCase):
         for name, text in (("app.c", APP), ("dxe_main.c", DXE)):
             self.assertLess(text.index("GuBootStateRead"), text.index("GuDiscoverSingleGpu"), name)
 
-    def test_write_failures_are_cast_to_void(self):
-        # A record write is never allowed to alter the transaction result.
+    def test_record_failures_block_active_execution_or_handover(self):
         for name, text in (("app.c", APP), ("dxe_main.c", DXE)):
-            self.assertEqual(text.count("(VOID)GuBootStateRecord"), 2, name)
+            intent = text.index("s=GuBootStateRecord(")
+            sequence = text.index("s=GuExecutePreparedSequence(", intent)
+            outcome = text.index("EFI_STATUS recorded=GuBootStateRecord(", sequence)
+            self.assertIn("if(s!=EFI_SUCCESS||!GuBootLogOpen())", text[intent:sequence], name)
+            self.assertIn("if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;", text[outcome:], name)
+            self.assertNotIn("(VOID)GuBootStateRecord", text, name)
+            self.assertIn("boot_state_status!=EFI_NOT_FOUND", text[:intent], name)
+        self.assertIn("GuBootStateRead(Table,&confirmed)", STATE)
+        self.assertIn("memcmp(&confirmed,State,sizeof(confirmed))==0", STATE)
 
     def test_interrupted_boot_is_reported(self):
         self.assertIn("BOOT_STATE WARNING=previous boot stopped during a transaction", BOOT_IO)
-        # A corrupt record is reported and ignored, never repaired during boot.
+        # A corrupt record is reported; active entry independently refuses it.
         self.assertIn("BOOT_STATE PRESENT=0 READ_STATUS=%#llx IGNORED=1", BOOT_IO)
+        self.assertIn("boot_state_status!=EFI_NOT_FOUND", APP)
+        self.assertIn("boot_state_status!=EFI_NOT_FOUND", DXE)
 
 
 class Validation(unittest.TestCase):

@@ -50,7 +50,13 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
    * the recovery check below; only failed/interrupted transactions can select
    * the no-GPU recovery path. */
   GU_BOOT_STATE boot_state; BOOLEAN boot_state_present = FALSE;
-  boot_state_present = (GuBootStateRead(t, &boot_state) == EFI_SUCCESS);
+  EFI_STATUS boot_state_status=GuBootStateRead(t,&boot_state);
+  boot_state_present=(boot_state_status==EFI_SUCCESS);
+  if(!boot_state_present&&boot_state_status!=EFI_NOT_FOUND) {
+    GuLog("BOOT_STATE=REFUSED READ_STATUS=%#llx GPU_ACTION=0\n",(unsigned long long)boot_state_status);
+    EFI_STATUS closed=GuBootClose();
+    return closed==EFI_SUCCESS?boot_state_status:closed;
+  }
 
   /* An unmatched INTENT, or a non-success OUTCOME, means the prior DXE
    * transaction was interrupted or failed. Do not touch PCI or retry: remove
@@ -105,20 +111,28 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   s=GuExecuteStopReleaseSequence(owner,t,image,&stage);
 #else
   /* Name the card before the first mutation so a power loss leaves evidence. */
-  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+  s=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_INTENT,0,owner->device_id,
                           (UINT16)owner->discovery_identity.segment,
                           (UINT16)owner->discovery_identity.bus,
                           (UINT8)owner->discovery_identity.device,
                           (UINT8)owner->discovery_identity.function,0);
+  if(s!=EFI_SUCCESS||!GuBootLogOpen()) {
+    if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+    goto finish;
+  }
   s=GuExecutePreparedSequence(owner,t,image,GU_S3_OPTIONAL,&stage);
-  (VOID)GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
+  owner=GuPlatformActive;
+  if(!owner){s=EFI_NOT_READY;goto finish;}
+  if(s==EFI_SUCCESS&&!GuBootLogOpen())s=EFI_DEVICE_ERROR;
+  EFI_STATUS recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
                           (UINT16)owner->discovery_identity.segment,
                           (UINT16)owner->discovery_identity.bus,
                           (UINT8)owner->discovery_identity.device,
                           (UINT8)owner->discovery_identity.function,
                           (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
+  if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;
 #endif
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 

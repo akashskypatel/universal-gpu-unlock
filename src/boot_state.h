@@ -10,11 +10,11 @@
  * entrypoint skips all GPU work and removes its owned Driver#### entry from
  * DriverOrder. This makes the next boot fail closed instead of repeating a
  * failed/interrupted transaction. The USB application recognizes the same latch before GPU discovery and removes
- * the owned NVRAM entry entirely. Neither path tries to repair GPU state.
+ * the owned NVRAM entry entirely, but preserves the failure record. Neither
+ * path tries to repair GPU state or repeats a failed transaction.
  *
- * Reset path: GuBootStateDelete removes the record. A record that fails its
- * size/magic/reserved-byte check is treated as absent and logged, never
- * repaired in place.
+ * Explicit recovery may delete the record. An invalid or unreadable record
+ * blocks active entry; it is never repaired in place.
  */
 #pragma once
 
@@ -46,16 +46,16 @@ typedef struct {
 } GU_BOOT_STATE;
 
 /* Read the record. EFI_NOT_FOUND when absent; EFI_COMPROMISED_DATA when the
- * stored value fails validation (the caller logs and continues without it). */
+ * stored value fails validation. Active entry refuses an invalid record. */
 EFI_STATUS GuBootStateRead(EFI_SYSTEM_TABLE *Table, GU_BOOT_STATE *Out);
 
-/* Replace the record. Never called before a transaction is about to start, and
- * never allowed to change control flow: the caller logs the status only. */
+/* Replace the record and verify the stored bytes and attributes. A successful
+ * service return alone is not sufficient evidence of a restart barrier. */
 EFI_STATUS GuBootStateWrite(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *State);
 EFI_STATUS GuBootStateDelete(EFI_SYSTEM_TABLE *Table);
 
-/* Build and write one phase transition. A write failure is returned for the
- * log; the caller's recovery policy remains conservative if no latch is stored. */
+/* Build and verify one phase transition. Active entry requires confirmed
+ * INTENT before mutation and a confirmed OUTCOME before normal handover. */
 EFI_STATUS GuBootStateRecord(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *Previous,
                              UINT32 Phase, UINT64 Status, UINT16 DeviceId,
                              UINT16 Segment, UINT16 Bus, UINT8 Device, UINT8 Function,
