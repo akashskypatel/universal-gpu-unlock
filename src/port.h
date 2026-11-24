@@ -112,6 +112,15 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #endif
 #endif
 
+#ifdef GU_FIRMWARE_REATTACH
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET) || !defined(GU_RUNTIME_SELECTION) || !defined(GU_RUNTIME_ESP) || !defined(GU_APP_OPERATION)
+#error Firmware reattachment requires the explicitly waived runtime application
+#endif
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_ESP_RESIDENT) || GU_APP_OPERATION != 85
+#error Firmware reattachment cannot waive link checks, install a driver or register resume writes
+#endif
+#endif
+
 /* GU_RUNTIME_SELECTION moves the target list out of the build: the image reads
  * the operator's "GuTargets" variable at boot instead of a generated
  * gpu-selection.h. Because the count is then unknown at build time, the static

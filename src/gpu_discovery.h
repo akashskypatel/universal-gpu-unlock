@@ -72,6 +72,10 @@ EFI_STATUS GuRuntimeSelectionSelectAll(VOID);
 #ifdef GU_ACTIVE_SINGLE_TARGET
 /* Runtime identity list for the warning shown before an ordered actuation. */
 size_t GuSelectedGpuCount(VOID);
+#ifdef GU_FIRMWARE_REATTACH
+size_t GuPreparedGpuCount(VOID);
+EFI_STATUS GuPreparedGpuRecordAt(size_t index,GU_GPU_RECORD *out);
+#endif
 EFI_STATUS GuSelectedGpuRecordAt(size_t index,GU_GPU_RECORD *out);
 EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                   const void *platform,

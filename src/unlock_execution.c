@@ -36,6 +36,14 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
   s=GuCompatReserveDevice(owner);
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
+#ifdef GU_FIRMWARE_REATTACH
+  GU_PHASE("firmware-peer-warning");
+  s=GuMsiStopReleaseWarnSurvivor();
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+  if(!GuBootLogOpen()||!table->BootServices->Stall)return EFI_NOT_READY;
+  s=table->BootServices->Stall(3000000U);
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+#endif
   GU_PHASE("driver-release");
   if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
   s=GuMsiRelease();
@@ -43,6 +51,12 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
 
   GuTraceDetail("driver-release","STATUS=%#llx RELEASED=%u",
                 (unsigned long long)s,(unsigned)GuMsiReleased());
+#ifdef GU_FIRMWARE_REATTACH
+  EFI_STATUS peer_console=GuMsiStopReleaseTryPeerConsole();
+  GuLog("FIRMWARE_PEER_CONSOLE_ATTEMPT STATUS=%#llx GLOBAL_CONOUT_CHANGED=0\n",
+        (unsigned long long)peer_console);
+  if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
+#endif
   GU_PHASE("cold-entry");
   if(!GuMsiReleased()||owner!=GuPlatformActive||
      !GuAd104ColdEntryFor(owner)||owner!=GuPlatformActive)return EFI_NOT_READY;
@@ -81,6 +95,13 @@ static EFI_STATUS GuExecuteUnlockCore(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table
   s=GuMsiFinish();
   if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
 
+#ifdef GU_FIRMWARE_REATTACH
+  GU_PHASE("reattach-firmware-drivers");
+  if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
+  s=GuMsiReattachAfterStop();
+  if(s!=EFI_SUCCESS||owner!=GuPlatformActive||owner->fault)return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
+  GuLog("FIRMWARE_REATTACH=VERIFIED TRANSACTION_VERIFIED=1 FUNCTIONAL_PERSISTENCE=PENDING_WINDOWS\n");
+#endif
   GU_PHASE("final-Windows-verification");
   if(!GuMsiReadyForWindows()||owner!=GuPlatformActive||owner->fault)return EFI_NOT_READY;
   GuLog("Selected preboot transaction verified; stock Windows driver acceptance and throughput remain unverified\n");
@@ -169,6 +190,9 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
      (policy!=GU_S3_DISABLED&&policy!=GU_S3_REQUIRED&&policy!=GU_S3_OPTIONAL))
     return EFI_INVALID_PARAMETER;
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
+#ifdef GU_FIRMWARE_REATTACH
+  if(policy!=GU_S3_DISABLED)return EFI_UNSUPPORTED;
+#endif
   EFI_STATUS s;
   for(;;) {
     GU_PHASE("selected-gpu-execution");

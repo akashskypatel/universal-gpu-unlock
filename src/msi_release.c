@@ -37,7 +37,7 @@ typedef struct {
   UINTN path_bytes;
   BOOLEAN seen;
 } SURVIVOR_GOP;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 /* Saved before Stop. Never read the old child handle after firmware removes it.
  * A new handle is accepted only with the same full PCI child device path. */
 #define TARGET_CHILD_LIMIT 128U
@@ -69,7 +69,7 @@ typedef struct {
   SURVIVOR_GOP *survivors;
   UINTN survivor_count,survivor_capacity;
   BOOLEAN survivor_baseline_valid;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   TARGET_CHILD *target_children;
   UINTN target_child_count,target_child_capacity;
   BOOLEAN reconnecting;
@@ -78,7 +78,7 @@ typedef struct {
 #endif
   UINTN stage,reported_additions,reported_removals;BOOLEAN ready,mutated,claimed,hardware_verified,headless,master_normalized,reattach_verified;
   BOOLEAN consoleless_target_gop;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   /* The current selected GPU owns ConOut; a separate GOP survives. */
   BOOLEAN target_console_experiment;
 #endif
@@ -98,7 +98,7 @@ typedef struct GU_MSI_OWNED_STATE {
 #define Plan (CurrentMsi->plan)
 #define Original (CurrentMsi->original)
 #define Current (CurrentMsi->current)
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 static BOOLEAN StopFileOnlyOutput;
 BOOLEAN GuMsiStopReleaseFileOnly(VOID) {return StopFileOnlyOutput;}
 BOOLEAN GuMsiStopReleaseOnlyGopTarget(VOID) {return Plan.consoleless_target_gop;}
@@ -125,7 +125,7 @@ static BOOLEAN SurvivorStorageOwned(const GU_PLATFORM *platform,const PLAN *plan
 }
 /* Prove pool membership before dereferencing a retained release record.
  * This also works on a completed inactive platform without rebinding it. */
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 static BOOLEAN TargetChildStorageOwned(const GU_PLATFORM *platform,const PLAN *plan) {
   if(plan->target_child_count>plan->target_child_capacity||
      plan->target_child_capacity>TARGET_CHILD_LIMIT||
@@ -145,7 +145,7 @@ static BOOLEAN ReleaseStateMatches(const GU_PLATFORM *platform) {
     state->owner_image==platform->image&&
     GraphStorageOwned(platform,&state->original)&&GraphStorageOwned(platform,&state->current)&&
     SurvivorStorageOwned(platform,&state->plan)&&
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
     TargetChildStorageOwned(platform,&state->plan)&&
     (const VOID *)state->plan.target_children!=state&&
     (!state->plan.target_children||
@@ -196,7 +196,7 @@ EFI_STATUS GuMsiReserveSelectedState(EFI_BOOT_SERVICES *bs) {
 static EFI_GUID PciGuid=EFI_PCI_IO_PROTOCOL_GUID,PathGuid=EFI_DEVICE_PATH_PROTOCOL_GUID;
 static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID,TextGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID InputGuid=EFI_SIMPLE_TEXT_INPUT_PROTOCOL_GUID;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 /* Standard UEFI EDID Discovered interface on a video-output child. Check
  * all 128 GUID bits, not the Data1 value printed by a diagnostic. */
 static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,
@@ -306,7 +306,7 @@ static BOOLEAN Removed(const EDGE *e,UINTN stage) {
   if(stage>=2&&Plan.gop&&(e->handle==Plan.gop||e->controller==Plan.gop)&&(e->agent==Plan.gfx_agent||Guid(&e->protocol,&GopGuid)))return TRUE;
   if(stage>=3&&(e->handle==Plan.pci||(Plan.gop&&e->handle==Plan.gop)||e->controller==Plan.pci||(Plan.gop&&e->controller==Plan.gop))&&e->agent==Plan.nv_agent)return TRUE;
   if(stage>=3&&Plan.gop&&e->handle==Plan.gop)return TRUE;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   /* A driver-bound EDID Discovered interface is a dependent of its verified
    * target video-output child. UEFI destroys children before removing the
    * parent driver. Allow this exact captured dependent to disappear only
@@ -323,7 +323,7 @@ static BOOLEAN Removed(const EDGE *e,UINTN stage) {
  * A protocol GUID alone never authorizes access to the GPU or its owners. */
 static BOOLEAN ProtectedHandle(EFI_HANDLE h) {
   if(!h)return FALSE;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   for(UINTN k=0;k<Plan.target_child_count;k++)
     if(Plan.target_children[k].live_handle==h)return TRUE;
 #endif
@@ -527,7 +527,7 @@ static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which) {
    * Services driver. Accept only a spec-defined code/data memory-type pair
    * for that dependent, never an application, data or unknown image type. */
   BOOLEAN code_type_ok=im->ImageCodeType==EfiBootServicesCode;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(which==3U) {
     code_type_ok=
       (im->ImageCodeType==EfiBootServicesCode&&
@@ -559,7 +559,7 @@ static EFI_STATUS Driver(UINTN which) {
     which==0?Plan.out_agent:which==1?Plan.gfx_agent:Plan.nv_agent,which);
 }
 static EFI_STATUS Alive(VOID) {
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(Plan.consoleless_target_gop)return EFI_SUCCESS;
 #endif
   EFI_SYSTEM_TABLE *t=Plan.table;VOID *in=NULL,*out=NULL,*err=NULL;
@@ -645,7 +645,7 @@ static EFI_STATUS Gops(BOOLEAN first) {
         Plan.mode=*g->Mode;
         Plan.info=*g->Mode->Info;
       } else {
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
         BOOLEAN remapped=FALSE;
         if(Plan.reconnecting&&Plan.stage==0) {
           for(UINTN k=0;k<Plan.target_child_count;k++)
@@ -734,7 +734,7 @@ static EFI_STATUS Gops(BOOLEAN first) {
 static EFI_GUID GlobalVarGuid={
   0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}
 };
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 /* The current target must own at least one configured ConOut path. Other
  * configured paths may use an existing captured peer GOP. Every ConOut and
  * ErrOut path must identify that target or one survivor, never unknown GPU
@@ -786,8 +786,11 @@ static EFI_STATUS BenchConfiguredConsolePaths(const CHAR16 *name,
   return EFI_COMPROMISED_DATA;
 }
 static EFI_STATUS BenchSelectedTargetConsole(VOID) {
-  if(!Plan.gop||!Plan.survivor_count||GuSelectedGpuCount()<2U)
+  if(!Plan.gop||!Plan.survivor_count)
     return EFI_NOT_READY;
+#ifndef GU_FIRMWARE_REATTACH
+  if(GuSelectedGpuCount()<2U)return EFI_NOT_READY;
+#endif
   size_t matches=0,selected_index=0;
   for(size_t i=0;i<GuSelectedGpuCount();i++) {
     GU_GPU_RECORD candidate={0};
@@ -853,7 +856,7 @@ static EFI_STATUS AmdConsoleVariable(
          at+n-start>192u||paths==8)return EFI_COMPROMISED_DATA;
       /* Normalize only this private GetVariable copy to END_ENTIRE. */
       data[at+1]=0xff;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
       int owner=GuDevicePathDisplayOwner(
           data+start,at+n-start,owners,(size_t)owner_count);
 #else
@@ -871,7 +874,7 @@ static EFI_STATUS AmdConsoleVariable(
         if(match<0)return EFI_COMPROMISED_DATA;
         if(match)matching_gops++;
       }
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
       /* Read-only diagnosis: a selected GPU can be the console owner even
        * when a second GOP is present. Observe that condition without
        * weakening the independent-survivor admission rule. */
@@ -888,7 +891,7 @@ static EFI_STATUS AmdConsoleVariable(
 #endif
       data[at+1]=subtype;
       if(owner!=1||matching_gops!=1) {
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
         GuLog("STOP_RELEASE_CONSOLE=REFUSED VARIABLE=%s REASON=NOT_UNIQUE_NON_TARGET_SURVIVOR OWNER=%d GOP_MATCHES=%u TARGET_PCI_MATCH=%d\n",
               variable_label,owner,(unsigned)matching_gops,target_pci_match);
 #endif
@@ -907,7 +910,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=INDEPENDENT_AMD_CONSOLE RESULT=BYPASSED\n");
   return EFI_SUCCESS;
 #else
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(Plan.consoleless_target_gop) {
     GuLog("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_CONSOLE_EXPERIMENT=%u PREFLIGHT_CONSOLE_IO=0\n",
           (unsigned)Plan.target_console_experiment);
@@ -916,13 +919,13 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
 #endif
   EFI_BOOT_SERVICES *b=Plan.table->BootServices;
   EFI_HANDLE *handles=NULL;UINTN count=0,display_count=0;
-#ifndef GU_STOP_RELEASE_ONLY_BENCH
+#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_FIRMWARE_REATTACH)
   UINTN amd_count=0;
 #endif
   GU_DEVICE_PATH_DISPLAY_OWNER *owners=NULL;
   EFI_STATUS s;
   if(!Plan.survivor_baseline_valid||!Plan.survivor_count) {
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
     GuLog("STOP_RELEASE_CONSOLE=REFUSED REASON=NO_INDEPENDENT_SURVIVOR_GOP TARGET_GOP=%u SURVIVOR_GOPS=%u\n",
           (unsigned)(Plan.gop!=NULL),(unsigned)Plan.survivor_count);
 #endif
@@ -963,11 +966,11 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
     if(s!=EFI_SUCCESS||!p){s=EFI_NOT_READY;break;}
     owners[display_count++]=(GU_DEVICE_PATH_DISPLAY_OWNER){
         (const unsigned char *)p,4096u,(UINT16)(h[0]&0xffffu),cls};
-#ifndef GU_STOP_RELEASE_ONLY_BENCH
+#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_FIRMWARE_REATTACH)
     if((h[0]&0xffffu)==0x1002u)amd_count++;
 #endif
   }
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(s==EFI_SUCCESS&&!display_count)s=EFI_ACCESS_DENIED;
 #else
   if(s==EFI_SUCCESS&&(!amd_count||!display_count))s=EFI_ACCESS_DENIED;
@@ -976,7 +979,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
     EFI_DEVICE_PATH_PROTOCOL *p=NULL;
     s=Interface(Plan.survivors[k].handle,&PathGuid,(VOID **)&p);
     if(s!=EFI_SUCCESS)break;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
     if(GuDevicePathDisplayOwner(
           (const unsigned char *)p,4096u,owners,(size_t)display_count)!=1)
 #else
@@ -989,7 +992,7 @@ static EFI_STATUS ReadOnlyAmdConsoleOwnership(VOID)
   if(s==EFI_SUCCESS)s=AmdConsoleVariable(L"ErrOut","ErrOut",owners,display_count);
   s=ReleaseObservation(b,owners,s);
   s=ReleaseObservation(b,handles,s);
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(s==EFI_SUCCESS)
     GuLog("STOP_RELEASE_CONSOLE=INDEPENDENT_SURVIVOR_VERIFIED POLICY=NON_TARGET_DISPLAY GOPS=%u\n",
           (unsigned)Plan.survivor_count);
@@ -1008,7 +1011,7 @@ static EFI_STATUS ReadOnlyAmdConsoleGraph(const GRAPH *graph)
   GuLog("UNVERIFIED_BENCH_OVERRIDE GATE=LIVE_AMD_TEXTOUT_GRAPH RESULT=BYPASSED\n");
   return EFI_SUCCESS;
 #else
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(Plan.consoleless_target_gop) {
     (void)graph;
     GuLog("STOP_RELEASE_TEXT_GRAPH=NOT_REQUIRED TARGET_CONSOLE_EXPERIMENT=%u PREFLIGHT_CONSOLE_IO=0\n",
@@ -1047,7 +1050,7 @@ static EFI_STATUS ReadConfigMode(UINT32 c[64],BOOLEAN permit_initial_master) {
   return s;
 }
 static EFI_STATUS ReadConfig(UINT32 c[64]) {return ReadConfigMode(c,FALSE);}
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 /* A successful ConnectController is not proof that the same PCI function
  * was recognized. Read the current BDF and immutable device/class/subsystem
  * identity without a new exclusive claim. PCI command/status is dynamic. */
@@ -1190,12 +1193,12 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
           (unsigned)(h==Plan.pci),(unsigned)GuIsPreparedPeerHandle(h));
     return EFI_ACCESS_DENIED;
   }
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   UINTN edid_index=Original.count;
 #endif
   for(UINTN k=0;k<Original.count;k++) {
     const EDGE *other=&Original.edges[k];
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
     /* RUN0040: child 0x74ed2918 had an EDID Discovered BY_DRIVER open
      * with handle==controller==child and count 1. This is a normal UEFI
      * video-output dependent, not a second parent or GPU owner. Require
@@ -1232,7 +1235,7 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
           (unsigned long long)(UINTN)h,(unsigned long long)s,(unsigned)on_target);
     return s==EFI_SUCCESS?EFI_ACCESS_DENIED:s;
   }
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(edid_index<Original.count) {
     EDGE *dependent=&Original.edges[edid_index];
     /* Even a standard EDID driver must have a real Stop() implementation.
@@ -1270,7 +1273,7 @@ static EFI_STATUS ClassifyIdleOutput(EDGE *e) {
 #endif
   GuLog("STOP_RELEASE_IDLE_ACCEPTED CHILD=%#llx RELATIONSHIP=%s\n",
         (unsigned long long)(UINTN)h,
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
         edid_index<Original.count?"EXACT_TARGET_EDID_DRIVER":"UNIQUE_TARGET_ONLY"
 #else
         "UNIQUE_TARGET_ONLY"
@@ -1384,7 +1387,7 @@ static EFI_STATUS Consumers(VOID) {
 }
 /* Stop-only reattachment identity: stable full PCI child paths, not the
  * firmware's allocation addresses. All GPU binding roles remain protected. */
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 static EFI_STATUS TargetChildBaseline(VOID) {
   if(Plan.target_children||Plan.target_child_count||Plan.target_child_capacity)
     return EFI_ALREADY_STARTED;
@@ -1538,7 +1541,7 @@ static BOOLEAN ReattachedGraphExpected(VOID) {
   return TRUE;
 }
 static EFI_STATUS ReattachedDriversVerified(VOID) {
-  for(UINTN role=0;role<3;role++) {
+  for(UINTN role=Plan.headless?2U:0U;role<3;role++) {
     EFI_STATUS s=Driver(role);
     if(s!=EFI_SUCCESS)return s;
   }
@@ -1569,11 +1572,11 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   if(!b->DisconnectController||!b->OpenProtocol||!b->CloseProtocol||!b->RaiseTPL||!b->RestoreTPL||
      !b->ProtocolsPerHandle||!b->OpenProtocolInformation||!b->LocateHandleBuffer||!b->HandleProtocol||
      !b->AllocatePool||!b->FreePool)return EFI_UNSUPPORTED;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(!b->ConnectController)return EFI_UNSUPPORTED;
 #endif
   EFI_STATUS s=EFI_SUCCESS;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   /* Observe GOP topology before deciding whether this target's own output is
    * the only console route. That mode must never touch UEFI console protocols. */
   s=GuVerifyActivePeers(t);
@@ -1585,7 +1588,7 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
   /* Each selected GPU is checked when it becomes the current target.
    * Only a target-owned ConOut with an independent surviving GOP permits
    * this file-only Stop path. The peer warning is still mandatory. */
-  if(Plan.gop&&Plan.survivor_count&&GuSelectedGpuCount()>1U) {
+  if(Plan.gop&&Plan.survivor_count) {
     EFI_STATUS console_owner=BenchSelectedTargetConsole();
     if(console_owner==EFI_SUCCESS) {
       Plan.target_console_experiment=TRUE;
@@ -1598,6 +1601,9 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
     }
   }
   if(Plan.gop&&!Plan.survivor_count) {
+#ifdef GU_FIRMWARE_REATTACH
+    return EFI_NOT_READY;
+#endif
     Plan.consoleless_target_gop=TRUE;
     StopFileOnlyOutput=TRUE;
     GuLog("STOP_RELEASE_CONSOLE_REQUIREMENT=NONE TARGET_IS_ONLY_GOP=1 "
@@ -1620,7 +1626,7 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
 #else
   if(!pci||!Gu.stop_release_ready)return EFI_NOT_READY;
 #endif
-#ifndef GU_STOP_RELEASE_ONLY_BENCH
+#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_FIRMWARE_REATTACH)
   s=GuVerifyActivePeers(t);
   if(s==EFI_SUCCESS)s=Gops(TRUE);
   if(s!=EFI_SUCCESS)GuLog("Preflight failed at peer/GOP observation: %#llx\n",(unsigned long long)s);
@@ -1661,7 +1667,7 @@ EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *t,EFI_HANDLE self,EFI_HANDLE pci) {
     if(s!=EFI_SUCCESS)GuLog("Preflight refused active survivor console graph: %#llx\n",(unsigned long long)s);
   }
   if(s==EFI_SUCCESS) { s=Consumers(); if(s!=EFI_SUCCESS) GuLog("Preflight failed at Consumers(): %#llx\n", (unsigned long long)s); }
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(s==EFI_SUCCESS) { s=TargetChildBaseline(); if(s!=EFI_SUCCESS)
     GuLog("Preflight failed at TargetChildBaseline(): %#llx\n",(unsigned long long)s); }
 #endif
@@ -1885,7 +1891,7 @@ static void StopContractLog(UINTN Stage, BOOLEAN Owner, BOOLEAN Cold,
   /* Do not log a bypassed AMD-console check as verified evidence. */
   Console=FALSE;
 #endif
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(Plan.consoleless_target_gop)Console=FALSE;
 #endif
   GU_STOP_OBSERVATION observation = {0};
@@ -1975,7 +1981,7 @@ EFI_STATUS GuMsiRelease(VOID) {
     if(s==EFI_SUCCESS)s=Driver(stage-1);
     b->RestoreTPL(old);
     if(s!=EFI_SUCCESS||Gu.fault)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
     /* A failed file write or flush is not an acceptable record of a new
      * proprietary Stop callback. Reattach remains separately reachable if
      * an earlier stage already stopped a driver. */
@@ -2034,7 +2040,7 @@ BOOLEAN GuMsiReleased(VOID) {
   return !failed;
 }
 
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
 /* Draw the warning through the surviving, selected NVIDIA peer's GOP.
  * This does not call ConOut, connect any driver or write a display mode.
  * A successful Blt confirms only a firmware API return, not visible pixels. */
@@ -2163,22 +2169,36 @@ static EFI_STATUS BenchShowReattachSuccess(VOID) {
   s=g->Blt(g,&background,EfiBltVideoFill,0,0,12,12,580,198,0);
   if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,background,"GPU REATTACHMENT VERIFIED");
   if(s==EFI_SUCCESS)s=BenchGopLine(g,24,67,scale,background,target);
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,background,"STOP RELEASE COMPLETE");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,108,scale,background,
+#ifdef GU_FIRMWARE_REATTACH
+       "FIRMWARE TEST COMPLETE");
+#else
+       "STOP RELEASE COMPLETE");
+#endif
   if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,background,"FIRMWARE DRIVERS RESTORED");
   return s;
 }
 
+#ifdef GU_FIRMWARE_REATTACH
+#define GuWarningGpuCount GuPreparedGpuCount
+#define GuWarningGpuRecordAt GuPreparedGpuRecordAt
+#define GU_WARNING_TEXT "WARNING GPU FIRMWARE TEST"
+#else
+#define GuWarningGpuCount GuSelectedGpuCount
+#define GuWarningGpuRecordAt GuSelectedGpuRecordAt
+#define GU_WARNING_TEXT "WARNING GPU DRIVER STOP TEST"
+#endif
 EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
   if(!ReleaseOwnerMatches()||!Plan.ready||Plan.mutated||Plan.stage||
      !Plan.survivor_baseline_valid||!GuBootLogOpen()||
-     GuSelectedGpuCount()<2U)return EFI_NOT_READY;
+     GuWarningGpuCount()<2U)return EFI_NOT_READY;
   EFI_STATUS s=Gops(FALSE);
   if(s==EFI_SUCCESS)s=GuVerifyActivePeers(Plan.table);
   if(s!=EFI_SUCCESS)return s;
   SURVIVOR_GOP *chosen=NULL;
   GU_GPU_RECORD selected={0};
-  for(size_t i=0;i<GuSelectedGpuCount();i++) {
-    s=GuSelectedGpuRecordAt(i,&selected);
+  for(size_t i=0;i<GuWarningGpuCount();i++) {
+    s=GuWarningGpuRecordAt(i,&selected);
     if(s!=EFI_SUCCESS)return s;
     if(selected.handle==Plan.pci)continue;
     if((selected.pci_id&0xffffU)!=0x10deU||!selected.handle||
@@ -2211,7 +2231,7 @@ EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID) {
   const UINTN scale=width>=1000U?3U:2U;
   EFI_GRAPHICS_OUTPUT_BLT_PIXEL dark={24,16,80,0};
   s=g->Blt(g,&dark,EfiBltVideoFill,0,0,12,12,580,180,0);
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,dark,"WARNING GPU DRIVER STOP TEST");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,26,scale,dark,GU_WARNING_TEXT);
   char target[]="TARGET 0000:00:00.0";
   if(s==EFI_SUCCESS) {
     if(Gu.discovery_identity.segment>0xffffU||
@@ -2297,7 +2317,7 @@ EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
   if(original_text_driver&&current_text_driver) {
     text_status=Interface(survivor->handle,&TextGuid,(VOID **)&peer_text);
     if(text_status==EFI_SUCCESS&&peer_text&&peer_text->OutputString) {
-      static CHAR16 notice[]=L"\r\nTarget driver released. Peer GPU text output is active. Reattaching target.\r\n";
+      static CHAR16 notice[]=L"\r\nTarget driver released. Peer GPU text output is active.\r\n";
       text_status=peer_text->OutputString(peer_text,notice);
       if(text_status==EFI_SUCCESS) {
         GuLog("STOP_RELEASE_PEER_CONOUT=ACQUIRED "
@@ -2312,7 +2332,7 @@ EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID) {
   const EFI_GRAPHICS_OUTPUT_BLT_PIXEL background={24,16,80,0};
   EFI_STATUS draw=width>=600U&&height>=210U?
     BenchGopLine(g,24U,183U,width>=1000U?3U:2U,background,
-                 "TARGET RELEASED REATTACH NEXT"):EFI_UNSUPPORTED;
+                 "TARGET DRIVER RELEASED"):EFI_UNSUPPORTED;
   GuLog("STOP_RELEASE_PEER_CONOUT=TEXT_UNAVAILABLE "
         "TEXT_STATUS=%#llx GRAPH_TEXT_OWNER=%u "
         "CHANNEL=PEER_GOP_BLT BLT_STATUS=%#llx "
@@ -2371,8 +2391,18 @@ EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID) {
 }
 #endif
 
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
-EFI_STATUS GuMsiReattachAfterStop(VOID) {
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
+/* For combined mode GuMsiFinish has already checked silicon, released
+ * the exclusive claim, and verified the detached graph. Stop-only owns
+ * the claim until this preparation step. */
+static EFI_STATUS PrepareReconnect(VOID) {
+#ifdef GU_FIRMWARE_REATTACH
+  if(!ReleaseOwnerMatches()||!Plan.ready||Plan.stage!=3||
+     Plan.claimed||Gu.owned||!Plan.mutated||Gu.fault||
+     !Plan.hardware_verified||!Gu.quiesced||Gu.flrs!=1||
+     !GuSafeToReturn()||!GuBootLogOpen())return EFI_NOT_READY;
+  return EFI_SUCCESS;
+#else
   if(!ReleaseOwnerMatches()||!Plan.ready||Plan.stage!=3||
      !Plan.claimed||!Gu.owned||!Plan.mutated||Gu.fault||
      !GuMsiReleased())return EFI_NOT_READY;
@@ -2385,8 +2415,21 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
     Gu.fault=TRUE;Gu.retained=TRUE;
     return s;
   }
-  Plan.claimed=FALSE;Gu.owned=FALSE;Plan.stage=0;
-  Plan.reconnecting=TRUE;
+  Plan.claimed=FALSE;Gu.owned=FALSE;
+  return EFI_SUCCESS;
+#endif
+}
+#ifdef GU_FIRMWARE_REATTACH
+#define GU_REATTACH_TRANSACTION_LOG "1"
+#else
+#define GU_REATTACH_TRANSACTION_LOG "0"
+#endif
+EFI_STATUS GuMsiReattachAfterStop(VOID) {
+  EFI_STATUS s=PrepareReconnect();
+  if(s!=EFI_SUCCESS)return s;
+  EFI_BOOT_SERVICES *b=Plan.table->BootServices;
+  if(!b||!b->ConnectController)return EFI_UNSUPPORTED;
+  Plan.stage=0;Plan.reconnecting=TRUE;
   /* Reconnect only after releasing our exclusive PCI I/O claim. Recursive
    * connection lets the firmware bind the original graphics stack and its
    * children. It is an attempt, not a guarantee; verify the observed graph. */
@@ -2417,7 +2460,7 @@ EFI_STATUS GuMsiReattachAfterStop(VOID) {
   NOTE("MSI reattach verification passed GRAPH_RESTORED=1 "
        "TARGET_GOP_RECOGNIZED=%u TARGET_CHILD_PATHS_MATCHED=%zu "
        "DRIVERS_VERIFIED=1 SURVIVOR_GOPS_MATCHED=%zu "
-       "DISPLAY_OUTPUT_TESTED=0 FIRMWARE_TRANSACTION=0\n",
+       "DISPLAY_OUTPUT_TESTED=0 FIRMWARE_TRANSACTION=" GU_REATTACH_TRANSACTION_LOG "\n",
        (unsigned)!Plan.headless,(size_t)Plan.target_child_count,
        (size_t)Plan.survivor_count);
   if(Plan.warning_peer_gop) {
@@ -2503,6 +2546,9 @@ BOOLEAN GuMsiMutated(VOID){
   return Plan.mutated;
 }
 BOOLEAN GuMsiReadyForWindows(VOID) {
+#ifdef GU_FIRMWARE_REATTACH
+  return GuMsiVerifyFinalGraph();
+#else
   if(!ReleaseOwnerMatches())return FALSE;
   if(!Plan.ready||Plan.stage!=3||Plan.claimed||Gu.owned||Gu.fault||
      !Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn()||!Plan.hardware_verified){
@@ -2522,6 +2568,7 @@ BOOLEAN GuMsiReadyForWindows(VOID) {
    * identity, no later recheck may restore approval in this transaction. */
   if(!ready)Plan.hardware_verified=FALSE;
   return ready;
+#endif
 }
 
 const VOID *GuMsiPlanOwnerToken(VOID) {return ReleaseOwnerMatches()?CurrentMsi:NULL;}
@@ -2533,7 +2580,14 @@ BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {
   if(!platform||!token||platform->release_state!=token||
      !ReleaseStateMatches(platform))return FALSE;
   const PLAN *plan=&platform->release_state->plan;
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#ifdef GU_FIRMWARE_REATTACH
+  return plan->table && plan->pci==platform->handle && plan->self==platform->image &&
+    plan->ready && plan->mutated && plan->stage==0 &&
+    plan->survivor_baseline_valid && !plan->claimed &&
+    plan->master_normalized && plan->hardware_verified && plan->reattach_verified &&
+    !platform->owned && !platform->fault && platform->quiesced &&
+    platform->flrs==1 && GuSafeToReturnFor(platform);
+#elif defined(GU_STOP_RELEASE_ONLY_BENCH)
   return plan->table && plan->pci==platform->handle && plan->self==platform->image &&
     plan->ready && plan->mutated && plan->stage==0 &&
     plan->survivor_baseline_valid && !plan->claimed &&
@@ -2550,9 +2604,15 @@ BOOLEAN GuMsiCompletedPlatform(const GU_PLATFORM *platform,const VOID *token) {
  * includes the earlier completed transactions. Never rebind an old context
  * or read device registers after the exclusive claim has closed. */
 BOOLEAN GuMsiVerifyFinalGraph(VOID) {
-#ifdef GU_STOP_RELEASE_ONLY_BENCH
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
   if(!ReleaseOwnerMatches()||!Plan.reattach_verified||Plan.stage!=0||
      Plan.claimed||Gu.owned||Gu.fault)return FALSE;
+#ifdef GU_FIRMWARE_REATTACH
+  if(!Plan.hardware_verified||!Gu.quiesced||Gu.flrs!=1||!GuSafeToReturn()) {
+    Plan.reattach_verified=FALSE;
+    return FALSE;
+  }
+#endif
   EFI_STATUS s=Snapshot(&Current);
   if(s==EFI_SUCCESS)s=ReconcileTargetChildren();
   if(s==EFI_SUCCESS&&!ReattachedGraphExpected())s=EFI_NOT_READY;

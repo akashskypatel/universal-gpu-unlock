@@ -7,6 +7,7 @@ param(
     [switch]$AcceptUnverifiedActuation,
     [switch]$StopReleaseOnlyBench,
     [switch]$StopReleaseWindowsHandoff,
+    [switch]$FirmwareReattach,
     [switch]$FileOnlyBootLog,
     [switch]$RuntimeSelection,
     [switch]$RuntimeEsp,
@@ -16,6 +17,9 @@ param(
     [string]$ApplicationOperation = 'Menu'
 )
 $ErrorActionPreference = 'Stop'
+if ($FirmwareReattach -and (-not $AcceptUnverifiedActuation -or -not $EnableSingleTargetExecution -or -not $RuntimeSelection -or -not $RuntimeEsp -or $EspResident -or $StopReleaseOnlyBench -or $SyntheticCompileProfile -or $ApplicationOperation -ne 'Unlock')) {
+    throw '-FirmwareReattach requires the waived runtime Unlock application without Stop-only or resume policy.'
+}
 # Operation selection is independent of the existing target selection and
 # admission gates. A fixed operation is only valid for the ordinary waived app.
 if ($ApplicationOperation -ne 'Menu' -and (-not $AcceptUnverifiedActuation -or $StopReleaseOnlyBench -or $SyntheticCompileProfile)) {
@@ -184,6 +188,7 @@ try {
         }
     }
 
+    if ($FirmwareReattach) { $clFlags += ' /DGU_FIRMWARE_REATTACH' }
     if ($fixedOperation) {
         $clFlags += " /DGU_APP_OPERATION=$($operationKeys[$ApplicationOperation])"
     }
@@ -237,7 +242,9 @@ try {
 
     $linkObjs = $objFiles -join ' '
     $binaryName = if ($StopReleaseWindowsHandoff) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI' } elseif ($StopReleaseOnlyBench -and $RuntimeSelection) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI' } elseif ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-' + $selection.Label + '.EFI' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP.EFI' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }
-    if ($fixedOperation) {
+    if ($FirmwareReattach) {
+        $binaryName = 'GPU-RUNTIME-FIRMWARE-REATTACH.EFI'
+    } elseif ($fixedOperation) {
         $operationLabel = ($ApplicationOperation -creplace '([a-z])([A-Z])','$1-$2').ToUpperInvariant()
         $binaryName = $binaryName -replace '\.EFI$',"-$operationLabel.EFI"
     }
@@ -258,7 +265,7 @@ try {
     $singleTargetActive = if ($StopReleaseOnlyBench) { 0 } else { [int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1)) }
     $stopOnlyAssertions = if ($StopReleaseWindowsHandoff) { 'FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 OS_HANDOFF=WINDOWS_AFTER_SUCCESS' } elseif ($StopReleaseOnlyBench) { 'FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 OS_HANDOFF=NONE' } else { '' }
     $stopConsolePolicy = if ($StopReleaseOnlyBench) { 'CONDITIONAL' } else { '0' }
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=$stopConsolePolicy FILE_ONLY_OUTPUT=$([int][bool]$FileOnlyBootLog) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) $stopOnlyAssertions APP_OPERATION=$ApplicationOperation FIXED_OPERATION=$fixedOperation FIRMWARE_TRANSACTION=$firmwareTransaction UNLOCK=$firmwareTransaction REATTACH_ATTEMPTED=$([int][bool]$StopReleaseOnlyBench) REATTACH_VERIFIED=0 TARGET_ORDER=$targetOrder NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=$stopConsolePolicy FILE_ONLY_OUTPUT=$([int][bool]$FileOnlyBootLog) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) $stopOnlyAssertions APP_OPERATION=$ApplicationOperation FIXED_OPERATION=$fixedOperation FIRMWARE_TRANSACTION=$firmwareTransaction UNLOCK=$firmwareTransaction REATTACH_ATTEMPTED=$([int][bool]($StopReleaseOnlyBench -or $FirmwareReattach)) REATTACH_VERIFIED=0 FIRMWARE_REATTACH=$([int][bool]$FirmwareReattach) TARGET_ORDER=$targetOrder NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
 } finally {
     Pop-Location
 }

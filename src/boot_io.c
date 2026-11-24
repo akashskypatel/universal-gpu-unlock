@@ -347,7 +347,7 @@ static const char *TraceElapsedText(char *buffer,UINTN size) {
 }
 
 static VOID TraceSay(const char *text) {
-#ifdef GU_DXE_FILE_ONLY_OUTPUT
+#if defined(GU_DXE_FILE_ONLY_OUTPUT) || defined(GU_FIRMWARE_REATTACH)
   /* GuTracePhase/Detail/Progress also call GuLog, which writes the DXE file. */
   (void)text;
 #else

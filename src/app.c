@@ -532,6 +532,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
   GuLog("PREBOOT OK: final environment checks passed; Windows startup and CUDA throughput remain unverified\n");
+#ifdef GU_FIRMWARE_REATTACH
+  if(!GuExecutionReadyForWindows(t)||!GuBootLogOpen()){s=EFI_NOT_READY;goto failed;}
+#endif
   GuBootUnsilence();
   GuBootSay(
     L" [3/4] GPU Driver/Display Handover ......... [ OK ]\r\n"

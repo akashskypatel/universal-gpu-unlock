@@ -918,6 +918,18 @@ EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
   return EFI_SUCCESS;
 }
 
+#ifdef GU_FIRMWARE_REATTACH
+size_t GuPreparedGpuCount(VOID) {
+  return ActiveInventoryValid&&ActiveSequenceValid?
+    ActiveInventory.inventory.count:0;
+}
+EFI_STATUS GuPreparedGpuRecordAt(size_t index,GU_GPU_RECORD *out) {
+  if(!out||!ActiveInventory.inventory.nvidia||index>=GuPreparedGpuCount())
+    return EFI_NOT_READY;
+  *out=ActiveInventory.inventory.nvidia[index];
+  return GuIsSupportedPciId(out->pci_id)?EFI_SUCCESS:EFI_DEVICE_ERROR;
+}
+#endif
 size_t GuSelectedGpuCount(VOID) {
   return ActiveInventoryValid&&ActiveSequenceValid?
     ActiveSequence.selected_count:0;

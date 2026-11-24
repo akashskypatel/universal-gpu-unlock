@@ -178,7 +178,9 @@ class UnsafeBenchVariantContract(unittest.TestCase):
             "#endif", 1)[0]
         countdown = self.boot.split("EFI_STATUS GuBootBenchCountdown(VOID)", 1)[1].split(
             "EFI_STATUS GuBootBenchReportCompletion", 1)[0]
-        self.assertIn("GuSelectedGpuRecordAt(i,&selected)", warning)
+        self.assertIn("GuWarningGpuRecordAt(i,&selected)", warning)
+        self.assertIn("#define GuWarningGpuRecordAt GuSelectedGpuRecordAt", self.release)
+        self.assertIn("#define GuWarningGpuRecordAt GuPreparedGpuRecordAt", self.release)
         self.assertIn("selected.handle==Plan.pci", warning)
         self.assertIn("(selected.pci_id&0xffffU)!=0x10deU", warning)
         self.assertIn("GuDevicePathHasPrefix(", warning)
@@ -261,6 +263,26 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertNotIn("return display", reattach)
         self.assertNotIn("->ConOut", notice)
         self.assertNotIn("SetMode(", notice)
+
+    def test_combined_firmware_and_reattach_contract(self):
+        core = self.execution.split("static EFI_STATUS GuExecuteUnlockCore", 1)[1].split("EFI_STATUS GuExecuteUnlock(", 1)[0]
+        ordered = ["GuMsiPreflight(", "GuMsiStopReleaseWarnSurvivor()", "Stall(3000000U)",
+                   "GuMsiRelease()", "gpu_unlock_610_unlock(", "gpu_unlock_610_release_shared(",
+                   "GuCompatCloseDevice(", "GuMsiFinish()", "GuMsiReattachAfterStop()",
+                   "GuMsiReadyForWindows()"]
+        self.assertEqual(sorted(core.index(x) for x in ordered), [core.index(x) for x in ordered])
+        prepare = self.release.split("static EFI_STATUS PrepareReconnect(VOID)", 1)[1].split("#else", 1)[0]
+        for gate in ("Plan.claimed||Gu.owned", "!Plan.hardware_verified", "!Gu.quiesced",
+                     "Gu.flrs!=1", "!GuSafeToReturn()", "!GuBootLogOpen()"):
+            self.assertIn(gate, prepare)
+        self.assertNotIn("CloseProtocol(", prepare)
+        proof = self.release.split("BOOLEAN GuMsiCompletedPlatform(", 1)[1].split("#elif", 1)[0]
+        self.assertIn("plan->hardware_verified && plan->reattach_verified", proof)
+        self.assertIn("plan->stage==0", proof)
+        self.assertIn("GuSafeToReturnFor(platform)", proof)
+        self.assertIn("if(policy!=GU_S3_DISABLED)return EFI_UNSUPPORTED;", self.execution)
+        self.assertIn("GU_UNVERIFIED_BENCH_CONDITIONS", self.port.split("#ifdef GU_FIRMWARE_REATTACH", 1)[1])
+        self.assertIn("FUNCTIONAL_PERSISTENCE=PENDING_WINDOWS", core)
 
     def test_failed_reattach_warns_on_peer_gop_before_thirty_second_reboot(self):
         notice = self.release.split(
@@ -371,9 +393,9 @@ class UnsafeBenchVariantContract(unittest.TestCase):
     def test_stop_only_console_gate_accepts_non_target_nvidia_survivor_but_requires_it(self):
         check = self.release.split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleGraph", 1)[0]
         variable = self.release.split("static EFI_STATUS AmdConsoleVariable", 1)[1].split("static EFI_STATUS ReadOnlyAmdConsoleOwnership", 1)[0]
-        self.assertIn("#ifdef GU_STOP_RELEASE_ONLY_BENCH\n      int owner=GuDevicePathDisplayOwner", variable)
+        self.assertIn("#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)\n      int owner=GuDevicePathDisplayOwner", variable)
         self.assertIn("#else\n      int owner=GuDevicePathAmdDisplayOwner", variable)
-        self.assertIn("#ifdef GU_STOP_RELEASE_ONLY_BENCH\n    if(GuDevicePathDisplayOwner", check)
+        self.assertIn("#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)\n    if(GuDevicePathDisplayOwner", check)
         self.assertIn("#else\n    if(GuDevicePathAmdDisplayOwner", check)
         self.assertIn("NO_INDEPENDENT_SURVIVOR_GOP", check)
         self.assertIn("matching_gops!=1", variable)
