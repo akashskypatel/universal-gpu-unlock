@@ -152,6 +152,133 @@ class BuildWiring(unittest.TestCase):
         self.assertIn("EFI_VARIABLE_NON_VOLATILE", STATE)
 
 
+class FixedApplicationOperations(unittest.TestCase):
+    def test_actual_operation_dispatch_and_administrative_completion(self):
+        """Compile the actual operation handlers without firmware or GPU access."""
+        helper_start = APP.index("#ifdef GU_APP_OPERATION\n/* A fixed I/R image")
+        helper_end = APP.index("EFI_STATUS EFIAPI UefiMain(", helper_start)
+        dispatch_start = APP.index('#ifdef GU_APP_OPERATION\n  stage="build-selected-operation"')
+        dispatch_end = APP.index("  if(!unlock) {", dispatch_start)
+        guard_start = APP.index("#if defined(GU_APP_OPERATION)")
+        guard_end = APP.index('#include "compat/compat.h"', guard_start)
+        source = r"""
+#include <stddef.h>
+#include <wchar.h>
+typedef int EFI_STATUS;
+typedef int BOOLEAN;
+typedef wchar_t CHAR16;
+typedef void VOID;
+typedef void *EFI_HANDLE;
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 5
+#define EFI_DEVICE_ERROR 7
+#define EFI_NOT_FOUND 14
+#define EfiResetWarm 1
+typedef struct { int fault; } GU_PLATFORM;
+typedef struct { EFI_STATUS (*Stall)(unsigned); } BOOT;
+typedef struct { void (*ResetSystem)(int,EFI_STATUS,unsigned,void *); } RUNTIME;
+typedef struct { BOOT *BootServices; RUNTIME *RuntimeServices; } EFI_SYSTEM_TABLE;
+static GU_PLATFORM platform,peer;
+static GU_PLATFORM *GuPlatformActive;
+static int menus,installs,removes,resets,closes,halts,cancels;
+static int log_open,watchdog_status,operation_status,close_status;
+static CHAR16 menu_key;
+void GuLog(const char *fmt,...) {(void)fmt;}
+void GuTracePhase(const char *stage) {(void)stage;}
+void GuTraceDetail(const char *stage,const char *fmt,...) {(void)stage;(void)fmt;}
+void GuBootSay(const CHAR16 *text) {(void)text;}
+void GuBootHalt(void) {halts++;}
+EFI_STATUS GuBootChoose(CHAR16 *choice) {menus++;*choice=menu_key;return EFI_SUCCESS;}
+EFI_STATUS GuBootWatchdogCancel(void) {cancels++;return watchdog_status;}
+int GuBootLogOpen(void) {return log_open;}
+EFI_STATUS GuBootClose(void) {closes++;return close_status;}
+EFI_STATUS GuInstallDriverOption(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
+  (void)image;(void)t;installs++;return operation_status;
+}
+EFI_STATUS GuRemoveDriverOption(EFI_SYSTEM_TABLE *t) {(void)t;removes++;return operation_status;}
+const char *DxeInstallReason(EFI_STATUS status) {(void)status;return "mock";}
+EFI_STATUS Stall(unsigned us) {(void)us;return EFI_SUCCESS;}
+void ResetSystem(int type,EFI_STATUS status,unsigned size,void *data) {
+  (void)type;(void)status;(void)size;(void)data;resets++;
+}
+static BOOT boot={Stall};
+static RUNTIME rt={ResetSystem};
+static EFI_SYSTEM_TABLE table={&boot,&rt};
+""" + APP[guard_start:guard_end] + APP[helper_start:helper_end] + r"""
+static int Run(void) {
+  GU_PLATFORM *owner=&platform;
+  EFI_SYSTEM_TABLE *t=&table;
+  EFI_HANDLE image=&table;
+  CHAR16 choice=L'S';
+  EFI_STATUS s=EFI_SUCCESS;
+  const char *stage="stage-windows-image";
+""" + APP[dispatch_start:dispatch_end] + r"""
+  /* Observe the existing U/P/S dispatch, not the transaction itself. */
+  return unlock?(enable_s3?101:100):102;
+failed:
+  return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+}
+static void Reset(CHAR16 key) {
+  GuPlatformActive=&platform;platform.fault=0;menu_key=key;
+  menus=installs=removes=resets=closes=halts=cancels=0;
+  log_open=1;watchdog_status=operation_status=close_status=EFI_SUCCESS;
+}
+#define CHECK(c) do {if(!(c))return __LINE__;} while(0)
+int main(void) {
+#ifdef GU_APP_OPERATION
+  CHAR16 key=(CHAR16)GU_APP_OPERATION;
+  Reset(L'S');
+  int result=Run();
+  CHECK(menus==0);
+  if(key==L'U'||key==L'P') {
+    CHECK(result==(key==L'P'?101:100));
+    CHECK(installs==0&&removes==0&&resets==0&&closes==0&&halts==0&&cancels==0);
+  } else {
+    CHECK(result==EFI_SUCCESS&&installs==(key==L'I')&&removes==(key==L'R'));
+    CHECK(resets==0&&closes==1&&halts==1&&cancels==1);
+    Reset(L'S');watchdog_status=EFI_DEVICE_ERROR;
+    CHECK(Run()==EFI_DEVICE_ERROR&&installs==0&&removes==0&&resets==0);
+    Reset(L'S');log_open=0;
+    CHECK(Run()==EFI_DEVICE_ERROR&&installs==0&&removes==0&&resets==0);
+    Reset(L'S');operation_status=EFI_NOT_FOUND;
+    CHECK(Run()==EFI_NOT_FOUND&&halts==1&&closes==1&&resets==0);
+    Reset(L'S');close_status=EFI_DEVICE_ERROR;
+    CHECK(Run()==EFI_DEVICE_ERROR&&halts==1&&closes==1&&resets==0);
+  }
+  Reset(L'S');GuPlatformActive=&peer;
+  CHECK(Run()==EFI_NOT_READY&&menus==0&&installs==0&&removes==0&&resets==0);
+  Reset(L'S');platform.fault=1;
+  CHECK(Run()==EFI_NOT_READY&&menus==0&&installs==0&&removes==0&&resets==0);
+#else
+  Reset(L'U');CHECK(Run()==100&&menus==1&&installs==0&&removes==0);
+  Reset(L'P');CHECK(Run()==101&&menus==1&&installs==0&&removes==0);
+  Reset(L'S');CHECK(Run()==102&&menus==1&&installs==0&&removes==0);
+  Reset(L'I');CHECK(Run()==EFI_SUCCESS&&menus==1&&installs==1&&removes==0&&resets==1);
+  Reset(L'R');CHECK(Run()==EFI_SUCCESS&&menus==1&&installs==0&&removes==1&&resets==1);
+#endif
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            code = Path(directory) / "operations.c"
+            code.write_text(source, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                cc = shutil.which(compiler)
+                if not cc:
+                    self.skipTest("Host compilers are required")
+                binary = Path(directory) / compiler
+                for key in (None, "U", "P", "I", "R"):
+                    with self.subTest(compiler=compiler, operation=key):
+                        flags = [] if key is None else [
+                            "-DGU_ACTIVE_UNVERIFIED_ACTUATION=1", f"-DGU_APP_OPERATION={ord(key)}"]
+                        built = subprocess.run([cc, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                                                "-pedantic", *flags, str(code), "-o", str(binary)],
+                                               capture_output=True, text=True)
+                        self.assertEqual(built.returncode, 0, built.stderr)
+                        run = subprocess.run([str(binary)], capture_output=True, text=True)
+                        self.assertEqual(run.returncode, 0, run.stderr)
+
+
 class Maintenance(unittest.TestCase):
     def test_independent_image_requires_review_and_confirmation(self):
         source = (SRC / "boot_state_maintenance.c").read_text(encoding="utf-8")

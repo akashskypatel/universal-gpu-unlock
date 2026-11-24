@@ -479,7 +479,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   /* Which key was pressed is the difference between a transaction and a stock
    * boot, and until now it appeared in no log at all. */
-  GuTraceDetail("manual-choice","KEY=%c TRANSACTION=%u S3_SCRIPT=%u",(char)choice,
+  GuTraceDetail(stage,"KEY=%c TRANSACTION=%u S3_SCRIPT=%u",(char)choice,
                 (unsigned)(choice == L'U' || choice == L'P'),
                 (unsigned)(choice == L'P'));
   BOOLEAN unlock = (choice == L'U' || choice == L'P');
