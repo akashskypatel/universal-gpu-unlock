@@ -284,6 +284,18 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("GU_UNVERIFIED_BENCH_CONDITIONS", self.port.split("#ifdef GU_FIRMWARE_REATTACH", 1)[1])
         self.assertIn("FUNCTIONAL_PERSISTENCE=PENDING_WINDOWS", core)
 
+    def test_combined_containment_does_not_use_the_stopped_console(self):
+        failed = self.app.rsplit("failed:", 1)[1]
+        combined = failed.split("#ifdef GU_FIRMWARE_REATTACH", 1)[1].split("#else", 1)[0]
+        self.assertIn("if(GuExecutionNeedsContainment())GuBootSilence();", combined)
+        self.assertIn("else GuBootUnsilence();", combined)
+        self.assertIn("GuBootWatchdogCancel()", failed)
+        self.assertIn("FIRMWARE_REATTACH_CONTAINMENT=HALT NEXT_GPU=BLOCKED AUTO_WARM_RESET=0", failed)
+        halt = self.boot.split("VOID GuBootHalt(VOID)", 1)[1].split("/* ----", 1)[0]
+        say = self.boot.split("VOID GuBootSay(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("GuBootSay(", halt)
+        self.assertIn("!Silent&&Table&&Table->ConOut", say)
+
     def test_combined_reconnect_and_completion_require_independent_proofs(self):
         prepare = self.release.split("static EFI_STATUS PrepareReconnect(VOID)", 1)[1].split("#ifdef GU_FIRMWARE_REATTACH\n#define GU_REATTACH_TRANSACTION_LOG", 1)[0]
         completion = self.release.split("BOOLEAN GuMsiCompletedPlatform(", 1)[1].split("/* Check the live graph", 1)[0]

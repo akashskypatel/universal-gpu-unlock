@@ -585,7 +585,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
 failed:
 
+#ifdef GU_FIRMWARE_REATTACH
+  /* GuBootHalt calls GuBootSay. Do not re-enable a potentially stopped
+   * firmware console on any contained combined failure. */
+  if(GuExecutionNeedsContainment())GuBootSilence();
+  else GuBootUnsilence();
+#else
   GuBootUnsilence();
+#endif
   if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
 
   GuLog("STOP: stage=%s status=%#llx mutated=%u retained=%u fault=%u\n",stage,(unsigned long long)s,GuMsiMutated(),Gu.retained,Gu.fault);
@@ -598,6 +605,11 @@ failed:
     /* Fault-independent containment, no freeing of unverified live mappings. */
 
     if((Gu.started&&Gu.owned)||Gu.master_attributes_pending)(VOID)GuClearMaster(&Gu);
+#ifdef GU_FIRMWARE_REATTACH
+    EFI_STATUS cancel_status=GuBootWatchdogCancel();
+    GuLog("FIRMWARE_REATTACH_CONTAINMENT=HALT NEXT_GPU=BLOCKED AUTO_WARM_RESET=0 WATCHDOG_CANCEL=%#llx\n",
+          (unsigned long long)cancel_status);
+#endif
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
     if(GuStopReleaseReattachFailed()) {
       /* The application has already stopped the sequence. Never use
