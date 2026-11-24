@@ -1666,6 +1666,68 @@ static int PathCopy(const EFI_DEVICE_PATH_PROTOCOL *source, GU_TOPO_PATH *out) {
   return 0;
 }
 
+#ifdef GU_TOPO_SAVE_LOG
+/* Supplemental raw boot-variable evidence. Keep this separate from the
+ * topology verdict and never link the variable mutation modules here. */
+static EFI_STATUS ObserveBootVariable(EFI_SYSTEM_TABLE *table,CHAR16 *name,
+                                      EFI_GUID *guid,const char *label,
+                                      UINT8 *data,UINTN capacity,UINTN *size) {
+  UINT32 attrs=0;
+  *size=capacity;
+  EFI_STATUS status=table->RuntimeServices&&table->RuntimeServices->GetVariable?
+      table->RuntimeServices->GetVariable(name,guid,&attrs,size,data):EFI_UNSUPPORTED;
+  Say("BOOT_VARIABLE NAME=%s STATUS=%#llx BYTES=%zu ATTRS=%#x READ_ONLY=1\r\n",
+      label,(unsigned long long)status,(size_t)*size,(unsigned)attrs);
+  if(status!=EFI_SUCCESS)return status;
+  if(*size>capacity)return EFI_COMPROMISED_DATA;
+  static const char digits[]="0123456789abcdef";
+  for(UINTN at=0;at<*size;) {
+    char hex[97];
+    UINTN count=*size-at;
+    if(count>48U)count=48U;
+    for(UINTN i=0;i<count;i++) {
+      hex[2*i]=digits[data[at+i]>>4];
+      hex[2*i+1]=digits[data[at+i]&15U];
+    }
+    hex[2*count]=0;
+    Say("BOOT_VARIABLE_DATA NAME=%s OFFSET=%zu HEX=%s\r\n",label,(size_t)at,hex);
+    at+=count;
+  }
+  return EFI_SUCCESS;
+}
+
+static void ReportExperimentBootVariables(EFI_SYSTEM_TABLE *table) {
+  /* Same variable identities as gpu_selection.c and boot_state.c.
+   * Report bytes, not a second implementation of their admission parsers. */
+  EFI_GUID targets={0x5c1f2b40,0x8e21,0x4ef7,{0x9d,0x2b,0x7a,0x11,0x3c,0x5e,0x84,0x02}};
+  EFI_GUID state={0x2a7d54c1,0x5b3e,0x4a19,{0x8f,0x60,0x9d,0x21,0xc4,0xb7,0xe8,0x03}};
+  UINT8 data[4096],order[256];
+  UINTN bytes=0,order_bytes=0;
+  int complete=1;
+  EFI_STATUS s=ObserveBootVariable(table,L"GuTargets",&targets,"GuTargets",data,sizeof(data),&bytes);
+  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND)complete=0;
+  s=ObserveBootVariable(table,L"GuBootState",&state,"GuBootState",data,sizeof(data),&bytes);
+  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND)complete=0;
+  s=ObserveBootVariable(table,L"DriverOrder",&GlobalGuid,"DriverOrder",order,sizeof(order),&order_bytes);
+  if(s==EFI_SUCCESS&&!(order_bytes%2U)&&order_bytes<=sizeof(order)) {
+    static const char digits[]="0123456789ABCDEF";
+    for(UINTN at=0;at<order_bytes;at+=2U) {
+      UINTN slot=(UINTN)order[at]|((UINTN)order[at+1U]<<8);
+      CHAR16 name[]=L"Driver0000";
+      char label[]="Driver0000";
+      for(UINTN i=0;i<4U;i++) {
+        char digit=digits[(slot>>(4U*i))&15U];
+        name[9U-i]=(CHAR16)digit;label[9U-i]=digit;
+      }
+      s=ObserveBootVariable(table,name,&GlobalGuid,label,data,1024U,&bytes);
+      if(s!=EFI_SUCCESS)complete=0;
+    }
+  } else if(s!=EFI_NOT_FOUND)complete=0;
+  Say("EXPERIMENT_BOOT_VARIABLES_CAPTURE=%s OBSERVATION_ONLY=1 NVRAM_WRITES=0\r\n",
+      complete?"COMPLETE":"INCOMPLETE");
+}
+#endif
+
 /* Configured ConOut and ErrOut are separate UEFI variables. Neither is
  * interchangeable with their *Dev inventories of possible output devices. */
 static int ReadConfiguredConsole(EFI_SYSTEM_TABLE *table, const CHAR16 *name,
@@ -3012,6 +3074,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #endif
   Say("GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls\r\n");
   Say("READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n");
+#ifdef GU_TOPO_SAVE_LOG
+  ReportExperimentBootVariables(table);
+#endif
   pci_ok=CapturePci(bs);
   if(!pci_ok)ReportPciEvidence(bs);
 #ifdef GU_MSI_B850_ROM_VARIABLES

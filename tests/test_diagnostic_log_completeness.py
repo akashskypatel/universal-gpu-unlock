@@ -172,5 +172,105 @@ class DiagnosticLogCompletenessTests(unittest.TestCase):
                 self._run(compiler, False)
 
 
+    def test_read_only_experiment_boot_variable_capture(self):
+        start = SOURCE.index("static EFI_STATUS ObserveBootVariable(")
+        end = SOURCE.index("#endif", start)
+        actual = SOURCE[start:end]
+        main = SOURCE.split("EFI_STATUS EFIAPI UefiMain(", 1)[1]
+        self.assertIn("ReportExperimentBootVariables(table);", main)
+        mock = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+typedef uint16_t CHAR16;
+typedef uint8_t UINT8;
+typedef uint32_t UINT32;
+typedef size_t UINTN;
+typedef uint64_t EFI_STATUS;
+typedef struct { UINT32 a; uint16_t b,c; UINT8 d[8]; } EFI_GUID;
+#define EFI_SUCCESS 0
+#define EFI_NOT_FOUND 14
+#define EFI_BUFFER_TOO_SMALL 5
+#define EFI_UNSUPPORTED 3
+#define EFI_COMPROMISED_DATA 33
+typedef struct {
+  EFI_STATUS (*GetVariable)(CHAR16 *,EFI_GUID *,UINT32 *,UINTN *,UINT8 *);
+} RT;
+typedef struct { RT *RuntimeServices; } EFI_SYSTEM_TABLE;
+static EFI_GUID GlobalGuid={0x8be4df61,0x93ca,0x11d2,{0xaa,0x0d,0,0xe0,0x98,0x03,0x2b,0x8c}};
+static char logtext[8192];
+static size_t used;
+static void Say(const char *fmt,...) {
+  va_list ap;va_start(ap,fmt);
+  int n=vsnprintf(logtext+used,sizeof(logtext)-used,fmt,ap);
+  va_end(ap);
+  if(n>0&&(size_t)n<sizeof(logtext)-used)used+=(size_t)n;
+}
+static int equal(const CHAR16 *name,const char *s) {
+  while(*name&&*s&&*name==(unsigned char)*s){name++;s++;}
+  return !*name&&!*s;
+}
+static int mode,calls,wrong;
+static EFI_STATUS Get(CHAR16 *name,EFI_GUID *guid,UINT32 *attrs,UINTN *size,UINT8 *data) {
+  const UINT8 target[]="0000:01:00.0";
+  const UINT8 state[]={0x47,0x55,0x42,0x31};
+  const UINT8 order[]={0x34,0x12};
+  const UINT8 option[]={1,0,0,0,0,0,0,0};
+  const UINT8 *value=NULL;UINTN n=0;UINT32 expected=0;
+  calls++;*attrs=7;
+  if(equal(name,"GuTargets")){value=target;n=sizeof(target)-1;expected=0x5c1f2b40;}
+  else if(equal(name,"GuBootState")){value=state;n=sizeof(state);expected=0x2a7d54c1;}
+  else if(equal(name,"DriverOrder")){value=order;n=mode==2?1:sizeof(order);expected=GlobalGuid.a;}
+  else if(equal(name,"Driver1234")){value=option;n=sizeof(option);expected=GlobalGuid.a;}
+  else {wrong=1;return EFI_UNSUPPORTED;}
+  if(guid->a!=expected){wrong=1;return EFI_UNSUPPORTED;}
+  if(mode==1||(mode==3&&equal(name,"Driver1234")))return EFI_NOT_FOUND;
+  if(mode==4&&equal(name,"GuTargets")){*size=4097;return EFI_BUFFER_TOO_SMALL;}
+  if(*size<n){wrong=1;return EFI_BUFFER_TOO_SMALL;}
+  memcpy(data,value,n);*size=n;return EFI_SUCCESS;
+}
+""" + actual + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d mode=%d: %s\n",__LINE__,mode,#x);return 1;}}while(0)
+int main(void) {
+  RT rt={Get};EFI_SYSTEM_TABLE table={&rt};
+  for(mode=0;mode<5;mode++) {
+    used=0;logtext[0]=0;calls=wrong=0;
+    ReportExperimentBootVariables(&table);
+    CHECK(!wrong);
+    CHECK(strstr(logtext,"NAME=GuTargets STATUS="));
+    CHECK(strstr(logtext,"NAME=GuBootState STATUS="));
+    CHECK(strstr(logtext,"NAME=DriverOrder STATUS="));
+    CHECK(calls==((mode==1||mode==2)?3:4));
+    CHECK((strstr(logtext,"CAPTURE=COMPLETE")!=NULL)==(mode<2));
+    CHECK((strstr(logtext,"CAPTURE=INCOMPLETE")!=NULL)==(mode>=2));
+    if(mode==0) {
+      CHECK(strstr(logtext,"NAME=GuTargets OFFSET=0 HEX=303030303a30313a30302e30"));
+      CHECK(strstr(logtext,"NAME=DriverOrder OFFSET=0 HEX=3412"));
+      CHECK(strstr(logtext,"NAME=Driver1234 OFFSET=0 HEX=0100000000000000"));
+    }
+    if(mode==1||mode==2)CHECK(!strstr(logtext,"NAME=Driver1234"));
+    if(mode==3)CHECK(!strstr(logtext,"NAME=Driver1234 OFFSET="));
+    if(mode==4)CHECK(!strstr(logtext,"NAME=GuTargets OFFSET="));
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "boot_variables.c"
+            src.write_text(mock, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(tmp) / compiler
+                    built = subprocess.run([compiler, "-std=c11", "-fshort-wchar",
+                                            "-O2", "-Wall", "-Wextra", "-Werror",
+                                            "-pedantic", str(src), "-o", str(binary)],
+                                           capture_output=True, text=True)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    ran = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
