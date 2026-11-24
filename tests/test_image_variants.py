@@ -736,6 +736,109 @@ class TheDocumentIsRendered(unittest.TestCase):
         self.assertIn("DONOR_HARDWARE_SESSION.md", DOC)
 
 
+class CanonicalProfileResolution(unittest.TestCase):
+    """Exercise the actual wrapper without compiling, signing or touching USB."""
+    @classmethod
+    def setUpClass(cls):
+        import shutil
+        cls.shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not cls.shell:
+            raise unittest.SkipTest("PowerShell unavailable; profile resolution was not executed")
+
+    def resolve(self, args, valid=True):
+        import subprocess
+        # The command is composed only from fixed test arguments. -Command is
+        # needed for explicit false switch values in Windows PowerShell 5.1.
+        command = "& '" + str(SCRIPT_PATH).replace("'", "''") + "' -ResolveOnly " + " ".join(args)
+        result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                                text=True, capture_output=True, timeout=30)
+        if not valid:
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertNotIn('"VariantId"', result.stdout)
+            return None
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return json.loads(result.stdout.strip())
+
+    def test_canonical_configs_preserve_legacy_builder_contracts(self):
+        one = ["-SelectionBdf", "'0000:01:00.0'"]
+        two = ["-SelectionBdfs", "'0000:01:00.0,0000:04:00.0'"]
+        esp = ["-WindowsEspGuid", "'a005858c-4487-4ee2-976e-1710ff484c31'"]
+        cases = [
+            ("diag-topology", ["diagnostic", "-SaveLog:$false"], []),
+            ("diag-topology-log", ["diagnostic"], []),
+            ("diag-topology-gop-text-cycle", ["diagnostic", "-Probe", "GopTextCycle"], []),
+            ("diag-topology-handoff", ["diagnostic"], esp),
+            ("diag-selection", ["diagnostic"], one),
+            ("compile-one-target", ["compile-check"], one),
+            ("compile-sequence", ["compile-check"], two),
+            ("dxe-compile-one-target", ["compile-check", "-ImageKind", "Dxe"], one),
+            ("dxe-compile-sequence", ["compile-check", "-ImageKind", "Dxe"], two),
+            ("app-stop-release-sequence-bench", ["driver-transition", "-Operation", "StopReattach"], []),
+            ("app-stop-release-sequence-bench", ["driver-transition", "-Operation", "StopReattach"], two),
+            ("app-stop-release-sequence-handoff", ["driver-transition", "-Operation", "StopReattach", "-Handoff", "WindowsAfterSuccess"], []),
+            ("dxe-stop-release-sequence-bench", ["driver-transition", "-Operation", "StopReattach", "-ImageKind", "Dxe"], []),
+            ("dxe-stop-release-sequence-bench", ["driver-transition", "-Operation", "StopReattach", "-ImageKind", "Dxe"], two),
+            ("actuate-one-target", ["firmware-transaction", "-Operation", "Menu"], one),
+            ("actuate-sequence", ["firmware-transaction", "-Operation", "Menu"], two),
+            ("actuate-one-target-resident", ["firmware-transaction", "-Operation", "Menu", "-EspPolicy", "Resident"], one),
+            ("actuate-runtime-selection", ["firmware-transaction", "-Operation", "Menu"], []),
+            ("actuate-runtime-selection-resident", ["firmware-transaction", "-Operation", "Menu", "-EspPolicy", "Resident"], []),
+            ("dxe-actuate-one-target", ["firmware-transaction", "-Operation", "DxeTransaction", "-ImageKind", "Dxe"], one),
+            ("dxe-actuate-sequence", ["firmware-transaction", "-Operation", "DxeTransaction", "-ImageKind", "Dxe"], two),
+            ("dxe-actuate-runtime-selection", ["firmware-transaction", "-Operation", "DxeTransaction", "-ImageKind", "Dxe"], []),
+            ("app-firmware-reattach", ["firmware-transaction", "-Operation", "UnlockReattach"], []),
+            ("app-firmware-reattach", ["firmware-transaction", "-Operation", "UnlockReattach"], esp),
+            ("app-unlock", ["firmware-transaction", "-Operation", "Unlock"], []),
+            ("app-unlock-with-resume", ["firmware-transaction", "-Operation", "UnlockWithResume"], []),
+            ("app-install-driver", ["maintenance", "-Operation", "InstallDriver"], []),
+            ("app-remove-driver", ["maintenance", "-Operation", "RemoveDriver"], []),
+            ("boot-state-maintenance", ["maintenance", "-Operation", "ReviewBootState"], []),
+            ("stop-dual-handoff", ["driver-transition", "-Operation", "LegacyStopObservation", "-LegacyTarget", "BothNvidia"], esp),
+        ]
+        for suffix, probe in (("msi-rom", "MsiRom"), ("msi-fuse", "MsiFuse"),
+                              ("msi-sec2", "MsiSec2"), ("vram-blocks", "VramBlocks")):
+            cases.append(("diag-" + suffix, ["diagnostic", "-Probe", probe], []))
+            cases.append(("diag-" + suffix + "-handoff", ["diagnostic", "-Probe", probe], esp))
+        for card in ("4090", "3080"):
+            opts = ["driver-transition", "-Operation", "LegacyStopObservation", "-LegacyTarget", "RTX" + card]
+            cases.append(("stop-" + card + "-once", opts, []))
+            cases.append(("stop-" + card + "-handoff", opts, esp))
+        self.assertEqual({alias for alias, _, _ in cases},
+                         {v["id"] for v in MANIFEST["variants"]} - {"prep-selected", "dxe-prep-selected"})
+        for alias, canonical, extra in cases:
+            with self.subTest(alias=alias, canonical=canonical, extra=extra):
+                old = self.resolve(["-Only", alias] + extra)
+                new = self.resolve(["-Only"] + canonical + extra)
+                self.assertEqual(new.pop("CanonicalProfile"), canonical[0])
+                self.assertIsNone(old.pop("CanonicalProfile"))
+                self.assertEqual(new, old)
+                self.assertEqual(new["VariantId"], alias)
+
+    def test_invalid_combinations_refuse_resolution(self):
+        one = ["-SelectionBdf", "'0000:01:00.0'"]
+        esp = ["-WindowsEspGuid", "'a005858c-4487-4ee2-976e-1710ff484c31'"]
+        cases = [
+            ["-Only", "diagnostic", "-Probe", "GopTextCycle"] + esp,
+            ["-Only", "diagnostic", "-Probe", "MsiRom"] + one,
+            ["-Only", "diagnostic", "-SaveLog:$false"] + one,
+            ["-Only", "diagnostic", "-Operation", "Unlock"],
+            ["-Only", "compile-check"],
+            ["-Only", "compile-check"] + one + esp,
+            ["-Only", "driver-transition"],
+            ["-Only", "driver-transition", "-Operation", "StopReattach", "-Handoff", "WindowsAfterSuccess"] + one,
+            ["-Only", "driver-transition", "-Operation", "LegacyStopObservation", "-LegacyTarget", "BothNvidia"],
+            ["-Only", "firmware-transaction"],
+            ["-Only", "firmware-transaction", "-Operation", "UnlockReattach", "-EspPolicy", "Pinned"],
+            ["-Only", "firmware-transaction", "-Operation", "UnlockWithResume"] + esp,
+            ["-Only", "maintenance", "-Operation", "ReviewBootState"] + one,
+            ["-Only", "maintenance", "-Operation", "ReviewBootState", "-StageDrive", "G"],
+            ["-Only", "diag-topology", "-Probe", "Topology"],
+        ]
+        for args in cases:
+            with self.subTest(args=args):
+                self.resolve(args, valid=False)
+
+
 if __name__ == "__main__":
     unittest.main()
 
