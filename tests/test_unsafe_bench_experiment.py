@@ -46,7 +46,7 @@ class UnsafeBenchVariantContract(unittest.TestCase):
 
     def test_only_aspm_admission_is_waived_in_the_named_experiment(self):
         accepted = self.checks.split("BOOLEAN GuLinkAccepted(", 1)[1].split("const char *GuLinkReason", 1)[0]
-        self.assertIn("#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_STOP_RELEASE_ONLY_BENCH)", accepted)
+        self.assertIn("#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)", accepted)
         self.assertIn("Verdict == GU_LINK_OK || Verdict == GU_LINK_ASPM_ENABLED", accepted)
         self.assertIn("return Verdict == GU_LINK_OK;", accepted)
         self.assertIn("if ((Link.errors & 0x06U) != 0) return GU_LINK_ERROR_LOGGED;", self.checks)

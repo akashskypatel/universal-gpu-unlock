@@ -169,7 +169,7 @@ int main(void) {
   Card(c, 0x50, card);
   EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_ASPM_ENABLED);
   EXPECT(link.aspm == 3 && link.errors == 0);
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_FIRMWARE_REATTACH)
   EXPECT(GuLinkAccepted(GU_LINK_ASPM_ENABLED));
 #else
   EXPECT(!GuLinkAccepted(GU_LINK_ASPM_ENABLED));
@@ -283,7 +283,7 @@ int main(void) {
                                    GU_LINK_DOWN, GU_LINK_UNUSABLE};
     for (UINTN i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
       EXPECT(GuLinkReason(all[i]) != NULL && GuLinkReason(all[i])[0]);
-#ifdef GU_UNVERIFIED_BENCH_CONDITIONS
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_FIRMWARE_REATTACH)
       EXPECT(GuLinkAccepted(all[i]) == (all[i] == GU_LINK_OK || all[i] == GU_LINK_ASPM_ENABLED));
 #else
       EXPECT(GuLinkAccepted(all[i]) == (all[i] == GU_LINK_OK));
@@ -388,14 +388,39 @@ class PciLinkState(unittest.TestCase):
             self.assertEqual(executed.returncode, 0, executed.stderr[-3000:])
             self.assertRegex(executed.stdout, r"STATUS=COMPLETE PASS=\d+ PCI_LINK_STATE_CASES")
 
+    def test_combined_override_admits_aspm_only(self):
+        compiler = os.environ.get("CC", "gcc")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "link.c"
+            binary = Path(directory) / "link"
+            source.write_text(harness(), encoding="utf-8")
+            built = subprocess.run(
+                [compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                 "-DGU_FIRMWARE_REATTACH", "-I", str(ROOT / "src"),
+                 str(source), "-o", str(binary)],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            self.assertEqual(built.returncode, 0, built.stderr[-3000:])
+            executed = subprocess.run([str(binary)], capture_output=True, text=True,
+                                      timeout=30, check=False)
+            self.assertEqual(executed.returncode, 0, executed.stderr[-3000:])
+            self.assertRegex(executed.stdout, r"STATUS=COMPLETE PASS=\d+ PCI_LINK_STATE_CASES")
+
     def test_the_active_path_observes_and_refuses(self):
         discovery = (ROOT / "src" / "gpu_discovery.c").read_text(encoding="utf-8")
-        self.assertIn("GuCheckLinkState(config,caps.pcie,&link)", discovery)
+        self.assertIn("GuCheckLinkState(config,caps->pcie,&link)", discovery)
         self.assertIn("PCI_LINK=%s WIDTH=%u", discovery)
         self.assertIn("REASON=PCIE_LINK LINK_REASON=%s", discovery)
         # The observation must sit after the admission gate it complements.
         self.assertLess(discovery.index("GuCheckConfigInitialMaster(config,selected.segment"),
-                        discovery.index("GuCheckLinkState(config,caps.pcie"))
+                        discovery.index("CheckSelectedLink(config,&caps,&selected)"))
+        successor = discovery.split("EFI_STATUS GuSelectNextGpu(", 1)[1]
+        self.assertLess(successor.index("GuCheckConfigInitialMaster("),
+                        successor.index("CheckSelectedLink(config,&caps,selected)"))
+        self.assertLess(successor.index("CheckSelectedLink(config,&caps,selected)"),
+                        successor.index("GuAllocatePlatform("))
+        self.assertIn("if(s!=EFI_SUCCESS){GuAbortSelectedGpuStep();return s;}", successor)
+        self.assertIn("if(!GuLinkAccepted(verdict))", discovery)
         # A refusal here must not claim retention: nothing was mutated.
         tail = discovery[discovery.index("REASON=PCIE_LINK LINK_REASON=%s"):
                          discovery.index("REASON=PCIE_LINK LINK_REASON=%s") + 400]

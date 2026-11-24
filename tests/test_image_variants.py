@@ -236,7 +236,7 @@ class TheCatalogueMatchesTheBuilders(unittest.TestCase):
         self.assertEqual(v["switches"]["ApplicationOperation"], "Unlock")
         self.assertNotIn("StopReleaseOnlyBench", v["switches"])
         self.assertNotIn("EspResident", v["switches"])
-        self.assertIn("ASPM_ADMISSION_BYPASSED=0", v["attestations"])
+        self.assertIn("ASPM_ADMISSION_BYPASSED=1", v["attestations"])
 
     def test_every_attestation_names_a_field_the_builder_prints(self):
         for variant in MANIFEST["variants"]:
@@ -277,7 +277,7 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "SINGLE_TARGET_ACTIVE": int((synthetic or accept) and (runtime or count == 1)),
             "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
             "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench or combined),
-            "ASPM_ADMISSION_BYPASSED": unsafe_bench,
+            "ASPM_ADMISSION_BYPASSED": int(unsafe_bench or combined),
             "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": 1 if combined else "CONDITIONAL" if unsafe_bench else 0,
             "FILE_ONLY_OUTPUT": unsafe_bench,
             "STOP_RELEASE_ONLY": unsafe_bench,

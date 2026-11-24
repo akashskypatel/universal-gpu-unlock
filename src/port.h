@@ -117,7 +117,7 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #error Firmware reattachment requires the explicitly waived runtime application
 #endif
 #if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_ESP_RESIDENT) || GU_APP_OPERATION != 85
-#error Firmware reattachment cannot waive link checks, install a driver or register resume writes
+#error Firmware reattachment cannot use the broad bench override, install a driver or register resume writes
 #endif
 #endif
 

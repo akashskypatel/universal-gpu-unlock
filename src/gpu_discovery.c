@@ -675,6 +675,39 @@ static EFI_STATUS ReadBarWindow(EFI_PCI_IO_PROTOCOL *pci,UINT64 *Base,UINT64 *Si
   return EFI_SUCCESS;
 }
 
+/* The same admission and observations apply before binding every selected GPU. */
+static EFI_STATUS CheckSelectedLink(const UINT32 config[64],const GU_CAPS *caps,
+                                    const GU_GPU_RECORD *selected) {
+  GU_LINK link = {0};   /* a log that never reached the check prints zeros, not stack */
+  GU_LINK_VERDICT verdict=GuCheckLinkState(config,caps->pcie,&link);
+  GuLog("PCI_LINK=%s WIDTH=%u MAX_WIDTH=%u SPEED=%u MAX_SPEED=%u ASPM=%u "
+        "TRAINED=%u UP=%u ERRORS=%u ERROR_CE=%u ERROR_NONFATAL=%u ERROR_FATAL=%u "
+        "ERROR_UR=%u OK_ERRORS=%u OK_ASPM=%u OK_TRAINED=%u OK_LINK=%u UP_WEIGHED=0 "
+        "HOTPLUG=%u SURPRISE=%u AER=UNOBSERVED "
+        "UNHANDLED=HOTPLUG,AER BDF=%04x:%02x:%02x.%x\n",
+        GuLinkReason(verdict),(unsigned)link.width,(unsigned)link.max_width,
+        (unsigned)link.speed,(unsigned)link.max_speed,(unsigned)link.aspm,
+        (unsigned)link.trained,(unsigned)link.up,(unsigned)link.errors,
+        (unsigned)(link.errors&1U),(unsigned)((link.errors>>1U)&1U),
+        (unsigned)((link.errors>>2U)&1U),(unsigned)((link.errors>>3U)&1U),
+        (unsigned)((link.errors&0x06U)==0),(unsigned)(link.aspm==0),
+        (unsigned)(link.trained!=0),
+        (unsigned)(link.width!=0&&link.speed!=0&&link.speed!=0x0fU),
+        (unsigned)link.hotplug,(unsigned)link.surprise,
+        (unsigned)selected->segment,(unsigned)selected->bus,
+        (unsigned)selected->device,(unsigned)selected->function);
+  if(!GuLinkAccepted(verdict)){
+    GuLog("ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=%s BDF=%04x:%02x:%02x.%x\n",
+          GuLinkReason(verdict),(unsigned)selected->segment,(unsigned)selected->bus,
+          (unsigned)selected->device,(unsigned)selected->function);
+    return EFI_UNSUPPORTED;
+  }
+  GuLog("PCIE_LINK_ADMISSION=ALLOW ASPM_EXCEPTION=%u BDF=%04x:%02x:%02x.%x\n",
+        (unsigned)(verdict==GU_LINK_ASPM_ENABLED),(unsigned)selected->segment,
+        (unsigned)selected->bus,(unsigned)selected->device,(unsigned)selected->function);
+  return EFI_SUCCESS;
+}
+
 /* Initialize the newly bound platform from the exact checked PCI snapshot.
  * Reuse this for the initial and every subsequent context. */
 static EFI_STATUS ConfigureBoundPlatform(EFI_HANDLE image,const GU_GPU_RECORD *selected,
@@ -894,6 +927,8 @@ EFI_STATUS GuSelectNextGpu(EFI_SYSTEM_TABLE *table) {
     GuAbortSelectedGpuStep();
     return EFI_UNSUPPORTED;
   }
+  s=CheckSelectedLink(config,&caps,selected);
+  if(s!=EFI_SUCCESS){GuAbortSelectedGpuStep();return s;}
   EFI_HANDLE image=Gu.image;
   EFI_BOOT_SERVICES *bs=table->BootServices;
   GU_PLATFORM *owner=NULL;
@@ -1255,42 +1290,8 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     s=EFI_UNSUPPORTED;goto done;
   }
 #endif
-  /* The capability chain says the card is a display function in a state this
-   * image may touch. It says nothing about the link the card sits on. Observe
-   * it once, name what it looks like, and refuse the states an unlock must not
-   * start on: an uncorrected PCIe error, an ASPM request this image does not
-   * manage, a link that is not trained or that negotiated no width or speed.
-   * Correctable errors, unsupported requests and DLLLA are recorded, not
-   * weighed, for the reasons GuCheckLinkState gives. AER lives in extended config space,
-   * which this snapshot does not reach, so it is named as unobserved. */
-  {
-    GU_LINK link = {0};   /* a log that never reached the check prints zeros, not stack */
-    GU_LINK_VERDICT verdict=GuCheckLinkState(config,caps.pcie,&link);
-    GuLog("PCI_LINK=%s WIDTH=%u MAX_WIDTH=%u SPEED=%u MAX_SPEED=%u ASPM=%u "
-          "TRAINED=%u UP=%u ERRORS=%u ERROR_CE=%u ERROR_NONFATAL=%u ERROR_FATAL=%u "
-          "ERROR_UR=%u OK_ERRORS=%u OK_ASPM=%u OK_TRAINED=%u OK_LINK=%u UP_WEIGHED=0 "
-          "HOTPLUG=%u SURPRISE=%u AER=UNOBSERVED "
-          "UNHANDLED=HOTPLUG,AER BDF=%04x:%02x:%02x.%x\n",
-          GuLinkReason(verdict),(unsigned)link.width,(unsigned)link.max_width,
-          (unsigned)link.speed,(unsigned)link.max_speed,(unsigned)link.aspm,
-          (unsigned)link.trained,(unsigned)link.up,(unsigned)link.errors,
-          (unsigned)(link.errors&1U),(unsigned)((link.errors>>1U)&1U),
-          (unsigned)((link.errors>>2U)&1U),(unsigned)((link.errors>>3U)&1U),
-          (unsigned)((link.errors&0x06U)==0),(unsigned)(link.aspm==0),
-          (unsigned)(link.trained!=0),
-          (unsigned)(link.width!=0&&link.speed!=0&&link.speed!=0x0fU),
-          (unsigned)link.hotplug,(unsigned)link.surprise,
-          (unsigned)selected.segment,(unsigned)selected.bus,
-          (unsigned)selected.device,(unsigned)selected.function);
-    if(!GuLinkAccepted(verdict)){
-      GuLog("ACTIVE_EXECUTION=REFUSED REASON=PCIE_LINK LINK_REASON=%s BDF=%04x:%02x:%02x.%x\n",
-            GuLinkReason(verdict),(unsigned)selected.segment,(unsigned)selected.bus,
-            (unsigned)selected.device,(unsigned)selected.function);
-      /* Nothing was mutated and nothing allocated, so nothing is retained:
-       * this refusal keeps the pre-mutation state the caller started in. */
-      s=EFI_UNSUPPORTED;goto done;
-    }
-  }
+  s=CheckSelectedLink(config,&caps,&selected);
+  if(s!=EFI_SUCCESS)goto done;
 #ifdef GU_ACTIVE_SINGLE_TARGET
   s=RefreshGpuRecords(table,&prepared,storage.live,storage.scanned,storage.capacity);
   size_t chosen=prepared.selected_indices[0];
