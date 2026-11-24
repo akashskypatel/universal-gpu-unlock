@@ -186,7 +186,13 @@ class UnsafeBenchVariantContract(unittest.TestCase):
         self.assertIn("Interface(chosen->handle,&GopGuid,(VOID **)&g)", warning)
         self.assertIn("g!=chosen->interface", warning)
         self.assertIn("EfiBltVideoFill", warning)
-        self.assertIn("EfiBltBufferToVideo", warning)
+        # The warning uses the shared glyph renderer for its text. Verify
+        # the call and the actual BLT operation, not its former inline location.
+        glyph_line = self.release.split("static EFI_STATUS BenchGopLine(", 1)[1].split(
+            "static char BenchHex", 1)[0]
+        self.assertIn("BenchGopLine(g,", warning)
+        self.assertIn("g->Blt(g,pixels,EfiBltBufferToVideo", glyph_line)
+        self.assertIn("if(s!=EFI_SUCCESS)return s;", glyph_line)
         self.assertIn("PHYSICAL_PIXELS_VERIFIED=0", warning)
         self.assertIn("GuVerifyActivePeers(Plan.table)", warning)
         self.assertIn("count>1U?", countdown)
