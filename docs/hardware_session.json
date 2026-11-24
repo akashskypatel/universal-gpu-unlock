@@ -655,6 +655,10 @@
         "why": "Bootable EFI application that selects supported NVIDIA GPUs dynamically by default, with optional fixed BDF selection. It performs driver Stop/release and reattachment only: no firmware asset files, PROM reads, or firmware unlock transaction. It returns to firmware without launching Windows. Display routing, recovery, reattachment, and hardware behavior are unverified."
       },
       {
+        "id": "app-stop-release-sequence-handoff",
+        "why": "This experiment stops and reconnects live GPU drivers. After verified reattachment, it can start Windows in the same boot. It is not read-only. Physical recovery and Windows driver behavior remain unverified."
+      },
+      {
         "id": "actuate-one-target-resident",
         "why": "writes the GPU from the ESP: `actuate` stage, and it is the only image that could observe B9's ESP-resident half."
       },

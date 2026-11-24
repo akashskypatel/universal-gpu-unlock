@@ -126,6 +126,7 @@ jobs:
             done
             python3 -m unittest discover -s tests -p test_stock_profile_contract.py -v
             python3 -m unittest discover -s tests -p test_watchdog_contract.py -v
+            python3 -m unittest discover -s tests -p test_unsafe_bench_experiment.py -v
             # Per-card firmware acceptance: an explicit allowlist, or nothing.
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_PROM_REFERENCE_HOST_TEST -DGU_PROM_REFERENCE_SYNTHETIC -Isrc tests/test_prom_reference.c src/prom_reference.c -o "$RUNNER_TEMP/test_prom_reference_ref_$compiler"
