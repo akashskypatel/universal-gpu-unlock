@@ -291,6 +291,12 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
    * it and reports why, which is the behaviour the refusal tests pin. */
   s=ResolveTargetsOnConsole(t);
   if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND) {stage="selection";GuTracePhase(stage);goto failed;}
+#ifdef GU_FIRMWARE_REATTACH
+  if(s==EFI_SUCCESS)
+    GuBootSay(L"\r\n[OK] Target selection accepted. Checking GPUs and loading firmware assets.\r\n"
+              L"USB reads may take several minutes. Do not restart or remove the USB.\r\n"
+              L"A separate warning will appear before each GPU driver release.\r\n");
+#endif
 #endif
   s=GuDiscoverSingleGpu(image,t);if(s!=EFI_SUCCESS)goto failed;
 #ifdef GU_ASSET_INSTALL_ONLY

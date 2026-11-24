@@ -297,11 +297,11 @@ VOID GuLogText(const char *text){GuLog("%s",text);}
  *
  * See port.h. Two properties matter more than the format:
  *
- * 1. The console mirror bypasses Silent. GuBootSilence() is deliberate for the
- *    transaction - it keeps the screen clean while the GPU is being driven - but
- *    a silent screen plus a log that stops mid-file is exactly the state RUN0011
- *    reported as a stall. Trace lines are the exception: they are short, they end
- *    in a newline, and they are what a person standing at the machine reads.
+ * 1. Legacy console traces bypass Silent. The combined firmware/reattach
+ *    application mirrors preparation progress only before GuBootSilence;
+ *    after that boundary its global console may be stale, so the existing
+ *    verified peer GOP notices and the file log remain authoritative.
+ *    File-only DXE images never mirror traces to the console.
  * 2. Nothing here can block or allocate. GetTime is used when the firmware offers
  *    it and the elapsed field reads NA when it does not, so a model world without
  *    a clock still traces.
@@ -347,10 +347,15 @@ static const char *TraceElapsedText(char *buffer,UINTN size) {
 }
 
 static VOID TraceSay(const char *text) {
-#if defined(GU_DXE_FILE_ONLY_OUTPUT) || defined(GU_FIRMWARE_REATTACH)
-  /* GuTracePhase/Detail/Progress also call GuLog, which writes the DXE file. */
+#ifdef GU_DXE_FILE_ONLY_OUTPUT
+  /* GuTracePhase/Detail/Progress also call GuLog, which writes the file. */
   (void)text;
 #else
+#ifdef GU_FIRMWARE_REATTACH
+  /* Preparation has not released any driver. Keep the global console
+   * silent from the existing actuation boundary through all successors. */
+  if(Silent)return;
+#endif
   CHAR16 wide[96];
   UINTN i=0;
   if(!Table||!Table->ConOut||!Table->ConOut->OutputString||!text)return;

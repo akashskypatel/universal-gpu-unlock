@@ -11,9 +11,9 @@ These tests pin the properties that make that impossible to reintroduce:
 
   * every stage string the application uses is also a trace line, emitted at the
     moment the stage is entered rather than after it returns;
-  * the trace line is flushed (through ``GuLog``) and mirrored to the console even
-    while the image is otherwise silent, because ``GuBootSilence`` is what left
-    the bench staring at a black screen;
+  * the trace line is flushed through GuLog. Legacy console traces bypass
+    silence; combined preparation traces stop at the actuation boundary;
+    file-only traces never call the global console;
   * the calls that can block -- config space, BAR0, the 1 MiB PROM copy, the
     vendor's delay loop -- name themselves first;
   * the vendor wait is rate-limited by accumulated delay, so tracing it cannot
@@ -27,6 +27,9 @@ simulator's own checks (``sim/sim_main.c``).
 
 import pathlib
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -55,13 +58,80 @@ class TheTraceNamesThePhaseBeforeItBlocks(unittest.TestCase):
         self.assertIn("Log->Write(Log,&bytes,buffer)", self.boot)
         self.assertIn("Log->Flush(Log)", self.boot)
 
-    def test_the_console_mirror_does_not_honour_silence(self):
-        body = self.boot.split("static VOID TraceSay(")[1].split("\nVOID GuTraceScreen")[0]
-        self.assertIn("Table->ConOut->OutputString", body)
-        # GuBootSay is the silenced path; the mirror must not go through it and
-        # must not consult Silent, or the screen stays black and the fix is gone.
-        self.assertNotIn("GuBootSay", body)
-        self.assertNotIn("Silent", body)
+    def test_console_mirror_respects_combined_actuation_boundary(self):
+        start = self.boot.index("static VOID TraceSay(")
+        body = self.boot[start:self.boot.index("\nVOID GuTraceScreen", start)]
+        app = read("app.c")
+        self.assertLess(app.index("[OK] Target selection accepted."),
+                        app.index("s=GuDiscoverSingleGpu(image,t)"))
+        self.assertLess(app.index("GuBootSilence();", app.index("Operator U/P")),
+                        app.index("s=GuExecutePreparedSequence("))
+        self.assertNotIn("GuBootUnsilence", read("unlock_execution.c"))
+        # Execute the actual output function for each profile. A file-only
+        # image must not print; combined must print before, never after silence.
+        harness = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <assert.h>
+typedef void VOID;
+typedef uint16_t CHAR16;
+typedef size_t UINTN;
+typedef struct OUT OUT;
+struct OUT { int (*OutputString)(OUT *,CHAR16 *); };
+typedef struct { OUT *ConOut; } SYS;
+static SYS *Table;
+static unsigned Silent;
+static unsigned calls;
+static int Output(OUT *out,CHAR16 *text) {
+    (void)out;assert(text[0]=='p');calls++;return 0;
+}
+""" + body + r"""
+int main(void) {
+    OUT out={Output};SYS table={&out};Table=&table;
+    Silent=0;TraceSay("preparation");
+#ifdef GU_DXE_FILE_ONLY_OUTPUT
+    assert(calls==0);
+#else
+    assert(calls==1);
+#endif
+    Silent=1;TraceSay("post-release");
+#if defined(GU_DXE_FILE_ONLY_OUTPUT)
+    assert(calls==0);
+#elif defined(GU_FIRMWARE_REATTACH)
+    assert(calls==1);
+#else
+    assert(calls==2);
+#endif
+    Table=NULL;TraceSay("preparation");
+    return 0;
+}
+"""
+        for compiler in ("gcc", "clang"):
+            if not shutil.which(compiler):
+                continue
+            for flags in ((), ("-DGU_FIRMWARE_REATTACH",),
+                          ("-DGU_DXE_FILE_ONLY_OUTPUT",)):
+                with self.subTest(compiler=compiler, flags=flags):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        src = pathlib.Path(tmp) / "trace.c"
+                        binary = pathlib.Path(tmp) / "trace"
+                        src.write_text(harness, encoding="utf-8")
+                        built = subprocess.run(
+                            [compiler, "-std=c11", "-Wall", "-Wextra", "-Werror",
+                             *flags, str(src), "-o", str(binary)],
+                            capture_output=True, text=True)
+                        self.assertEqual(built.returncode, 0, built.stderr)
+                        run = subprocess.run([str(binary)], capture_output=True, text=True)
+                        self.assertEqual(run.returncode, 0, run.stderr)
+
+    def test_combined_peer_completion_warns_about_next_preparation(self):
+        release = read("msi_release.c")
+        notice = release.split("static EFI_STATUS BenchShowReattachSuccess(VOID)", 1)[1].split(
+            "#define GuWarningGpuCount", 1)[0]
+        self.assertIn("NEXT STAGE MAY TAKE MINUTES", notice)
+        self.assertIn("Plan.reattach_verified", notice)
+        self.assertNotIn("->ConOut", notice)
 
     def test_the_trace_cannot_block_when_the_firmware_has_no_clock(self):
         body = self.boot.split("static BOOLEAN TraceClock(")[1].split("static const char *TraceElapsedText")[0]

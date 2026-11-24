@@ -2179,7 +2179,12 @@ static EFI_STATUS BenchShowReattachSuccess(VOID) {
 #else
        "STOP RELEASE COMPLETE");
 #endif
-  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,background,"FIRMWARE DRIVERS RESTORED");
+  if(s==EFI_SUCCESS)s=BenchGopLine(g,24,149,scale,background,
+#ifdef GU_FIRMWARE_REATTACH
+       "NEXT STAGE MAY TAKE MINUTES");
+#else
+       "FIRMWARE DRIVERS RESTORED");
+#endif
   return s;
 }
 
