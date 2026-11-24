@@ -144,9 +144,12 @@ finish:
     s=EFI_SUCCESS;
 #else
     GuLog("DXE-DRIVER: final transaction checks passed; closing boot resources.\n");
+#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
+    GuLog("EXPERIMENT_RESTART_BARRIER=RETAINED PHASE=INTENT OWNER_ACCEPTANCE=PENDING AUTO_RETRY=0\n");
+#endif
 #endif
     s=GuBootClose();
-#ifndef GU_STOP_RELEASE_ONLY_BENCH
+#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
     if(s==EFI_SUCCESS) {
       GU_PLATFORM *completed=GuPlatformActive;
       if(!completed||completed->fault)s=EFI_NOT_READY;

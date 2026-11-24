@@ -4,7 +4,11 @@
  * This module keeps one fixed-size record in NVRAM:
  *
  *   phase = INTENT   written before the first GPU mutation, naming the card
- *   phase = OUTCOME  written after the sequence returns, with the status
+ *   phase = OUTCOME  legacy preboot result after durable completion
+ *
+ * An explicitly waived active experiment retains INTENT even on successful
+ * preboot completion. It is a one-use barrier until explicit owner recovery;
+ * neither returning firmware control nor starting Windows clears it.
  *
  * An unmatched INTENT or a non-success OUTCOME is a recovery latch: the DXE
  * entrypoint skips all GPU work and removes its owned Driver#### entry from

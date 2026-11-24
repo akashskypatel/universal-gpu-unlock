@@ -84,6 +84,28 @@ class TwoPhaseWrites(unittest.TestCase):
         self.assertIn("GuBootStateRead(Table,&confirmed)", STATE)
         self.assertIn("memcmp(&confirmed,State,sizeof(confirmed))==0", STATE)
 
+    def test_waived_active_attempt_preserves_intent_across_handover(self):
+        for name, text in (("app.c", APP), ("dxe_main.c", DXE)):
+            seq = text.index("s=GuExecutePreparedSequence(")
+            close = text.index("s=GuBootClose()", seq)
+            notice = text.index("EXPERIMENT_RESTART_BARRIER=RETAINED", seq)
+            self.assertLess(notice, close, name)
+            self.assertIn("AUTO_RETRY=0", text[notice:close], name)
+        app = APP[APP.index('stage="close-USB-log";GuTracePhase(stage);s=GuBootClose();', APP.index("s=GuExecutePreparedSequence(")):]
+        legacy = app.index("#ifndef GU_ACTIVE_UNVERIFIED_ACTUATION")
+        outcome = app.index("GU_BOOT_STATE_OUTCOME", legacy)
+        guard_end = app.index("#endif", outcome)
+        start = app.index("s=GuBootWindows()", guard_end)
+        self.assertLess(legacy, outcome)
+        self.assertLess(outcome, guard_end)
+        self.assertLess(guard_end, start)
+        returned = app[start:app.index("#endif /* !GU_STOP_RELEASE_ONLY_BENCH */", start)]
+        self.assertIn("#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION", returned)
+        self.assertLess(returned.index("GuBootHalt();return s;"), returned.index("recorded=GuBootStateRecord("))
+        self.assertIn("#if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_UNVERIFIED_ACTUATION)", DXE)
+        self.assertNotIn("GuBootStateDelete(t)", APP)
+        self.assertNotIn("GuBootStateDelete(t)", DXE)
+
     def test_interrupted_boot_is_reported(self):
         self.assertIn("BOOT_STATE WARNING=previous boot stopped during a transaction", BOOT_IO)
         # A corrupt record is reported; active entry independently refuses it.

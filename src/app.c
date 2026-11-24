@@ -489,9 +489,15 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     L" Launching Windows Boot Manager; post-boot benchmark required.\r\n\r\n"
   );
 
+#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
+  /* The experimental attempt is one-use. Keep the original verified INTENT
+   * through handover; neither StartImage nor a reset proves OS acceptance. */
+  GuLog("EXPERIMENT_RESTART_BARRIER=RETAINED PHASE=INTENT OWNER_ACCEPTANCE=PENDING AUTO_RETRY=0\n");
+#endif
   stage="close-USB-log";GuTracePhase(stage);s=GuBootClose();if(s!=EFI_SUCCESS||Gu.fault)goto failed;
 
-  /* This outcome records preboot completion, not a successful OS boot. */
+#ifndef GU_ACTIVE_UNVERIFIED_ACTUATION
+  /* This legacy outcome records preboot completion, not a successful OS boot. */
   stage="record-preboot-outcome";
   EFI_STATUS recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
@@ -502,12 +508,17 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
                           (UINT8)(s==EFI_SUCCESS&&owner->armed?1U:0U));
   if(s==EFI_SUCCESS&&recorded!=EFI_SUCCESS)s=recorded;
   if(s!=EFI_SUCCESS)goto failed;
+#endif
 
   stage="start-Windows";GuTracePhase(stage);s=GuBootWindows();
 
   /* A returned Windows image is not a successful handoff. Re-establish
    * the failed boot barrier; never request a reset or retry here. */
   if(s==EFI_SUCCESS)s=EFI_ABORTED;
+#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
+  /* No state rewrite is needed, including when StartImage returns. */
+  GuBootHalt();return s;
+#else
   recorded=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_OUTCOME,(UINT64)s,owner->device_id,
                           (UINT16)owner->discovery_identity.segment,
@@ -515,6 +526,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
                           (UINT8)owner->discovery_identity.device,
                           (UINT8)owner->discovery_identity.function,0);
   GuBootHalt();return recorded==EFI_SUCCESS?s:recorded;
+#endif
 #endif /* !GU_STOP_RELEASE_ONLY_BENCH */
 
 failed:
