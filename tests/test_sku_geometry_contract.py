@@ -169,9 +169,9 @@ class DiagnosticStaysAvailable(unittest.TestCase):
 
 class GateIsWiredEverywhere(unittest.TestCase):
     def test_image_builds_compile_the_table(self):
+        from test_build_source_lists import builder_sources
         for script in ("Build-Dxe-Driver.ps1", "Build-Experimental-MSVC.ps1"):
-            text = (SRC / script).read_text(encoding="utf-8")
-            self.assertIn("gpu_sku_geometry.c", text, script)
+            self.assertIn("gpu_sku_geometry.c", builder_sources(script), script)
 
     def test_simulator_compiles_the_table(self):
         self.assertIn('"gpu_sku_geometry.c"', RUN_SIM)

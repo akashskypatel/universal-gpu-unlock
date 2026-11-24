@@ -110,6 +110,46 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
             self.assertEqual(len(actual), len(set(actual)))
             self.assertEqual(actual, builder_sources(name))
 
+    def test_shared_compile_plan_preserves_commands_and_object_order(self):
+        import json
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable")
+        helper = str(ROOT / "src" / "Gpu-Execution-Sources.ps1").replace("'", "''")
+        for name, directory in zip(BUILDERS, ("build", "build_dxe")):
+            text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
+            self.assertIn(f"New-GuSourceCompilePlan -Sources $sources -CompilerFlags $clFlags -ObjectDirectory '{directory}'", text)
+            self.assertIn("$compileCmds = $compilePlan.Commands", text)
+            self.assertIn("$objFiles = $compilePlan.Objects", text)
+            assignment = next(line.strip() for line in text.splitlines()
+                              if line.strip().startswith("$sources = @("))
+            for stop_only in (False, True):
+                with self.subTest(builder=name, stop_only=stop_only):
+                    exclusion = r"; $sources = @($sources | Where-Object { $_ -ne 'vendor\unlock_610.c' })" if stop_only else ""
+                    cmd = (f". '{helper}'; {assignment}{exclusion}; "
+                           f"New-GuSourceCompilePlan -Sources $sources -CompilerFlags '/nologo /Oi /TC' "
+                           f"-ObjectDirectory '{directory}' -VcVars 'C:\VS Tools\vcvars64.bat' "
+                           r"-SourceDirectory 'C:\GPU Source' | ConvertTo-Json -Compress")
+                    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", cmd],
+                                            capture_output=True, text=True, check=True, timeout=30)
+                    plan = json.loads(result.stdout)
+                    commands = ['@echo off', r'call "C:\VS Tools\vcvars64.bat" >nul',
+                                'if errorlevel 1 exit /b 1', r'cd /d "C:\GPU Source"']
+                    objects = []
+                    for source in builder_sources(name):
+                        if stop_only and source == "vendor/unlock_610.c":
+                            continue
+                        base = Path(source).stem
+                        if source.startswith("vendor/"):
+                            base = "vendor_" + base
+                        obj = f"{directory}\\{base}.obj"
+                        objects.append(obj)
+                        flags = "/nologo /Oi- /TC" if source == "runtime.c" else "/nologo /Oi /TC"
+                        commands += [f"cl {flags} /Fo{obj} " + source.replace("/", "\\"),
+                                     "if errorlevel 1 exit /b 1"]
+                    self.assertEqual(plan["Objects"], objects)
+                    self.assertEqual(plan["Commands"], commands)
+
     def test_no_builder_list_silently_skips_a_unit(self):
         for builder in BUILDERS:
             listed = builder_sources(builder)

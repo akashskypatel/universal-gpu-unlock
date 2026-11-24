@@ -145,14 +145,6 @@ try {
         $sources = @($sources | Where-Object { $_ -ne 'vendor\unlock_610.c' })
     }
 
-    $objFiles = @()
-    $compileCmds = @(
-        '@echo off',
-        "call `"$VcVars`" >nul",
-        'if errorlevel 1 exit /b 1',
-        "cd /d `"$PSScriptRoot`""
-    )
-
     $clFlags = '/nologo /O2 /Oi /GS- /Gs65536 /Zl /c /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild /Icompat /Ivendor /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
 
     if ($selection.Count -or $RuntimeSelection) {
@@ -220,18 +212,9 @@ try {
         $clFlags += ' /DGU_PROM_REFERENCE_CAPTURED'
     }
 
-    foreach ($src in $sources) {
-        $base = [System.IO.Path]::GetFileNameWithoutExtension($src)
-        if ($src -like 'vendor\*') { $base = 'vendor_' + $base }
-        $obj = "build\$base.obj"
-        $objFiles += $obj
-        $flags = $clFlags
-        if ($src -eq 'runtime.c') {
-            $flags = $clFlags.Replace('/Oi', '/Oi-')
-        }
-        $compileCmds += "cl $flags /Fo$obj $src"
-        $compileCmds += 'if errorlevel 1 exit /b 1'
-    }
+    $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $clFlags -ObjectDirectory 'build' -VcVars $VcVars -SourceDirectory $PSScriptRoot
+    $compileCmds = $compilePlan.Commands
+    $objFiles = $compilePlan.Objects
 
     $linkObjs = $objFiles -join ' '
     $binaryName = if ($StopReleaseWindowsHandoff) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI' } elseif ($StopReleaseOnlyBench -and $RuntimeSelection) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI' } elseif ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-' + $selection.Label + '.EFI' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION.EFI' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP.EFI' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-' + $selection.Label + '.EFI' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-' + $selection.Label + '.EFI' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-' + $selection.Label + '.EFI' } else { 'AD102-EXPERIMENTAL.EFI' }

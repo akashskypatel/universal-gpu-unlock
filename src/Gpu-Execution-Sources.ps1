@@ -30,3 +30,35 @@ $executionSupportSources = @(
     'vendor\vbios_610.c',
     'vendor\gfw_eval.c'
 )
+
+# Generate the same commands for both entrypoints. The caller supplies its
+# existing compiler flags and keeps its own linker subsystem and entrypoint.
+function New-GuSourceCompilePlan {
+    param(
+        [string[]]$Sources,
+        [string]$CompilerFlags,
+        [string]$ObjectDirectory,
+        [string]$VcVars,
+        [string]$SourceDirectory
+    )
+    $objects = @()
+    $commands = @(
+        '@echo off',
+        "call `"$VcVars`" >nul",
+        'if errorlevel 1 exit /b 1',
+        "cd /d `"$SourceDirectory`""
+    )
+    foreach ($source in $Sources) {
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($source)
+        if ($source -like 'vendor\*') { $base = 'vendor_' + $base }
+        $object = "$ObjectDirectory\$base.obj"
+        $objects += $object
+        $flags = $CompilerFlags
+        if ($source -eq 'runtime.c') {
+            $flags = $CompilerFlags.Replace('/Oi', '/Oi-')
+        }
+        $commands += "cl $flags /Fo$object $source"
+        $commands += 'if errorlevel 1 exit /b 1'
+    }
+    return @{ Commands = $commands; Objects = $objects }
+}

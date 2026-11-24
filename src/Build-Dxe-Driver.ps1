@@ -109,14 +109,6 @@ try {
         $sources = @($sources | Where-Object { $_ -ne 'vendor\unlock_610.c' })
     }
 
-    $objFiles = @()
-    $compileCmds = @(
-        '@echo off',
-        "call `"$VcVars`" >nul",
-        'if errorlevel 1 exit /b 1',
-        "cd /d `"$PSScriptRoot`""
-    )
-
     $clFlags = '/nologo /O2 /Oi /GS- /Gs65536 /Zl /c /TC /D__KERNEL__ /DGU_UEFI_PORT /DGU_AD104_TRANSACTION /DGU_ENTRY_LATCHED_SS1_FULL /D_CRT_SECURE_NO_WARNINGS /I. /Ibuild_dxe /Icompat /Ivendor /Ivendor\edk2\Include /Ivendor\edk2\Include\X64'
 
     if ($selection.Count -or $RuntimeSelection) {
@@ -155,18 +147,9 @@ try {
         $clFlags += ' /DGU_RUNTIME_SELECTION'
     }
 
-    foreach ($src in $sources) {
-        $base = [System.IO.Path]::GetFileNameWithoutExtension($src)
-        if ($src -like 'vendor\*') { $base = 'vendor_' + $base }
-        $obj = "build_dxe\$base.obj"
-        $objFiles += $obj
-        $flags = $clFlags
-        if ($src -eq 'runtime.c') {
-            $flags = $clFlags.Replace('/Oi', '/Oi-')
-        }
-        $compileCmds += "cl $flags /Fobuild_dxe\$base.obj $src"
-        $compileCmds += 'if errorlevel 1 exit /b 1'
-    }
+    $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $clFlags -ObjectDirectory 'build_dxe' -VcVars $VcVars -SourceDirectory $PSScriptRoot
+    $compileCmds = $compilePlan.Commands
+    $objFiles = $compilePlan.Objects
 
     $linkObjs = $objFiles -join ' '
     $binaryName = if ($StopReleaseOnlyBench -and $RuntimeSelection) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-DXE.efi' } elseif ($StopReleaseOnlyBench) { 'GPU-SEQUENCE-STOP-RELEASE-BENCH-DXE-' + $selection.Label + '.efi' } elseif ($RuntimeSelection -and $AcceptUnverifiedActuation) { 'GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-DXE.efi' } elseif ($RuntimeSelection) { 'GPU-RUNTIME-SELECTION-PREP-DXE.efi' } elseif ($AcceptUnverifiedActuation -and $selection.Count -gt 1) { 'GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($AcceptUnverifiedActuation) { 'GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile -and $selection.Count -gt 1) { 'GPU-SEQUENCE-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($SyntheticCompileProfile) { 'GPU-ONE-TARGET-COMPILE-ONLY-DXE-' + $selection.Label + '.efi' } elseif ($EnableSingleTargetExecution) { 'GPU-ONE-TARGET-EXPERIMENTAL-DXE-' + $selection.Label + '.efi' } elseif ($selection.Count) { 'GPU-ACTIVE-PREP-DXE-' + $selection.Label + '.efi' } else { 'AdaUnlockDxe.efi' }
