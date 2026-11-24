@@ -848,6 +848,26 @@ function Get-VariantBinary($Variant) {
     return $Variant.binary.Replace('<label>', $label)
 }
 
+function Get-ResolvedAttestations($Variant) {
+    foreach ($declared in $Variant.attestations) {
+        $attestation = $declared.Replace('<selection-count>', [string](Get-SelectionCount))
+        if ($Variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
+            (Get-SelectionCount) -ge 1) {
+            $attestation = $attestation.Replace('RUNTIME_SELECTION=1', 'RUNTIME_SELECTION=0')
+            $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION',
+                ('TARGET_ORDER=' + ($script:SelectionSpec.Locations -join ',')))
+        }
+        if ($attestation -match '<[^>]+>') {
+            throw "Unknown attestation placeholder for $($Variant.id): $declared"
+        }
+        $attestation
+    }
+    if ($Variant.id -eq 'app-firmware-reattach') {
+        $expectedEsp = if ($WindowsEspGuid) { ([guid]$WindowsEspGuid).ToString('D') } else { 'NONE' }
+        "WINDOWS_ESP_GUID=$expectedEsp"
+    }
+}
+
 function Build-VariantArguments($Variant) {
     $arguments = @{}
     foreach ($property in $Variant.switches.PSObject.Properties) {
@@ -1059,6 +1079,7 @@ try {
             Selection = @(if ($resolvedArguments.ContainsKey('SelectionBdf') -or $resolvedArguments.ContainsKey('SelectionBdfs')) { $script:SelectionSpec.Locations })
             BuildPrerequisite = $resolutionPrerequisite
             ExpectedAttestations = @($resolvedVariant.attestations)
+            ResolvedAttestations = @(Get-ResolvedAttestations $resolvedVariant)
         } | ConvertTo-Json -Depth 6 -Compress)
         exit 0
     }
@@ -1295,33 +1316,14 @@ try {
                 throw ($mismatch + ' Fix docs/image_variants.json; this script never renames an image.')
             }
             $verifiedAttestations = @()
-            foreach ($declared in $variant.attestations) {
-                # A count is not a constant: `SELECTED_COUNT=<selection-count>` is
-                # resolved from the operator's own selection, so the receipt has to
-                # name the number this build compiled rather than the number the
-                # catalogue guessed. Anything else in angle brackets is a mistake
-                # and is refused instead of being matched literally.
-                $attestation = $declared.Replace('<selection-count>', [string](Get-SelectionCount))
-                if ($variant.id -in @('app-stop-release-sequence-bench','dxe-stop-release-sequence-bench') -and
-                    (Get-SelectionCount) -ge 1) {
-                    $attestation = $attestation.Replace('RUNTIME_SELECTION=1', 'RUNTIME_SELECTION=0')
-                    $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION',
-                        ('TARGET_ORDER=' + ($script:SelectionSpec.Locations -join ',')))
-                }
-                if ($attestation -match '<[^>]+>') {
-                    throw "Unknown attestation placeholder for $($variantId): $declared"
-                }
+            foreach ($attestation in @(Get-ResolvedAttestations $variant)) {
                 if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape($attestation) + '(?:\s|$)')) {
-                    throw "Build attestation missing or wrong for $($variantId): $declared"
+                    if ($variantId -eq 'app-firmware-reattach' -and $attestation -like 'WINDOWS_ESP_GUID=*') {
+                        throw 'Combined image Windows ESP GUID attestation mismatch.'
+                    }
+                    throw "Build attestation missing or wrong for $($variantId): $attestation"
                 }
                 $verifiedAttestations += $attestation
-            }
-            if ($variantId -eq 'app-firmware-reattach') {
-                $expectedEsp = if ($WindowsEspGuid) { ([guid]$WindowsEspGuid).ToString('D') } else { 'NONE' }
-                if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape("WINDOWS_ESP_GUID=$expectedEsp") + '(?:\s|$)')) {
-                    throw 'Combined image Windows ESP GUID attestation mismatch.'
-                }
-                $verifiedAttestations += "WINDOWS_ESP_GUID=$expectedEsp"
             }
             Assert-EfiImage $builtImage ([int]$familySpec.subsystem)
             if ((Get-Sha256 $builtImage) -ne $sourceHash) {

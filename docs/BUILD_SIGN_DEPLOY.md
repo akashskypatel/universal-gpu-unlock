@@ -172,7 +172,10 @@ Inspect a configuration without compiling, signing or staging:
 `-ResolveOnly` reports the canonical profile, compatibility ID, request
 origin, builder, switches, safety class, PE subsystem, predicted unsigned
 filename, validated compiled GPU selection, missing private-profile prerequisite
-and expected attestation templates. It validates selection addresses and
+and expected attestation templates. The ResolvedAttestations field contains the
+actual expected build values after selection and partition substitution. It
+uses the same resolver as the build's independent status-line check. It
+validates selection addresses and
 applicable partition GUIDs without writing a selection header. It does not
 check the compiler, signing certificate, physical
 hardware or firmware execution. The signed build receipt records actual

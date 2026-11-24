@@ -852,7 +852,9 @@ class CanonicalProfileResolution(unittest.TestCase):
 
     def test_receipt_keeps_verified_values_separate_from_templates(self):
         self.assertIn("$verifiedAttestations += $attestation", SCRIPT)
-        self.assertIn('$verifiedAttestations += "WINDOWS_ESP_GUID=$expectedEsp"', SCRIPT)
+        self.assertIn('"WINDOWS_ESP_GUID=$expectedEsp"', SCRIPT)
+        self.assertIn('foreach ($attestation in @(Get-ResolvedAttestations $variant))', SCRIPT)
+        self.assertIn('ResolvedAttestations = @(Get-ResolvedAttestations $resolvedVariant)', SCRIPT)
         self.assertIn("ExpectedAttestations = @($variant.attestations)", SCRIPT)
         self.assertIn("AttestationsVerified = $verifiedAttestations", SCRIPT)
         self.assertIn("CanonicalProfile = $variant.profile", SCRIPT)
@@ -878,6 +880,19 @@ class CanonicalProfileResolution(unittest.TestCase):
                                "-SelectionBdf", "'0000:04:00.0'"])
         self.assertEqual(result["Selection"], ["0000:04:00.0"])
         self.assertEqual(result["Binary"], "GPU-SEQUENCE-STOP-RELEASE-BENCH-0000-04-00-0.EFI")
+        self.assertIn("RUNTIME_SELECTION=0", result["ResolvedAttestations"])
+        self.assertIn("TARGET_ORDER=0000:04:00.0", result["ResolvedAttestations"])
+        self.assertNotIn("RUNTIME_SELECTION=1", result["ResolvedAttestations"])
+        result = self.resolve(["-Only", "compile-check", "-SelectionBdfs",
+                               "'0000:01:00.0,0000:04:00.0'"])
+        self.assertIn("SELECTED_COUNT=2", result["ResolvedAttestations"])
+        self.assertTrue(all("<" not in value for value in result["ResolvedAttestations"]))
+        result = self.resolve(["-Only", "firmware-transaction", "-Operation", "UnlockReattach"])
+        self.assertIn("WINDOWS_ESP_GUID=NONE", result["ResolvedAttestations"])
+        result = self.resolve(["-Only", "firmware-transaction", "-Operation", "UnlockReattach",
+                               "-WindowsEspGuid", "'A005858C-4487-4EE2-976E-1710FF484C31'"])
+        self.assertIn("WINDOWS_ESP_GUID=a005858c-4487-4ee2-976e-1710ff484c31",
+                      result["ResolvedAttestations"])
         for args in (
             ["-Only", "compile-check", "-SelectionBdf", "'bad'"],
             ["-Only", "compile-check", "-SelectionBdf", "'0000:01:20.0'"],
