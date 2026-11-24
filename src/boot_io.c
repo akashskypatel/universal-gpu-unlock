@@ -328,6 +328,19 @@ static UINTN AssetReadBestBytes,AssetReadBestSeconds;
 static BOOLEAN AssetReadSizeSettled;
 static UINTN TraceBootStartSeconds;
 static BOOLEAN TraceBootClockStarted;
+#ifdef GU_ACTIVE_SINGLE_TARGET
+/* A boot-local snapshot of the exact successful launch-root GSP file. No
+ * shared allocation or borrowed firmware pointer is published to a successor. */
+typedef struct {
+  const CHAR16 *path;
+  EFI_TIME created,modified;
+  UINT64 physical_size,attributes;
+} GU_GSP_FILE_SNAPSHOT;
+static GU_GSP_FILE_SNAPSHOT GspFileCandidate,GspFileCached;
+static GU_PLATFORM *GspCacheOwner;
+static const GU_ARCH_ASSET *GspCacheManifest;
+static BOOLEAN GspFileReadActive;
+#endif
 
 static BOOLEAN TraceClock(UINTN *seconds) {
   EFI_RUNTIME_SERVICES *rt=Table?Table->RuntimeServices:NULL;
@@ -552,6 +565,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   if(!image||!t||!t->BootServices)return EFI_INVALID_PARAMETER;
 
   Table=t;Self=image;
+  TraceBootClockStarted=TraceClock(&TraceBootStartSeconds);
 
   EFI_BOOT_SERVICES *b=t->BootServices;EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
 
@@ -771,7 +785,52 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
   BOOLEAN settled=learn&&AssetReadSizeSettled;
   UINTN reads=0,read_seconds=0,progress_seconds=0,reported=0,last_report=0;
   BOOLEAN timing=adaptive&&TraceClock(&last_report);
-  for(UINTN at=0;s==EFI_SUCCESS&&at<expected;) {
+  UINTN at=0;
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(s==EFI_SUCCESS&&adaptive&&GspFileReadActive&&root==Root&&
+     GspCacheOwner&&GspCacheOwner!=GuPlatformActive&&GspCacheManifest&&
+     GspFileCached.path&&expected==GspCacheManifest->bytes&&
+     f->SetPosition&&f->GetPosition&&info->ModificationTime.Year) {
+    const CHAR16 *a=name,*b=GspFileCached.path;
+    while(*a&&*a==*b){a++;b++;}
+    const GU_ARCH_ASSETS *arch=GuGetArchAssets();
+    /* Never bypass an existing distinct preferred file. Reuse only the exact
+     * prior selected path and unchanged metadata on the retained launch root.
+     * The pinned RAM snapshot, not a new full disk read, supplies the bytes. */
+    if(!*a&&!*b&&arch&&arch->entries[2].bytes==expected&&
+       strcmp(arch->entries[2].sha256,GspCacheManifest->sha256)==0&&
+       info->PhysicalSize==GspFileCached.physical_size&&
+       info->Attribute==GspFileCached.attributes&&
+       !memcmp(&info->CreateTime,&GspFileCached.created,sizeof(EFI_TIME))&&
+       !memcmp(&info->ModificationTime,&GspFileCached.modified,sizeof(EFI_TIME))) {
+      const struct firmware *source=&GspCacheOwner->asset_entries[2].firmware;
+      if(GspCacheOwner->fault||GspCacheOwner->retained||
+         !GuPlatformAssetsOwned(GspCacheOwner)||
+         source->size!=expected||!GuCpuPoolOwns(GspCacheOwner,source->data,expected)||
+         !GuCpuPoolOwns(&Gu,p,expected)||source->data==p) {
+        s=EFI_DEVICE_ERROR;
+      } else {
+        UINT64 pos=0;
+        s=f->SetPosition(f,(UINT64)expected);
+        if(s==EFI_SUCCESS)s=f->GetPosition(f,&pos);
+        if(s==EFI_SUCCESS&&pos!=(UINT64)expected)s=EFI_DEVICE_ERROR;
+        if(s==EFI_SUCCESS) {
+          UINTN start=0,end=0;
+          BOOLEAN timed=TraceClock(&start);
+          memcpy(p,source->data,expected);
+          at=expected;
+          timed=timed&&TraceClock(&end);
+          GuTraceDetail("asset-cache","HIT=1 BYTES=%u COPY_SECONDS=%u CLOCK=%u INDEPENDENT_BUFFER=1",
+                        (unsigned)expected,(unsigned)(timed?(end+86400U-start)%86400U:0),
+                        (unsigned)timed);
+          GuTraceProgress("asset-read-bytes",at,expected);
+          if(BootFileStatus!=EFI_SUCCESS)s=BootFileStatus;
+        }
+      }
+    }
+  }
+#endif
+  for(;s==EFI_SUCCESS&&at<expected;) {
     UINTN n=expected-at;if(n>chunk)n=chunk;UINTN wanted=n;
     UINTN before=0,after=0;
     BOOLEAN measured=adaptive&&TraceClock(&before);
@@ -839,8 +898,17 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
   EFI_STATUS closed=CloseBootFile(&f);if(closed!=EFI_SUCCESS)s=closed;
 
   if(s!=EFI_SUCCESS){GuFree(p);return s;}
-  if(learn&&expected>=1048576U){AssetReadSize=chunk;AssetReadBestBytes=best_bytes;
+  if(learn&&expected>=1048576U&&reads){AssetReadSize=chunk;AssetReadBestBytes=best_bytes;
     AssetReadBestSeconds=best_seconds;AssetReadSizeSettled=settled;}
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(adaptive&&GspFileReadActive&&root==Root&&info->ModificationTime.Year) {
+    GspFileCandidate.path=name;
+    GspFileCandidate.created=info->CreateTime;
+    GspFileCandidate.modified=info->ModificationTime;
+    GspFileCandidate.physical_size=info->PhysicalSize;
+    GspFileCandidate.attributes=info->Attribute;
+  }
+#endif
   *data=p;return EFI_SUCCESS;
 
 }
@@ -1226,14 +1294,23 @@ EFI_STATUS GuBootLoadAssets(VOID) {
    * last line and no way to tell this loop from the diagnostic that follows it. */
   GuTracePhase("asset-load");
   TraceAssetReadActive=TRUE;
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  GspFileCandidate.path=NULL;
+#endif
   for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
     const GU_ARCH_ASSET *a=&arch->entries[i];
     VOID *p=NULL;
     GuTraceDetail("asset-read","INDEX=%u NAME=%s BYTES=%u",(unsigned)i,
                   a->name?a->name:"?",(unsigned)a->bytes);
+#ifdef GU_ACTIVE_SINGLE_TARGET
+    GspFileReadActive=(i==2);
+#endif
     status=ReadFile(Root,a->path,a->bytes,&p);
     if(status==EFI_NOT_FOUND&&i==2&&arch->alternate_gsp_path)
       status=ReadFile(Root,arch->alternate_gsp_path,a->bytes,&p);
+#ifdef GU_ACTIVE_SINGLE_TARGET
+    GspFileReadActive=FALSE;
+#endif
     if(status==EFI_NOT_FOUND)
       status=ReadPinnedAssetFromConfiguredEsp(a,a->path,&p);
     if(status==EFI_NOT_FOUND&&i==2&&arch->alternate_gsp_path)
@@ -1245,7 +1322,20 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     }
     /* Verify every fallback immediately; do not accept matching filenames
      * from the internal partition without the original signed-data digest. */
-    if(!GuHashMatches(p,a->bytes,a->sha256)) {
+#ifdef GU_ACTIVE_SINGLE_TARGET
+    UINTN hash_start=0,hash_end=0;
+    BOOLEAN hash_timed=i==2&&TraceClock(&hash_start);
+#endif
+    BOOLEAN hash_ok=GuHashMatches(p,a->bytes,a->sha256);
+#ifdef GU_ACTIVE_SINGLE_TARGET
+    if(i==2) {
+      hash_timed=hash_timed&&TraceClock(&hash_end);
+      GuTraceDetail("asset-hash-timing","BYTES=%u SECONDS=%u CLOCK=%u MATCH=%u",
+        (unsigned)a->bytes,(unsigned)(hash_timed?(hash_end+86400U-hash_start)%86400U:0),
+        (unsigned)hash_timed,(unsigned)hash_ok);
+    }
+#endif
+    if(!hash_ok) {
       GuFree(p);
       status=EFI_CRC_ERROR;
       break;
@@ -1257,6 +1347,14 @@ EFI_STATUS GuBootLoadAssets(VOID) {
   TraceAssetReadActive=FALSE;
   if(status==EFI_SUCCESS&&!GuAd104AssetsValid(&Gu))status=EFI_CRC_ERROR;
   GuTraceDetail("asset-load","STATUS=%#llx",(unsigned long long)status);
+  if(status==EFI_SUCCESS&&BootFileStatus!=EFI_SUCCESS)status=BootFileStatus;
+#ifdef GU_ACTIVE_SINGLE_TARGET
+  if(status==EFI_SUCCESS&&GspFileCandidate.path) {
+    GspFileCached=GspFileCandidate;
+    GspCacheOwner=&Gu;
+    GspCacheManifest=&arch->entries[2];
+  }
+#endif
   if(status!=EFI_SUCCESS) {
     for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
       if(GuAssets[i].firmware.data)GuFree((VOID *)GuAssets[i].firmware.data);
