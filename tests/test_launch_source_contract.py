@@ -48,9 +48,20 @@ class AResidentImageIdentifiesItsOwnEsp(unittest.TestCase):
         for builder in BUILDERS:
             text = (ROOT / "src" / builder).read_text(encoding="utf-8-sig")
             self.assertIn("[switch]$EspResident", text, builder)
-            self.assertIn("'-EspResident requires -RuntimeEsp", text, builder)
-            self.assertIn("'-EspResident cannot be combined with -SyntheticCompileProfile", text, builder)
+            self.assertIn("Assert-GuExecutionBuildOptions ", text, builder)
+            self.assertLess(text.index("Assert-GuExecutionBuildOptions "),
+                            text.index("Resolve-GuVcVars "), builder)
+            self.assertLess(text.index("Assert-GuExecutionBuildOptions "),
+                            text.index("New-GuGpuSelectionSpec "), builder)
+            self.assertIn("-EspResident:$EspResident", text, builder)
+            self.assertIn("-RuntimeEsp:$RuntimeEsp", text, builder)
+            self.assertIn("-SyntheticCompileProfile:$SyntheticCompileProfile", text, builder)
             self.assertIn("/DGU_ESP_RESIDENT", text, builder)
+        options = (ROOT / "src" / "Gpu-Execution-Sources.ps1").read_text(encoding="utf-8")
+        self.assertIn("if ($EspResident -and -not $RuntimeEsp) {", options)
+        self.assertIn("'-EspResident requires -RuntimeEsp", options)
+        self.assertIn("if ($EspResident -and $SyntheticCompileProfile) {", options)
+        self.assertIn("'-EspResident cannot be combined with -SyntheticCompileProfile", options)
 
     def test_the_resident_written_line_says_the_gates_are_unchanged(self):
         self.assertIn("LAUNCH_SOURCE=ESP_RESIDENT_WINDOWS_ESP", BOOT)
