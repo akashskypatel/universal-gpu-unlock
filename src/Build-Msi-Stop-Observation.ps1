@@ -24,16 +24,9 @@ if ($BothNvidia -and $Target3080) {
 if ($BothNvidia -and (-not $AcceptWindowsHandoffRisk -or -not $WindowsEspGuid)) {
     throw '-BothNvidia requires explicit risk acceptance and pinned Windows handoff.'
 }
-if (-not $VcVars) {
-    $vswhere=Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path -LiteralPath $vswhere) {
-        $install=& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-        if ($install) { $VcVars=Join-Path $install 'VC\Auxiliary\Build\vcvars64.bat' }
-    }
-}
-if (-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)) {
-    throw 'MSVC x64 build environment not found; specify -VcVars.'
-}
+. (Join-Path $PSScriptRoot 'Msvc-Environment.ps1')
+$VcVars = Resolve-GuVcVars -VcVars $VcVars
+
 Push-Location -LiteralPath $PSScriptRoot
 try {
     $output=Join-Path $PSScriptRoot 'build_stop_observation'

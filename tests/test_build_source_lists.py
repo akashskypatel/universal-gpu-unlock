@@ -150,6 +150,36 @@ class TheBuildersCompileTheSameProgramAsTheSimulator(unittest.TestCase):
                     self.assertEqual(plan["Objects"], objects)
                     self.assertEqual(plan["Commands"], commands)
 
+    def test_all_builders_use_shared_toolchain_discovery(self):
+        for name in ("Build-Experimental-MSVC.ps1", "Build-Dxe-Driver.ps1", "Build-Gpu-Topology-Diagnostic.ps1", "Build-Msi-Stop-Observation.ps1", "Build-Boot-State-Maintenance.ps1"):
+            text = (ROOT / "src" / name).read_text(encoding="utf-8-sig")
+            self.assertIn(". (Join-Path $PSScriptRoot 'Msvc-Environment.ps1')", text)
+            suffix = " -SearchDefaultPaths" if name in BUILDERS else ""
+            self.assertIn("$VcVars = Resolve-GuVcVars -VcVars $VcVars" + suffix + "\n", text)
+            self.assertNotIn("vswhere.exe", text)
+
+    def test_shared_toolchain_explicit_path_and_missing_path(self):
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            self.skipTest("PowerShell unavailable")
+        helper = str(ROOT / "src" / "Msvc-Environment.ps1").replace("'", "''")
+        with tempfile.TemporaryDirectory() as directory:
+            explicit = Path(directory) / "vcvars64.bat"
+            explicit.touch()
+            prefix = f"$ErrorActionPreference='Stop'; . '{helper}'; Resolve-GuVcVars -VcVars "
+            for path, success in ((explicit, True), (explicit.with_suffix(".missing"), False)):
+                with self.subTest(path=path):
+                    quoted = str(path).replace("'", "''")
+                    result = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command",
+                                             prefix + f"'{quoted}' -SearchDefaultPaths"],
+                                            capture_output=True, text=True, timeout=30)
+                    if success:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), str(path))
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("Visual Studio x64 Build Tools not found", result.stderr)
+
     def test_no_builder_list_silently_skips_a_unit(self):
         for builder in BUILDERS:
             listed = builder_sources(builder)
