@@ -13,7 +13,7 @@ static unsigned checks;
 
 static unsigned char store[64];
 static UINTN store_len;
-static int store_present, writes, deletes, fail_write;
+static int store_present, writes, deletes, fail_write, drop_write;
 
 static EFI_STATUS FakeGetVariable(const void *Name, EFI_GUID *Vendor, UINT32 *Attributes,
                                   UINTN *Size, VOID *Data) {
@@ -26,7 +26,8 @@ static EFI_STATUS FakeGetVariable(const void *Name, EFI_GUID *Vendor, UINT32 *At
   if (!Data) return EFI_INVALID_PARAMETER;
   memcpy(Data, store, store_len);
   *Size = store_len;
-  if (Attributes) *Attributes = EFI_VARIABLE_NON_VOLATILE;
+  if (Attributes) *Attributes = EFI_VARIABLE_NON_VOLATILE |
+      EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS;
   return EFI_SUCCESS;
 }
 
@@ -43,6 +44,7 @@ static EFI_STATUS FakeSetVariable(const void *Name, EFI_GUID *Vendor, UINT32 Att
   }
   if (Size > sizeof(store)) return EFI_OUT_OF_RESOURCES;
   if ((Attributes & EFI_VARIABLE_NON_VOLATILE) == 0) return EFI_INVALID_PARAMETER;
+  if(drop_write)return EFI_SUCCESS;
   memcpy(store, Data, Size);
   store_len = Size;
   store_present = 1;
@@ -66,7 +68,7 @@ static void Reset(void) {
   store_len = 0;
   store_present = 0;
   writes = deletes = 0;
-  fail_write = 0;
+  fail_write = drop_write = 0;
 }
 
 static GU_BOOT_STATE Sample(void) {
@@ -182,6 +184,15 @@ static int CheckTransitions(void) {
                           0, 1, 0, 0, 1) == EFI_SUCCESS);
   CHECK(GuBootStateRead(&table, &out) == EFI_SUCCESS);
   CHECK(out.BootCount == 2 && out.Armed == 1);
+
+  /* Success without storing the new record is not a restart barrier. */
+  previous = out;
+  drop_write = 1;
+  CHECK(GuBootStateRecord(&table, &previous, GU_BOOT_STATE_INTENT, 0, 0x2684,
+                          0, 1, 0, 0, 0) == EFI_COMPROMISED_DATA);
+  CHECK(GuBootStateRead(&table, &out) == EFI_SUCCESS);
+  CHECK(out.Phase == GU_BOOT_STATE_OUTCOME);
+  drop_write = 0;
 
   /* A write failure is reported and changes nothing. */
   previous = out;

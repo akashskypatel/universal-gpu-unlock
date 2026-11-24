@@ -48,6 +48,7 @@ EFI_STATUS GuBootStateRead(EFI_SYSTEM_TABLE *Table, GU_BOOT_STATE *Out) {
    * record has no version field, so guessing at a layout would be a guess. */
   if (size != sizeof(buffer)) return EFI_COMPROMISED_DATA;
   if (!Valid(&buffer)) return EFI_COMPROMISED_DATA;
+  if (attributes != GU_BOOT_STATE_ATTRIBUTES) return EFI_COMPROMISED_DATA;
   *Out = buffer;
   return EFI_SUCCESS;
 }
@@ -56,9 +57,14 @@ EFI_STATUS GuBootStateWrite(EFI_SYSTEM_TABLE *Table, const GU_BOOT_STATE *State)
   if (!Table || !State) return EFI_INVALID_PARAMETER;
   if (!Usable(Table)) return EFI_UNSUPPORTED;
   if (!Valid(State)) return EFI_INVALID_PARAMETER;
-  return Table->RuntimeServices->SetVariable(GU_BOOT_STATE_VARIABLE_NAME, &StateGuid,
+  EFI_STATUS s = Table->RuntimeServices->SetVariable(GU_BOOT_STATE_VARIABLE_NAME, &StateGuid,
                                              GU_BOOT_STATE_ATTRIBUTES, sizeof(*State),
                                              (VOID *)State);
+  if(s!=EFI_SUCCESS)return s;
+  GU_BOOT_STATE confirmed;
+  s=GuBootStateRead(Table,&confirmed);
+  if(s!=EFI_SUCCESS)return s;
+  return memcmp(&confirmed,State,sizeof(confirmed))==0?EFI_SUCCESS:EFI_COMPROMISED_DATA;
 }
 
 EFI_STATUS GuBootStateDelete(EFI_SYSTEM_TABLE *Table) {
