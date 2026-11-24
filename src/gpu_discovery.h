@@ -67,6 +67,10 @@ int GuIsUnselectedGpuHandle(EFI_HANDLE handle);
 /* Stop/release bench policy: select every currently detected supported NVIDIA
  * function in memory, without persisting GuTargets to NVRAM. */
 EFI_STATUS GuRuntimeSelectionSelectAll(VOID);
+#ifdef GU_FIRMWARE_REATTACH
+/* Fresh, boot-local single target chosen by the operator. */
+EFI_STATUS GuRuntimeSelectionChoose(const GU_GPU_LOCATION *location);
+#endif
 #endif
 
 #ifdef GU_ACTIVE_SINGLE_TARGET

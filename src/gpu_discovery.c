@@ -279,11 +279,29 @@ EFI_STATUS GuRuntimeSelectionSelectAll(VOID) {
   GuLog("ACTIVE_SELECTION=POLICY_ALL SOURCE=LIVE_BOOT_INVENTORY NVRAM=UNCHANGED\n");
   return EFI_SUCCESS;
 }
+#ifdef GU_FIRMWARE_REATTACH
+EFI_STATUS GuRuntimeSelectionChoose(const GU_GPU_LOCATION *location) {
+  if(!location||location->segment>0xffffU||location->bus>255U||
+     location->device>31U||location->function>7U)return EFI_INVALID_PARAMETER;
+  if(g_runtime_selection_loaded)return EFI_ALREADY_STARTED;
+  memset(&g_runtime_selection,0,sizeof(g_runtime_selection));
+  g_runtime_selection.list[0]=*location;
+  g_runtime_selection.count=1;
+  g_runtime_selection_loaded=TRUE;
+  GuLog("ACTIVE_SELECTION=REQUESTED COUNT=1 SOURCE=LIVE_OPERATOR NVRAM=UNCHANGED\n");
+  return EFI_SUCCESS;
+}
+#endif
 static EFI_STATUS ResolveRuntimeSelection(EFI_SYSTEM_TABLE *table,
                                           const GU_GPU_LOCATION **requested,
                                           size_t *requested_count,BOOLEAN *all) {
   if(!requested||!requested_count||!all)return EFI_INVALID_PARAMETER;
   if(!g_runtime_selection_loaded) {
+#ifdef GU_FIRMWARE_REATTACH
+    (void)table;
+    GuLog("ACTIVE_SELECTION=REFUSED REASON=FRESH_OPERATOR_CHOICE_REQUIRED\n");
+    return EFI_NOT_READY;
+#else
     EFI_STATUS s=GuSelectionRead(table,&g_runtime_selection);
     if(s==EFI_NOT_FOUND) {
       memset(&g_runtime_selection,0,sizeof(g_runtime_selection));
@@ -302,6 +320,7 @@ static EFI_STATUS ResolveRuntimeSelection(EFI_SYSTEM_TABLE *table,
             g_runtime_selection.count);
     else
       GuLog("ACTIVE_SELECTION=UNSET SOURCE=NONE AUTO_SINGLE_ONLY=1\n");
+#endif
   }
   *requested=g_runtime_selection.count?g_runtime_selection.list:NULL;
   *requested_count=g_runtime_selection.count;

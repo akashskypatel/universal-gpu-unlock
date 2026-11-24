@@ -155,6 +155,89 @@ int main(void) {
                     self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
 
 
+    def test_combined_requires_a_fresh_choice_and_never_uses_saved_selection(self):
+        app = (SRC / "app.c").read_text(encoding="utf-8")
+        start = app.index("static EFI_STATUS ResolveTargetsOnConsole(")
+        end = app.index("\n#endif\n\n/* The outcomes", start)
+        menu = app[start:end]
+        self.assertIn("if(s!=EFI_SUCCESS) {stage=\"selection\";GuTracePhase(stage);goto failed;}", app)
+        self.assertIn("REASON=FRESH_OPERATOR_CHOICE_REQUIRED", DISCOVERY)
+        # Compile the actual menu with combined mode enabled. No NVRAM
+        # read/write functions exist in this harness; a stale-variable
+        # fallback or persisted choice would fail compilation.
+        mock = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <assert.h>
+typedef uint16_t CHAR16;
+typedef uint16_t UINT16;
+typedef uint8_t UINT8;
+typedef int EFI_STATUS;
+#define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 2
+#define EFI_NOT_FOUND 14
+#define EFI_DEVICE_ERROR 7
+#define TRUE 1
+#define GU_FIRMWARE_REATTACH 1
+typedef struct { unsigned segment,bus,device,function; } GU_GPU_LOCATION;
+typedef struct { GU_GPU_LOCATION list[128];size_t count;int all; } GU_SELECTION;
+typedef struct { unsigned segment,bus,device,function,pci_id; } GU_GPU_RECORD;
+typedef struct { struct { size_t count; GU_GPU_RECORD nvidia[2]; } inventory; } GU_GPU_PREPARED_SEQUENCE;
+typedef struct { CHAR16 UnicodeChar;unsigned ScanCode; } EFI_INPUT_KEY;
+typedef struct IN IN;
+struct IN { EFI_STATUS (*ReadKeyStroke)(IN *,EFI_INPUT_KEY *); };
+typedef struct { void (*Stall)(unsigned); } BS;
+typedef struct { BS *BootServices;IN *ConIn; } EFI_SYSTEM_TABLE;
+static unsigned count,shown,chosen,all,calls;
+static CHAR16 key;
+static int display_error;
+static void GuLog(const char *fmt,...){(void)fmt;}
+static void GuBootSay(const CHAR16 *msg){(void)msg;}
+static int GuBootLogOpen(void){return 1;}
+static EFI_STATUS GuPrepareGpuSequence(EFI_SYSTEM_TABLE *t,void *r,size_t n,GU_GPU_PREPARED_SEQUENCE *p){
+  (void)t;(void)r;(void)n;p->inventory.count=count;
+  p->inventory.nvidia[0]=(GU_GPU_RECORD){0,1,0,0,0x268410de};
+  p->inventory.nvidia[1]=(GU_GPU_RECORD){0,4,0,0,0x220a10de};return 0;
+}
+static EFI_STATUS ShowTargetChoice(EFI_SYSTEM_TABLE *t,size_t i,const GU_GPU_RECORD *r){
+  (void)t;(void)i;(void)r;shown++;return display_error;
+}
+static EFI_STATUS GuRuntimeSelectionSelectAll(void){all++;return 0;}
+static EFI_STATUS GuRuntimeSelectionChoose(const GU_GPU_LOCATION *p){chosen=p->bus;return 0;}
+static EFI_STATUS Read(IN *in,EFI_INPUT_KEY *out){
+  (void)in;calls++;if(!key)return EFI_NOT_FOUND;
+  out->UnicodeChar=key;out->ScanCode=0;return 0;
+}
+static void Stall(unsigned n){(void)n;}
+""" + menu + r"""
+int main(void){
+  BS bs={Stall};IN in={Read};EFI_SYSTEM_TABLE t={&bs,&in};
+  count=2;key='A';assert(ResolveTargetsOnConsole(&t)==0&&all==1&&shown==2);
+  key='2';assert(ResolveTargetsOnConsole(&t)==0&&chosen==4);
+  key='S';assert(ResolveTargetsOnConsole(&t)==EFI_NOT_FOUND&&all==1&&chosen==4);
+  key=0;assert(ResolveTargetsOnConsole(&t)==EFI_NOT_FOUND&&all==1&&chosen==4);
+  count=1;key='S';assert(ResolveTargetsOnConsole(&t)==EFI_NOT_FOUND&&all==1&&chosen==4);
+  key='1';assert(ResolveTargetsOnConsole(&t)==0&&chosen==1);
+  display_error=7;key='A';assert(ResolveTargetsOnConsole(&t)==7&&all==1);
+  return 0;
+}
+"""
+        for compiler in compilers():
+            with self.subTest(compiler=compiler):
+                with tempfile.TemporaryDirectory() as tmp:
+                    src = Path(tmp) / "menu.c"
+                    binary = Path(tmp) / "menu"
+                    src.write_text(mock, encoding="utf-8")
+                    build = subprocess.run([compiler, "-std=c11", "-fshort-wchar",
+                                            "-Wall", "-Wextra", "-Werror", "-pedantic",
+                                            str(src), "-o", str(binary)],
+                                           capture_output=True, text=True)
+                    self.assertEqual(build.returncode, 0, build.stderr)
+                    run = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+
+
 class ProfileGates(unittest.TestCase):
     """``port.h`` keeps runtime selection inside a real execution profile."""
 

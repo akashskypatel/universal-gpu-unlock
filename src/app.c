@@ -77,7 +77,9 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
   return GuRuntimeSelectionSelectAll();
 #else
   GU_SELECTION selection;
-  EFI_STATUS s=GuSelectionRead(t,&selection);
+  EFI_STATUS s;
+#ifndef GU_FIRMWARE_REATTACH
+  s=GuSelectionRead(t,&selection);
   if(s==EFI_SUCCESS) {
     GuLog("ACTIVE_SELECTION=PRESENT COUNT=%zu ALL=%u SOURCE=VARIABLE\n",
           selection.count,(unsigned)selection.all);
@@ -87,6 +89,7 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
     GuLog("ACTIVE_SELECTION=UNREADABLE STATUS=%#llx\n",(unsigned long long)s);
     return s;
   }
+#endif
   GU_GPU_PREPARED_SEQUENCE prepared;
   s=GuPrepareGpuSequence(t,NULL,0,&prepared);
   if(s!=EFI_SUCCESS) {
@@ -98,6 +101,7 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
     return EFI_NOT_FOUND;
   }
   memset(&selection,0,sizeof(selection));
+#ifndef GU_FIRMWARE_REATTACH
   if(prepared.inventory.count==1) {
     const GU_GPU_RECORD *record=&prepared.inventory.nvidia[0];
     selection.list[0].segment=(UINT16)record->segment;
@@ -113,6 +117,7 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
     GuBootSay(L"\r\nOne NVIDIA GPU found; recording it as the target.\r\n");
     return s;
   }
+#endif
   /* Bounded display: the console offers at most nine entries. A larger
    * machine sets the variable directly, which this path only reads. */
   size_t shown=prepared.inventory.count<9?prepared.inventory.count:9;
@@ -130,7 +135,7 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
       return s!=EFI_SUCCESS?s:EFI_DEVICE_ERROR;
     }
   }
-  GuBootSay(L"\r\nMultiple NVIDIA GPUs found.\r\n"
+  GuBootSay(L"\r\nSelect GPUs for this boot.\r\n"
             L"Press 1-9 to select a target, A for all supported cards, "
             L"or S to skip (no card is touched).\r\n");
   if(!t->ConIn||!t->ConIn->ReadKeyStroke)return EFI_NOT_FOUND;
@@ -144,7 +149,11 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
       }
       if(c=='a'||c=='A') {
         selection.all=TRUE;
+#ifdef GU_FIRMWARE_REATTACH
+        s=GuRuntimeSelectionSelectAll();
+#else
         s=GuSelectionWrite(t,&selection);
+#endif
         GuLog("ACTIVE_SELECTION=POLICY_ALL BY_OPERATOR=1 STATUS=%#llx\n",
               (unsigned long long)s);
         return s;
@@ -156,7 +165,11 @@ static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
         selection.list[0].device=(UINT8)record->device;
         selection.list[0].function=(UINT8)record->function;
         selection.count=1;
+#ifdef GU_FIRMWARE_REATTACH
+        s=GuRuntimeSelectionChoose(&selection.list[0]);
+#else
         s=GuSelectionWrite(t,&selection);
+#endif
         GuLog("ACTIVE_SELECTION=CHOSEN BDF=%04x:%02x:%02x.%x STATUS=%#llx\n",
               (unsigned)record->segment,(unsigned)record->bus,
               (unsigned)record->device,(unsigned)record->function,
@@ -290,12 +303,14 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   /* A selection that cannot be resolved is not fatal here: discovery refuses
    * it and reports why, which is the behaviour the refusal tests pin. */
   s=ResolveTargetsOnConsole(t);
-  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND) {stage="selection";GuTracePhase(stage);goto failed;}
 #ifdef GU_FIRMWARE_REATTACH
+  if(s!=EFI_SUCCESS) {stage="selection";GuTracePhase(stage);goto failed;}
   if(s==EFI_SUCCESS)
     GuBootSay(L"\r\n[OK] Target selection accepted. Checking GPUs and loading firmware assets.\r\n"
               L"USB reads may take several minutes. Do not restart or remove the USB.\r\n"
               L"A separate warning will appear before each GPU driver release.\r\n");
+#else
+  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND) {stage="selection";GuTracePhase(stage);goto failed;}
 #endif
 #endif
   s=GuDiscoverSingleGpu(image,t);if(s!=EFI_SUCCESS)goto failed;
