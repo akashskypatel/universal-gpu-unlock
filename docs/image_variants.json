@@ -118,7 +118,8 @@
         "WINDOWS_HANDOFF=0",
         "SELECTION_COUNT=0"
       ],
-      "note": "the smallest read-only image: it prints to the console and writes nothing"
+      "note": "the smallest read-only image: it prints to the console and writes nothing",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-topology-log",
@@ -136,7 +137,8 @@
         "SAVE_LOG=1",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "stage 1 of the donor session: the log this build writes is what tools/verify_run_log.py scores"
+      "note": "stage 1 of the donor session: the log this build writes is what tools/verify_run_log.py scores",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-topology-gop-text-cycle",
@@ -158,7 +160,8 @@
         "SAVE_LOG=1",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "Explicit visual diagnostic: logs per-GOP SimpleTextOut and GOP driver image; writes only through already installed text interfaces and pauses two seconds each. Does not Stop, reconnect, set display modes, change global ConOut, or write NVRAM. Successful text API return is not proof of visible pixels."
+      "note": "Explicit visual diagnostic: logs per-GOP SimpleTextOut and GOP driver image; writes only through already installed text interfaces and pauses two seconds each. Does not Stop, reconnect, set display modes, change global ConOut, or write NVRAM. Successful text API return is not proof of visible pixels.",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-topology-handoff",
@@ -178,7 +181,8 @@
         "WINDOWS_HANDOFF=1"
       ],
       "requires_esp_guid": true,
-      "note": "starts the pinned Windows Boot Manager after the log is saved; needs a reviewed ESP GUID"
+      "note": "starts the pinned Windows Boot Manager after the log is saved; needs a reviewed ESP GUID",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-selection",
@@ -197,7 +201,8 @@
         "WINDOWS_HANDOFF=0"
       ],
       "requires_selection": "any",
-      "note": "the builder refuses a selected diagnostic with Windows handoff, so this one always returns to the launch environment"
+      "note": "the builder refuses a selected diagnostic with Windows handoff, so this one always returns to the launch environment",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-msi-rom",
@@ -216,7 +221,8 @@
         "MSI_B850_ROM_VARIABLES=1",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "reads the MS-7E56 UEFI variables; cannot be combined with a GPU selection"
+      "note": "reads the MS-7E56 UEFI variables; cannot be combined with a GPU selection",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-msi-rom-handoff",
@@ -237,7 +243,8 @@
         "WINDOWS_HANDOFF=1"
       ],
       "requires_esp_guid": true,
-      "note": "as above, then hands off to Windows"
+      "note": "as above, then hands off to Windows",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-msi-fuse",
@@ -256,7 +263,8 @@
         "MSI_B850_FUSE_VERSION=1",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "reads the FWSEC/GSP signature-slot fuse on each verified NVIDIA GPU"
+      "note": "reads the FWSEC/GSP signature-slot fuse on each verified NVIDIA GPU",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-msi-fuse-handoff",
@@ -277,7 +285,8 @@
         "WINDOWS_HANDOFF=1"
       ],
       "requires_esp_guid": true,
-      "note": "the fuse read that fixes the signature slot; still not the Windows 617.42 provenance"
+      "note": "the fuse read that fixes the signature slot; still not the Windows 617.42 provenance",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-msi-sec2",
@@ -296,7 +305,8 @@
         "MSI_B850_SEC2_UCODE1=1",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "reads BAR0 0x824140 only, and prints WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN"
+      "note": "reads BAR0 0x824140 only, and prints WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-msi-sec2-handoff",
@@ -317,7 +327,8 @@
         "WINDOWS_HANDOFF=1"
       ],
       "requires_esp_guid": true,
-      "note": "as above, then hands off to Windows"
+      "note": "as above, then hands off to Windows",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-vram-blocks",
@@ -336,7 +347,8 @@
         "VRAM_BLOCK_PROBE=1",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "reads the 42 BAR0 words the waived transaction writes, once per verified card, and writes nothing; the safety interlock before the first actuation"
+      "note": "reads the 42 BAR0 words the waived transaction writes, once per verified card, and writes nothing; the safety interlock before the first actuation",
+      "profile": "diagnostic"
     },
     {
       "id": "diag-vram-blocks-handoff",
@@ -357,7 +369,8 @@
         "WINDOWS_HANDOFF=1"
       ],
       "requires_esp_guid": true,
-      "note": "as above, then hands off to Windows; the probe's digest is in the log either way"
+      "note": "as above, then hands off to Windows; the probe's digest is in the log either way",
+      "profile": "diagnostic"
     },
     {
       "id": "prep-selected",
@@ -375,7 +388,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "requires_selection": "any",
-      "note": "stage 2 of the donor session: runs the whole preflight, then refuses before GuInit"
+      "note": "stage 2 of the donor session: runs the whole preflight, then refuses before GuInit",
+      "profile": "diagnostic"
     },
     {
       "id": "compile-one-target",
@@ -393,7 +407,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "requires_selection": "single",
-      "note": "the CI-equivalent compile check for an operator's own selection"
+      "note": "the CI-equivalent compile check for an operator's own selection",
+      "profile": "compile-check"
     },
     {
       "id": "compile-sequence",
@@ -411,7 +426,8 @@
         "MULTI_GPU_MUTATION_ALLOWED=0"
       ],
       "requires_selection": "sequence",
-      "note": "two or more targets, one active at a time"
+      "note": "two or more targets, one active at a time",
+      "profile": "compile-check"
     },
     {
       "id": "actuate-one-target",
@@ -438,7 +454,8 @@
       ],
       "requires_selection": "single",
       "note": "stage 3 of the donor session; the only image that may write, and its own status line says it is unverified",
-      "requires_local_boot_profile": true
+      "requires_local_boot_profile": true,
+      "profile": "firmware-transaction"
     },
     {
       "id": "actuate-sequence",
@@ -460,7 +477,8 @@
       ],
       "requires_selection": "sequence",
       "note": "two or more targets, each step gated on its predecessor, no retry",
-      "requires_local_boot_profile": true
+      "requires_local_boot_profile": true,
+      "profile": "firmware-transaction"
     },
     {
       "id": "app-stop-release-sequence-bench",
@@ -498,7 +516,8 @@
         "PROM_READ=0",
         "OS_HANDOFF=NONE"
       ],
-      "note": "Bootable EFI application. At each boot it enumerates current PCI devices and selects every currently detected supported NVIDIA GPU in firmware enumeration order, without a compiled BDF list or persistent GuTargets write. Waives ASPM admission. Console policy is topology-dependent: before Stop, the image makes a best-effort attempt to display the warning through configured ConOut, including when the target is the only GOP; this attempt is not a console admission requirement. If that target is the only GOP, release diagnostics use the authoritative file log, then after ConnectController and reattachment graph verification the image makes a best-effort completion display through current ConOut; console-output failure does not invalidate the verified sequence. Otherwise ConOut, ErrOut and the live TextOut graph must resolve to a verified non-target survivor GOP, including an unselected NVIDIA peer. It runs msi_release.c Stop/release, ConnectController reattachment and protocol/GOP graph checks for the live selection, then returns to firmware without launching another EFI program. The pre-Stop warning lists each selected device's live BDF, PCI ID and subsystem ID; successful or unavailable console display is recorded in the file log. vendor/unlock_610.c is excluded and no firmware unlock transaction is called. Displays on listed GPUs may go dark, disconnect or flicker; physical display routing, reattachment, recovery and hardware behavior are unverified. No firmware asset files are loaded and PROM/signature checks are not run. File logging and the live device warning are retained; routine screen output is suppressed. For a fixed ordered subset instead, pass -SelectionBdfs with one or more BDFs when building this stop-only variant; the build embeds and reports that exact order."
+      "note": "Bootable EFI application. At each boot it enumerates current PCI devices and selects every currently detected supported NVIDIA GPU in firmware enumeration order, without a compiled BDF list or persistent GuTargets write. Waives ASPM admission. Console policy is topology-dependent: before Stop, the image makes a best-effort attempt to display the warning through configured ConOut, including when the target is the only GOP; this attempt is not a console admission requirement. If that target is the only GOP, release diagnostics use the authoritative file log, then after ConnectController and reattachment graph verification the image makes a best-effort completion display through current ConOut; console-output failure does not invalidate the verified sequence. Otherwise ConOut, ErrOut and the live TextOut graph must resolve to a verified non-target survivor GOP, including an unselected NVIDIA peer. It runs msi_release.c Stop/release, ConnectController reattachment and protocol/GOP graph checks for the live selection, then returns to firmware without launching another EFI program. The pre-Stop warning lists each selected device's live BDF, PCI ID and subsystem ID; successful or unavailable console display is recorded in the file log. vendor/unlock_610.c is excluded and no firmware unlock transaction is called. Displays on listed GPUs may go dark, disconnect or flicker; physical display routing, reattachment, recovery and hardware behavior are unverified. No firmware asset files are loaded and PROM/signature checks are not run. File logging and the live device warning are retained; routine screen output is suppressed. For a fixed ordered subset instead, pass -SelectionBdfs with one or more BDFs when building this stop-only variant; the build embeds and reports that exact order.",
+      "profile": "driver-transition"
     },
     {
       "id": "app-stop-release-sequence-handoff",
@@ -537,7 +556,8 @@
         "PROM_READ=0",
         "OS_HANDOFF=WINDOWS_AFTER_SUCCESS"
       ],
-      "note": "Uses the same runtime GPU selection, Stop/release and verified reattachment sequence as the Stop-only application. After each verified reattachment, the application makes a best-effort attempt to replace the warning on its original peer display with a success message and target address. After all targets complete, loads the Windows Boot Manager from exactly one detected non-USB EFI system partition. Rechecks the complete GPU sequence, closes the USB log, then starts Windows without a reset. A failed check blocks explicit handover. No fixed BDFs, firmware unlock, flash or NVRAM writes. Windows boot and physical recovery remain unverified."
+      "note": "Uses the same runtime GPU selection, Stop/release and verified reattachment sequence as the Stop-only application. After each verified reattachment, the application makes a best-effort attempt to replace the warning on its original peer display with a success message and target address. After all targets complete, loads the Windows Boot Manager from exactly one detected non-USB EFI system partition. Rechecks the complete GPU sequence, closes the USB log, then starts Windows without a reset. A failed check blocks explicit handover. No fixed BDFs, firmware unlock, flash or NVRAM writes. Windows boot and physical recovery remain unverified.",
+      "profile": "driver-transition"
     },
     {
       "id": "actuate-one-target-resident",
@@ -560,7 +580,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "requires_selection": "single",
-      "note": "the B9 relaxation combined with the waiver: the riskiest image this repository can build"
+      "note": "the B9 relaxation combined with the waiver: the riskiest image this repository can build",
+      "profile": "firmware-transaction"
     },
     {
       "id": "actuate-runtime-selection",
@@ -580,7 +601,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "note": "no compiled BDF, so the operator picks the target at the machine instead of at the build",
-      "requires_local_boot_profile": true
+      "requires_local_boot_profile": true,
+      "profile": "firmware-transaction"
     },
     {
       "id": "actuate-runtime-selection-resident",
@@ -601,7 +623,8 @@
         "UNVERIFIED_ACTUATION=1",
         "ACTUATION_VERIFIED=0"
       ],
-      "note": "no compiled BDF and no compiled ESP GUID: both are resolved at boot"
+      "note": "no compiled BDF and no compiled ESP GUID: both are resolved at boot",
+      "profile": "firmware-transaction"
     },
     {
       "id": "app-firmware-reattach",
@@ -640,7 +663,8 @@
         "CAN_FLASH=0",
         "RECOVERY_VERIFIED=0"
       ],
-      "note": "Combined firmware transaction and driver reattachment application. Uses runtime target selection and existing firmware admission. Requires a verified non-target NVIDIA display warning before each Stop. Verifies the existing firmware transaction and resource cleanup before closing exclusive ownership. Reconnects the original driver and verifies the restored device, child, display and peer graph. Stops the sequence on failure. Starts Windows only after all targets pass and the log closes. Retains the one-use restart record. CUDA verification is manual after Windows starts. No resume writes. Explicitly waives ASPM admission only; retains link training, negotiated width/speed and uncorrected error refusals. Historical physical PASS: RUN0002(1).TXT on RTX 4090 and RTX 3080 with connected displays, followed by Windows driver 617.42 and CUDA execution. Numerical accuracy, failed-transaction recovery and other configurations remain unverified."
+      "note": "Combined firmware transaction and driver reattachment application. Uses runtime target selection and existing firmware admission. Requires a verified non-target NVIDIA display warning before each Stop. Verifies the existing firmware transaction and resource cleanup before closing exclusive ownership. Reconnects the original driver and verifies the restored device, child, display and peer graph. Stops the sequence on failure. Starts Windows only after all targets pass and the log closes. Retains the one-use restart record. CUDA verification is manual after Windows starts. No resume writes. Explicitly waives ASPM admission only; retains link training, negotiated width/speed and uncorrected error refusals. Historical physical PASS: RUN0002(1).TXT on RTX 4090 and RTX 3080 with connected displays, followed by Windows driver 617.42 and CUDA execution. Numerical accuracy, failed-transaction recovery and other configurations remain unverified.",
+      "profile": "firmware-transaction"
     },
     {
       "id": "app-unlock",
@@ -669,7 +693,8 @@
         "CAN_FLASH=0",
         "RECOVERY_VERIFIED=0"
       ],
-      "note": "Existing U handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. RAM-only; no new S3 script requested. Not a combined reattachment/persistence profile."
+      "note": "Existing U handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. RAM-only; no new S3 script requested. Not a combined reattachment/persistence profile.",
+      "profile": "firmware-transaction"
     },
     {
       "id": "app-unlock-with-resume",
@@ -698,7 +723,8 @@
         "CAN_FLASH=0",
         "RECOVERY_VERIFIED=0"
       ],
-      "note": "Existing P handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Existing S3 resume policy is requested. Not a combined reattachment/persistence profile."
+      "note": "Existing P handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Existing S3 resume policy is requested. Not a combined reattachment/persistence profile.",
+      "profile": "firmware-transaction"
     },
     {
       "id": "app-install-driver",
@@ -727,7 +753,8 @@
         "CAN_FLASH=0",
         "RECOVERY_VERIFIED=0"
       ],
-      "note": "Existing I handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Registers only the existing companion driver path; the correctly reviewed companion must already be present. Stops after the operation instead of rebooting into itself. Not a combined reattachment/persistence profile."
+      "note": "Existing I handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Registers only the existing companion driver path; the correctly reviewed companion must already be present. Stops after the operation instead of rebooting into itself. Not a combined reattachment/persistence profile.",
+      "profile": "maintenance"
     },
     {
       "id": "app-remove-driver",
@@ -756,7 +783,8 @@
         "CAN_FLASH=0",
         "RECOVERY_VERIFIED=0"
       ],
-      "note": "Existing R handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Removes owned driver entries; does not clear the restart barrier. Stops after the operation instead of rebooting into itself. Not a combined reattachment/persistence profile."
+      "note": "Existing R handler selected by the image, without the operation menu. Existing target selection, preparation, recovery latch and admission checks remain in force. Removes owned driver entries; does not clear the restart barrier. Stops after the operation instead of rebooting into itself. Not a combined reattachment/persistence profile.",
+      "profile": "maintenance"
     },
     {
       "id": "dxe-prep-selected",
@@ -772,7 +800,8 @@
         "UNVERIFIED_ACTUATION=0"
       ],
       "requires_selection": "any",
-      "note": "the same preparation as a boot-service driver; it cannot be staged as BOOTX64.EFI"
+      "note": "the same preparation as a boot-service driver; it cannot be staged as BOOTX64.EFI",
+      "profile": "diagnostic"
     },
     {
       "id": "dxe-compile-one-target",
@@ -788,7 +817,8 @@
         "MULTI_GPU_MUTATION_ALLOWED=0"
       ],
       "requires_selection": "single",
-      "note": "proves the DXE entrypoint links for this selection"
+      "note": "proves the DXE entrypoint links for this selection",
+      "profile": "compile-check"
     },
     {
       "id": "dxe-compile-sequence",
@@ -805,7 +835,8 @@
         "MULTI_GPU_MUTATION_ALLOWED=0"
       ],
       "requires_selection": "sequence",
-      "note": "two or more targets, compile-checked only"
+      "note": "two or more targets, compile-checked only",
+      "profile": "compile-check"
     },
     {
       "id": "dxe-actuate-one-target",
@@ -826,7 +857,8 @@
       ],
       "requires_selection": "single",
       "note": "NVRAM-installed driver form; -StageDxeCompanion stages this exact paired build at EFI\\Drivers\\AdaUnlockDxe.efi, never as BOOTX64.EFI",
-      "requires_local_boot_profile": true
+      "requires_local_boot_profile": true,
+      "profile": "firmware-transaction"
     },
     {
       "id": "dxe-actuate-sequence",
@@ -847,7 +879,8 @@
       ],
       "requires_selection": "sequence",
       "note": "NVRAM-installed driver form, ordered",
-      "requires_local_boot_profile": true
+      "requires_local_boot_profile": true,
+      "profile": "firmware-transaction"
     },
     {
       "id": "dxe-stop-release-sequence-bench",
@@ -882,7 +915,8 @@
         "OS_HANDOFF=NONE"
       ],
       "note": "Dynamic DXE test that selects all currently detected supported NVIDIA GPUs in firmware enumeration order, without compiled BDFs or persistent GuTargets writes. Waives ASPM admission. Console policy is topology-dependent: before Stop, the image makes a best-effort attempt to display the warning through configured ConOut, including when the target is the only GOP; this attempt is not a console admission requirement. If that target is the only GOP, release diagnostics use the authoritative file log, then after ConnectController and reattachment graph verification the image makes a best-effort completion display through current ConOut; console-output failure does not invalidate the verified sequence. Otherwise ConOut, ErrOut and the live TextOut graph must resolve to a verified non-target survivor GOP, including an unselected NVIDIA peer. Each selected GPU runs msi_release.c driver Stop/release, then ConnectController reattachment and protocol/GOP graph verification. The pre-Stop warning lists each selected device's live BDF, PCI ID and subsystem ID; successful or unavailable console display is recorded in the file log. The vendor gpu_unlock_610 firmware transaction is excluded from the image; UNLOCK=0, FLASH=0, RESET=0. Displays on selected GPUs may go dark, disconnect, or flicker; physical reattachment, recovery and hardware behavior are unverified. No firmware asset files are loaded and PROM/signature checks are not run. File logging and the live device warning are retained; routine screen output is suppressed. The DXE driver returns to firmware after the release sequence. For a fixed ordered subset instead, pass -SelectionBdfs with one or more BDFs when building this stop-only variant; the build embeds and reports that exact order.",
-      "requires_local_boot_profile": true
+      "requires_local_boot_profile": true,
+      "profile": "driver-transition"
     },
     {
       "id": "dxe-actuate-runtime-selection",
@@ -901,7 +935,8 @@
         "ACTUATION_VERIFIED=0"
       ],
       "note": "NVRAM-installed driver, target at boot",
-      "requires_local_boot_profile": true
+      "requires_local_boot_profile": true,
+      "profile": "firmware-transaction"
     },
     {
       "id": "stop-4090-once",
@@ -925,7 +960,8 @@
         "HARDWARE_TESTED=0",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "halts after the Stop; the vendor callback can hang without a timeout"
+      "note": "halts after the Stop; the vendor callback can hang without a timeout",
+      "profile": "driver-transition"
     },
     {
       "id": "stop-4090-handoff",
@@ -947,7 +983,8 @@
         "RECOVERY_VERIFIED=0"
       ],
       "requires_esp_guid": true,
-      "note": "starts the pinned Windows Boot Manager after the Stop returns"
+      "note": "starts the pinned Windows Boot Manager after the Stop returns",
+      "profile": "driver-transition"
     },
     {
       "id": "stop-3080-once",
@@ -967,7 +1004,8 @@
         "UNLOCK=0",
         "WINDOWS_HANDOFF=0"
       ],
-      "note": "GA102 variant: requires the original 148,992-byte ROM and the original GOP driver"
+      "note": "GA102 variant: requires the original 148,992-byte ROM and the original GOP driver",
+      "profile": "driver-transition"
     },
     {
       "id": "stop-3080-handoff",
@@ -989,7 +1027,8 @@
         "RECOVERY_VERIFIED=0"
       ],
       "requires_esp_guid": true,
-      "note": "GA102 variant, then hands off to Windows"
+      "note": "GA102 variant, then hands off to Windows",
+      "profile": "driver-transition"
     },
     {
       "id": "stop-dual-handoff",
@@ -1013,7 +1052,8 @@
         "RECOVERY_VERIFIED=0"
       ],
       "requires_esp_guid": true,
-      "note": "one boot, two Stops, AMD left attached; the builder refuses this without pinned handoff"
+      "note": "one boot, two Stops, AMD left attached; the builder refuses this without pinned handoff",
+      "profile": "driver-transition"
     },
     {
       "id": "boot-state-maintenance",
@@ -1031,7 +1071,8 @@
         "NOT_FOR_AUTOMATIC_DEPLOYMENT=1",
         "HARDWARE_TESTED=0"
       ],
-      "note": "Independent maintenance application. Requires explicit deployment consent and isolated USB media. Displays the exact record, requires REARM confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified."
+      "note": "Independent maintenance application. Requires explicit deployment consent and isolated USB media. Displays the exact record, requires REARM confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified.",
+      "profile": "maintenance"
     }
   ],
   "not_buildable": [
@@ -1062,6 +1103,33 @@
     {
       "id": "dxe-prep-runtime-selection",
       "why": "a preparation-only image cannot also read its targets at boot: src/port.h requires the ordered selected-target mode (GU_ACTIVE_SINGLE_TARGET) for GU_RUNTIME_SELECTION, and src/gpu_discovery.c refuses that mode with a preflight-only profile, so no define set satisfies both - the source needs a preparation profile for runtime target selection first"
+    }
+  ],
+  "profiles": [
+    {
+      "id": "diagnostic",
+      "usage": "[-Probe Topology|GopTextCycle|MsiRom|MsiFuse|MsiSec2|VramBlocks|Preflight] [-SaveLog:$false] [selection or ESP where supported]",
+      "note": "Preflight requires explicit GPU selection and file logging. It supports -ImageKind Application|Dxe."
+    },
+    {
+      "id": "driver-transition",
+      "usage": "-Operation StopReattach|LegacyStopObservation [-ImageKind] [-Handoff] [-LegacyTarget]",
+      "note": "Retains the distinct driver-transition configurations."
+    },
+    {
+      "id": "firmware-transaction",
+      "usage": "-Operation UnlockReattach|Unlock|UnlockWithResume|Menu|DxeTransaction [-ImageKind] [-EspPolicy]",
+      "note": "The operation must be explicit."
+    },
+    {
+      "id": "maintenance",
+      "usage": "-Operation InstallDriver|RemoveDriver|ReviewBootState",
+      "note": "Retains the separate administrative configurations."
+    },
+    {
+      "id": "compile-check",
+      "usage": "[-ImageKind Application|Dxe] -SelectionBdf(s) <BDFs>",
+      "note": "Compile validation only."
     }
   ]
 }

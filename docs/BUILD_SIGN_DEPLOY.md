@@ -72,7 +72,9 @@ exact match. DXE, R, and other profiles retain their existing admission policy.
 The wrapper accepts five canonical profile names with `-Only`. It resolves
 each supported request to an existing catalogue entry. The builder, execution
 policy, safety class and staging checks stay the same. The old IDs and
-`-All` matrix remain available during migration.
+`-All` matrix remain available during migration. Use `-List` for the five public profiles.
+Use `-ListLegacy` for the full compatibility matrix. Neither command builds,
+signs or stages an image.
 
 | Profile | Options |
 | --- | --- |
@@ -92,8 +94,11 @@ Inspect a configuration without compiling, signing or staging:
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -ResolveOnly
 ```
 
-`-ResolveOnly` reports the selected catalogue ID, builder, switches, safety
-class, PE subsystem and expected attestations. It does not check the build
+`-ResolveOnly` reports the canonical profile, selected compatibility ID,
+requested profile or legacy alias, builder, switches, safety class, PE
+subsystem and expected attestations. Build receipts retain the actual verified
+attestation values separately from their templates. They identify the effective
+profile even when the request uses a legacy ID. It does not check the build
 environment, certificate, physical hardware or actual firmware execution.
 It does not permit deployment.
 

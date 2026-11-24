@@ -812,10 +812,42 @@ class CanonicalProfileResolution(unittest.TestCase):
             with self.subTest(alias=alias, canonical=canonical, extra=extra):
                 old = self.resolve(["-Only", alias] + extra)
                 new = self.resolve(["-Only"] + canonical + extra)
-                self.assertEqual(new.pop("CanonicalProfile"), canonical[0])
-                self.assertIsNone(old.pop("CanonicalProfile"))
+                self.assertEqual(new["CanonicalProfile"], canonical[0])
+                self.assertEqual(old["CanonicalProfile"], canonical[0])
+                self.assertEqual(new.pop("RequestedCanonicalProfile"), canonical[0])
+                self.assertIsNone(old.pop("RequestedCanonicalProfile"))
+                self.assertIsNone(new.pop("RequestedLegacyAlias"))
+                self.assertEqual(old.pop("RequestedLegacyAlias"), alias)
                 self.assertEqual(new, old)
                 self.assertEqual(new["VariantId"], alias)
+
+    def test_public_listing_has_five_profiles_and_legacy_listing_has_all_configs(self):
+        import subprocess
+        command = "& '" + str(SCRIPT_PATH).replace("'", "''") + "' "
+        expected = {"diagnostic", "driver-transition", "firmware-transaction", "maintenance", "compile-check"}
+        self.assertEqual({p["id"] for p in MANIFEST["profiles"]}, expected)
+        self.assertEqual(len(MANIFEST["profiles"]), 5)
+        for option in ("-List", "-ListLegacy"):
+            result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command + option],
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            profiles = re.findall(r"^PROFILE (\S+)", result.stdout, re.M)
+            variants = re.findall(r"^VARIANT (\S+) PROFILE=(\S+)", result.stdout, re.M)
+            self.assertEqual(len(profiles), 5)
+            self.assertEqual(set(profiles), expected)
+            if option == "-List":
+                self.assertEqual(variants, [])
+            else:
+                self.assertEqual(len(variants), len(MANIFEST["variants"]))
+                self.assertEqual(dict(variants), {v["id"]: v["profile"] for v in MANIFEST["variants"]})
+
+    def test_receipt_keeps_verified_values_separate_from_templates(self):
+        self.assertIn("$verifiedAttestations += $attestation", SCRIPT)
+        self.assertIn('$verifiedAttestations += "WINDOWS_ESP_GUID=$expectedEsp"', SCRIPT)
+        self.assertIn("ExpectedAttestations = @($variant.attestations)", SCRIPT)
+        self.assertIn("AttestationsVerified = $verifiedAttestations", SCRIPT)
+        self.assertIn("CanonicalProfile = $variant.profile", SCRIPT)
+        self.assertIn("HardwareVerified = $false", SCRIPT)
 
     def test_invalid_combinations_refuse_resolution(self):
         one = ["-SelectionBdf", "'0000:01:00.0'"]

@@ -52,7 +52,7 @@ reason recorded, when you do not supply one. -All cannot be combined with
 
 .PARAMETER Only
 One canonical profile with typed options, or one or more legacy variant IDs
-(see -List). Cannot be combined with -All. -ResolveOnly reports the selected
+(see -List or -ListLegacy). Cannot be combined with -All. -ResolveOnly reports the selected
 configuration without compiling, signing or staging.
 
 .PARAMETER Family
@@ -90,7 +90,10 @@ Do not prove the certificate is in the BIOS db. Records db_enrolled=UNKNOWN in
 the receipt, so a later reader can tell the difference.
 
 .PARAMETER List
-Print the catalogue and exit. Nothing is built, signed or staged.
+Print the five canonical profiles and exit. Nothing is built, signed or staged.
+
+.PARAMETER ListLegacy
+Print the complete compatibility matrix and exit. Nothing is built, signed or staged.
 
 .EXAMPLE
 # What can this repository build?
@@ -183,7 +186,8 @@ param(
     [switch]$StageDxeCompanion,
     [switch]$CapturedPromReference,
     [switch]$SkipDbCheck,
-    [switch]$List
+    [switch]$List,
+    [switch]$ListLegacy
 )
 
 Set-StrictMode -Version Latest
@@ -192,7 +196,6 @@ $script:ExplicitProfileOptions = @()
 foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','LegacyTarget','EspPolicy')) {
     if ($PSBoundParameters.ContainsKey($optionName)) { $script:ExplicitProfileOptions += $optionName }
 }
-$script:CanonicalProfiles = @('diagnostic','driver-transition','firmware-transaction','maintenance','compile-check')
 $script:RequestedCanonicalProfile = $null
 $ErrorActionPreference = 'Stop'
 
@@ -649,6 +652,7 @@ if (-not (Test-Path -LiteralPath $cataloguePath -PathType Leaf)) {
 $catalogue = Get-Content -LiteralPath $cataloguePath -Raw -Encoding UTF8 | ConvertFrom-Json
 $familyById = @{}
 foreach ($familySpec in $catalogue.families) { $familyById[$familySpec.id] = $familySpec }
+$script:CanonicalProfiles = @($catalogue.profiles | ForEach-Object { $_.id })
 
 # Translate only supported combinations to existing catalogue entries.
 # No new firmware policy, builder waiver or runtime operation is introduced here.
@@ -890,14 +894,15 @@ function Build-VariantArguments($Variant) {
     return $arguments
 }
 
-if ($List) {
-    Say 'PROFILE diagnostic -Probe Topology|GopTextCycle|MsiRom|MsiFuse|MsiSec2|VramBlocks|Preflight [-SaveLog:$false] [selection or ESP where supported]'
-    Say '  Preflight requires explicit GPU selection and file logging; supports -ImageKind Application|Dxe.'
-    Say 'PROFILE compile-check -ImageKind Application|Dxe -SelectionBdf(s) <BDFs>'
-    Say 'PROFILE driver-transition -Operation StopReattach|LegacyStopObservation [-ImageKind] [-Handoff] [-LegacyTarget]'
-    Say 'PROFILE firmware-transaction -Operation UnlockReattach|Unlock|UnlockWithResume|Menu|DxeTransaction [-ImageKind] [-EspPolicy]'
-    Say 'PROFILE maintenance -Operation InstallDriver|RemoveDriver|ReviewBootState'
-    Say 'Legacy variant IDs remain available below. Use -ResolveOnly with -Only to inspect the selected configuration without building.'
+if ($List -or $ListLegacy) {
+    foreach ($profileSpec in $catalogue.profiles) {
+        Say ("PROFILE {0} {1}" -f $profileSpec.id, $profileSpec.usage)
+        Say ("  {0}" -f $profileSpec.note)
+    }
+    if (-not $ListLegacy) {
+        Say 'Use -ListLegacy for the compatibility matrix. Use -ResolveOnly with -Only to inspect a configuration without building.'
+        exit 0
+    }
     Say ('CATALOGUE {0} variants={1} families={2}' -f $cataloguePath, @($catalogue.variants).Count, @($catalogue.families).Count)
     foreach ($familySpec in $catalogue.families) {
         Say ("FAMILY {0} BUILDER={1} SUBSYSTEM={2}" -f $familySpec.id, $familySpec.builder, $familySpec.subsystem)
@@ -905,7 +910,7 @@ if ($List) {
             $needs = @()
             if ($variant.PSObject.Properties.Name -contains 'requires_selection' -and $variant.requires_selection) { $needs += "SELECTION=$($variant.requires_selection)" }
             if ($variant.PSObject.Properties.Name -contains 'requires_esp_guid' -and $variant.requires_esp_guid) { $needs += 'ESP_GUID' }
-            Say ("VARIANT {0} SAFETY={1} BINARY={2} {3}" -f $variant.id, $variant.safety, $variant.binary, ($needs -join ' '))
+            Say ("VARIANT {0} PROFILE={1} SAFETY={2} BINARY={3} {4}" -f $variant.id, $variant.profile, $variant.safety, $variant.binary, ($needs -join ' '))
         }
     }
     foreach ($blocked in $catalogue.not_buildable) {
@@ -1023,7 +1028,9 @@ try {
         }
         $resolvedVariant = $variants[0]
         Say ([ordered]@{
-            CanonicalProfile = $script:RequestedCanonicalProfile
+            CanonicalProfile = $resolvedVariant.profile
+            RequestedCanonicalProfile = $script:RequestedCanonicalProfile
+            RequestedLegacyAlias = $(if (-not $script:RequestedCanonicalProfile) { $resolvedVariant.id } else { $null })
             VariantId = $resolvedVariant.id
             Safety = $resolvedVariant.safety
             Subsystem = $familyById[$resolvedVariant.family].subsystem
@@ -1279,6 +1286,7 @@ try {
                 $mismatch = ("Builder produced '{0}' but the catalogue expects '{1}'." -f $builtImage, $binaryName)
                 throw ($mismatch + ' Fix docs/image_variants.json; this script never renames an image.')
             }
+            $verifiedAttestations = @()
             foreach ($declared in $variant.attestations) {
                 # A count is not a constant: `SELECTED_COUNT=<selection-count>` is
                 # resolved from the operator's own selection, so the receipt has to
@@ -1298,12 +1306,14 @@ try {
                 if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape($attestation) + '(?:\s|$)')) {
                     throw "Build attestation missing or wrong for $($variantId): $declared"
                 }
+                $verifiedAttestations += $attestation
             }
             if ($variantId -eq 'app-firmware-reattach') {
                 $expectedEsp = if ($WindowsEspGuid) { ([guid]$WindowsEspGuid).ToString('D') } else { 'NONE' }
                 if ($statusLine -notmatch ('(?:^|\s)' + [regex]::Escape("WINDOWS_ESP_GUID=$expectedEsp") + '(?:\s|$)')) {
                     throw 'Combined image Windows ESP GUID attestation mismatch.'
                 }
+                $verifiedAttestations += "WINDOWS_ESP_GUID=$expectedEsp"
             }
             Assert-EfiImage $builtImage ([int]$familySpec.subsystem)
             if ((Get-Sha256 $builtImage) -ne $sourceHash) {
@@ -1354,14 +1364,17 @@ try {
 
             [ordered]@{
                 VariantId = $variantId
-                CanonicalProfile = $script:RequestedCanonicalProfile
+                CanonicalProfile = $variant.profile
+                RequestedCanonicalProfile = $script:RequestedCanonicalProfile
+                RequestedLegacyAlias = $(if (-not $script:RequestedCanonicalProfile -and @($Only | ForEach-Object { $_.Trim() }) -contains $variantId) { $variantId } else { $null })
                 Family = $variant.family
                 Safety = $variant.safety
                 WritesGpu = [bool]$catalogue.safety_classes.($variant.safety).writes_gpu
                 RequiresSelection = $(if ($variant.PSObject.Properties.Name -contains 'requires_selection') { $variant.requires_selection } else { $null })
-                Selection = $(if ($SelectionBdfs) { $SelectionBdfs } elseif ($SelectionBdf) { $SelectionBdf } else { $null })
+                Selection = $(if ($buildArguments.ContainsKey('SelectionBdfs')) { $buildArguments['SelectionBdfs'] } elseif ($buildArguments.ContainsKey('SelectionBdf')) { $buildArguments['SelectionBdf'] } else { $null })
                 Switches = $buildArguments
-                AttestationsVerified = @($variant.attestations)
+                ExpectedAttestations = @($variant.attestations)
+                AttestationsVerified = $verifiedAttestations
                 Subsystem = [int]$familySpec.subsystem
                 Repository = $RepoRoot
                 SourceEfi = $builtImage
