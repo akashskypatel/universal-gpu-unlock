@@ -259,7 +259,7 @@ Build configuration matrix (also available with `-ListConfigurations`). Configur
 
 | Configuration ID | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
-| `boot-state-maintenance` | `BOOT-STATE-MAINTENANCE.EFI` | `maintenance` | nothing | Independent maintenance application. Requires explicit deployment consent and isolated USB media. Displays the exact record, requires REARM confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified. |
+| `boot-state-maintenance` | `BOOT-STATE-MAINTENANCE.EFI` | `maintenance` | nothing | Independent maintenance application. Requires explicit deployment consent and isolated USB media. Displays the exact record, requires D/d confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified. |
 
 ### Not buildable, and why
 
@@ -289,7 +289,7 @@ For an explicitly authorized maintenance deployment, replace `G` with the isolat
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only maintenance -Operation ReviewBootState -StageDrive G -AcceptActuatingDeploy
 ```
 
-Before confirmation, photograph the reviewed record. Type `REARM` (any letter case) and press Enter only if the prerequisites are met. The image displays the entered letters. An incorrect or incomplete entry cancels on Enter; Esc cancels immediately. On success, record `REACTIVATION=RECORD_REMOVAL_VERIFIED`. Power off and remove the maintenance media. Do not remove unrelated DriverOrder entries or retry after uncertain readback.
+Before confirmation, photograph the reviewed record. Press `D` or `d` only if the prerequisites are met. No Enter is needed. Any other key cancels. On success, record `REACTIVATION=RECORD_REMOVAL_VERIFIED`. Power off and remove the maintenance media. Do not remove unrelated DriverOrder entries or retry after uncertain readback.
 
 `<label>` is the repository's own selection label from
 `src/Gpu-Selection-Build.ps1`: `0000:01:00.0` becomes `0000-01-00-0`, two targets

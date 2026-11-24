@@ -18,19 +18,15 @@ static EFI_STATUS Say(EFI_SYSTEM_TABLE *t,const char *fmt,...) {
 }
 
 static EFI_STATUS Confirm(EFI_SYSTEM_TABLE *t) {
-  static const CHAR16 expected[]=L"REARM";
   EFI_STATUS s=t->ConIn->Reset(t->ConIn,FALSE);
   if(s!=EFI_SUCCESS)return s;
   s=Say(t,"Preserve the log and photograph this record before continuing.\r\n"
           "Confirm separately authorized next experiment, stock recovery,\r\n"
           "and removal of all active experiment boot media.\r\n"
-          "Type REARM (any letter case), then Enter to remove only the reviewed record.\r\n"
-          "An incorrect entry or Esc cancels. This does not accept a GPU result.\r\n"
-          "Confirmation: ");
+          "Press D or d to delete only the reviewed record. No Enter needed.\r\n"
+          "Any other key cancels. This does not accept a GPU result.\r\n");
   if(s!=EFI_SUCCESS)return s;
   EFI_EVENT event=t->ConIn->WaitForKey;
-  size_t count=0;
-  BOOLEAN invalid=FALSE;
   for(;;) {
     UINTN index=0;
     s=t->BootServices->WaitForEvent(1,&event,&index);
@@ -40,23 +36,8 @@ static EFI_STATUS Confirm(EFI_SYSTEM_TABLE *t) {
     s=t->ConIn->ReadKeyStroke(t->ConIn,&key);
     if(s==EFI_NOT_READY)continue;
     if(s!=EFI_SUCCESS)return s;
-    if(key.ScanCode==SCAN_ESC)return EFI_ABORTED;
-    if(key.ScanCode==0&&key.UnicodeChar==L'\r') {
-      s=Say(t,"\r\n");
-      if(s!=EFI_SUCCESS)return s;
-      return !invalid&&count==sizeof(expected)/sizeof(expected[0])-1?
-        EFI_SUCCESS:EFI_ABORTED;
-    }
-    CHAR16 letter=key.UnicodeChar;
-    if(letter>=L'a'&&letter<=L'z')letter=(CHAR16)(letter-L'a'+L'A');
-    /* Invalid or excess input is sticky until Enter. Never confirm a prefix,
-     * and never return to firmware just because a printable key differs. */
-    if(key.ScanCode!=0||count>=sizeof(expected)/sizeof(expected[0])-1||
-       letter!=expected[count])invalid=TRUE;
-    else count++;
-    s=Say(t,"%c",(letter>=L'A'&&letter<=L'Z'&&key.ScanCode==0)?
-          (int)letter:'?');
-    if(s!=EFI_SUCCESS)return s;
+    return key.ScanCode==0&&(key.UnicodeChar==L'D'||key.UnicodeChar==L'd')?
+      EFI_SUCCESS:EFI_ABORTED;
   }
 }
 
