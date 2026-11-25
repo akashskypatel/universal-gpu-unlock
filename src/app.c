@@ -18,6 +18,10 @@
 #error Stop-only Windows handover requires runtime selection, runtime ESP discovery and file-only Stop scope
 #endif
 
+#if defined(GU_SELECT_ALL_GPUS) && (!defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_SELECTION))
+#error Automatic all-GPU selection requires combined runtime firmware reattachment
+#endif
+
 #if defined(GU_APP_OPERATION)
 #if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_SYNTHETIC_COMPILE_ONLY) || defined(GU_ASSET_INSTALL_ONLY)
 #error A fixed application operation requires the ordinary explicitly waived application
@@ -71,6 +75,13 @@ static EFI_STATUS ShowTargetChoice(EFI_SYSTEM_TABLE *t,size_t choice,
  * selection profiles continue to acquire operator policy through GuTargets. */
 static EFI_STATUS ResolveTargetsOnConsole(EFI_SYSTEM_TABLE *t) {
   if(!t||!t->BootServices)return EFI_INVALID_PARAMETER;
+#ifdef GU_SELECT_ALL_GPUS
+  if(!GuBootLogOpen())return EFI_DEVICE_ERROR;
+  EFI_STATUS automatic=GuRuntimeSelectionSelectAll();
+  GuLog("ACTIVE_SELECTION=POLICY_ALL SOURCE=BUILD_OPTION STATUS=%#llx\n",
+        (unsigned long long)automatic);
+  return automatic!=EFI_SUCCESS?automatic:(GuBootLogOpen()?EFI_SUCCESS:EFI_DEVICE_ERROR);
+#endif
 #ifdef GU_STOP_RELEASE_ONLY_BENCH
   /* Select the supported NVIDIA devices found by the discovery pass that
    * follows. This is an in-memory policy; do not persist a stale BDF or ALL. */

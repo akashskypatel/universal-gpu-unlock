@@ -164,6 +164,7 @@ param(
     [string]$SelectionBdf,
     [string]$SelectionBdfs,
     [string]$WindowsEspGuid,
+    [switch]$SelectAllGpus,
     [string]$WslDistribution,
     [string]$WslUser,
     [string]$VcVars,
@@ -203,6 +204,9 @@ foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','O
     if ($PSBoundParameters.ContainsKey($optionName)) { $script:ExplicitProfileOptions += $optionName }
 }
 $script:RequestedCanonicalProfile = $null
+if ($SelectAllGpus -and ($Only -ne 'firmware-transaction' -or $Operation -ne 'UnlockReattach' -or $All -or $Family -or $List -or $ListConfigurations)) {
+    throw '-SelectAllGpus requires -Only firmware-transaction -Operation UnlockReattach.'
+}
 $script:DiskStageRequested = $PSBoundParameters.ContainsKey('StageDisk') -and $StageDisk
 $stageArgumentCount = if ($null -eq $StageTargetArgument) { 0 } else { $StageTargetArgument.Count }
 if ($stageArgumentCount -gt 1 -or ($stageArgumentCount -and -not ($StageDrive -or $script:DiskStageRequested))) {
@@ -1287,6 +1291,9 @@ function Get-ResolvedAttestations($Variant) {
             $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION',
                 ('TARGET_ORDER=' + ($script:SelectionSpec.Locations -join ',')))
         }
+        if ($SelectAllGpus -and (Test-VariantSwitch $Variant 'FirmwareReattach')) {
+            $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_OPERATOR_SELECTION', 'TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION')
+        }
         if ($attestation -match '<[^>]+>') {
             throw "Unknown attestation placeholder for $($Variant.id): $declared"
         }
@@ -1324,6 +1331,9 @@ function Build-VariantArguments($Variant) {
         if ($SelectionBdf) { $arguments['SelectionBdf'] = $SelectionBdf }
         elseif ($SelectionBdfs) { $arguments['SelectionBdfs'] = $SelectionBdfs }
         else { throw 'SELECTION_REQUIRED' }
+    }
+    if ((Test-VariantSwitch $Variant 'FirmwareReattach') -and $SelectAllGpus) {
+        $arguments['SelectAllGpus'] = $true
     }
     if ((Test-VariantSwitch $Variant 'FirmwareReattach') -and $WindowsEspGuid) {
         $arguments['WindowsEspGuid'] = $WindowsEspGuid

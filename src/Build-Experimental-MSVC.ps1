@@ -8,6 +8,7 @@ param(
     [switch]$StopReleaseOnlyBench,
     [switch]$StopReleaseWindowsHandoff,
     [switch]$FirmwareReattach,
+    [switch]$SelectAllGpus,
     [switch]$FileOnlyBootLog,
     [switch]$RuntimeSelection,
     [switch]$RuntimeEsp,
@@ -21,6 +22,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $espPinText = 'NONE'
 $stagePinText = 'NONE'
+if ($SelectAllGpus -and -not $FirmwareReattach) { throw '-SelectAllGpus requires -FirmwareReattach.' }
 if ($StagePartitionGuid) {
     if (-not $FirmwareReattach) { throw '-StagePartitionGuid requires -FirmwareReattach.' }
     . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
@@ -119,6 +121,7 @@ try {
     }
 
     if ($FirmwareReattach) { $clFlags += ' /DGU_FIRMWARE_REATTACH' }
+    if ($SelectAllGpus) { $clFlags += ' /DGU_SELECT_ALL_GPUS' }
     if ($fixedOperation) {
         $clFlags += " /DGU_APP_OPERATION=$($operationKeys[$ApplicationOperation])"
     }
@@ -197,7 +200,7 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    $targetOrder = if ($FirmwareReattach) { 'RUNTIME_OPERATOR_SELECTION' } elseif ($StopReleaseOnlyBench -and $RuntimeSelection) { 'RUNTIME_SUPPORTED_NVIDIA_ENUMERATION' } else { $selection.Locations -join ',' }
+    $targetOrder = if ($SelectAllGpus) { 'RUNTIME_SUPPORTED_NVIDIA_ENUMERATION' } elseif ($FirmwareReattach) { 'RUNTIME_OPERATOR_SELECTION' } elseif ($StopReleaseOnlyBench -and $RuntimeSelection) { 'RUNTIME_SUPPORTED_NVIDIA_ENUMERATION' } else { $selection.Locations -join ',' }
     $reportedSelectedCount = if ($FirmwareReattach -or ($StopReleaseOnlyBench -and $RuntimeSelection)) { 'RUNTIME' } else { [string]$selection.Count }
     $singleTargetActive = if ($StopReleaseOnlyBench) { 0 } else { [int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1)) }
     $stopOnlyAssertions = if ($StopReleaseWindowsHandoff) { 'FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 OS_HANDOFF=WINDOWS_AFTER_SUCCESS' } elseif ($StopReleaseOnlyBench) { 'FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 OS_HANDOFF=NONE' } else { '' }

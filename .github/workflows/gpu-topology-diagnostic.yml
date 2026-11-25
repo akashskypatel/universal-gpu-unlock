@@ -701,6 +701,9 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Explicit Windows ESP combined compilation failed'}
             $pinnedStatus = @($pinnedCombined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
             if($pinnedStatus.Count -ne 1 -or "$($pinnedStatus[0])" -notmatch 'WINDOWS_ESP_GUID=12345678-1234-5678-9abc-def012345678'){throw 'Explicit Windows ESP attestation mismatch'}
+            $autoCombined = & .\src\Build-Experimental-MSVC.ps1 -FirmwareReattach -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation Unlock -SelectAllGpus -WindowsEspGuid '12345678-1234-5678-9abc-def012345678' -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            $autoStatus = @($autoCombined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+            if($autoStatus.Count -ne 1 -or "$($autoStatus[0])" -notmatch 'TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION WINDOWS_ESP_GUID=12345678-1234-5678-9abc-def012345678 STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789'){throw 'Automatic selection and partition pin attestation mismatch'}
             & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime app compilation failed'}
             if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI)){throw 'Stop-only runtime EFI missing'}

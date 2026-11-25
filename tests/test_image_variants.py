@@ -1220,12 +1220,23 @@ if ($Mode -eq 0) {
         result = self.resolve(combined)
         self.assertNotIn("WindowsEspGuid", result["Switches"])
         self.assertIn("WINDOWS_ESP_GUID=NONE", result["ResolvedAttestations"])
+        self.assertNotIn("SelectAllGpus", result["Switches"])
+        self.assertIn("TARGET_ORDER=RUNTIME_OPERATOR_SELECTION", result["ResolvedAttestations"])
+        result = self.resolve(combined + ["-SelectAllGpus", "-WindowsEspGuid", guid])
+        self.assertTrue(result["Switches"]["SelectAllGpus"])
+        self.assertEqual(result["Switches"]["WindowsEspGuid"], guid)
+        self.assertIn("TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION", result["ResolvedAttestations"])
+        self.assertNotIn("TARGET_ORDER=RUNTIME_OPERATOR_SELECTION", result["ResolvedAttestations"])
+        self.assertIn("WINDOWS_ESP_GUID=" + guid, result["ResolvedAttestations"])
+        self.resolve(combined + ["-SelectAllGpus"] + two, valid=False)
+        self.resolve(["-Only", "diagnostic", "-SelectAllGpus"], valid=False)
         for operation in ("Unlock", "UnlockWithResume"):
             args = ["-Only", "firmware-transaction", "-Operation", operation]
             result = self.resolve(args)
             self.assertNotIn("WindowsEspGuid", result["Switches"])
             self.assertFalse(any(a.startswith("WINDOWS_ESP_GUID=") for a in result["ResolvedAttestations"]))
             self.resolve(args + ["-WindowsEspGuid", guid], valid=False)
+            self.resolve(args + ["-SelectAllGpus"], valid=False)
 
     def test_paired_transaction_predicate_accepts_only_original_pair(self):
         import subprocess

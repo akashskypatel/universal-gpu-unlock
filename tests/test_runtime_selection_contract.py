@@ -192,10 +192,10 @@ typedef struct { void (*Stall)(unsigned); } BS;
 typedef struct { BS *BootServices;IN *ConIn; } EFI_SYSTEM_TABLE;
 static unsigned count,shown,chosen,all,calls;
 static CHAR16 key;
-static int display_error;
+static int display_error, selection_error, log_open=1;
 static void GuLog(const char *fmt,...){(void)fmt;}
 static void GuBootSay(const CHAR16 *msg){(void)msg;}
-static int GuBootLogOpen(void){return 1;}
+static int GuBootLogOpen(void){return log_open;}
 static EFI_STATUS GuPrepareGpuSequence(EFI_SYSTEM_TABLE *t,void *r,size_t n,GU_GPU_PREPARED_SEQUENCE *p){
   (void)t;(void)r;(void)n;p->inventory.count=count;
   p->inventory.nvidia[0]=(GU_GPU_RECORD){0,1,0,0,0x268410de};
@@ -204,7 +204,7 @@ static EFI_STATUS GuPrepareGpuSequence(EFI_SYSTEM_TABLE *t,void *r,size_t n,GU_G
 static EFI_STATUS ShowTargetChoice(EFI_SYSTEM_TABLE *t,size_t i,const GU_GPU_RECORD *r){
   (void)t;(void)i;(void)r;shown++;return display_error;
 }
-static EFI_STATUS GuRuntimeSelectionSelectAll(void){all++;return 0;}
+static EFI_STATUS GuRuntimeSelectionSelectAll(void){all++;return selection_error;}
 static EFI_STATUS GuRuntimeSelectionChoose(const GU_GPU_LOCATION *p){chosen=p->bus;return 0;}
 static EFI_STATUS Read(IN *in,EFI_INPUT_KEY *out){
   (void)in;calls++;if(!key)return EFI_NOT_FOUND;
@@ -214,6 +214,13 @@ static void Stall(unsigned n){(void)n;}
 """ + menu + r"""
 int main(void){
   BS bs={Stall};IN in={Read};EFI_SYSTEM_TABLE t={&bs,&in};
+#ifdef GU_SELECT_ALL_GPUS
+  t.ConIn=NULL;count=2;
+  assert(ResolveTargetsOnConsole(NULL)==EFI_INVALID_PARAMETER&&all==0);
+  log_open=0;assert(ResolveTargetsOnConsole(&t)==EFI_DEVICE_ERROR&&all==0);
+  log_open=1;assert(ResolveTargetsOnConsole(&t)==0&&all==1&&shown==0&&calls==0&&chosen==0);
+  selection_error=7;assert(ResolveTargetsOnConsole(&t)==7&&all==2&&calls==0);
+#else
   count=2;key='A';assert(ResolveTargetsOnConsole(&t)==0&&all==1&&shown==2);
   key='2';assert(ResolveTargetsOnConsole(&t)==0&&chosen==4);
   key='S';assert(ResolveTargetsOnConsole(&t)==EFI_NOT_FOUND&&all==1&&chosen==4);
@@ -221,17 +228,18 @@ int main(void){
   count=1;key='S';assert(ResolveTargetsOnConsole(&t)==EFI_NOT_FOUND&&all==1&&chosen==4);
   key='1';assert(ResolveTargetsOnConsole(&t)==0&&chosen==1);
   display_error=7;key='A';assert(ResolveTargetsOnConsole(&t)==7&&all==1);
+#endif
   return 0;
 }
 """
         for compiler in compilers():
-            with self.subTest(compiler=compiler):
-                with tempfile.TemporaryDirectory() as tmp:
+            for flags in ([], ["-DGU_SELECT_ALL_GPUS"]):
+                with self.subTest(compiler=compiler, flags=flags), tempfile.TemporaryDirectory() as tmp:
                     src = Path(tmp) / "menu.c"
                     binary = Path(tmp) / "menu"
                     src.write_text(mock, encoding="utf-8")
                     build = subprocess.run([compiler, "-std=c11", "-fshort-wchar",
-                                            "-Wall", "-Wextra", "-Werror", "-pedantic",
+                                            "-Wall", "-Wextra", "-Werror", "-pedantic", *flags,
                                             str(src), "-o", str(binary)],
                                            capture_output=True, text=True)
                     self.assertEqual(build.returncode, 0, build.stderr)

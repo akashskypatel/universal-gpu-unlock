@@ -106,6 +106,8 @@ companion DXE driver and halts; P still requests the existing S3 resume policy.
 The explicit combined `-WindowsEspGuid` option bypasses the menu and requires one
 exact match. DXE, R, and other profiles retain their existing admission policy.
 
+Optional `-SelectAllGpus` is valid only with `-Only firmware-transaction -Operation UnlockReattach`. It selects all currently supported NVIDIA GPUs from the live inventory without a target prompt or persistent selection record. It preserves sequential execution, recovery checks, and all admission conditions. Without the switch, a fresh interactive selection remains mandatory. Combine it with `-WindowsEspGuid` and `-StageDisk` if applicable. The verified build receipt reports `TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION` instead of `RUNTIME_OPERATOR_SELECTION`.
+
 ## Canonical profiles and arguments
 
 Use `-Only <profile>` with the operation-specific arguments below. The five
@@ -148,7 +150,7 @@ distinct. ESP = EFI System Partition. DXE = Driver Execution Environment.
 
 | Operation | Arguments | Restrictions |
 | --- | --- | --- |
-| `UnlockReattach` | Optional `-WindowsEspGuid`, `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list. Combined transaction and original-driver reattachment. No resume writes. |
+| `UnlockReattach` | Optional `-WindowsEspGuid`, `-EspPolicy Runtime`, `-SelectAllGpus` | Runtime application selection only. No compiled BDF list. Combined transaction and original-driver reattachment. No resume writes. |
 | `Unlock` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. RAM-only. |
 | `UnlockWithResume` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. Requests the existing S3 resume policy. Physical resume verification is pending. |
 | `Menu` | `-SelectionBdf` or `-SelectionBdfs`, `-EspPolicy Pinned/Resident` | Application only. Omit selection for runtime selection. Pinned is default and needs private ESP profile. Resident supports zero or one compiled target, not a sequence. No explicit ESP pin. |
@@ -191,6 +193,7 @@ captured reference options apply.
 | `-All`, `-Family <builder-family>` | Build matrix controls. No canonical operation options with a matrix request. |
 | `-SelectionBdf`, `-SelectionBdfs` | One compiled PCI bus/device/function address (BDF), or a comma-separated ordered list, where supported. Do not combine them. |
 | `-WindowsEspGuid` | Unique GPT partition GUID, where supported. Not the disk GUID or ESP type GUID. |
+| `-SelectAllGpus` | Explicit live selection of all supported GPUs for UnlockReattach only. No selection prompt or persistent target record. |
 | `-CapturedPromReference` | Include existing captured references for supported application-builder configurations. Not a signature-authentication claim. |
 | `-StageDxeCompanion` | Existing paired one-target menu application and DXE driver deployment only. |
 | `-VcVars` | Explicit path to the Visual Studio x64 environment script. All five builders use shared environment discovery when omitted. |
