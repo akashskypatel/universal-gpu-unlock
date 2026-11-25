@@ -532,12 +532,12 @@ VOID GuTracePhase(const char *phase) {
   TraceFormat(line,sizeof(line),"[gu] %u %s (%s)\r\n",(unsigned)TraceSteps,
            phase?phase:"?",TraceElapsedText(elapsed,sizeof(elapsed)));
   TraceSay(line);
-  if(TraceBootClockStarted&&phase) {
+  if((TraceBootClockStarted||TraceBootFineValid)&&phase) {
     const char *a=phase,*b="close-USB-log";
     while(*a&&*a==*b){a++;b++;}
     UINTN now=0;
     if(!*a&&!*b) {
-      if(TraceClock(&now))GuLog("TRACE_BOOT TOTAL_SECONDS=%u\n",
+      if(TraceBootClockStarted&&TraceClock(&now))GuLog("TRACE_BOOT TOTAL_SECONDS=%u\n",
         (unsigned)((now+86400U-TraceBootStartSeconds)%86400U));
       UINT64 end=0,ms=0;char value[24];
       BOOLEAN fine=TraceBootFineValid&&TraceFineClock(&end)&&
@@ -993,7 +993,7 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
     char file_value[24],read_value[24],progress_value[24],rtc_value[24];
     fine_file=fine_file&&TraceFineClock(&file_end)&&TraceFineDelta(file_start,file_end,&file_ms);
     file_rtc=file_rtc&&TraceClock(&file_rtc_end);
-    GuTraceDetail("asset-file-timing","SOURCE=%s BYTES=%u FILE_SECONDS=%s FILE_MS=%s READ_MS=%s PROGRESS_MS=%s",
+    GuTraceDetail("asset-file-timing","SOURCE=%s BYTES=%u FILE_SECONDS=%s FILE_MS=%s READ_MS=%s READ_PROGRESS_MS=%s",
       root==Root?"LAUNCH_ROOT":"ESP_FALLBACK",(unsigned)expected,
       TraceMsText(file_rtc,(file_rtc_end+86400U-file_rtc_start)%86400U,rtc_value,sizeof(rtc_value)),
       TraceMsText(fine_file,file_ms,file_value,sizeof(file_value)),

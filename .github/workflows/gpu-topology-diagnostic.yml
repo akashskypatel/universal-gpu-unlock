@@ -212,6 +212,7 @@ jobs:
             python3 -m unittest discover -s tests -p test_boot_binding_contract.py -v
             python3 -m unittest discover -s tests -p test_driver_nvram_capacity.py -v
             python3 -m unittest discover -s tests -p test_compat_dma_mask.py -v
+            python3 -m unittest discover -s tests -p test_actuation_trace.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             CC=clang python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_turing_cold_state.py -v
