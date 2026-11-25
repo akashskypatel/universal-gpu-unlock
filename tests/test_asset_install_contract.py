@@ -140,7 +140,20 @@ class ExistingFilesAreNeverOverwritten(unittest.TestCase):
         # fresh one; neither is used.
         for forbidden in ("EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0)\n    s=",):
             self.assertNotIn(forbidden, STAGE_ONE)
-        self.assertNotIn("->Delete", BOOT)
+        # Only the explicitly authorized combined-application log cleanup
+        # may delete a file. The installer and its shared asset I/O remain
+        # deletion-free, including when cleanup support is compiled in.
+        cleanup = function_body(BOOT, "static EFI_STATUS DeleteOldRunLogs(")
+        self.assertEqual(BOOT.count(cleanup), 1)
+        self.assertNotIn("->Delete", BOOT.replace(cleanup, "", 1))
+        self.assertEqual(cleanup.count("->Delete("), 1)
+        self.assertIn("slot&&slot!=current", cleanup)
+        self.assertIn("RunLogInfoSlot((const VOID *)words,bytes)!=slot", cleanup)
+        self.assertNotIn("DeleteOldRunLogs", INSTALLER)
+        self.assertNotIn("DeleteOldRunLogs", STAGE_ONE)
+        self.assertEqual(BOOT.count("DeleteOldRunLogs("), 2)
+        self.assertIn('s=Root->Open(Root,&dir,L"\\\\AD102-UNLOCK"', cleanup)
+        self.assertIn("LogVolumeFull(total,free_bytes)", cleanup)
         self.assertNotIn("SetInfo", BOOT)
 
     def test_a_refusal_stops_the_whole_bundle(self):
