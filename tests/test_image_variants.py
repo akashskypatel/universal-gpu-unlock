@@ -448,7 +448,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
                       "NO_BOOT_ENTRY_CHANGE=1", "NO_RESET=1", "HARDWARE_TESTED=0"):
             self.assertIn(token, variant["attestations"])
             self.assertIn(token, builder)
-        gate = SCRIPT.index("if ($safety.may_be_staged -ne $true -and -not $AcceptActuatingDeploy)")
+        gate = SCRIPT.index("if (($safety.may_be_staged -ne $true -or ($installerVariant -and $catalogue.safety_classes.($installerVariant.safety).may_be_staged -ne $true)) -and -not $AcceptActuatingDeploy)")
         maintenance = SCRIPT.index("if ($deployVariant.safety -eq 'maintenance')")
         self.assertLess(gate, maintenance)
         stage = SCRIPT[SCRIPT.index("function Stage-SignedEfi"):SCRIPT.index("# --- catalogue")]
@@ -481,6 +481,13 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertIn("if ($result.id -eq $stageVariantId) { $result.destination = $bootDeployment.Path }", SCRIPT)
         self.assertIn("$companion[0]) + @($variants)", SCRIPT)
         self.assertIn("Stage-SignedDxeCompanion", SCRIPT)
+        self.assertIn("$dxeStageVariantId = $stageVariantId\n            $stageVariantId = [string]$installerVariant.id", SCRIPT)
+        self.assertIn("$variants = @($variants) + @($installerVariant)", SCRIPT)
+        self.assertIn("if ($pairedStage -and $stageVariantId -eq $variantId)", SCRIPT)
+        self.assertIn("elseif ($pairedStage -and $dxeStageVariantId -eq $variantId)", SCRIPT)
+        paired = SCRIPT[SCRIPT.index("if ($pairedStage) {\n        if (-not $pendingDxeImage"):]
+        self.assertLess(paired.index("if (-not $pendingDxeImage -or -not $pendingBootImage"), paired.index("Stage-SignedDxeCompanion -Drive"))
+        self.assertIn("Restore-DxeCompanionDeployment $dxeDeployment", paired)
         self.assertIn("Join-Path $bootDir $imageName", SCRIPT)
         self.assertIn("EFI\\Drivers\\AdaUnlockDxe.efi", SCRIPT)
         self.assertIn("STAGED_DXE_COMPANION PATH=", SCRIPT)
@@ -739,7 +746,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
 
 
     def test_all_gpu_writing_configurations_stage_firmware_assets(self):
-        self.assertIn("$safety = $catalogue.safety_classes.($deployVariant.safety)\n        if ($safety.writes_gpu) { $assetRepoForStage = $RepoRoot }", SCRIPT)
+        self.assertIn("$safety = $catalogue.safety_classes.($deployVariant.safety)\n        if ($safety.writes_gpu -or ($installerVariant -and $catalogue.safety_classes.($installerVariant.safety).writes_gpu)) { $assetRepoForStage = $RepoRoot }", SCRIPT)
         for variant in MANIFEST["variants"]:
             safety = MANIFEST["safety_classes"][variant["safety"]]
             self.assertEqual(safety["writes_gpu"], variant["safety"] in ("actuates", "stop-only"), variant["id"])
@@ -1269,8 +1276,21 @@ if ($Mode -eq 0) {
                     attestations.append("STAGE_PARTITION_GUID=NONE")
                 self.assertEqual(new["ResolvedAttestations"], attestations)
                 self.assertNotIn("RequestedLegacyAlias", new)
+                installer_expected = expected["family"] == "prepare-dxe" and not switches.get("SyntheticCompileProfile")
+                if installer_expected:
+                    installer = variants["app-install-driver"]
+                    self.assertEqual(new["Installer"]["VariantId"], installer["id"])
+                    self.assertEqual(new["Installer"]["Subsystem"], 10)
+                    self.assertEqual(new["Installer"]["Builder"], FAMILY[installer["family"]]["builder"])
+                    self.assertEqual(new["Installer"]["Switches"], installer["switches"])
+                    self.assertEqual(new["Installer"]["ResolvedAttestations"], installer["attestations"])
+                else:
+                    self.assertIsNone(new["Installer"])
                 rewritten = self.resolve(["-Only"] + canonical + extra, script_path=renamed_script)
                 self.assertEqual(rewritten.pop("VariantId"), "rewritten-" + configuration)
+                if installer_expected:
+                    self.assertEqual(rewritten["Installer"]["VariantId"], "rewritten-app-install-driver")
+                    rewritten["Installer"]["VariantId"] = new["Installer"]["VariantId"]
                 self.assertEqual(rewritten, {key: value for key, value in new.items() if key != "VariantId"})
 
     def test_stop_selection_and_combined_esp_follow_builder_configuration(self):

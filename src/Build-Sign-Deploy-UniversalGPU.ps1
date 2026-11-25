@@ -40,7 +40,7 @@ One named variant can be staged on a verified writable non-system FAT32 volume,
 after a verified local backup of the file being replaced. Applications use
 EFI\BOOT\BOOTX64.EFI; DXE drivers use EFI\Drivers\AdaUnlockDxe.efi.
 Stop-only and actuating images stage the complete firmware asset bundle and
-require -AcceptActuatingDeploy. Maintenance record review also requires explicit consent. For the waived one-target app, -StageDxeCompanion additionally
+require -AcceptActuatingDeploy. Maintenance record review also requires explicit consent. Executable DXE profiles also build and sign the existing InstallDriver application and stage both files when a target is supplied. Synthetic compile-check images remain standalone. For the waived one-target app, -StageDxeCompanion additionally
 builds, signs and stages its matching DXE image at
 EFI\Drivers\AdaUnlockDxe.efi for the app's explicit I path.
 
@@ -1041,7 +1041,7 @@ function Stage-SignedEfi {
         if ((Get-Sha256 $savedOld) -ne $oldSha -or (Get-Sha256 $destination) -ne $oldSha) {
             throw 'Existing BOOTX64.EFI backup verification failed; existing EFI not removed.'
         }
-        Say "Verified original USB BOOTX64.EFI backup: $savedOld"
+        Say "Verified original $imageName backup: $savedOld"
     }
 
     $stagedFirmwareAssets = @()
@@ -1329,6 +1329,19 @@ function Test-PairedTransactionVariant($Variant, [string]$Family) {
             (Test-VariantSwitch $Variant 'AcceptUnverifiedActuation'))
 }
 
+# Every executable DXE profile needs the existing registration application.
+# Synthetic compile-only images are not intended for registration.
+function Get-DxeInstallerVariant($Variant) {
+    if ($Variant.family -ne 'prepare-dxe' -or (Test-VariantSwitch $Variant 'SyntheticCompileProfile')) { return $null }
+    $installer = @($catalogue.variants | Where-Object {
+        $_.family -eq 'prepare' -and $_.profile -eq 'maintenance' -and
+        $_.safety -eq 'actuates' -and $_.switches.PSObject.Properties['ApplicationOperation'] -and
+        $_.switches.ApplicationOperation -eq 'InstallDriver'
+    })
+    if ($installer.Count -ne 1) { throw 'Catalogue must contain exactly one DXE registration application.' }
+    return $installer[0]
+}
+
 function Test-DxeFirmwareTransaction($Variant) {
     return ($Variant.family -eq 'prepare-dxe' -and (Test-VariantSwitch $Variant 'AcceptUnverifiedActuation') -and -not (Test-VariantSwitch $Variant 'StopReleaseOnlyBench'))
 }
@@ -1550,6 +1563,9 @@ try {
     $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
     $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf
     $variants = @(Select-Variants)
+    $installerVariant = $null
+    if ($Only -and $variants.Count -eq 1) { $installerVariant = Get-DxeInstallerVariant $variants[0] }
+    $pairedStage = [bool]($StageDxeCompanion -or ($installerVariant -and ($StageDrive -or $script:DiskStageRequested)))
     if ($ResolveOnly) {
         if (-not $Only -or $variants.Count -ne 1 -or $StageDrive -or $StageDxeCompanion) {
             throw '-ResolveOnly requires one explicit selection and does not permit deployment.'
@@ -1576,6 +1592,11 @@ try {
             BuildPrerequisite = $resolutionPrerequisite
             ExpectedAttestations = @($resolvedVariant.attestations)
             ResolvedAttestations = @(Get-ResolvedAttestations $resolvedVariant)
+            Installer = $(if ($installerVariant) {
+                [ordered]@{ VariantId=$installerVariant.id; Subsystem=10; Builder=$familyById[$installerVariant.family].builder;
+                    Switches=(Build-VariantArguments $installerVariant); Binary=(Get-VariantBinary $installerVariant);
+                    ResolvedAttestations=@(Get-ResolvedAttestations $installerVariant) }
+            } else { $null })
         } | ConvertTo-Json -Depth 6 -Compress)
         exit 0
     }
@@ -1601,9 +1622,9 @@ try {
         $deployVariant = $variants[0]
         $stageVariantId = $deployVariant.id
         $safety = $catalogue.safety_classes.($deployVariant.safety)
-        if ($safety.writes_gpu) { $assetRepoForStage = $RepoRoot }
+        if ($safety.writes_gpu -or ($installerVariant -and $catalogue.safety_classes.($installerVariant.safety).writes_gpu)) { $assetRepoForStage = $RepoRoot }
         # A DXE boot-service driver cannot be staged as BOOTX64.EFI; select its driver path by subsystem.
-        if ($safety.may_be_staged -ne $true -and -not $AcceptActuatingDeploy) {
+        if (($safety.may_be_staged -ne $true -or ($installerVariant -and $catalogue.safety_classes.($installerVariant.safety).may_be_staged -ne $true)) -and -not $AcceptActuatingDeploy) {
             throw ("Refusing to stage {0}: safety={1} writes_gpu={2}. Add -AcceptActuatingDeploy if the donor card, the recovery toolkit and the session plan are ready." -f
                    $deployVariant.id, $deployVariant.safety, $safety.writes_gpu)
         }
@@ -1613,7 +1634,8 @@ try {
             }
             Say 'WARNING: maintenance can remove GuBootState only after explicit D/d confirmation. Existing firmware driver registration must be removed before record deletion.'
         }
-        if ($safety.writes_gpu) {
+        if ($installerVariant) { Say ("DXE_INSTALLER_SELECTED id={0} PATH=EFI\BOOT\BOOTX64.EFI" -f $installerVariant.id) }
+        if ($safety.writes_gpu -or $installerVariant) {
             Say ("WARNING: staging ACTUATING_IMAGE={0} SAFETY={1}; it may write the GPU. Recovery toolkit on the bench is not optional." -f
                  $deployVariant.id, $deployVariant.safety)
         }
@@ -1632,6 +1654,14 @@ try {
         # Build/sign the resident driver first; the boot application is staged
         # only after its companion has been prepared successfully.
         $variants = @($companion[0]) + @($variants)
+    } elseif ($installerVariant) {
+        # The requested driver stays first; both artifacts must be signed
+        # before the paired deployment replaces either EFI executable.
+        if ($pairedStage) {
+            $dxeStageVariantId = $stageVariantId
+            $stageVariantId = [string]$installerVariant.id
+        }
+        $variants = @($variants) + @($installerVariant)
     }
 
     $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
@@ -1705,6 +1735,11 @@ try {
         $skipReason = Test-VariantSelection $deployVariant
         if ($skipReason) { throw "Cannot provision for $($deployVariant.id): $skipReason" }
         [void](Build-VariantArguments $deployVariant)
+        if ($installerVariant) {
+            $skipReason = Test-VariantSelection $installerVariant
+            if ($skipReason) { throw "Cannot provision for $($installerVariant.id): $skipReason" }
+            [void](Build-VariantArguments $installerVariant)
+        }
         [uint64]$stageAssetBytes = 0
         if ($assetRepoForStage) {
             foreach ($assetEntry in @(Get-FirmwareAssetPlan -AssetRepo $assetRepoForStage)) {
@@ -1884,9 +1919,9 @@ try {
 
             $receiptPath = "$signedEfi.json"
             $deployment = $null
-            if ($StageDxeCompanion -and $stageVariantId -eq $variantId) {
+            if ($pairedStage -and $stageVariantId -eq $variantId) {
                 $pendingBootImage = [pscustomobject]@{ Path = $signedEfi; Sha256 = $signedHash; Receipt = $receiptPath }
-            } elseif ($StageDxeCompanion -and $dxeStageVariantId -eq $variantId) {
+            } elseif ($pairedStage -and $dxeStageVariantId -eq $variantId) {
                 $pendingDxeImage = [pscustomobject]@{ Path = $signedEfi; Sha256 = $signedHash; Receipt = $receiptPath }
             } elseif ($stageVariantId -and $stageVariantId -eq $variantId) {
                 $deployment = Stage-SignedEfi -Drive $drive -Root $usbRoot -SignedFile $signedEfi `
@@ -1954,7 +1989,7 @@ try {
         }
     }
 
-    if ($StageDxeCompanion) {
+    if ($pairedStage) {
         if (-not $pendingDxeImage -or -not $pendingBootImage -or $failedCount) {
             throw 'Paired deployment not staged: both signed companion artifacts must build and verify first.'
         }
@@ -1973,6 +2008,7 @@ try {
             throw "Application staging failed; DXE companion was rolled back: $stageError"
         }
         $stagedPath = $bootDeployment.Path
+        Say (("STAGED {0} PATH={1} DRIVE={2}:") -f $dxeStageVariantId, $dxeDeployment.Path, $drive)
         Say ("STAGED_DXE_COMPANION PATH={0} DRIVE={1}: SHA256={2}" -f
              $dxeDeployment.Path, $drive.ToUpperInvariant(), $pendingDxeImage.Sha256)
         $dxeReceipt = Get-Content -LiteralPath $pendingDxeImage.Receipt -Raw | ConvertFrom-Json
