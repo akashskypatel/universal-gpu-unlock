@@ -4,6 +4,28 @@
 EFI_STATUS GuMsiPreflight(EFI_SYSTEM_TABLE *,EFI_HANDLE,EFI_HANDLE);
 EFI_STATUS GuMsiRelease(VOID);
 BOOLEAN GuMsiReleased(VOID);
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_FIRMWARE_REATTACH)
+/* Close the exclusive PCI claim, reconnect firmware drivers, and verify the
+ * original controller/GOP graph is restored. Combined mode requires a prior verified transaction and closed claim. */
+EFI_STATUS GuMsiReattachAfterStop(VOID);
+/* True when this Stop-only run must avoid all system-console output. */
+BOOLEAN GuMsiStopReleaseFileOnly(VOID);
+BOOLEAN GuMsiStopReleaseOnlyGopTarget(VOID);
+BOOLEAN GuMsiStopReleaseConsoleRestored(VOID);
+VOID GuMsiStopReleaseRequireFileOnly(VOID);
+/* Use the validated surviving NVIDIA GOP before each multi-GPU Stop.
+ * No system text-console output and no change to display mode. */
+EFI_STATUS GuMsiStopReleaseWarnSurvivor(VOID);
+/* After target-owned ConOut is stopped, try peer TextOut or a GOP Blt
+ * fallback. Never replace the firmware global ConOut or ConsoleOutHandle. */
+EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID);
+/* On failed reattach, show restart and boot-loop instructions only through
+ * the still-valid original non-target GOP; never use a stale ConOut. */
+EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID);
+#endif
+#ifdef GU_DXE_FIRMWARE_REATTACH
+EFI_STATUS GuMsiVerifyResumeBar(VOID);
+#endif
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);
 BOOLEAN GuMsiMutated(VOID);

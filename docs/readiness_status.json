@@ -1,0 +1,399 @@
+{
+  "schema": "gu-readiness/1",
+  "reviewed": "2026-11-18",
+  "vocabulary": {
+    "done": "the source obligation in the item's exit criteria is implemented and pinned by a host test, simulator row or CI job",
+    "partial": "part of the exit criteria is implemented and the remainder is named",
+    "none": "no source work has been done"
+  },
+  "note": "hardware_verified stays false until a run logs the evidence. Nothing in this tree has ever executed on a GPU.",
+  "items": [
+    {
+      "id": "A1",
+      "class": "A",
+      "priority": "P0",
+      "source": "done",
+      "section": "11.1",
+      "note": "Runtime selector over the live inventory (GuTargets plus console choice); ordered coordinator unchanged.",
+      "hardware_verified": false
+    },
+    {
+      "id": "A2",
+      "class": "A",
+      "priority": "P0",
+      "source": "done",
+      "section": "11.25",
+      "note": "Runtime ESP identification plus the BootOrder cross-check: the selected volume must be named by a Boot#### that BootOrder lists, a readable order naming none refuses, and an unreadable order is logged as unchecked instead of counting as a pass.",
+      "hardware_verified": false
+    },
+    {
+      "id": "A3",
+      "class": "A",
+      "priority": "P0",
+      "source": "done",
+      "section": "11.2",
+      "note": "Build-time multi-target coupling removed; admission stays fail-closed without the waiver. Needs two physical cards.",
+      "hardware_verified": false
+    },
+    {
+      "id": "A4",
+      "class": "A",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.11",
+      "note": "An image refuses a card whose captured stock value it was not built for; choosing the entry-latched policy at runtime has no cold-state evidence.",
+      "hardware_verified": false
+    },
+    {
+      "id": "A5",
+      "class": "A",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.9",
+      "note": "Uncaptured Ada SKUs are refused and Turing is refused at build time; the per-SKU tables and the Turing payload are data, not code.",
+      "hardware_verified": false
+    },
+    {
+      "id": "A6",
+      "class": "A",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.10",
+      "note": "A GU_ASSET_INSTALL_ONLY build stages and re-verifies the bundle on the ESP; the launch rule, signature acceptance and the 84 MB decision are open.",
+      "hardware_verified": false
+    },
+    {
+      "id": "A7",
+      "class": "A",
+      "priority": "P1",
+      "source": "partial",
+      "section": "11.8",
+      "note": "The INTENT/OUTCOME record exists and is inert; whether re-application is safe is unproven, so the contract is still open.",
+      "hardware_verified": false
+    },
+    {
+      "id": "A8",
+      "class": "A",
+      "priority": "P1",
+      "source": "done",
+      "section": "11.15",
+      "note": "Recovery matrix pinned to log lines and the boot record, plus an opt-in bounded timer. Nothing is verified on hardware.",
+      "hardware_verified": false
+    },
+    {
+      "id": "B1",
+      "class": "B",
+      "priority": "P0",
+      "source": "none",
+      "section": null,
+      "note": "An AMD display function must own the console (msi_release.c:695).",
+      "hardware_verified": false
+    },
+    {
+      "id": "B2",
+      "class": "B",
+      "priority": "P0",
+      "source": "none",
+      "section": null,
+      "note": "Headless needs a surviving non-target GOP; non-headless needs exactly one target GOP.",
+      "hardware_verified": false
+    },
+    {
+      "id": "B3",
+      "class": "B",
+      "priority": "P0",
+      "source": "done",
+      "section": "11.20",
+      "note": "MSI/MSI-X must be enabled-off and the function in D0 at admission; PMC version and PMCSR state are both checked (§11.20).",
+      "hardware_verified": false
+    },
+    {
+      "id": "B4",
+      "class": "B",
+      "priority": "P1",
+      "source": "done",
+      "section": "11.20",
+      "note": "Any PCI capability id outside PM/MSI/MSI-X/PCIe/vendor is refused, as is a vendor capability shorter than its header (§11.20).",
+      "hardware_verified": false
+    },
+    {
+      "id": "B5",
+      "class": "B",
+      "priority": "P1",
+      "source": "done",
+      "section": "11.20",
+      "note": "PCIe endpoint v1/v2 only (device type <= 1), FLR capability advertised, and no already-initiated FLR in Device Control (§11.20).",
+      "hardware_verified": false
+    },
+    {
+      "id": "B6",
+      "class": "B",
+      "priority": "P0",
+      "source": "done",
+      "section": "11.3",
+      "note": "The firmware BAR descriptor is authoritative: any power-of-two window of at least 16 MiB, config mismatch refused.",
+      "hardware_verified": false
+    },
+    {
+      "id": "B7",
+      "class": "B",
+      "priority": "P1",
+      "source": "done",
+      "section": "11.4",
+      "note": "AllocateMaxAddress asks for a sub-4 GiB buffer up front; the mapped-ceiling check stays as the last defence.",
+      "hardware_verified": false
+    },
+    {
+      "id": "B8",
+      "class": "B",
+      "priority": "P2",
+      "source": "done",
+      "section": "11.20",
+      "note": "Bus Master off at admission; the one exception is the single-target read-only inspection, which cannot survive into the transaction (§11.20).",
+      "hardware_verified": false
+    },
+    {
+      "id": "B9",
+      "class": "B",
+      "priority": "P1",
+      "source": "partial",
+      "section": "11.17",
+      "note": "A resident build may start from the Windows ESP behind five gates and a provable writable log; the default build still names its refusal. Never booted.",
+      "hardware_verified": false
+    },
+    {
+      "id": "B10",
+      "class": "B",
+      "priority": "P1",
+      "source": "none",
+      "section": null,
+      "note": "Per-call DMA, 1 MiB ROM buffer and the radix table multiply with card count and are untested.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C1",
+      "class": "C",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.16",
+      "note": "A pre-Stop capture and a ten-requirement contract exist and are pinned by host tests; the bound, the signed-Booter comparison and the recovery evidence are still absent.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C2",
+      "class": "C",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.23",
+      "note": "DMA quiescence after Stop now polls the PCIe Transaction Pending bit five times and refuses a card that never drains, retaining its buffers; there is still no IOMMU, queue readback or bus trace, and the poll bound is a count, not a measured budget.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C3",
+      "class": "C",
+      "priority": "P0",
+      "source": "none",
+      "section": null,
+      "note": "Firmware acceptance is a structural parse and a digest log; SIGNATURE_AUTHENTICATED=0.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C4",
+      "class": "C",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.13",
+      "note": "A per-card ROM allowlist exists but carries no references, and it is a digest, not a signature.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C5",
+      "class": "C",
+      "priority": "P1",
+      "source": "none",
+      "section": null,
+      "note": "Post-state verification proves the registers written, not the unlock.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C6",
+      "class": "C",
+      "priority": "P1",
+      "source": "partial",
+      "section": "11.12",
+      "note": "A bound can be armed per build; no worst-case duration has been measured, so the default arms nothing.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C7",
+      "class": "C",
+      "priority": "P1",
+      "source": "none",
+      "section": null,
+      "note": "Post-FLR expectations are board-observed values assumed for every board.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C8",
+      "class": "C",
+      "priority": "P2",
+      "source": "partial",
+      "section": "11.24",
+      "note": "The PCIe link is read at admission: sticky errors, an ASPM request this image does not manage, an untrained or down link, and an unusable width/speed refuse the active path. AER lives in extended config space and is logged as unobserved; hot-plug events, training recovery and tunneled links are still unhandled.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C9",
+      "class": "C",
+      "priority": "P1",
+      "source": "partial",
+      "section": "11.33",
+      "note": "A two-card host model executes selection and per-target admission from real code (§11.22); one boot has now prepared both cards and held two per-card contexts (§11.33, RUN0003), and no multi-target write has run.",
+      "hardware_verified": false
+    },
+    {
+      "id": "C10",
+      "class": "C",
+      "priority": "P1",
+      "source": "partial",
+      "section": "11.26",
+      "note": "The resume boot-script writes are pinned by an executed host model - addresses, widths, one attempt, failure retention - and the log states S3_RESUME=UNVERIFIED WHY=NO_RESUME_HOOK BAR_BASE_MAY_MOVE=1. A resume cannot be verified from this image, and a BAR reassignment would move the write target.",
+      "hardware_verified": false
+    },
+    {
+      "id": "D1",
+      "class": "D",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.19",
+      "note": "Every variant is signed inside WSL with a personal certificate, and signing refuses unless that certificate is already in the BIOS db. One machine's trust, no CA, no timestamp, no release key.",
+      "hardware_verified": false
+    },
+    {
+      "id": "D2",
+      "class": "D",
+      "priority": "P0",
+      "source": "done",
+      "section": "11.14",
+      "note": "The Windows job compiles the admitted image and the host job diffs it; nothing is published.",
+      "hardware_verified": false
+    },
+    {
+      "id": "D3",
+      "class": "D",
+      "priority": "P1",
+      "source": "partial",
+      "section": "11.27",
+      "note": "Every loadable payload has a provenance record checked against the firmware's own asset table, and the gate refuses missing, mismatched, orphaned or signature-claiming records; NVIDIA signature authentication is still absent and reported as such.",
+      "hardware_verified": false
+    },
+    {
+      "id": "D4",
+      "class": "D",
+      "priority": "P2",
+      "source": "none",
+      "section": null,
+      "note": "MSVC-only toolchain and a disabled installer.",
+      "hardware_verified": false
+    },
+    {
+      "id": "D5",
+      "class": "D",
+      "priority": "P0",
+      "source": "partial",
+      "section": "11.31",
+      "note": "`tools/donor_gate.py` machine-checks whether the session may advance, and the read-only session's step-by-step guide is grounded on real captures: eight physical logs are digest-pinned and re-scored by the suite on every run. Identity is now an ordered target list (this fork executes one card at a time in order, not one card only), so the read-only and preparation stages of the first two batches compose into `VERDICT=GO` with `HARDWARE_VERIFIED=0`. No machine runs a stage automatically and the actuation stage has never run.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E1",
+      "class": "E",
+      "priority": "P0",
+      "source": "none",
+      "section": null,
+      "note": "Stock Windows 617.42 must accept a modified card.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E2",
+      "class": "E",
+      "priority": "P0",
+      "source": "none",
+      "section": null,
+      "note": "Tensor Core numerical correctness after modification.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E3",
+      "class": "E",
+      "priority": "P1",
+      "source": "none",
+      "section": null,
+      "note": "Tensor Core throughput and the rate-limiter effect.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E4",
+      "class": "E",
+      "priority": "P0",
+      "source": "none",
+      "section": null,
+      "note": "The recovery matrix executed, including a mid-transaction power loss.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E5",
+      "class": "E",
+      "priority": "P0",
+      "source": "none",
+      "section": null,
+      "note": "Multi-GPU end to end on real hardware.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E6",
+      "class": "E",
+      "priority": "P1",
+      "source": "none",
+      "section": null,
+      "note": "BDF stability across firmware updates and slot changes.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E7",
+      "class": "E",
+      "priority": "P1",
+      "source": "none",
+      "section": null,
+      "note": "Coupling to the 610.43.03 asset lineage across driver updates.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E8",
+      "class": "E",
+      "priority": "P1",
+      "source": "none",
+      "section": null,
+      "note": "AD104/AD106/AD107 and the GA102 variants that are not 0x2684/0x220a.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E9",
+      "class": "E",
+      "priority": "P2",
+      "source": "none",
+      "section": null,
+      "note": "Thermal, power and long-run stability.",
+      "hardware_verified": false
+    },
+    {
+      "id": "E10",
+      "class": "E",
+      "priority": "P2",
+      "source": "none",
+      "section": null,
+      "note": "Interaction with Secure Boot, BitLocker and anti-cheat.",
+      "hardware_verified": false
+    }
+  ]
+}

@@ -69,10 +69,144 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #elif defined(GU_STOCK_PROFILE_ORIGINAL_03100062) || defined(GU_STOCK_PROFILE_OBSERVED_03000062) || defined(GU_ENTRY_LATCHED_SS1_PRESERVE) || defined(GU_ENTRY_LATCHED_SS1_FULL)
 #error Stock profile selection requires experimental firmware
 #endif
+/* GU_ACTIVE_UNVERIFIED_ACTUATION is the single, non-default acceptance that
+ * an image may perform the unverified, irreversible GPU firmware transaction.
+ * It is a deliberate operator waiver, not a verification result: vendor Stop
+ * bounds, signed Windows 617.42 Booter acceptance, DMA quiescence and physical
+ * recovery all remain unproven (see docs/MULTI_GPU_REFACTOR_REVIEW.md).
+ *
+ * The waiver is only meaningful in a deployable transaction build, so it is
+ * rejected in combination with every preparation-only or synthetic profile
+ * and requires both the experimental firmware transaction profile and the
+ * ordered selected-target mode. GU_ACTIVE_SINGLE_TARGET selects that ordered
+ * path: one card is active at a time, and the ordered list may name several
+ * targets that are executed sequentially. */
+#ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
+#if !defined(GU_AD104_TRANSACTION)
+#error Unverified actuation requires the experimental firmware transaction profile
+#endif
+#if !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Unverified actuation requires the ordered selected-target execution mode
+#endif
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
+#error Unverified actuation cannot be combined with preparation-only or synthetic builds
+#endif
+#if defined(GU_HOST_TEST_PROFILE)
+#error Unverified actuation requires the reviewed local boot profile, not the synthetic ESP GUID
+#endif
+#endif
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS)
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
+#error The unverified ASPM bench-condition override requires an explicit ordered actuation build
+#endif
+#if !defined(GU_DXE_FILE_ONLY_OUTPUT)
+#error The unverified bench image must preserve its log while suppressing routine screen output
+#endif
+#endif
+#if defined(GU_STOP_RELEASE_ONLY_BENCH)
+#if !defined(GU_UNVERIFIED_BENCH_CONDITIONS) || !defined(GU_DXE_FILE_ONLY_OUTPUT)
+#error Stop/release-only bench mode requires explicit ASPM admission waiver and file-only logging
+#endif
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Stop/release-only mode requires explicit ordered stop/release consent
+#endif
+#endif
+
+#if defined(GU_RUNTIME_ESP_PIN) && (!defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_ESP))
+#error Explicit runtime ESP pin requires the combined runtime application
+#endif
+#if defined(GU_DXE_FIRMWARE_REATTACH) && (!defined(GU_FIRMWARE_REATTACH) || defined(GU_APP_OPERATION) || defined(GU_INTERACTIVE_WINDOWS_ESP) || defined(GU_RUNTIME_ESP_PIN))
+#error DXE reattachment cannot use application entry or handover policy
+#endif
+#ifdef GU_FIRMWARE_REATTACH
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Firmware reattachment requires explicit ordered actuation consent
+#endif
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_ESP_RESIDENT)
+#error Firmware reattachment cannot use the broad bench override or resident Windows ESP
+#endif
+#ifndef GU_DXE_FIRMWARE_REATTACH
+#if !defined(GU_RUNTIME_SELECTION) || !defined(GU_RUNTIME_ESP) || !defined(GU_APP_OPERATION)
+#error Firmware reattachment requires the explicitly waived runtime application
+#endif
+#if GU_APP_OPERATION != 85
+#error Combined application cannot install a driver or register resume writes
+#endif
+#endif
+#endif
+#if defined(GU_SELECT_ALL_GPUS) && (!defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_SELECTION))
+#error Automatic all-GPU selection requires combined runtime firmware reattachment
+#endif
+
+/* GU_RUNTIME_SELECTION moves the target list out of the build: the image reads
+ * the operator's "GuTargets" variable at boot instead of a generated
+ * gpu-selection.h. Because the count is then unknown at build time, the static
+ * "exactly one address" gate cannot apply; the runtime admission gate does,
+ * unchanged, so a multi-card request without a waiver still refuses to actuate.
+ * A synthetic compile-only profile has no operator policy to read, so the
+ * combination is rejected. */
+#if defined(GU_RUNTIME_SELECTION)
+#if !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Runtime target selection requires the ordered selected-target execution mode
+#endif
+#if defined(GU_SYNTHETIC_COMPILE_ONLY) || defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
+#error Runtime target selection requires a real execution profile
+#endif
+#endif
+
+/* GU_SIMULATED_ACTUATION is the hosted simulator profile. It exists so the
+ * real active transaction sources can be executed against a modelled PCI
+ * device on a workstation, for pre-execution and post-execution inspection.
+ *
+ * It is structurally impossible to ship: it is rejected in any build that is
+ * not hosted, and rejected next to the GU_UEFI_PORT marker that both firmware
+ * builders emit. A simulator build also never sets GU_HOST_TEST_PROFILE,
+ * because the simulated card must satisfy the same config policy, PROM and
+ * FWSEC checks as hardware.
+ *
+ * The simulator is evidence about code behaviour only. It is not evidence
+ * about silicon, and its logs are marked SIMULATED for that reason. */
+#ifdef GU_SIMULATED_ACTUATION
+#if __STDC_HOSTED__ != 1
+#error Simulated actuation is a hosted-only build and cannot be part of a firmware image
+#endif
+#if defined(GU_UEFI_PORT)
+#error Simulated actuation must not use the UEFI port marker emitted by the firmware builders
+#endif
+#if !defined(GU_AD104_TRANSACTION)
+#error Simulated actuation requires the experimental firmware transaction profile
+#endif
+#if !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Simulated actuation requires the ordered selected-target execution mode
+#endif
+#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
+#error Simulated actuation cannot be combined with preparation-only or synthetic builds
+#endif
+#if defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
+#error Simulated actuation and the hardware waiver are distinct profiles
+#endif
+#endif
+
+/* One admission switch, two provenances: the hardware waiver and the
+ * simulator. Both relax the same admission checks; only the hardware waiver
+ * can reach silicon, and only the simulator can be inspected afterwards. */
+#if defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
+#define GU_ACTUATION_ADMITTED 1
+#define GU_ACTUATION_SIMULATED 0
+#elif defined(GU_SIMULATED_ACTUATION)
+#define GU_ACTUATION_ADMITTED 1
+#define GU_ACTUATION_SIMULATED 1
+#else
+#define GU_ACTUATION_ADMITTED 0
+#define GU_ACTUATION_SIMULATED 0
+#endif
+
 /* Selected active artifacts are restricted to inventory/plan preparation.
  * The legacy engine is linked for compile coverage, but GPU I/O write,
  * DMA and FLR helpers also refuse in this configuration. */
-#if defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
+#if GU_ACTUATION_ADMITTED
+#define GU_PREFLIGHT_ONLY 0
+#elif defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY) || defined(GU_SYNTHETIC_COMPILE_ONLY)
 #define GU_PREFLIGHT_ONLY 1
 #elif defined(GU_AD104_TRANSACTION) || (defined(GU_AD104_HOST_TEST) && __STDC_HOSTED__ == 1)
 #define GU_PREFLIGHT_ONLY 0
@@ -88,6 +222,9 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #define GU_SELECTOR_PHASE_TARGET 3U
 /* The manifest contains a fixed number of files per GPU. Each platform
  * owns its own table, including before asset reservation. */
+/* BAR0 window rules live in gpu_bar.h so the host fixtures compile the same
+ * definitions the firmware does. */
+#include "gpu_bar.h"
 #define GU_ASSET_COUNT 5U
 struct firmware {size_t size;const UINT8 *data;};
 typedef struct GU_ASSET {const char *name;struct firmware firmware;} GU_ASSET;
@@ -141,6 +278,8 @@ typedef struct {
   BOOLEAN release_state_reserved, release_owner_invalid;
   GU_ASSET asset_entries[GU_ASSET_COUNT];
   BOOLEAN asset_entries_reserved, asset_load_attempted;
+  /* Stop/release-only readiness is independent of firmware/PROM qualification. */
+  BOOLEAN stop_release_ready;
   BOOLEAN (*display_check)(VOID);
 #ifdef GU_ENTRY_LATCHED
   /* Per-physical-GPU selector values, never shared with another adapter. */
@@ -190,16 +329,19 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
                                       const GU_GPU_EXEC_OBSERVATION *observations,
                                       size_t count);
 #endif
-#ifdef GU_ENTRY_LATCHED
 /* Only ColdCheck may latch, after all exact-card/cold/PROM checks. These
-   values are private to port.c; the vendor core can only read/compare them. */
+   values are private to port.c; the vendor core can only read/compare them.
+   Every profile declares this API: the non-latched policies keep no private
+   copy, so their latch is a no-op and their match has no expectation. Declaring
+   it unconditionally is what lets those builds link at all - before this, three
+   of the four policies failed to link because the call sites were unconditional
+   and the definitions were not. */
 BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1);
 BOOLEAN GuGetEntrySelectorsFor(const GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1);
 BOOLEAN GuEntrySelectorsMatchFor(const GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1);
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0, UINT32 Ss1);
 BOOLEAN GuGetEntrySelectors(UINT32 *Ss0, UINT32 *Ss1);
 BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0, UINT32 Ss1);
-#endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
 /* The full policy owns the only permitted SS1 write phase. */
 BOOLEAN GuSelectorPhaseFor(GU_PLATFORM *platform,UINT32 Phase);
@@ -226,6 +368,23 @@ VOID GuStarted(VOID);
 VOID GuQuiesced(VOID);
 VOID GuLog(const char *Format, ...);
 VOID GuLogText(const char *Text);
+/* Verbose actuation trace.
+ *
+ * A phase that can block must say so before it blocks, in the USB log *and* on
+ * the console. RUN0011 is the reason: the waived boot wrote thirteen lines, went
+ * black, and stayed black for over a minute inside a call that logged nothing
+ * until it returned. From the outside that is indistinguishable from a fault, and
+ * from the log alone it cannot even be told which call it was. Each line here is
+ * flushed by GuLog and mirrored to the console even while the image is otherwise
+ * silent, so a stall names its own last phase. */
+VOID GuTraceReset(VOID);
+VOID GuTracePhase(const char *Phase);
+VOID GuTraceDetail(const char *Phase, const char *Format, ...);
+VOID GuTraceProgress(const char *Phase, UINTN Done, UINTN Total);
+VOID GuTraceDelay(UINT64 Ticks);
+/* Console lines that must be visible even while the image is silent. */
+VOID GuTraceScreen(const char *Text);
+VOID GuTraceStop(const char *Stage, UINT64 Status);
 BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *Destination,const VOID *Source,size_t Bytes);
 /* Read-only ownership proof for retained CPU objects, including inactive platforms. */
 BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *platform,const VOID *memory,size_t bytes);

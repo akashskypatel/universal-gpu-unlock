@@ -6,6 +6,58 @@ int GuTopoClassRelevant(uint16_t class_code) {
   return class_code == 0x0604U || (class_code & 0xff00U) == 0x0300U;
 }
 
+int GuTopoReadPcieLink(const uint32_t config[64], GU_TOPO_LINK_OBS *out) {
+  uint64_t seen=0;
+  unsigned pointer,steps=0;
+  int saw_pcie=0;
+  GU_TOPO_LINK_OBS result={0};
+  if(out)memset(out,0,sizeof(*out));
+  if(!config||!out)return -1;
+  if((config[0x04U/4U]&(1U<<20U))==0)return 0;
+  pointer=(config[0x34U/4U]>>0)&0xffU;
+  while(pointer) {
+    uint32_t header;
+    unsigned id,next,version,type;
+    uint64_t bit;
+    if(++steps>48U || pointer<0x40U || pointer>0xfcU || (pointer&3U))return -1;
+    bit=UINT64_C(1)<<(pointer/4U);
+    if(seen&bit)return -1;
+    seen|=bit;
+    header=config[pointer/4U];
+    id=header&0xffU;next=(header>>8U)&0xffU;
+    if(id==0x10U) {
+      uint16_t pcie=(uint16_t)(header>>16U);
+      version=pcie&0x0fU;type=(pcie>>4U)&0x0fU;
+      if(saw_pcie || (version!=1U&&version!=2U)||type>10U)return -1;
+      saw_pcie=1;
+      /* Root-complex integrated endpoints and event collectors (types 9/10)
+       * have no PCIe Link Capability/Control/Status registers; still validate
+       * the rest of the capability chain before reporting that fact. */
+      if(type!=9U&&type!=10U) {
+        uint32_t link_capabilities,link_control_status,device_control_status;
+        if(pointer>0xe8U)return -1; /* Link Status must fit in config space. */
+        link_capabilities=config[(pointer+0x0cU)/4U];
+        link_control_status=config[(pointer+0x10U)/4U];
+        device_control_status=config[(pointer+0x08U)/4U];
+        result.present=1;
+        result.port_type=(uint8_t)type;
+        result.capability_offset=(uint16_t)pointer;
+        result.max_speed=(uint8_t)(link_capabilities&0x0fU);
+        result.max_width=(uint8_t)((link_capabilities>>4U)&0x3fU);
+        result.aspm=(uint8_t)(link_control_status&3U);
+        result.speed=(uint8_t)((link_control_status>>16U)&0x0fU);
+        result.width=(uint8_t)((link_control_status>>20U)&0x3fU);
+        result.training=(uint8_t)((link_control_status>>27U)&1U);
+        result.dll_active=(uint8_t)((link_control_status>>29U)&1U);
+        result.device_errors=(uint8_t)((device_control_status>>16U)&0x0fU);
+      }
+    }
+    pointer=next;
+  }
+  *out=result;
+  return result.present?1:0;
+}
+
 int GuTopoClassifierStable(const uint32_t first[3], const uint32_t second[3]) {
   return first && second && first[0] == second[0] && first[2] == second[2];
 }
@@ -21,6 +73,16 @@ int GuTopoDriverOwnerStable(const GU_TOPO_PCI *before, size_t driver_count,
 }
 
 static size_t Body(const GU_TOPO_PATH *p) { return p->length - 4U; }
+
+/* Half-open range comparison for caller-owned capture, report and storage.
+ * A range that could wrap the address space is treated as overlapping. */
+static int RangesOverlap(const void *a, size_t a_bytes,
+                         const void *b, size_t b_bytes) {
+  size_t a0 = (size_t)(uintptr_t)a, b0 = (size_t)(uintptr_t)b;
+  if (!a || !b) return 0;
+  if (a0 > SIZE_MAX - a_bytes || b0 > SIZE_MAX - b_bytes) return 1;
+  return a0 < b0 + b_bytes && b0 < a0 + a_bytes;
+}
 
 int GuTopoPathValid(const GU_TOPO_PATH *p) {
   size_t at = 0;
@@ -279,12 +341,25 @@ int GuTopoCombinedConsoleVerdict(int graph_status, int errout_classified,
  * GPU model, PCI slot ordering or assumption that root ports are distinct. */
 int GuTopoAssess(const GU_TOPO_CAPTURE *s, GU_TOPO_REPORT *r,
                  GU_TOPO_GPU_REPORT *storage, size_t capacity) {
-  size_t i,j,count=0;
+  size_t i,j,count=0,storage_bytes=0;
   int bad=0,incomplete=0;
   if(!r)return GU_TOPO_INVALID;
+  /* The report and the per-GPU storage are independent caller-owned outputs.
+   * Verify that independence before the first output byte is written: a
+   * storage range inside the report or the live capture cannot be initialized
+   * or filled without destroying evidence the assessment still reads. */
+  if(capacity>GU_TOPO_MAX_PCI)return GU_TOPO_INVALID;
+  if(capacity && !storage)return GU_TOPO_INVALID;
+  if(capacity) {
+    if(capacity>SIZE_MAX/sizeof(*storage))return GU_TOPO_INVALID;
+    storage_bytes=capacity*sizeof(*storage);
+  }
+  if(RangesOverlap(r,sizeof(*r),s,sizeof(*s)) ||
+     RangesOverlap(storage,storage_bytes,r,sizeof(*r)) ||
+     RangesOverlap(storage,storage_bytes,s,sizeof(*s)))
+    return GU_TOPO_INVALID;
   memset(r,0,sizeof(*r));r->status=GU_TOPO_INVALID;
-  if(!CaptureValid(s) || capacity>GU_TOPO_MAX_PCI ||
-     (capacity && !storage))return r->status;
+  if(!CaptureValid(s))return r->status;
   for(i=0;i<s->pci_count;i++) {
     const GU_GPU_RECORD *id=&s->pci[i].identity;
     if((id->pci_id&0xffffU)==0x10deU && (id->class_code&0xff00U)==0x0300U)

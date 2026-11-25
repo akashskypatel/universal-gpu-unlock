@@ -19,25 +19,170 @@ class BootBinding(unittest.TestCase):
         self.assertNotIn('L"\\\\EFI\\\\Boot\\\\bootx64.efi"',BOOT)
         self.assertNotIn('L"EFI\\\\Boot\\\\bootx64.efi"',BOOT)
     def test_reuse_existing_bounded_parser_in_both_builds(self):
-        for s in (APP,DXE):
-            self.assertIn("'gpu_windows_path.c'",s)
+        from test_build_source_lists import builder_sources
+        for name in ("Build-Experimental-MSVC.ps1", "Build-Dxe-Driver.ps1"):
+            self.assertIn("gpu_windows_path.c", builder_sources(name))
     def test_only_report_selected_volume_after_success(self):
         self.assertIn("if(s==EFI_SUCCESS)TargetEspVolume=volume;",BOOT)
         self.assertIn("EFI_HANDLE GuBootGetTargetEspVolume(VOID)",BOOT)
         self.assertIn("const CHAR16 *GuBootGetLogPath(VOID)",BOOT)
         self.assertIn("EFI_HANDLE GuBootGetTargetEspVolume(VOID);",HEADER)
     def test_asset_fallback_is_only_pinned_read_only_esp(self):
+        # One locator decides which volume the ESP is; the reader itself may not
+        # write to it, and the installer (a separate, explicit build) may.
+        locator=BOOT.split("static EFI_STATUS ConfiguredEspVolume(",1)[1].split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[0]
+        self.assertIn("GuWindowsEspPathMatches(",locator)
+        self.assertIn("(const uint8_t *)&WindowsPartition",locator)
+        self.assertIn("matches!=1U",locator)
         c=BOOT.split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[1].split("EFI_STATUS GuBootLoadAssets(",1)[0]
-        self.assertIn("GuWindowsEspPathMatches(",c)
-        self.assertIn("(const uint8_t *)&WindowsPartition",c)
-        self.assertIn("matches!=1U",c)
+        self.assertIn("ConfiguredEspVolume(",c)
         self.assertIn("GuHashMatches(",c)
         self.assertNotIn("SetVariable(",c)
         self.assertNotIn("EFI_FILE_MODE_WRITE",c)
         self.assertNotIn("EFI_FILE_MODE_CREATE",c)
+        self.assertNotIn("GuAssetInstallStage(",c)
+        loader=BOOT.split("EFI_STATUS GuBootLoadAssets(VOID) {",1)[1].split("static EFI_STATUS ReadWindowsBinary(",1)[0]
+        self.assertNotIn("EFI_FILE_MODE_WRITE",loader)
+        self.assertNotIn("GuAssetInstallStage(",loader)
         loader=BOOT.split("EFI_STATUS GuBootLoadAssets(",1)[1].split("static EFI_STATUS ReadWindowsBinary(",1)[0]
         self.assertIn("ReadPinnedAssetFromConfiguredEsp(",loader)
         self.assertIn("GuFree((VOID *)GuAssets[i].firmware.data)",loader)
+
+    def test_log_retention_is_guarded_and_excludes_current(self):
+        boot = BOOT.split("EFI_STATUS GuBootOpen(", 1)[1].split("static EFI_STATUS ReadFile(", 1)[0]
+        self.assertLess(boot.index("current_log_slot=slot;"), boot.index("s=DeleteOldRunLogs(current_log_slot);"))
+        self.assertIn("read==EFI_NOT_FOUND||(read==EFI_SUCCESS&&!GuBootStateRequiresRecovery(&previous))", boot)
+        self.assertIn("LOG_RETENTION SKIPPED=1 REASON=RECOVERY_OR_UNCERTAIN_STATE", boot)
+        cleanup = BOOT.split("static EFI_STATUS DeleteOldRunLogs(", 1)[1].split("#endif", 1)[0]
+        self.assertIn("slot&&slot!=current", cleanup)
+        self.assertIn("RunLogInfoSlot((const VOID *)words,bytes)!=slot", cleanup)
+        self.assertLess(cleanup.index("if(s==EFI_SUCCESS&&!eof)"), cleanup.index("s=file->Delete(file);file=NULL;"))
+        self.assertNotIn("EFI_FILE_MODE_CREATE", cleanup)
+
+    def test_log_cleanup_threshold_and_consumed_handles(self):
+        actual = BOOT.split("/* Standard EFI_FILE_SYSTEM_INFO prefix", 1)[1].split("\n#endif", 1)[0]
+        actual = "/* Standard EFI_FILE_SYSTEM_INFO prefix" + actual
+        host = r"""
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+typedef uint64_t UINT64;
+typedef uint32_t UINT32;
+typedef uint8_t UINT8;
+typedef size_t UINTN;
+typedef unsigned char BOOLEAN;
+typedef wchar_t CHAR16;
+typedef void VOID;
+typedef int EFI_STATUS;
+typedef struct {UINT32 a; uint16_t b,c; UINT8 d[8];} EFI_GUID;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 1
+#define EFI_UNSUPPORTED 2
+#define EFI_COMPROMISED_DATA 3
+#define EFI_DEVICE_ERROR 4
+#define EFI_OUT_OF_RESOURCES 5
+#define EFI_FILE_MODE_READ 1
+#define EFI_FILE_MODE_WRITE 2
+#define EFI_FILE_DIRECTORY 16
+typedef struct {
+  UINT64 Size,FileSize,Attribute;
+  CHAR16 FileName[1];
+} EFI_FILE_INFO;
+typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+struct EFI_FILE_PROTOCOL {
+  EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,UINT64,UINT64);
+  EFI_STATUS (*GetInfo)(EFI_FILE_PROTOCOL *,EFI_GUID *,UINTN *,VOID *);
+  EFI_STATUS (*Read)(EFI_FILE_PROTOCOL *,UINTN *,VOID *);
+  EFI_STATUS (*Delete)(EFI_FILE_PROTOCOL *);
+};
+static EFI_FILE_PROTOCOL root,dir,file,*Root=&root,*Log=&file;
+static EFI_GUID InfoGuid;
+static EFI_STATUS BootFileStatus;
+static unsigned opened,closed,deleted,mode,index_entry,selected;
+static UINT64 capacity,available;
+static const CHAR16 *names[]={L"RUN0001.TXT",L"RUN0002.TXT",L"RUN0003.TXT",L"KEEP.TXT",L"RUN0004.TXT",L"RUN0005.TXT.bak"};
+static void GuLog(const char *fmt,...){(void)fmt;}
+static EFI_STATUS BootFileOpenResult(EFI_STATUS s,EFI_FILE_PROTOCOL **p){(void)p;return s;}
+static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **p){if(*p){closed++;*p=NULL;}return EFI_SUCCESS;}
+""" + actual + r"""
+static EFI_STATUS Info(EFI_FILE_PROTOCOL *f,EFI_GUID *g,UINTN *n,VOID *buf){
+  if(f==&root){
+    if(g!=&LogVolumeInfoGuid||mode==2)return EFI_UNSUPPORTED;
+    GU_LOG_VOLUME_INFO *i=buf;memset(buf,0,sizeof(*i));
+    i->Size=offsetof(GU_LOG_VOLUME_INFO,VolumeLabel)+sizeof(CHAR16);
+    i->VolumeSize=capacity;i->FreeSpace=available;i->BlockSize=512;
+    if(mode==3)i->FreeSpace=capacity+1;
+    *n=(UINTN)i->Size;return EFI_SUCCESS;
+  }
+  if(f!=&file||g!=&InfoGuid)return EFI_DEVICE_ERROR;
+  EFI_FILE_INFO *i=buf;
+  i->Attribute=mode==5?EFI_FILE_DIRECTORY:0;
+  const CHAR16 *name=names[selected];
+  i->Size=offsetof(EFI_FILE_INFO,FileName)+(wcslen(name)+1)*sizeof(CHAR16);
+  memcpy(i->FileName,name,(wcslen(name)+1)*sizeof(CHAR16));*n=(UINTN)i->Size;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Open(EFI_FILE_PROTOCOL *f,EFI_FILE_PROTOCOL **out,CHAR16 *name,UINT64 flags,UINT64 attrs){
+  (void)attrs;opened++;
+  if(flags!=3)return EFI_DEVICE_ERROR;
+  if(f==&root&&wcscmp(name,L"\\AD102-UNLOCK")==0){*out=&dir;return EFI_SUCCESS;}
+  if(f!=&dir)return EFI_DEVICE_ERROR;
+  for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++)if(!wcscmp(name,names[i])){
+    selected=i;*out=&file;return EFI_SUCCESS;
+  }
+  return EFI_DEVICE_ERROR;
+}
+static EFI_STATUS Read(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *buf){
+  if(f!=&dir)return EFI_DEVICE_ERROR;
+  if(index_entry==sizeof(names)/sizeof(names[0])){*n=0;return EFI_SUCCESS;}
+  unsigned i=index_entry++;
+  EFI_FILE_INFO *info=buf;const CHAR16 *name=names[i];
+  info->Attribute=i==4?EFI_FILE_DIRECTORY:0;
+  info->Size=offsetof(EFI_FILE_INFO,FileName)+(wcslen(name)+1)*sizeof(CHAR16);
+  memcpy(info->FileName,name,(wcslen(name)+1)*sizeof(CHAR16));*n=(UINTN)info->Size;
+  if(mode==6&&i==4)info->Size=*n+1;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Delete(EFI_FILE_PROTOCOL *f){
+  if(f!=&file||selected==1||selected>=3)return EFI_DEVICE_ERROR;
+  deleted++;
+  if(mode==4)return EFI_DEVICE_ERROR;
+  available+=mode==7?1:20;
+  return EFI_SUCCESS;
+}
+#define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL %d: %s mode=%u\n",__LINE__,#x,mode);return 1;}}while(0)
+int main(void){
+  root.Open=Open;root.GetInfo=Info;dir.Read=Read;dir.Open=Open;file.GetInfo=Info;file.Delete=Delete;
+  CHECK(LogVolumeFull(UINT64_MAX,UINT64_MAX/10));
+  CHECK(!LogVolumeFull(UINT64_MAX,UINT64_MAX/10+1));
+  for(mode=0;mode<8;mode++){
+    opened=closed=deleted=index_entry=selected=0;capacity=1000;available=mode==0?101:100;
+    if(mode==7)available=50;
+    EFI_STATUS s=DeleteOldRunLogs(2);
+    if(mode==0||mode==2||mode==3){CHECK(s==EFI_SUCCESS&&!opened&&!deleted&&!closed);}
+    if(mode==1){CHECK(s==EFI_SUCCESS&&deleted==1&&opened==2&&closed==1&&available==120);}
+    if(mode==4){CHECK(s!=EFI_SUCCESS&&deleted==1&&opened==2&&closed==1);}
+    if(mode==5){CHECK(s!=EFI_SUCCESS&&!deleted&&opened==2&&closed==2);}
+    if(mode==6){CHECK(s!=EFI_SUCCESS&&!deleted&&opened==1&&closed==1);}
+    if(mode==7){CHECK(s==EFI_SUCCESS&&deleted==2&&opened==3&&closed==1&&available==52);}
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retention.c"
+            path.write_text(host, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                binary = Path(directory) / compiler
+                built = subprocess.run([compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-pedantic",
+                                        str(path), "-o", str(binary)], capture_output=True, text=True)
+                self.assertEqual(built.returncode, 0, built.stderr)
+                result = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_shared_filesystem_census_refuses_uncertain_release(self):
         """Compile the real enumeration/release helpers with simulated services."""
@@ -133,9 +278,16 @@ int main(void){
                 result=subprocess.run([str(binary)],capture_output=True,text=True)
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
+        locator=BOOT.split("static EFI_STATUS ConfiguredEspVolume(",1)[1].split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[0]
+        self.assertIn("LocateBootFilesystems(b,&handles,&count)",locator)
+        # The census must finish releasing before anything reads a pinned asset.
+        # Compared over the whole source: `locator` stops at the reader's
+        # signature, so it can never contain it.
+        self.assertLess(BOOT.index("if(freed!=EFI_SUCCESS)return freed;"),
+                        BOOT.index("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp("))
         assets=BOOT.split("static EFI_STATUS ReadPinnedAssetFromConfiguredEsp(",1)[1].split("EFI_STATUS GuBootLoadAssets(",1)[0]
-        self.assertIn("LocateBootFilesystems(b,&handles,&count)",assets)
-        self.assertLess(assets.index("if(freed!=EFI_SUCCESS)return freed;"),assets.index("fs->OpenVolume("))
+        self.assertIn("ConfiguredEspVolume(&matched)",assets)
+        self.assertLess(assets.index("ConfiguredEspVolume(&matched)"),assets.index("fs->OpenVolume("))
         windows=BOOT.split("EFI_STATUS GuBootLoadWindows(",1)[1].split("EFI_STATUS GuBootChoose(",1)[0]
         self.assertIn("UnreleasedFilesystemHandles",windows)
         self.assertIn("LocateBootFilesystems(b,&h,&count)",windows)
@@ -152,17 +304,24 @@ int main(void){
         opened = BOOT[begin:end]
         guard = opened.index("#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY")
         finish_log = opened.index("if(closed!=EFI_SUCCESS){s=closed;goto failed;}")
-        watchdog = opened.index("if(!b->SetWatchdogTimer){s=EFI_UNSUPPORTED;goto failed;}")
+        watchdog = opened.index("s=WatchdogProgram((UINTN)GU_WATCHDOG_SECONDS);")
         self.assertLess(finish_log, guard)
         self.assertLess(guard, watchdog)
-        self.assertEqual(
-            opened[guard:watchdog].strip(),
-            "#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY\n"
+        guarded=opened[guard:watchdog].strip()
+        self.assertTrue(guarded.startswith("#ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY"))
+        self.assertIn(
             "  /* Preparation reads PCI identity and writes only its removable USB log.\n"
             "   * Do not change the firmware watchdog or any active boot state. */\n"
             "  return EFI_SUCCESS;\n"
-            "#endif")
-        self.assertIn("s=b->SetWatchdogTimer(0,0,0,NULL);", opened[watchdog:])
+            "#endif", guarded)
+        # The guard returns before the timer is touched, whatever the bound is.
+        self.assertNotIn("SetWatchdogTimer", guarded)
+        # The old unconditional disable lives in WatchdogProgram now, reached only
+        # with a zero bound, so the prepare-only return still wins.
+        program=BOOT.split("static EFI_STATUS WatchdogProgram(UINTN Bound) {",1)[1].split("\n}\n",1)[0]
+        self.assertIn("SetWatchdogTimer(Bound * 10000000U, 0, 0, NULL)", program)
+        self.assertIn("if (s == EFI_SUCCESS && Bound)", program)
+        self.assertIn("GU_ACTIVE_SEQUENCE_PREPARE_ONLY", opened)
         self.assertIn("EFI_STATUS released=GuBootClose();",opened[watchdog:])
         for source in (APP, DXE):
             self.assertIn("/DGU_ACTIVE_SEQUENCE_PREPARE_ONLY", source)
@@ -244,9 +403,17 @@ int main(void){
         self.assertLess(windows.index("if(s!=EFI_SUCCESS||matches<1"),windows.index("b->LoadImage("))
         self.assertIn("BootFileStatus!=EFI_SUCCESS",BOOT.split("EFI_STATUS GuBootWindows(",1)[1])
         import re
-        opens=re.findall(r"(?:s|opened)=[^;\n]*->(?:Open|OpenVolume)\([^;]*\);\s*(?:s|opened)=BootFileOpenResult\(", BOOT)
-        self.assertEqual(len(opens),9)
-        self.assertEqual(len(re.findall(r"->(?:Open|OpenVolume)\(",BOOT)),9)
+        # Every open result must be handled, not necessarily wrapped in
+        # BootFileOpenResult: the inline sites test the status immediately.
+        # Counting is what let a stale pin hide (9 became 15 when the staged
+        # bundle added readers), so the property is checked instead.
+        lines=BOOT.splitlines()
+        opens=[index for index,line in enumerate(lines) if re.search(r"->(?:Open|OpenVolume)\(",line)]
+        self.assertGreaterEqual(len(opens),9)
+        for index in opens:
+            handled="\n".join(lines[index:index+3])
+            self.assertRegex(handled, r"BootFileOpenResult\(|!=EFI_SUCCESS|==EFI_SUCCESS",
+                             f"open at src/boot_io.c:{index+1} is not checked")
         # Boot-wide staging must not allocate from either GPU's CPU pool.
         reader=BOOT.split("static EFI_STATUS ReadWindowsBinary(",1)[1].split("EFI_STATUS GuBootLoadWindows(",1)[0]
         for source in (reader,windows):
@@ -448,19 +615,20 @@ int main(int argc,char **argv) {
         source=(ROOT/"gpu_topology_efi.c").read_text(encoding="utf-8")
         handover=(ROOT/"gpu_windows_handoff.c").read_text(encoding="utf-8")
         self.assertIn("'-WindowsEspGuid requires -SaveLog",builder)
-        # All three opt-in MSI diagnostics must reject PCI selection.
+        # Every opt-in source diagnostic must reject PCI selection, including
+        # the read-only block probe.
         self.assertIn(
-            "($MsiB850RomVariables -or $MsiB850FuseVersion -or $MsiB850Sec2Ucode1) -and $selection.Count",
+            "($MsiB850RomVariables -or $MsiB850FuseVersion -or $MsiB850Sec2Ucode1 -or $VramBlockProbe) -and $selection.Count",
             builder)
         for option in ("$MsiB850RomVariables.IsPresent", "$MsiB850FuseVersion.IsPresent",
-                       "$MsiB850Sec2Ucode1.IsPresent"):
+                       "$MsiB850Sec2Ucode1.IsPresent", "$VramBlockProbe.IsPresent"):
             self.assertIn(option,builder)
         self.assertIn(".Where({ $_ }).Count -gt 1",builder)
         self.assertIn("MSI B850 diagnostics must be built separately.",builder)
         self.assertNotIn("($selection.Count -or $WindowsEspGuid)",builder)
         self.assertIn("if ($selection.Count -and $WindowsEspGuid)",builder)
         self.assertIn("if ($MsiB850Sec2Ucode1 -and -not $SaveLog)",builder)
-        self.assertIn("if (@($MsiB850RomVariables.IsPresent, $MsiB850FuseVersion.IsPresent, $MsiB850Sec2Ucode1.IsPresent).Where({ $_ }).Count -gt 1)",builder)
+        self.assertIn("if (@($MsiB850RomVariables.IsPresent, $MsiB850FuseVersion.IsPresent, $MsiB850Sec2Ucode1.IsPresent, $VramBlockProbe.IsPresent).Where({ $_ }).Count -gt 1)",builder)
         self.assertIn("$sources += 'gpu_windows_handoff.c'",builder)
         self.assertIn("if ($WindowsEspGuid) { $flags += ' /DGU_TOPO_WINDOWS_HANDOFF' }",builder)
         for name in ("GPU-TOPOLOGY-WINDOWS-HANDOFF-DIAGNOSTIC.EFI",

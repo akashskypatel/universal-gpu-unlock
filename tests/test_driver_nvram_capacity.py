@@ -220,6 +220,46 @@ int main(int argc,char **argv) {
 
 
 
+class TheInstallerSaysWhichFileItCouldNotOpen(unittest.TestCase):
+    """RUN0014 answered `I` with `Failed to install DXE Driver: 0x800000000000000e`
+    and nothing else. That status is EFI_NOT_FOUND, and the only place this path
+    returns it is the open of the resident driver file - the file was not on the
+    volume the application was launched from. The log now names the file, and the
+    ASCII spelling it prints is pinned against the wide literal it actually opens,
+    so the two cannot drift."""
+
+    @staticmethod
+    def collapsed(text):
+        """`\\\\EFI` in C source and `\\EFI` in a printed line are one path."""
+        return text.replace("\\\\", "\\")
+
+    def test_the_logged_path_is_the_one_the_installer_opens(self):
+        driver_file = re.search(r'DriverFile\[\]\s*=\s*L"([^"]+)"', SOURCE)
+        self.assertIsNotNone(driver_file)
+        wanted = self.collapsed(driver_file.group(1))
+        self.assertEqual(wanted, "\\EFI\\Drivers\\AdaUnlockDxe.efi")
+        body = production("DriverFilePresent")
+        logged = re.findall(r"FILE=([^ \"]+)", body)
+        self.assertTrue(logged)
+        for path in logged:
+            self.assertEqual(self.collapsed(path), wanted, path)
+
+    def test_the_absent_file_is_named_as_the_reason(self):
+        body = production("DriverFilePresent")
+        self.assertIn("DRIVER_INSTALL=REFUSED REASON=DRIVER_FILE_ABSENT", body)
+        self.assertIn("FIX='stage the dxe-* variant beside this image, or skip I'", body)
+        # The open itself is reported whether it succeeds or not, so a log cannot
+        # show the install attempt without showing what it looked for.
+        self.assertIn("DRIVER_INSTALL=%s PHASE=driver-file", body)
+
+    def test_the_application_names_a_reason_beside_the_status(self):
+        app = (Path(__file__).resolve().parents[1] / "src" / "app.c").read_text(encoding="utf-8")
+        self.assertIn('DXE_INSTALL=FAILED STATUS=%#llx REASON=%s', app)
+        for reason in ("DRIVER_FILE_ABSENT", "NO_FREE_DRIVER_SLOT", "PLATFORM_REFUSED",
+                       "OWNED_SLOT_LOCKED", "NVRAM_ENTRY_INVALID"):
+            self.assertIn('"%s"' % reason, app)
+
+
 class NvramDisableTests(unittest.TestCase):
     def test_production_disable_removes_only_owned_order_slots(self):
         """Compile the real install-independent disable and removal functions."""

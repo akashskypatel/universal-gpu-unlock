@@ -45,6 +45,11 @@ int main(void) {
       {amd_gop,sizeof(amd_gop),0x1002,0x0300},
       {short_path,sizeof(short_path),0x8086,0x0300}
     };
+    assert(GuDevicePathDisplayOwner(amd_gop,sizeof(amd_gop),owners,2)==1);
+    assert(GuDevicePathDisplayOwner(target,sizeof(target),owners,2)==1);
+    assert(GuDevicePathDisplayOwner(short_path,sizeof(short_path),owners,2)==0);
+    assert(GuDevicePathDisplayOwner(amd_gop,sizeof(amd_gop),owners,0)==-1);
+    assert(GuDevicePathDisplayOwner(amd_gop,sizeof(amd_gop),NULL,2)==-1);
     assert(GuDevicePathAmdDisplayOwner(amd_gop,sizeof(amd_gop),owners,2)==1);
     assert(GuDevicePathAmdDisplayOwner(target,sizeof(target),owners,2)==0);
     assert(GuDevicePathAmdDisplayOwner(short_path,sizeof(short_path),owners,2)==0);
@@ -105,6 +110,8 @@ int main(void) {
     assert(sizeof(nvidia_console)==48);
     assert(GuDevicePathAmdDisplayOwner(
         amd_console,sizeof(amd_console),original,2)==1);
+    assert(GuDevicePathDisplayOwner(
+        nvidia_console,sizeof(nvidia_console),original,2)==1);
     assert(GuDevicePathAmdDisplayOwner(
         nvidia_console,sizeof(nvidia_console),original,2)==0);
     /* A peer-only GOP cannot replace the independent AMD output. */
@@ -187,6 +194,6 @@ int main(void) {
     assert(GuDevicePathAmdDisplayOwner(paths[39],sizeof(paths[39]),owners,40)==-1);
     assert(GuDevicePathAmdDisplayOwner(paths[39],sizeof(paths[39]),owners,GU_DISPLAY_OWNER_MAX+1u)==-1);
   }
-  puts("STATUS=COMPLETE DEVICE_PATH_AMD_OWNERSHIP_AND_BOUNDS");
+  puts("STATUS=COMPLETE DEVICE_PATH_DISPLAY_OWNER_AND_AMD_POLICY_BOUNDS");
   return 0;
 }

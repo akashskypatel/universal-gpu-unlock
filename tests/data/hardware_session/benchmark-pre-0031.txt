@@ -1,0 +1,67 @@
+CUDA devices (integrated GPUs are excluded):
+  cuda:0: NVIDIA GeForce RTX 4090 pci=1 - selected
+  cuda:1: NVIDIA GeForce RTX 3080 pci=4 - selected
+===============================================================================
+GPU 0: NVIDIA GeForce RTX 4090
+CUDA index         : 0
+PCI bus id         : 1
+UUID               : a682f1f7-db6f-62a3-29a2-73553c8aedce
+Attribution        : CUDA ordinal is not a PCI BDF; measured only
+Compute capability : 8.9
+Total GPU memory   : 23.73 GiB
+Multiprocessors    : 128
+PyTorch            : 2.11.0+cu128 (CUDA 12.8)
+===============================================================================
+
+--- MATRIX COMPUTE THROUGHPUT ---
+Precision              | Matrix       |   Latency (ms) |      TFLOP/s
+------------------------------------------------------------------------
+FP16 Tensor Cores      | 4096x4096   |          0.845 |       162.69
+FP16 Tensor Cores      | 8192x8192   |          6.889 |       159.60
+FP16 Tensor Cores      | 16384x16384  |         54.700 |       160.81
+BF16 Tensor Cores      | 4096x4096   |          0.903 |       152.14
+BF16 Tensor Cores      | 8192x8192   |          6.627 |       165.92
+BF16 Tensor Cores      | 16384x16384  |         54.303 |       161.98
+FP32 (TF32 allowed)    | 4096x4096   |          1.640 |        83.78
+FP32 (TF32 allowed)    | 8192x8192   |         12.953 |        84.88
+FP32 (TF32 allowed)    | 16384x16384  |        103.314 |        85.14
+
+--- GPU MEMORY COPY BANDWIDTH ---
+Copy 2.00 GiB -> 2.00 GiB: 4.670 ms, 856.49 GiB/s
+Measurements failed on GPU 0: 0
+
+===============================================================================
+GPU 1: NVIDIA GeForce RTX 3080
+CUDA index         : 1
+PCI bus id         : 4
+UUID               : 2281aef8-2cda-f4c2-4e51-88f25c7df107
+Attribution        : CUDA ordinal is not a PCI BDF; measured only
+Compute capability : 8.6
+Total GPU memory   : 11.79 GiB
+Multiprocessors    : 70
+PyTorch            : 2.11.0+cu128 (CUDA 12.8)
+===============================================================================
+
+--- MATRIX COMPUTE THROUGHPUT ---
+Precision              | Matrix       |   Latency (ms) |      TFLOP/s
+------------------------------------------------------------------------
+FP16 Tensor Cores      | 4096x4096   |          2.359 |        58.26
+FP16 Tensor Cores      | 8192x8192   |         17.439 |        63.05
+FP16 Tensor Cores      | 16384x16384  |        126.929 |        69.30
+BF16 Tensor Cores      | 4096x4096   |          2.007 |        68.49
+BF16 Tensor Cores      | 8192x8192   |         15.994 |        68.75
+BF16 Tensor Cores      | 16384x16384  |        125.126 |        70.30
+FP32 (TF32 allowed)    | 4096x4096   |          4.287 |        32.06
+FP32 (TF32 allowed)    | 8192x8192   |         32.070 |        34.28
+FP32 (TF32 allowed)    | 16384x16384  |        255.702 |        34.40
+
+--- GPU MEMORY COPY BANDWIDTH ---
+Copy 2.00 GiB -> 2.00 GiB: 5.196 ms, 769.75 GiB/s
+Measurements failed on GPU 1: 0
+
+===============================================================================
+PER-GPU SUMMARY
+CUDA   GPU                             FP16 8192   BF16 8192   FP32 8192    Copy GiB/s  Failed
+0      NVIDIA GeForce RTX 4090            159.60      165.92       84.88        856.49       0
+1      NVIDIA GeForce RTX 3080             63.05       68.75       34.28        769.75       0
+Discrete GPUs benchmarked: 2; failures: 0

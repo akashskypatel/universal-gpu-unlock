@@ -1,5 +1,36 @@
 # Dynamic read-only NVIDIA GPU and PCI/GOP topology diagnostic
 
+## Fixed-cable display inventory (read-only)
+
+The generic diagnostic now emits one `GOP_DISPLAY[n]` row per captured GOP,
+classifies its graphics-PCI path as NVIDIA, independent display, ambiguous, or
+unknown, and reports the owner BDF when the path has one unambiguous graphics
+controller. It records the current GOP mode descriptor (resolution, pixel
+format, scanline stride, framebuffer base and size), plus optional active and
+discovered EDID manufacturer/product identifiers with base-block header and
+checksum checks. EDID serial numbers are intentionally omitted.
+
+These are **firmware-reported descriptors**, not proof that framebuffer memory
+is mapped/usable or that a physical monitor is attached. `GOP_DISPLAY_DATA`
+explicitly says no framebuffer access, mode set, BLT, Stop, or detach occurred.
+The existing configured `ConOut`/`ErrOut`, text-output openers, and GOP-to-PCI
+path evidence remain separate observations; a GOP or `ConOut` association does
+not alone establish safe driver release.
+
+A `-SaveLog` build can now run even when `SystemTable->ConOut` is absent. It
+records `DIAGNOSTIC_OUTPUT SCREEN=UNAVAILABLE DURABLE_LOG=1` and writes the
+numbered report to the launch volume. A build without durable logging still
+refuses that headless condition, so it cannot silently lose its only output.
+
+For the final cable arrangement, build the generic saved-log image with:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog
+```
+
+This first pass remains strictly observational; it does not test a 3080 display
+release or authorize either GPU transaction.
+
 ### Separate SEC2 version-register comparison (opt-in MSI fuse diagnostic)
 
 The first physical fuse log `0031` resolved the production FWSEC/GSP
@@ -22,11 +53,27 @@ exact success/error status and an explicit
 SEC2 signature, write a GPU register, reset a Falcon, or load firmware.
 No SEC2 read occurs in generic topology or ROM-variable builds.
 
-The earlier physical `0031` did **not** contain these new SEC2 records;
-a new run of the revised, signed MSI fuse image is necessary to observe
-that *different* register. This will not clear the original Windows
-signed Booter IMAGE/HEADER/SIG/PATCH producer, same-instance loader
-invocation, or safe GA102 release by itself.
+The earlier physical `0031` did **not** contain these new SEC2 records.
+That gap is now closed: the revised images ran on the donor bench, and
+`GPU-TOPOLOGY-DIAGNOSTIC-0004.TXT` / `-0005.TXT` carry the reads
+(`tests/data/hardware_session/physical-readonly-0004.txt`, `-0005.txt`,
+digest-pinned in `docs/hardware_session.json` and re-scored by the suite).
+What they say:
+
+* the SEC2 fuse at `0x00824148` reads `RAW=0x1` on the RTX 4090 and
+  `RAW=0x3` on the RTX 3080, agreeing per card with the FWSEC fuse at
+  `0x008241e0` in the same log;
+* the SEC2 version register at `0x00824140` reads `0x1` and `0x3`
+  respectively, so two different named registers agree about each card;
+* every SEC2 line still carries
+  `WINDOWS_61742_SIGNATURE_SLOT=UNKNOWN` / `SECURE_ACCEPTANCE=UNVERIFIED`
+  and the FWSEC lines still carry `ACCEPTANCE=UNVERIFIED`: the reads
+  reproduce each other, they do not authenticate anything, and the
+  Windows 617.42 descriptor is still missing.
+
+This will not clear the original Windows signed Booter
+IMAGE/HEADER/SIG/PATCH producer, same-instance loader invocation, or safe
+GA102 release by itself.
 
 
 ## Original RTX 3080 isolated Stop experiment — not an unlock
@@ -404,7 +451,31 @@ verbose Unicode text through `ConOut` and does not write a disk or NVRAM.
 **Optional** `-SaveLog` creates a new, numbered
 `GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT` (then `-0001.TXT`, etc.) on the
 application's EFI volume, refusing overwrites and file-operation failures.
-This log file is the only intended persistent mutation by the diagnostic.
+Those files are the only intended persistent mutations by the diagnostic.
+
+`-VramBlockProbe` (which the builder only accepts together with `-SaveLog`)
+additionally writes one `PROM-<segment>-<bus>-<device>-<function>-<run>.BIN`
+per card it read, holding exactly the 1 MiB it copied from
+`BAR0 + 0x300000`, under the digest the log prints for that reading. The bytes
+are written while the buffer that produced the digest is still live, so the
+window is read once. The file exists because the transaction refuses a board on
+the FWSEC-FRTS descriptor inside that window and nothing in the image parses
+one: the capture is the input to that question, and the answer is produced off
+the bench by the same parser the transaction uses. A failed capture is its own
+line - `VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE ... REASON=FILE_NOT_WRITTEN` -
+and never stops the log from being written.
+
+`-VramBlockProbe` also reads the fuse window the transaction uses to choose a
+packed signature - sixteen words at `BAR0 + 0x8241c0`, one per possible ucode id,
+printed per card as `VRAM_BLOCK_PROBE_FUSE ... UCODE_ID=<id> RAW=<word>
+VERSION=<version> ACCESS=<STATE|NOT_ACCESSIBLE>` with one
+`VRAM_BLOCK_PROBE_FUSE_END ... UCODE9_UNREAD=<0|1>` closing line. Nothing is
+written to the card to obtain this. The version is the number
+`unlock_transaction_fwsec()` computes, so an inaccessible word reports version
+zero here exactly as it would there; a version the captured ROM's signature mask
+cannot select is a refusal the next actuating boot would meet before its first
+write, and gate `R7_FUSE_VERSION_READ` fails a log whose window was not
+completely read.
 
 ## Build, inspect and run
 
@@ -603,6 +674,16 @@ proof that `DisconnectController()` is safe.
 
 ## Current status
 
+- A signed `diag-topology-log` image of this tree has been executed on the MSI
+  B850 bench: one display on the AMD iGPU, no cable on either NVIDIA card,
+  Windows started afterwards with no error and no hang. The capture
+  (`GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT`, 151 lines, CRLF) reports
+  `TOPOLOGY_VERDICT=INCOMPLETE NVIDIA_CONOUT_BLOCKER=0`,
+  `ERROR_CONSOLE_ISOLATION=INDEPENDENT_OBSERVED`, `GOP_COUNT=0` on both NVIDIA
+  cards, and `DIAGNOSTIC_LOG_COMPLETENESS=COMPLETE DROPPED=0 OVERFLOW=0`. It is
+  stored and scored in
+  [the donor-hardware session](DONOR_HARDWARE_SESSION.md#physical-readonly-0000);
+  it is an observation, not a verification, and no eligibility flag moved.
 - Generic host checks and isolated MSVC EFI builds are verified; physical
   execution of the new generic **ordered two-target passive diagnostic** is
   now documented in both B850 `0007` (mixed-monitor console conflict) and

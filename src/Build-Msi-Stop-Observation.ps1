@@ -24,16 +24,9 @@ if ($BothNvidia -and $Target3080) {
 if ($BothNvidia -and (-not $AcceptWindowsHandoffRisk -or -not $WindowsEspGuid)) {
     throw '-BothNvidia requires explicit risk acceptance and pinned Windows handoff.'
 }
-if (-not $VcVars) {
-    $vswhere=Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path -LiteralPath $vswhere) {
-        $install=& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-        if ($install) { $VcVars=Join-Path $install 'VC\Auxiliary\Build\vcvars64.bat' }
-    }
-}
-if (-not $VcVars -or -not (Test-Path -LiteralPath $VcVars)) {
-    throw 'MSVC x64 build environment not found; specify -VcVars.'
-}
+. (Join-Path $PSScriptRoot 'Msvc-Environment.ps1')
+$VcVars = Resolve-GuVcVars -VcVars $VcVars
+
 Push-Location -LiteralPath $PSScriptRoot
 try {
     $output=Join-Path $PSScriptRoot 'build_stop_observation'
@@ -43,31 +36,21 @@ try {
     if ($Target3080) { $flags+=' /DGU_STOP_TARGET_3080' }
     if ($BothNvidia) { $flags+=' /DGU_STOP_BOTH_NVIDIA' }
     if ($WindowsEspGuid) {
-        $parsed=[guid]::Empty
-        if (-not [guid]::TryParse($WindowsEspGuid,[ref]$parsed) -or $parsed -eq [guid]::Empty) {
-            throw 'Invalid or empty Windows ESP unique partition GUID.'
-        }
-        $parts=$parsed.ToString('D').Split('-')
-        $last=$parts[3]+$parts[4]
-        $octets=@(0..7 | ForEach-Object { '0x'+$last.Substring(2*$_,2) })
-        $initializer='{0x'+$parts[0]+',0x'+$parts[1]+',0x'+$parts[2]+',{' + ($octets -join ',') + '}}'
+        . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
+        $parsed = ConvertTo-GuWindowsEspGuid $WindowsEspGuid
+        $initializer = New-GuWindowsEspGuidInitializer $parsed
         Set-Content -LiteralPath (Join-Path $output 'windows-esp-guid.h') -Encoding ascii -Value ('#define GU_WINDOWS_ESP_GUID_INITIALIZER '+$initializer)
         $sources+=@('gpu_windows_handoff.c','gpu_windows_path.c')
         $flags+=' /DGU_STOP_WINDOWS_HANDOFF'
     }
-    $commands=@('@echo off',('call "'+$VcVars+'" >nul'),'if errorlevel 1 exit /b 1',('cd /d "'+$PSScriptRoot+'"'))
-    $objects=@()
-    foreach ($source in $sources) {
-        $obj='build_stop_observation\' + [IO.Path]::GetFileNameWithoutExtension($source) + '.obj'
-        $objects+=$obj
-        $commands+=('cl '+$flags+' /Fo"'+$obj+'" "'+$source+'"')
-        $commands+='if errorlevel 1 exit /b 1'
-    }
-    $joined=($objects | ForEach-Object { '"'+$_+'"' }) -join ' '
+    . (Join-Path $PSScriptRoot 'Gpu-Execution-Sources.ps1')
+    $compilePlan = New-GuSourceCompilePlan -Sources $sources -CompilerFlags $flags -ObjectDirectory 'build_stop_observation' -VcVars $VcVars -SourceDirectory $PSScriptRoot -QuotePaths
+    $commands = $compilePlan.Commands
+    $objects = $compilePlan.Objects
     $targetName=if ($BothNvidia) { 'DUAL-NVIDIA' } elseif ($Target3080) { 'RTX3080' } else { 'RTX4090' }
     $binary=if ($WindowsEspGuid) { "MSI-$targetName-STOP-WINDOWS-HANDOFF-EXPERIMENT.EFI" }
         else { "MSI-$targetName-STOP-ONCE-EXPERIMENT.EFI" }
-    $commands+=('link /nologo /subsystem:efi_application /entry:UefiMain /machine:x64 /nodefaultlib /incremental:no /fixed:no /dynamicbase:no /nxcompat:no /out:build_stop_observation\'+$binary+' '+$joined)
+    $commands += New-GuLinkCommand -ImageFlags '/subsystem:efi_application /entry:UefiMain' -OutputFile "build_stop_observation\$binary" -Objects $objects -QuotePaths
     $commands+='if errorlevel 1 exit /b 1'
     $batch=Join-Path $output 'build-stop-only.cmd'
     Set-Content -LiteralPath $batch -Encoding ascii -Value $commands

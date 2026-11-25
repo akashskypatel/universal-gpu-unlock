@@ -440,32 +440,47 @@ int main(void){
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 typedef void *EFI_HANDLE;
 typedef size_t UINTN;
 typedef uint32_t UINT32;
 typedef int BOOLEAN;
 typedef int EFI_STATUS;
-typedef int EFI_GUID;
+typedef struct { uint32_t Data1; uint16_t Data2,Data3; uint8_t Data4[8]; } EFI_GUID;
 #define TRUE 1
 #define FALSE 0
 #define EFI_SUCCESS 0
 #define EFI_ACCESS_DENIED 1
 #define EFI_DEVICE_ERROR 2
 #define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 8
+#define EFI_OPEN_PROTOCOL_BY_DRIVER 16
+#define GU_STOP_RELEASE_ONLY_BENCH 1
 """ + records + r"""
 typedef struct { EFI_HANDLE handle; } SURVIVOR_GOP;
+typedef struct { EFI_HANDLE live_handle; } TARGET_CHILD;
 typedef struct {
   EFI_HANDLE pci,gop,self,console,input,error,nv_agent,out_agent,gfx_agent;
   SURVIVOR_GOP *survivors;
   UINTN survivor_count;
+  TARGET_CHILD *target_children;
+  UINTN target_child_count;
 } PLAN;
 static PLAN Plan;
 static GRAPH Original;
-static EFI_GUID TextGuid=1,GopGuid=2,PathGuid=3;
+static EFI_GUID TextGuid={.Data1=1},GopGuid={.Data1=2},PathGuid={.Data1=3};
+static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,
+                                   {0xa0,0x49,0x8a,0xd0,0x6c,0x1a,0x66,0xaa}};
+static void GuLog(const char *format,...){(void)format;}
 static int peer,foreign;
-static EFI_HANDLE bad_path;
-static int Guid(const EFI_GUID *a,const EFI_GUID *b){return *a==*b;}
+static EFI_HANDLE bad_path,bad_driver;
+static int driver_checks;
+static int Guid(const EFI_GUID *a,const EFI_GUID *b){return memcmp(a,b,sizeof(*a))==0;}
 static int GuIsPreparedPeerHandle(EFI_HANDLE h){return h==&peer;}
+static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which){
+  (void)which;
+  driver_checks++;
+  return (!a||a==bad_driver)?EFI_ACCESS_DENIED:EFI_SUCCESS;
+}
 static EFI_STATUS GopOnTarget(EFI_HANDLE h,BOOLEAN *on_target){
   if(h==bad_path)return EFI_DEVICE_ERROR;
   *on_target=h!=&foreign;return EFI_SUCCESS;
@@ -477,7 +492,7 @@ int main(void) {
   SURVIVOR_GOP survivors[]={{&survivor}};
   EDGE edges[14]={0};
   Plan=(PLAN){&pci,&gop,&self,&console,&input,&error,&agent,
-              &out_agent,&gfx_agent,survivors,1};
+              &out_agent,&gfx_agent,survivors,1,NULL,0};
   Original=(GRAPH){12,14,edges};
   for(UINTN i=0;i<12;i++){
     edges[i]=(EDGE){.handle=&pci,.agent=&agent,.controller=&child[i],
@@ -522,6 +537,45 @@ int main(void) {
   Original.count=13;
   CHECK(ClassifyIdleOutput(&edges[12])==EFI_SUCCESS && ProtectedHandle(&other));
   CHECK(!Removed(&edges[13],3));
+  /* RUN0040: exactly one EDID Discovered BY_DRIVER open on an NVIDIA child.
+   * The parent DevicePath edge remains the only child relationship to PCI.
+   * The EDID dependent may disappear at stage 3, not stage 1 or 2. */
+  edges[12].idle_output=FALSE;
+  Original.count=14;
+  edges[13]=(EDGE){.handle=&other,.controller=&other,.agent=&out_agent,
+                   .protocol=EdidDiscoveredGuid,.attributes=EFI_OPEN_PROTOCOL_BY_DRIVER,
+                   .count=1};
+  int prior=driver_checks;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_SUCCESS);
+  CHECK(driver_checks==prior+1);
+  CHECK(edges[12].idle_output&&edges[13].idle_output);
+  CHECK(!Removed(&edges[13],0)&&!Removed(&edges[13],1)&&
+        !Removed(&edges[13],2)&&Removed(&edges[13],3));
+  /* A second non-EDID consumer cannot be mistaken for display metadata. */
+  edges[12].idle_output=FALSE;edges[13].idle_output=FALSE;
+  edges[13].protocol=TextGuid;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[12].idle_output&&!edges[13].idle_output);
+  /* A Data1-only GUID match is not sufficient for this exception. */
+  edges[13].protocol=EdidDiscoveredGuid;
+  edges[13].protocol.Data2^=1;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13].protocol=EdidDiscoveredGuid;
+  /* A non-driver relationship or a repeated open is not safe to remove. */
+  edges[13].attributes=EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13].attributes=EFI_OPEN_PROTOCOL_BY_DRIVER;edges[13].count=2;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  edges[13].count=1;
+  /* Validation failure must not mark either original edge removable. */
+  bad_driver=&out_agent;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[12].idle_output&&!edges[13].idle_output);
+  bad_driver=NULL;
+  /* A consumer with peer ownership can never be admitted. */
+  edges[13].agent=&peer;
+  CHECK(ClassifyIdleOutput(&edges[12])==EFI_ACCESS_DENIED);
+  CHECK(!edges[13].idle_output);
   return 0;
 }
 """
@@ -534,6 +588,267 @@ int main(void) {
                     built = subprocess.run(
                         [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
                          "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                        capture_output=True, text=True)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    checked = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
+    def test_edid_driver_runtime_image_type_is_checked_without_weakening_gpu_driver(self):
+        """Compile actual image validation and exercise code/data pairs and address bounds."""
+        checked = ("static EFI_STATUS ValidateDriverAgent(EFI_HANDLE a,UINTN which) {" +
+                   function_body("ValidateDriverAgent") + "}\n")
+        program = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef uint64_t UINT64;
+typedef unsigned int UINT32;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+typedef struct { unsigned int value; } EFI_GUID;
+typedef struct {
+  VOID *Stop;
+  EFI_HANDLE DriverBindingHandle,ImageHandle;
+  UINT32 Version;
+} EFI_DRIVER_BINDING_PROTOCOL;
+typedef struct {
+  VOID *ImageBase;
+  UINT64 ImageSize;
+  UINT32 ImageCodeType,ImageDataType;
+} EFI_LOADED_IMAGE_PROTOCOL;
+#define EFI_SUCCESS 0
+#define EFI_UNSUPPORTED 3
+#define EfiLoaderCode 1
+#define EfiLoaderData 2
+#define EfiBootServicesCode 3
+#define EfiBootServicesData 4
+#define EfiRuntimeServicesCode 5
+#define EfiRuntimeServicesData 6
+#define GU_STOP_RELEASE_ONLY_BENCH 1
+static EFI_GUID BindingGuid={1},ImageGuid={2};
+static int agent_storage,image_storage;
+static EFI_DRIVER_BINDING_PROTOCOL driver;
+static EFI_LOADED_IMAGE_PROTOCOL image;
+static void GuLog(const char *text,...){(void)text;}
+static EFI_STATUS Interface(EFI_HANDLE handle,EFI_GUID *guid,VOID **out){
+  if(handle==&agent_storage&&guid==&BindingGuid){
+    *out=&driver;return EFI_SUCCESS;
+  }
+  if(handle==&image_storage&&guid==&ImageGuid){
+    *out=&image;return EFI_SUCCESS;
+  }
+  *out=NULL;return EFI_UNSUPPORTED;
+}
+""" + checked + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  const uintptr_t base=(uintptr_t)0x7b08a000U;
+  driver.Stop=(VOID *)(base+0x1504U);
+  driver.DriverBindingHandle=&agent_storage;
+  driver.ImageHandle=&image_storage;
+  driver.Version=1;
+  image.ImageBase=(VOID *)base;
+  image.ImageSize=36864U;
+  image.ImageCodeType=EfiBootServicesCode;
+  image.ImageDataType=EfiBootServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,0)==EFI_SUCCESS);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  /* A valid runtime UEFI driver can own a child display protocol.
+   * Do not admit this image type for the selected NVIDIA driver itself. */
+  image.ImageCodeType=EfiRuntimeServicesCode;
+  image.ImageDataType=EfiRuntimeServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  CHECK(ValidateDriverAgent(&agent_storage,2)==EFI_UNSUPPORTED);
+  /* A loader application, unknown code class, or an invalid code/data pair
+   * must still be rejected, even when Stop lies within the image. */
+  image.ImageCodeType=EfiLoaderCode;
+  image.ImageDataType=EfiLoaderData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageCodeType=17;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageCodeType=EfiRuntimeServicesCode;
+  image.ImageDataType=EfiBootServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageCodeType=EfiBootServicesCode;
+  image.ImageDataType=EfiRuntimeServicesData;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageDataType=EfiBootServicesData;
+  /* Offset checks must reject either boundary, including overflowing base
+   * arithmetic, without an unsigned wraparound admission. */
+  driver.Stop=(VOID *)(base-1U);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  driver.Stop=(VOID *)(base+36864U);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  driver.Stop=(VOID *)(base+36863U);
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  /* Isolate the image-size floor: the Stop pointer must be inside the
+   * reduced image so only the 4096-byte minimum can cause rejection. */
+  driver.Stop=(VOID *)(base+128U);
+  image.ImageSize=4095U;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  image.ImageSize=36864U;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_SUCCESS);
+  driver.DriverBindingHandle=&image_storage;
+  CHECK(ValidateDriverAgent(&agent_storage,3)==EFI_UNSUPPORTED);
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "loaded_image_type.c"
+            source.write_text(program, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(directory) / compiler
+                    build = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", str(source), "-o", str(binary)],
+                        capture_output=True, text=True)
+                    self.assertEqual(build.returncode, 0, build.stderr)
+                    result = subprocess.run([str(binary)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_reconnected_target_child_handles_match_full_device_path_not_addresses(self):
+        """Run the actual remapping code against new handles, lost children and duplicates."""
+        start = SOURCE.index("static EFI_HANDLE ReattachedChild(")
+        stop = SOURCE.index("static BOOLEAN KnownReattachedEdge(", start)
+        identity = SOURCE[start:stop]  # ReattachedChild, ReconcileTargetChildren, SameReattachedEdge
+        reconcile = ""  # The preceding source slice already contains the real function.
+        program = r"""
+#include <stdint.h>
+#include <stddef.h>
+#include <string.h>
+#include <stdio.h>
+#include "gpu_device_path.h"
+typedef void VOID;
+typedef void *EFI_HANDLE;
+typedef size_t UINTN;
+typedef uint32_t UINT32;
+typedef int EFI_STATUS;
+typedef int BOOLEAN;
+typedef struct { unsigned char bytes[16]; } EFI_GUID;
+typedef struct { unsigned char bytes[16]; } EFI_DEVICE_PATH_PROTOCOL;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_ACCESS_DENIED 1
+#define EFI_NOT_READY 2
+#define EFI_COMPROMISED_DATA 3
+#define EFI_DEVICE_PATH_PROTOCOL_GUID {0}
+#define EFI_OPEN_PROTOCOL_BY_CHILD_CONTROLLER 8
+#define MAX_SURVIVOR_PATH_BYTES 1024
+typedef struct {
+  EFI_HANDLE old_handle,live_handle;
+  unsigned char path[MAX_SURVIVOR_PATH_BYTES];
+  UINTN path_bytes;
+  BOOLEAN is_gop;
+} TARGET_CHILD;
+typedef struct {
+  EFI_HANDLE handle,agent,controller;
+  EFI_GUID protocol;
+  UINT32 attributes,count;
+  BOOLEAN usb_baseline,idle_output;
+} EDGE;
+typedef struct {UINTN count,capacity;EDGE *edges;} GRAPH;
+typedef struct {
+  EFI_HANDLE pci,nv_agent;
+  TARGET_CHILD *target_children;
+  UINTN target_child_count,target_child_capacity;
+  BOOLEAN reconnecting;
+  UINTN stage;
+} PLAN;
+static PLAN Plan;
+static GRAPH Current;
+static EFI_GUID PathGuid={{1}};
+static int pci,nvagent,foreign_agent,oldgop,newgop,oldedid,newedid,duplicate;
+static unsigned char gop_path[]={1,1,4,0,2,1,5,0,7,0x7f,0xff,4,0};
+static unsigned char edid_path[]={1,1,4,0,2,2,5,0,8,0x7f,0xff,4,0};
+static unsigned char unknown_path[]={1,1,4,0,2,3,5,0,8,0x7f,0xff,4,0};
+static int Guid(const EFI_GUID *a,const EFI_GUID *b){
+  return memcmp(a,b,sizeof(*a))==0;
+}
+static int GopOnTarget(EFI_HANDLE handle,BOOLEAN *target){
+  *target=handle==&newgop||handle==&newedid||handle==&duplicate;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Interface(EFI_HANDLE handle,EFI_GUID *guid,VOID **out){
+  if(!Guid(guid,&PathGuid))return EFI_NOT_READY;
+  if(handle==&newgop){*out=gop_path;return EFI_SUCCESS;}
+  if(handle==&newedid){*out=edid_path;return EFI_SUCCESS;}
+  if(handle==&duplicate){*out=gop_path;return EFI_SUCCESS;}
+  *out=NULL;return EFI_NOT_READY;
+}
+static void GuLog(const char *text,...){(void)text;}
+""" + identity + reconcile + r"""
+#define CHECK(x) do {if(!(x)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#x);return 1;}} while(0)
+int main(void) {
+  TARGET_CHILD children[2]={0};
+  EDGE current[3]={0};
+  Plan.pci=&pci;Plan.nv_agent=&nvagent;
+  Plan.reconnecting=TRUE;Plan.stage=0;
+  Plan.target_children=children;
+  Plan.target_child_count=2;Plan.target_child_capacity=2;
+  children[0].old_handle=&oldgop;
+  children[0].path_bytes=sizeof(gop_path);
+  memcpy(children[0].path,gop_path,sizeof(gop_path));
+  children[0].is_gop=TRUE;
+  children[1].old_handle=&oldedid;
+  children[1].path_bytes=sizeof(edid_path);
+  memcpy(children[1].path,edid_path,sizeof(edid_path));
+  /* Enumeration order is irrelevant; full paths determine mapping. */
+  current[0]=(EDGE){.handle=&pci,.agent=&nvagent,.controller=&newedid,
+                  .protocol=PathGuid,.attributes=8,.count=1};
+  current[1]=(EDGE){.handle=&pci,.agent=&nvagent,.controller=&newgop,
+                  .protocol=PathGuid,.attributes=8,.count=1};
+  Current.edges=current;Current.count=2;
+  CHECK(ReconcileTargetChildren()==EFI_SUCCESS);
+  CHECK(ReattachedChild(&oldgop)==&newgop);
+  CHECK(ReattachedChild(&oldedid)==&newedid);
+  CHECK(ReattachedChild(&pci)==&pci);
+  EDGE before={.handle=&pci,.agent=&nvagent,.controller=&oldedid,
+               .protocol=PathGuid,.attributes=8,.count=1};
+  CHECK(SameReattachedEdge(&before,&current[0]));
+  CHECK(!SameReattachedEdge(&before,&current[1]));
+  /* A missing child is not successful reattachment. */
+  Current.count=1;
+  CHECK(ReconcileTargetChildren()==EFI_NOT_READY);
+  Current.count=2;
+  /* The original parent driver must still own the reattached child. */
+  current[0].agent=&foreign_agent;
+  CHECK(ReconcileTargetChildren()==EFI_ACCESS_DENIED);
+  current[0].agent=&nvagent;
+  /* An unexpected same-GPU full path is not sufficient to grant identity. */
+  current[0].controller=&duplicate;
+  CHECK(ReconcileTargetChildren()==EFI_ACCESS_DENIED);
+  current[0].controller=&newedid;
+  /* Duplicate current bindings are rejected rather than counted twice. */
+  current[2]=current[1];
+  Current.count=3;
+  CHECK(ReconcileTargetChildren()==EFI_ACCESS_DENIED);
+  Current.count=2;
+  CHECK(ReconcileTargetChildren()==EFI_SUCCESS);
+  /* A valid target child path cannot alias a sibling's full path. */
+  memcpy(children[1].path,gop_path,sizeof(gop_path));
+  children[1].path_bytes=sizeof(gop_path);
+  current[0].controller=&duplicate; /* Both live children now have the same complete path. */
+  CHECK(ReconcileTargetChildren()==EFI_COMPROMISED_DATA);
+  (void)unknown_path;
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "reattach_handles.c"
+            source.write_text(program, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                with self.subTest(compiler=compiler):
+                    binary = Path(directory) / compiler
+                    built = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", "-I",
+                         str(Path(__file__).resolve().parents[1] / "src"),
+                         str(source), "-o", str(binary)],
                         capture_output=True, text=True)
                     self.assertEqual(built.returncode, 0, built.stderr)
                     checked = subprocess.run([str(binary)], capture_output=True, text=True)

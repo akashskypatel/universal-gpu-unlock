@@ -37,6 +37,30 @@ BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
 BOOLEAN GuLatchEntrySelectors(UINT32 Ss0,UINT32 Ss1) {
   return GuLatchEntrySelectorsFor(&Gu,Ss0,Ss1);
 }
+#else
+/* Policies without an entry latch keep no private selector copy: the values are
+ * read where they are needed and nothing is compared against them later. These
+ * definitions state that explicitly, instead of leaving the call sites
+ * unresolved - which is why the non-latched profiles could not link before. */
+BOOLEAN GuGetEntrySelectorsFor(const GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1) {
+  (void)platform;(void)Ss0;(void)Ss1;return FALSE; /* nothing was latched */
+}
+BOOLEAN GuGetEntrySelectors(UINT32 *Ss0,UINT32 *Ss1) {
+  return GuGetEntrySelectorsFor(&Gu,Ss0,Ss1);
+}
+BOOLEAN GuEntrySelectorsMatchFor(const GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
+  (void)platform;(void)Ss0;(void)Ss1;return TRUE; /* no expectation to contradict */
+}
+BOOLEAN GuEntrySelectorsMatch(UINT32 Ss0,UINT32 Ss1) {
+  return GuEntrySelectorsMatchFor(&Gu,Ss0,Ss1);
+}
+BOOLEAN GuLatchEntrySelectorsFor(GU_PLATFORM *platform,UINT32 Ss0,UINT32 Ss1) {
+  if(!platform||platform->fault)return FALSE;
+  (void)Ss0;(void)Ss1;return TRUE; /* no latch in this policy */
+}
+BOOLEAN GuLatchEntrySelectors(UINT32 Ss0,UINT32 Ss1) {
+  return GuLatchEntrySelectorsFor(&Gu,Ss0,Ss1);
+}
 #endif
 #ifdef GU_ENTRY_LATCHED_SS1_FULL
 BOOLEAN GuSelectorPhaseFor(GU_PLATFORM *platform,UINT32 Phase) {
@@ -208,17 +232,26 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
        platform->image!=Gu.image||
        !GuGpuRecordMatches(&platform->discovery_identity,&record->identity)||
        platform->device_id!=(UINT16)(record->identity.pci_id>>16)||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+       !platform->stop_release_ready||
+       record->owners.firmware_assets!=&platform->stop_release_ready||
+#else
        !platform->profile_verified||!platform->prom_verified||
-       !platform->release_state_reserved||platform->release_owner_invalid||
-       !platform->release_state||platform->release_state!=record->owners.release_plan||
        !platform->asset_entries_reserved||!platform->asset_load_attempted||
        platform->asset_entries!=record->owners.firmware_assets||
        !GuPlatformAssetsOwned(platform)||
+#endif
+       !platform->release_state_reserved||platform->release_owner_invalid||
+       !platform->release_state||platform->release_state!=record->owners.release_plan||
        platform->fault||platform->retained||platform->owned||
        platform->allocations||platform->dma_count||platform->master_attributes_pending||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+       !GuMsiCompletedPlatform(platform,record->owners.release_plan))
+#else
        !platform->quiesced||platform->flrs!=1||
        !GuCompatCompletedPlatform(platform)||
        !GuMsiCompletedPlatform(platform,record->owners.release_plan))
+#endif
       return EFI_ACCESS_DENIED;
   }
   return EFI_SUCCESS;
@@ -266,7 +299,12 @@ EFI_STATUS GuAdvanceAllocatedPlatform(EFI_BOOT_SERVICES *bs,GU_PLATFORM **owner,
   /* This is the serialized boot entry path. The previous GPU's live
    * post-close proof must pass before the active pointer can change. */
   const VOID *release=sequence->targets[sequence->order[sequence->next_step-1]].owners.release_plan;
-  if(GuMsiPlanOwnerToken()!=release||!GuMsiReadyForWindows()||
+#ifdef GU_STOP_RELEASE_ONLY_BENCH
+  BOOLEAN previous_ready=GuMsiPlanOwnerToken()==release&&GuMsiVerifyFinalGraph();
+#else
+  BOOLEAN previous_ready=GuMsiPlanOwnerToken()==release&&GuMsiReadyForWindows();
+#endif
+  if(!previous_ready||
      GuPlatformActive!=&current->platform||GuMsiPlanOwnerToken()!=release||
      !GuSafeToReturn()||Gu.fault||Gu.owned||Gu.release_owner_invalid||
      *owner!=&candidate->platform||!PlatformPristine(candidate))
@@ -469,8 +507,20 @@ EFI_STATUS GuDmaAllocate(GU_PLATFORM *owner,UINTN N,VOID **C,UINT64 *D) {
   if(GU_PREFLIGHT_ONLY || !owner->profile_verified || !owner->armed || !owner->display_ok || !N || N>(128U<<20) || owner->fault || owner->retained || !owner->pci || !owner->owned)return EFI_INVALID_PARAMETER;
   Entry=GuAlloc(sizeof(*Entry));if(!Entry)return EFI_OUT_OF_RESOURCES;
   Entry->pages=(N+4095)/4096;Entry->bytes=Entry->pages*4096;
-  Status=owner->pci->AllocateBuffer(owner->pci,AllocateAnyPages,EfiBootServicesData,
-    Entry->pages,&Entry->cpu,0);
+  /* The falcon DMA registers carry 32-bit addresses. Ask for a buffer inside
+   * that window instead of relying on where AllocateAnyPages happens to land,
+   * which on a large-memory machine is routinely above 4 GiB. The sentinel is
+   * page-unaligned, so a real allocation can never be mistaken for "the
+   * firmware did not touch the output". */
+  {
+    /* Take ownership of any output the firmware wrote, including one above
+     * the ceiling: the mapped address below decides usability, and a buffer
+     * that exists must never be dropped. */
+    VOID *Buffer=(VOID *)(UINTN)~(UINTN)0;
+    Status=owner->pci->AllocateBuffer(owner->pci,AllocateMaxAddress,EfiBootServicesData,
+      Entry->pages,&Buffer,0);
+    if(Buffer&&Buffer!=(VOID *)(UINTN)~(UINTN)0)Entry->cpu=Buffer;
+  }
   if(EFI_ERROR(Status) || !Entry->cpu) {
     /* The service may report an error after writing an output pointer.
      * Never discard ownership of a possibly allocated DMA-capable buffer. */

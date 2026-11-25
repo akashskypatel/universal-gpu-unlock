@@ -91,6 +91,34 @@ int main(void) {
   CHECK(GuTopoClassRelevant(0x0300U));
   CHECK(GuTopoClassRelevant(0x0302U));
   CHECK(GuTopoClassRelevant(0x0380U));
+  /* Read-only decoder exposes the endpoint and each bridge's own side of a
+   * PCIe link; the 3080's observed ASPM=2 and negotiated x4 must not be hidden. */
+  {
+    uint32_t config[64]={0};
+    GU_TOPO_LINK_OBS link;
+    config[0x04U/4U]=1U<<20U; /* PCI Status: Capabilities List present. */
+    config[0x34U/4U]=0x40U;
+    config[0x40U/4U]=0x00020010U; /* PCIe v2 endpoint. */
+    config[0x48U/4U]=0x00090000U; /* Device Status: CE | UR, raw only. */
+    config[0x4cU/4U]=0x00000104U; /* Gen4, max x16. */
+    config[0x50U/4U]=0x00440002U; /* ASPM L1, Gen4 x4, DLLLA clear. */
+    CHECK(GuTopoReadPcieLink(config,&link)==1);
+    CHECK(link.present && link.port_type==0 && link.capability_offset==0x40U);
+    CHECK(link.aspm==2 && link.speed==4 && link.width==4);
+    CHECK(link.max_speed==4 && link.max_width==16 && !link.training);
+    CHECK(!link.dll_active && link.device_errors==9);
+    config[0x40U/4U]=0x00420010U; /* PCIe v2 Root Port. */
+    config[0x50U/4U]=0x00440000U;
+    CHECK(GuTopoReadPcieLink(config,&link)==1 && link.port_type==4 && link.aspm==0);
+    config[0x40U/4U]=0x00920010U; /* RC integrated endpoint: no link registers. */
+    CHECK(GuTopoReadPcieLink(config,&link)==0 && !link.present);
+    config[0x40U/4U]=0x00024010U; /* Self-looping capability chain. */
+    CHECK(GuTopoReadPcieLink(config,&link)==-1 && !link.present);
+    memset(config,0,sizeof(config));
+    CHECK(GuTopoReadPcieLink(config,&link)==0 && !link.present);
+    CHECK(GuTopoReadPcieLink(NULL,&link)==-1);
+    CHECK(GuTopoReadPcieLink(config,NULL)==-1);
+  }
   /* A GOP is associated only by a valid complete controller path prefix. */
   {
     GU_TOPO_PATH controller=Path(1,0,0,0),child=controller;
@@ -587,6 +615,30 @@ int main(void) {
   snapshot.pci[20].first_owner_agent=NULL;
   CHECK(GuTopoAssess(&snapshot,&report,report_storage,18)==GU_TOPO_INCOMPLETE);
   CHECK(report.gpu_count==18);
+  /* The report and the per-GPU storage are independent caller-owned outputs.
+   * An overlapping range is refused before any output byte is written, so a
+   * partially initialized report can never be mistaken for an assessment. */
+  {
+    union { GU_TOPO_CAPTURE capture; GU_TOPO_REPORT report; } alias;
+    GU_TOPO_GPU_REPORT storage[GU_TOPO_MAX_PCI];
+    Baseline();
+    report.status=7777;report.gpu_count=99;
+    CHECK(GuTopoAssess(&snapshot,&report,(GU_TOPO_GPU_REPORT *)(void *)&report,1)==GU_TOPO_INVALID);
+    CHECK(report.status==7777 && report.gpu_count==99);
+    CHECK(GuTopoAssess(&snapshot,&report,(GU_TOPO_GPU_REPORT *)(void *)&snapshot,1)==GU_TOPO_INVALID);
+    CHECK(report.status==7777 && report.gpu_count==99);
+    memset(storage,0,sizeof(storage));
+    memset(&alias,0,sizeof(alias));
+    alias.capture=snapshot;
+    CHECK(GuTopoAssess(&alias.capture,(GU_TOPO_REPORT *)(void *)&alias.capture,
+                       storage,GU_TOPO_MAX_PCI)==GU_TOPO_INVALID);
+    CHECK(storage[0].gpu_index==0 && storage[0].gop_count==0 && !storage[0].ancestry_verified);
+    CHECK(alias.capture.pci_count==snapshot.pci_count &&
+          alias.capture.pci[1].identity.pci_id==snapshot.pci[1].identity.pci_id);
+    /* Adjacent, distinct storage remains valid and fully populated. */
+    CHECK(GuTopoAssess(&snapshot,&report,storage,GU_TOPO_MAX_PCI)==GU_TOPO_COMPLETE);
+    CHECK(report.gpu_count==2 && report.gpus==storage);
+  }
   printf("PASS dynamic multi-GPU topology: %u checks; no EFI/hardware calls\n",checks);
   return 0;
 }

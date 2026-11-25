@@ -43,7 +43,12 @@ class AssetLifetimeTests(unittest.TestCase):
             compiled = subprocess.run(
                 [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
                  "-Werror", "-pedantic", "-I", str(ROOT / "src"),
-                 str(source), "-o", str(binary)],
+                 "-DGU_PROM_REFERENCE_HOST_TEST",
+                 # The record, geometry and per-card reference modules are
+                 # compiled on the host.
+                 str(source), str(ROOT / "src/gpu_sku_geometry.c"),
+                 str(ROOT / "src/prom_reference.c"),
+                 "-o", str(binary)],
                 capture_output=True, text=True)
             self.assertEqual(compiled.returncode, 0, compiled.stderr)
             for case in cases:
@@ -176,6 +181,157 @@ int main(int argc,char **argv) {
 """
         self.compile_run(host, range(9))
 
+    def test_adaptive_reader_and_exact_path_cache(self):
+        reader = body(BOOT, "static EFI_STATUS ReadFile(",
+                      "/* Both asset fallback and Windows staging")
+        cache = body(BOOT, "typedef struct {\n  const CHAR16 *path;",
+                     "#endif\n\nstatic BOOLEAN TraceClock")
+        host = r'''
+#include <stdint.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+typedef void VOID;
+typedef int EFI_STATUS;
+typedef size_t UINTN;
+typedef uint64_t UINT64;
+typedef uint8_t UINT8;
+typedef wchar_t CHAR16;
+typedef int BOOLEAN;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_NOT_FOUND 1
+#define EFI_DEVICE_ERROR 2
+#define EFI_BAD_BUFFER_SIZE 3
+#define EFI_COMPROMISED_DATA 4
+#define EFI_OUT_OF_RESOURCES 5
+#define EFI_FILE_MODE_READ 1
+#define EFI_FILE_DIRECTORY 16
+#define GU_ACTIVE_SINGLE_TARGET 1
+#define MIB (1048576U)
+#define SIZE (20U*MIB+7U)
+typedef struct {unsigned Year,Month,Day,Hour,Minute,Second,Nanosecond,TimeZone,Daylight;} EFI_TIME;
+typedef struct {
+  UINT64 FileSize,PhysicalSize,Attribute;
+  EFI_TIME CreateTime,ModificationTime;
+} EFI_FILE_INFO;
+typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+struct EFI_FILE_PROTOCOL {
+  EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,UINT64,UINT64);
+  EFI_STATUS (*GetInfo)(EFI_FILE_PROTOCOL *,void *,UINTN *,void *);
+  EFI_STATUS (*Read)(EFI_FILE_PROTOCOL *,UINTN *,void *);
+  EFI_STATUS (*SetPosition)(EFI_FILE_PROTOCOL *,UINT64);
+  EFI_STATUS (*GetPosition)(EFI_FILE_PROTOCOL *,UINT64 *);
+};
+typedef struct {UINTN size;const VOID *data;} FW;
+struct firmware {UINTN size;const VOID *data;};
+typedef struct {struct firmware firmware;} ASSET;
+typedef struct {int fault,retained;ASSET asset_entries[5];} GU_PLATFORM;
+typedef struct {const CHAR16 *path;const char *name,*sha256;UINTN bytes;} GU_ARCH_ASSET;
+typedef struct {GU_ARCH_ASSET entries[5];} GU_ARCH_ASSETS;
+static GU_PLATFORM cards[2],*GuPlatformActive=&cards[0];
+#define Gu (*GuPlatformActive)
+static const GU_ARCH_ASSETS arch={.entries={[2]={L"gsp","gsp","digest",SIZE}}};
+static const GU_ARCH_ASSETS *GuGetArchAssets(void){return &arch;}
+static EFI_STATUS BootFileStatus;
+static EFI_FILE_PROTOCOL root,file,*Root=&root;
+static int InfoGuid,mode,read_calls,close_calls,seek_calls,progress_calls;
+static UINTN AssetReadSize=MIB,AssetReadBestBytes,AssetReadBestSeconds;
+static BOOLEAN AssetReadSizeSettled,TraceAssetReadActive=TRUE;
+static UINTN pos,largest,clock_seconds,last_progress;
+static VOID *allocation;
+static GU_PLATFORM *allocation_owner;
+static UINT8 *cached_bytes;
+static BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *owner) {
+  return owner==&cards[0] && mode!=10;
+}
+static BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *owner,const VOID *p,UINTN bytes) {
+  return bytes==SIZE && ((owner==allocation_owner&&p==allocation)||
+         (owner==&cards[0]&&p==cached_bytes&&cached_bytes));
+}
+static BOOLEAN TraceClock(UINTN *seconds){*seconds=clock_seconds;return mode!=11;}
+static BOOLEAN TraceFineClock(UINT64 *ticks){*ticks=clock_seconds*1000ULL;return mode!=11;}
+static BOOLEAN TraceFineDelta(UINT64 start,UINT64 end,UINT64 *ms){if(end<start)return FALSE;*ms=end-start;return TRUE;}
+static const char *TraceMsText(BOOLEAN valid,UINT64 ms,char *out,UINTN capacity){if(!valid)return "NA";snprintf(out,capacity,"%llu",(unsigned long long)ms);return out;}
+static VOID GuTraceDetail(const char *phase,const char *fmt,...){(void)phase;(void)fmt;}
+static VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
+  (void)phase;(void)total;progress_calls++;last_progress=done;
+  if(mode==6)BootFileStatus=EFI_DEVICE_ERROR;
+}
+static VOID *GuAlloc(UINTN bytes){allocation=malloc(bytes);allocation_owner=&Gu;return allocation;}
+static VOID GuFree(VOID *p){if(p==allocation)allocation=NULL;free(p);}
+static EFI_STATUS BootFileOpenResult(EFI_STATUS s,EFI_FILE_PROTOCOL **f){(void)f;return s;}
+static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **f){*f=NULL;close_calls++;return mode==13?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+static EFI_STATUS Open(EFI_FILE_PROTOCOL *r,EFI_FILE_PROTOCOL **f,CHAR16 *n,UINT64 m,UINT64 a) {
+  (void)r;(void)n;(void)m;(void)a;pos=0;*f=&file;return EFI_SUCCESS;
+}
+static EFI_STATUS Info(EFI_FILE_PROTOCOL *f,void *g,UINTN *n,void *out) {
+  (void)f;(void)g;EFI_FILE_INFO *i=out;memset(i,0,sizeof(*i));
+  i->FileSize=SIZE;i->PhysicalSize=SIZE;i->CreateTime.Year=2026;
+  i->ModificationTime.Year=mode==9?2025:2026;*n=sizeof(*i);return EFI_SUCCESS;
+}
+static EFI_STATUS Read(EFI_FILE_PROTOCOL *f,UINTN *n,void *out) {
+  (void)f;
+  if(pos==SIZE){*n=mode==5?1:0;return EFI_SUCCESS;}
+  read_calls++;if(*n>largest)largest=*n;
+  if((mode==1||mode==4)&&*n>2*MIB){pos+=17;return EFI_BAD_BUFFER_SIZE;}
+  if(mode==2&&read_calls==2){*n-=1;return EFI_SUCCESS;}
+  if(mode==3&&read_calls==2)return EFI_DEVICE_ERROR;
+  if(mode==12&&*n==4*MIB)clock_seconds+=20;
+  else clock_seconds+=(unsigned)(*n/MIB)*2U;
+  memset(out,0x5a,*n);pos+=*n;return EFI_SUCCESS;
+}
+static EFI_STATUS Seek(EFI_FILE_PROTOCOL *f,UINT64 n){(void)f;seek_calls++;pos=(UINTN)n;return mode==4?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+static EFI_STATUS Position(EFI_FILE_PROTOCOL *f,UINT64 *n){(void)f;*n=pos;return EFI_SUCCESS;}
+''' + cache + reader + r'''
+#define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}} while(0)
+int main(int argc,char **argv) {
+  mode=argc>1?atoi(argv[1]):-1;
+  root.Open=Open;file.GetInfo=Info;file.Read=Read;file.SetPosition=Seek;file.GetPosition=Position;
+  const CHAR16 *name=L"gsp";
+  if(mode>=7&&mode<=10) {
+    cached_bytes=malloc(SIZE);CHECK(cached_bytes);
+    memset(cached_bytes,0x6b,SIZE);
+    cards[0].asset_entries[2].firmware=(struct firmware){SIZE,cached_bytes};
+    GspCacheOwner=&cards[0];GspCacheManifest=&arch.entries[2];
+    GspFileCached.path=L"gsp";GspFileCached.created.Year=2026;
+    GspFileCached.modified.Year=2026;GspFileCached.physical_size=SIZE;
+    GuPlatformActive=&cards[1];GspFileReadActive=TRUE;
+    if(mode==8)name=L"other";
+  }
+  if(mode==14)TraceAssetReadActive=FALSE;
+  VOID *data=NULL;EFI_STATUS status=ReadFile(Root,name,SIZE,&data);
+  CHECK(close_calls==1);
+  if(mode==2||mode==3||mode==4||mode==5||mode==6||mode==10||mode==13) {
+    CHECK(status!=EFI_SUCCESS&&!data&&!allocation);
+    if(mode==2||mode==3)CHECK(read_calls==2&&seek_calls==0);
+    if(mode==4)CHECK(seek_calls==1);
+    if(mode==10)CHECK(read_calls==0);
+  } else {
+    CHECK(status==EFI_SUCCESS&&data==allocation&&data);
+    if(mode==7) {
+      CHECK(!read_calls&&seek_calls==1&&data!=cached_bytes&&last_progress==SIZE);
+      CHECK(((UINT8 *)data)[0]==0x6b&&((UINT8 *)data)[SIZE-1]==0x6b);
+      CHECK(GspFileCandidate.path==name);
+    } else {
+      CHECK(((UINT8 *)data)[0]==0x5a&&((UINT8 *)data)[SIZE-1]==0x5a);
+      if(mode==1)CHECK(seek_calls==1&&AssetReadSize==2*MIB);
+      if(mode==0||mode==11)CHECK(read_calls==5&&largest==8*MIB&&last_progress==SIZE&&AssetReadSize==8*MIB);
+      if(mode==8||mode==9)CHECK(read_calls>0&&seek_calls==0);
+      if(mode==12)CHECK(AssetReadSize==2*MIB&&AssetReadSizeSettled);
+      if(mode==14)CHECK(read_calls==21&&largest==MIB&&!progress_calls&&AssetReadSize==MIB);
+    }
+    GuFree(data);
+  }
+  free(cached_bytes);
+  return 0;
+}
+'''
+        self.compile_run(host, range(15))
+
     def test_loader_prevents_cross_target_asset_replacement(self):
         source = r'''
 #include <stdint.h>
@@ -205,9 +361,38 @@ static LOADED GuAssets[GU_ASSET_COUNT];
 typedef struct {int started,fault,retained,asset_load_attempted;} GU_PLATFORM;
 static GU_PLATFORM Gu;
 static VOID *Root=(VOID *)(uintptr_t)1;
+static VOID *Table=(VOID *)(uintptr_t)1;
+typedef uint32_t UINT32;
+typedef uint64_t UINT64;
 static VOID *UnreleasedFilesystemHandles;
 static EFI_STATUS BootFileStatus;
 static int read_calls,freed,fail_at,corrupt_at,available=1;
+/* The load path reports what removable media staged; this harness does not
+ * compile the record module, so the report is stood in for here. Its own
+ * behaviour is covered by tests/test_asset_install.c and the contract test. */
+typedef struct { uint32_t Magic, Files; uint64_t BootCount; CHAR16 Version[32];
+                 char Bundle[65]; } GU_ASSET_INSTALL;
+typedef struct { const char *Name; unsigned long long Bytes;
+                 const char *Sha256; } GU_ASSET_REF;
+typedef struct { const CHAR16 *Version; unsigned Count;
+                 const GU_ASSET_REF *Files; } GU_ASSET_BUNDLE;
+#define GU_ASSET_INSTALL_ABSENT 0u
+#define GU_ASSET_INSTALL_CORRUPT 3u
+static EFI_STATUS GuAssetInstallRead(VOID *table, GU_ASSET_INSTALL *out) {
+  (void)table; (void)out; return EFI_NOT_FOUND;
+}
+static uint32_t GuAssetInstallState(const GU_ASSET_INSTALL *record,
+                                    const GU_ASSET_BUNDLE *bundle) {
+  (void)bundle; return record ? GU_ASSET_INSTALL_CORRUPT : GU_ASSET_INSTALL_ABSENT;
+}
+static const char *GuAssetInstallStateName(uint32_t state) {
+  (void)state; return "ABSENT";
+}
+static VOID GuAssetBundleFromArch(const GU_ARCH_ASSETS *arch, GU_ASSET_REF *files,
+                                  GU_ASSET_BUNDLE *bundle) {
+  (void)arch; (void)files;
+  if (bundle) { bundle->Version = 0; bundle->Count = 0; bundle->Files = files; }
+}
 static const GU_ARCH_ASSETS bundle={{
   {L"a","A","1",8},{L"b","B","2",8},{L"c","C","3",8},
   {L"d","D","4",8},{L"e","E","5",8}},NULL};
@@ -232,6 +417,13 @@ static BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
   return TRUE;
 }
 static void GuFree(VOID *p) {if(p){freed++;free(p);}}
+/* The trace is a port facility (src/boot_io.c). This harness splices a function
+ * out of its file, so it supplies that port itself; the lines are inert here. */
+static BOOLEAN TraceAssetReadActive;
+static void __attribute__((unused)) GuTracePhase(const char *phase){(void)phase;}
+static void __attribute__((unused)) GuTraceDetail(const char *phase,const char *format,...){(void)phase;(void)format;}
+static void __attribute__((unused)) GuTraceProgress(const char *phase,size_t done,size_t total){(void)phase;(void)done;(void)total;}
+static void __attribute__((unused)) GuTraceDelay(unsigned long long ticks){(void)ticks;}
 static void GuLog(const char *fmt,...) {(void)fmt;}
 ''' + LOADER + r'''
 #define CHECK(e) do {if(!(e)){fprintf(stderr,"FAIL %d: %s\n",__LINE__,#e);return 1;}} while(0)
@@ -299,6 +491,11 @@ int main(int argc,char **argv) {
 #include <stdio.h>
 #include <stdlib.h>
 #include "gpu_inventory.h"
+#include "gpu_sku_geometry.h"
+/* The spliced prepare path records a stock-profile contradiction and a missing
+   per-card reference; this build has neither compiled expectation. */
+static int StockProfileMismatch;
+static int PromReferenceMismatch;
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef size_t UINTN;
@@ -316,6 +513,14 @@ typedef int EFI_STATUS;
 #define EFI_COMPROMISED_DATA 6
 #define EFI_ERROR(x) ((x)!=EFI_SUCCESS)
 #define EfiPciIoWidthUint32 1
+/* The production BAR gate: any firmware-assigned window of at least 16 MiB. */
+#define GU_BAR_MIN_BYTES 0x1000000ULL
+static uint64_t GuBarBaseFromConfig(const UINT32 *c) {
+  /* Same decode as port.h: 32-bit BAR0 at 0x10, 64-bit when type bits say so. */
+  uint64_t base = (uint64_t)(c[4] & 0xfffffff0U);
+  if (((c[4] >> 1) & 3U) == 2U) base |= ((uint64_t)c[5]) << 32;
+  return base;
+}
 typedef struct mock_pci mock_pci;
 struct mock_pci {
   EFI_STATUS (*GetLocation)(mock_pci *,UINTN *,UINTN *,UINTN *,UINTN *);
@@ -351,6 +556,12 @@ static BOOLEAN GuCheckConfig(UINT32 *c,UINTN s,UINTN b,UINTN d,UINTN f,GU_CAPS *
   *caps=(GU_CAPS){1,2,3,4,5};return TRUE;
 }
 static BOOLEAN GuIsSupportedPciId(UINT32 id){return id==0x268410deU||id==0x220a10deU;}
+/* The trace is a port facility (src/boot_io.c). This harness splices a function
+ * out of its file, so it supplies that port itself; the lines are inert here. */
+static void __attribute__((unused)) GuTracePhase(const char *phase){(void)phase;}
+static void __attribute__((unused)) GuTraceDetail(const char *phase,const char *format,...){(void)phase;(void)format;}
+static void __attribute__((unused)) GuTraceProgress(const char *phase,size_t done,size_t total){(void)phase;(void)done;(void)total;}
+static void __attribute__((unused)) GuTraceDelay(unsigned long long ticks){(void)ticks;}
 static void GuLog(const char *fmt,...){(void)fmt;}
 static BOOLEAN RegistersFor(GU_PLATFORM *platform,UINT32 *a,UINT32 *b){
   if(!platform||platform!=active){if(platform)platform->fault=1;return FALSE;}
@@ -364,8 +575,9 @@ static BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,void *p,const void *source,size_t
   if(read_fails){owner->fault=1;return FALSE;}
   return TRUE;
 }
-static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const void *p,size_t bytes){
-  (void)platform;
+static BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const void *p,size_t bytes,
+                                  BOOLEAN require){
+  (void)platform;(void)require;
   (void)p;(void)bytes;rom_checks++;return TRUE;
 }
 struct gpu_unlock_fwsec {int valid;};
@@ -409,6 +621,9 @@ int main(int argc,char **argv){
     case 10:free_fails=1;break;
     case 11:read_fails=1;break;
     case 12:break;
+    /* An Ada id the device list admits but whose geometry was never captured:
+     * the refusal must cost no hardware read at all. */
+    case 13:Gu.device_id=0x2786U;break;
     default:return 2;
   }
   if(mode<10){
@@ -417,8 +632,13 @@ int main(int argc,char **argv){
     if(mode==0||mode==1||mode==9)CHECK(locations==2);
     CHECK(!parses&&!latches);
   }else{
+    unsigned pre_reads=(unsigned)reads;
     EFI_STATUS s=GuAd104Prepare();
-    if(mode==12){
+    if(mode==13){
+      /* A SKU gate: refused, nothing read, nothing latched, nothing retained. */
+      CHECK(s==EFI_UNSUPPORTED&&reads==(int)pre_reads&&!parses&&!latches&&!rom_checks);
+      CHECK(!Gu.profile_verified&&!Gu.prom_verified&&!Gu.fault&&!Gu.retained&&!Gu.started);
+    }else if(mode==12){
       CHECK(s==EFI_SUCCESS&&Gu.profile_verified&&Gu.prom_verified&&latches==1&&parses==1);
     }else{
       CHECK(s==EFI_DEVICE_ERROR&&!Gu.profile_verified&&!Gu.prom_verified&&!latches);
@@ -430,7 +650,7 @@ int main(int argc,char **argv){
   return 0;
 }
 """
-        self.compile_run(host,range(13))
+        self.compile_run(host,range(14))
 
     def test_parent_supported_reference_manifests(self):
         source = r'''
@@ -438,6 +658,10 @@ int main(int argc,char **argv){
 #include <stddef.h>
 #include <wchar.h>
 #include "gpu_device_ids.h"
+/* The spliced Turing table carries the build-time row-count tripwire. */
+#include "turing_assets.h"
+/* The spliced manifest reports the reference count the image carries. */
+#include "prom_reference.h"
 typedef uint32_t UINT32;
 typedef uint16_t UINT16;
 typedef unsigned long UINTN;
@@ -449,6 +673,11 @@ typedef int BOOLEAN;
 #define GU_ASSET_COUNT 5U
 typedef struct {const CHAR16 *path;const char *name;const char *sha256;UINTN bytes;} GU_ARCH_ASSET;
 typedef struct {GU_ARCH_ASSET entries[GU_ASSET_COUNT];const CHAR16 *alternate_gsp_path;} GU_ARCH_ASSETS;
+#define GU_ASSET_BUNDLE_VERSION L"610.43.03"
+typedef struct { const char *Name; unsigned long long Bytes;
+                 const char *Sha256; } GU_ASSET_REF;
+typedef struct { const CHAR16 *Version; unsigned Count;
+                 const GU_ASSET_REF *Files; } GU_ASSET_BUNDLE;
 struct firmware {size_t size;const unsigned char *data;};
 typedef struct {const char *name;struct firmware firmware;} GU_ASSET;
 typedef struct {int is_turing,is_ampere;UINT16 device_id;GU_ASSET asset_entries[GU_ASSET_COUNT];} GU_PLATFORM;

@@ -38,6 +38,37 @@ class BenchmarkReportContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             benchmark.selected_devices("all", 0)
 
+    def test_accuracy_bounds_reject_wrong_results(self):
+        for mode, (l2, peak) in benchmark.ACCURACY_LIMITS.items():
+            with self.subTest(mode=mode):
+                self.assertTrue(benchmark.accuracy_passes(mode, False, l2, peak))
+                self.assertFalse(benchmark.accuracy_passes(mode, False, l2 * 2, peak))
+                self.assertFalse(benchmark.accuracy_passes(mode, False, l2, peak * 2))
+                self.assertFalse(benchmark.accuracy_passes(mode, False, float("nan"), 0))
+                self.assertFalse(benchmark.accuracy_passes(mode, False, 0, float("inf")))
+                self.assertTrue(benchmark.accuracy_passes(mode, True, 0, 0))
+                self.assertFalse(benchmark.accuracy_passes(mode, True, 0, 1e-12))
+
+    def test_cpu_reference_and_metrics(self):
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("PyTorch unavailable for CPU reference verification")
+        for dtype in (torch.float16, torch.bfloat16, torch.float32):
+            a, b, reference = benchmark.accuracy_inputs(torch, dtype, 512, 1729, True)
+            self.assertEqual(reference.dtype, torch.float64)
+            exact = (a.float() @ b.float()).to(dtype)
+            self.assertEqual(benchmark.accuracy_metrics(torch, exact, reference), (0, 0))
+            bad = exact.clone()
+            bad[0, 0] += 2
+            self.assertGreater(benchmark.accuracy_metrics(torch, bad, reference)[0], 0)
+            bad[0, 0] = float("nan")
+            self.assertEqual(benchmark.accuracy_metrics(torch, bad, reference),
+                             (float("inf"), float("inf")))
+            self.assertEqual(benchmark.accuracy_metrics(torch, -exact, reference)[0], 2)
+            with self.assertRaises(ValueError):
+                benchmark.accuracy_metrics(torch, exact[:1], reference)
+
     def test_no_automatic_claim_of_unlock(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn("UNLOCK_VERIFIED=false", source)

@@ -1,7 +1,13 @@
 #ifndef GU_SHA256_H
 #define GU_SHA256_H
 
+#if defined(GU_SHA256_HOST_TEST)
+/* Host builds of the pure hashing module use the same type shim as the units
+ * that include it; the algorithm itself is unchanged. */
+#include "../tests/asset_install_mock.h"
+#else
 #include <Uefi.h>
+#endif
 
 /*
  * One-shot SHA-256. Data must contain Size readable bytes, Size must be less

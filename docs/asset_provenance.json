@@ -1,0 +1,104 @@
+{
+  "schema": "gu-asset-provenance/1",
+  "lineage": "NVIDIA 610.43.03",
+  "origin": {
+    "tree": "Windows-GPU-UNLOCK/research/firmware/ada_610",
+    "manifest": "artifacts-610.43.03.json",
+    "note": "The parent research tree records where each payload was extracted from. That tree is not part of this repository, so this file records the reference rather than re-deriving it."
+  },
+  "authentication": {
+    "signature_authenticated": false,
+    "why": "Nothing in this repository verifies an NVIDIA signature over any payload. The records below assert where each byte came from and that the firmware's own pin table agrees with it; they do not and cannot assert authenticity."
+  },
+  "records": [
+    {
+      "asset": "gpu-unlock/610.43.03/booter_load_ad102.bin",
+      "role": "Booter signed loader for AD102",
+      "sha256": "6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",
+      "bytes": 57672
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/v67-ad102-610.43.03-four-plm.bin",
+      "role": "V67 microcode image with four PLM variants, AD102",
+      "sha256": "44c36b2d6b3424e53e18f3e55db85c833655de071ce66ce42749588a4a7dc8cb",
+      "bytes": 64000
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_ga10x.bin",
+      "role": "GSP firmware payload shared by GA10x parts",
+      "sha256": "572373620a37418f24dc16b5031c39338778c3257e48e8408de9a57291b24f3a",
+      "bytes": 84277400
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_boot_ad102.bin",
+      "role": "GSP boot stub for AD102",
+      "sha256": "45d6335a8185d6ff13e8d1484cea73f68d3d13aa1c19dc080ed1c3482dd5bac0",
+      "bytes": 36864
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_boot_desc_ad102.bin",
+      "role": "GSP boot descriptor for AD102",
+      "sha256": "83f8f3f1f5f9496e0ea8fc7103c2beb64d0b6de2f5ffe725f13514de5a95fa42",
+      "bytes": 84
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/booter_load_ga102.bin",
+      "role": "Booter signed loader for GA102",
+      "sha256": "056cbc064a888f80717726c54d7f64fcd68044d123870c95a74f37f4975dcaa4",
+      "bytes": 61256
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/v67-ga102-610.43.03.bin",
+      "role": "V67 microcode image for GA102",
+      "sha256": "2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197",
+      "bytes": 64000
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_boot_ga102.bin",
+      "role": "GSP boot stub for GA102",
+      "sha256": "3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768",
+      "bytes": 24576
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin",
+      "role": "GSP boot descriptor for GA102",
+      "sha256": "cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15",
+      "bytes": 84
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/booter_load_tu102.bin",
+      "role": "Booter signed loader for TU102",
+      "sha256": "3ae2cccc2666e5de1fee0db68a41ba37086124425eaed4d90718e194d5d48276",
+      "bytes": 59976,
+      "note": "Pinned by the parent tree; no TU102 payload bytes are carried in this fork, so a Turing actuation build refuses to compile."
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/v67-tu102-610.43.03.bin",
+      "role": "V67 microcode image for TU102",
+      "sha256": "2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197",
+      "bytes": 64000,
+      "note": "Same digest as the GA102 V67 image in the parent manifest; no TU102 payload bytes are carried here."
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_tu10x.bin",
+      "role": "GSP firmware payload for TU10x parts",
+      "sha256": "73065619db9ec921d19fc4e519dd04d91a9199b525eaca9b257b89fb8c5ec52c",
+      "bytes": 29352832,
+      "note": "Not carried in this fork."
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_boot_tu102.bin",
+      "role": "GSP boot stub for TU102",
+      "sha256": "8765694cd38beaa4e2b8b1b83a31fb7aee6cb9d8b7c6bc7a86e6d931a3a056c2",
+      "bytes": 4096,
+      "note": "Not carried in this fork."
+    },
+    {
+      "asset": "gpu-unlock/610.43.03/gsp_boot_desc_tu102.bin",
+      "role": "GSP boot descriptor for TU102",
+      "sha256": "9e7cca2cfdc5ce601b0adba39967850046108df6c2d23fff95578ca3f0ccbe01",
+      "bytes": 76,
+      "note": "Not carried in this fork."
+    }
+  ]
+}

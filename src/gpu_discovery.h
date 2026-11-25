@@ -57,11 +57,30 @@ EFI_STATUS GuDiscoverSingleGpu(EFI_HANDLE image, EFI_SYSTEM_TABLE *table);
  * In default firmware modes this is a no-op. */
 EFI_STATUS GuVerifyActivePeers(EFI_SYSTEM_TABLE *table);
 int GuIsPreparedPeerHandle(EFI_HANDLE handle);
+/* True only for a verified, currently unselected record in the active inventory. */
+int GuIsUnselectedGpuHandle(EFI_HANDLE handle);
 
 /* One selected active card. Binds a genuine ordered-state record around
  * the existing shared GuExecuteUnlock sequence, without permitting a
  * second active card or authorizing firmware work. */
+#ifdef GU_RUNTIME_SELECTION
+/* Stop/release bench policy: select every currently detected supported NVIDIA
+ * function in memory, without persisting GuTargets to NVRAM. */
+EFI_STATUS GuRuntimeSelectionSelectAll(VOID);
+#ifdef GU_FIRMWARE_REATTACH
+/* Fresh, boot-local single target chosen by the operator. */
+EFI_STATUS GuRuntimeSelectionChoose(const GU_GPU_LOCATION *location);
+#endif
+#endif
+
 #ifdef GU_ACTIVE_SINGLE_TARGET
+/* Runtime identity list for the warning shown before an ordered actuation. */
+size_t GuSelectedGpuCount(VOID);
+#ifdef GU_FIRMWARE_REATTACH
+size_t GuPreparedGpuCount(VOID);
+EFI_STATUS GuPreparedGpuRecordAt(size_t index,GU_GPU_RECORD *out);
+#endif
+EFI_STATUS GuSelectedGpuRecordAt(size_t index,GU_GPU_RECORD *out);
 EFI_STATUS GuBeginSelectedGpuStep(EFI_SYSTEM_TABLE *table,
                                   const void *platform,
                                   const void *release_plan,

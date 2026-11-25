@@ -7,6 +7,19 @@
 #include "compat/compat.h"
 #include "port.h"
 #include "prom_identity.h"
+#include "prom_reference.h"
+#include "gpu_sku_geometry.h"
+#include "asset_install.h"
+#include "stock_profile.h"
+#include "turing_assets.h"
+
+/* Set when the card's cold selector contradicts the profile this image was
+ * built for. It is a refusal, not a hardware fault: nothing was written. */
+static BOOLEAN StockProfileMismatch;
+/* Set when this build requires a captured per-card reference and the card in
+ * front of it is not in the allowlist. Also a refusal, not a fault: the card may
+ * be perfectly healthy, it is simply not a card this image has a reference for. */
+static BOOLEAN PromReferenceMismatch;
 
 static const GU_ARCH_ASSETS AdaAssets={{
     {L"\\AD102-ASSETS\\booter_load_ad102.bin","gpu-unlock/610.43.03/booter_load_ad102.bin","6ee05b20e1dc244c08c052f36ef28469b8d09f4955d1fe33e48a179e11a7fd49",57672U},
@@ -22,8 +35,11 @@ static const GU_ARCH_ASSETS AmpereAssets={{
     {L"\\GA102-ASSETS\\gsp_boot_ga102.bin","gpu-unlock/610.43.03/gsp_boot_ga102.bin","3df651acb174fd5f5561a1996965b192f50c5d763168446ed0d4ead19d895768",24576U},
     {L"\\GA102-ASSETS\\gsp_boot_desc_ga102.bin","gpu-unlock/610.43.03/gsp_boot_desc_ga102.bin","cc5a3fc1f4c47f2fe107b1b68f0176d8a448e6dec84b575e5560ccef5262bf15",84U}
   },L"\\AD102-ASSETS\\gsp_ga10x.bin"};
-/* The parent supplies these 610.43.03 reference assets. The fork currently
- * carries no TU102 payload bytes; EFI checks actual files and hashes. */
+/* The parent supplies these 610.43.03 reference assets. The fork carries no
+ * TU102 payload bytes - `TU102-ASSETS/` is a README - which is why
+ * `turing_assets.h` refuses to compile a Turing actuation build and pins the row
+ * count below. EFI checks actual files and hashes; this table only says what it
+ * would look for. */
 static const GU_ARCH_ASSETS TuringAssets={{
     {L"\\TU102-ASSETS\\booter_load_tu102.bin","gpu-unlock/610.43.03/booter_load_tu102.bin","3ae2cccc2666e5de1fee0db68a41ba37086124425eaed4d90718e194d5d48276",59976U},
     {L"\\TU102-ASSETS\\v67-tu102-610.43.03.bin","gpu-unlock/610.43.03/v67-tu102-610.43.03.bin","2a0aa1f86d0b6afff5214d641d87d46dc98ef06ed908ff05d0ddbad5ffb7e197",64000U},
@@ -31,6 +47,9 @@ static const GU_ARCH_ASSETS TuringAssets={{
     {L"\\TU102-ASSETS\\gsp_boot_tu102.bin","gpu-unlock/610.43.03/gsp_boot_tu102.bin","8765694cd38beaa4e2b8b1b83a31fb7aee6cb9d8b7c6bc7a86e6d931a3a056c2",4096U},
     {L"\\TU102-ASSETS\\gsp_boot_desc_tu102.bin","gpu-unlock/610.43.03/gsp_boot_desc_tu102.bin","9e7cca2cfdc5ce601b0adba39967850046108df6c2d23fff95578ca3f0ccbe01",76U}
   },NULL};
+/* Fails the build if the reviewed manifest rows change (see turing_assets.h):
+ * a trimmed table must not leave Turing cards admitted. */
+GU_TURING_ROW_COUNT_IS(TuringAssets);
 const GU_ARCH_ASSETS *GuGetArchAssetsForPciId(UINT32 pci_id) {
   if((pci_id & 0xffffU)!=0x10deU)return NULL;
   UINT16 dev=(UINT16)(pci_id>>16);
@@ -65,6 +84,26 @@ BOOLEAN GuPlatformAssetsOwned(const GU_PLATFORM *platform) {
   }
   return TRUE;
 }
+/* The compiled manifest as the staged-asset record module sees it: the same
+ * names, sizes and pinned digests the loader verifies. No file access. */
+VOID GuAssetBundleFromArch(const GU_ARCH_ASSETS *arch,GU_ASSET_REF *files,
+                           GU_ASSET_BUNDLE *bundle) {
+  if(!bundle)return;
+  bundle->Version=GU_ASSET_BUNDLE_VERSION;
+  bundle->Count=0;
+  bundle->Files=files;
+  if(!arch||!files)return;
+  for(UINTN i=0;i<GU_ASSET_COUNT;i++) {
+    files[i].Name=arch->entries[i].name;
+    files[i].Bytes=(unsigned long long)arch->entries[i].bytes;
+    files[i].Sha256=arch->entries[i].sha256;
+    bundle->Count++;
+  }
+}
+
+UINTN GuAd104PromReferenceCount(VOID) {
+  return (UINTN)GuPromReferenceCount();
+}
 BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
   const GU_ARCH_ASSETS *arch=PlatformManifest(platform);
   if(!arch||!GuPlatformAssetsOwned(platform))return FALSE;
@@ -75,7 +114,12 @@ BOOLEAN GuAd104AssetsValid(const GU_PLATFORM *platform) {
   }
   return TRUE;
 }
-BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *Data,UINTN Bytes) {
+/* `RequireReference` is the caller's policy, not a compile-time fact: the
+ * read-only diagnostic passes FALSE because it exists to capture the reference a
+ * refusal would otherwise demand, and preparation passes TRUE so a build that
+ * requires a reference cannot proceed without one. */
+BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *Data,UINTN Bytes,
+                           BOOLEAN RequireReference) {
   /* The live NV_PROM_DATA window is 1 MiB, unlike the accepted 2 MiB
    * archive. Compare live PCI identity and validate the PROM structure;
    * the FWSEC descriptor and cold/PCI snapshots are checked separately.
@@ -94,6 +138,36 @@ BOOLEAN GuAd104PromMatches(const GU_PLATFORM *platform,const VOID *Data,UINTN By
   s[64]=0;
   GuLog("PROM readout SHA256: %s PCIR_device=%04x STRUCTURE_VALID=1 SIGNATURE_AUTHENTICATED=0\n",
         s,(unsigned)platform->device_id);
+  /* The authenticated half: an exact hit on device, subsystem, ROM digest and
+   * loader version, or nothing. */
+  const GU_PROM_REFERENCE *reference=NULL;
+  UINT32 subsystem=platform->discovery_identity.subsystem_id;
+  GU_PROM_REF_DECISION decision=GuPromReferenceDecide(platform->device_id,subsystem,
+                                                      s,GU_ASSET_BUNDLE_VERSION_CHAR8,
+                                                      &reference);
+  if(decision==GU_PROM_REF_ACCEPTED) {
+    GuLog("PROM_IDENTITY=VERIFIED DEVICE=%04x SUBSYS=%08x LOADER=%s REFERENCE=%s "
+          "SIGNATURE_AUTHENTICATED=0\n",
+          (unsigned)platform->device_id,(unsigned)subsystem,
+          GU_ASSET_BUNDLE_VERSION_CHAR8,reference&&reference->Origin?reference->Origin:"none");
+    return TRUE;
+  }
+  GuLog("PROM_IDENTITY=%s DEVICE=%04x SUBSYS=%08x SHA256=%s REASON=%s REFS=%u "
+        "DIAGNOSTIC_ALLOWED=1\n",
+        RequireReference?"REFUSED":"UNVERIFIED",(unsigned)platform->device_id,
+        (unsigned)subsystem,s,GuPromReferenceReason(decision),
+        (unsigned)GuPromReferenceCount());
+#if defined(GU_PROM_REFERENCE_REQUIRED)
+  if(RequireReference) {
+    PromReferenceMismatch=TRUE;
+    return FALSE;
+  }
+#else
+  (void)RequireReference;
+#endif
+  /* No reference was required, so structural validity stands - and the log says
+   * exactly that, with the digest an operator needs to capture one. */
+  GuLog("PROM_IDENTITY MODE=STRUCTURAL AUTHENTICATION=0\n");
   return TRUE;
 }
 BOOLEAN GuAd104FwsecMatches(const struct gpu_unlock_fwsec *f) {
@@ -111,7 +185,7 @@ static BOOLEAN ConfigFor(GU_PLATFORM *platform) {
   if(!platform->handle||!platform->pci||id->handle!=platform->handle||id->pci!=platform->pci||
      id->pci_id!=(((UINT32)platform->device_id<<16)|0x10deU)||
      !platform->pci->GetLocation||!platform->pci->Pci.Read||
-     !platform->bar_base||platform->bar_size!=0x1000000||
+     !platform->bar_base||platform->bar_size<GU_BAR_MIN_BYTES||
      EFI_ERROR(platform->pci->GetLocation(platform->pci,&s,&b,&d,&f))) {
     GuLog("Config: invalid pci handle or location\n");return FALSE;
   }
@@ -133,7 +207,7 @@ static BOOLEAN ConfigFor(GU_PLATFORM *platform) {
   }
   if(c[0]!=id->pci_id||c[11]!=id->subsystem_id||(c[2]>>16)!=id->class_code||
      !GuIsSupportedPciId(c[0])||((c[2]>>16)!=0x0300U&&(c[2]>>16)!=0x0302U)||
-     (c[4]&~0xfU)!=platform->bar_base) {
+     GuBarBaseFromConfig(c)!=platform->bar_base) {
     GuLog("Config: mismatch c0=0x%x c2=0x%x c4=0x%x bar_base=0x%llx\n",
           c[0],c[2],c[4],(unsigned long long)platform->bar_base);return FALSE;
   }
@@ -186,6 +260,19 @@ static BOOLEAN RegistersFor(GU_PLATFORM *platform,UINT32 *Ss0,UINT32 *Ss1) {
     GuLog("Selectors invalid: SS0=0x%x, SS1=0x%x (expected SS1 <= 7)\n",*Ss0,*Ss1);
     return FALSE;
   }
+#ifdef GU_STOCK_PROFILE_SS0
+  /* The image implements one stock policy; a card presenting another value is
+   * not a transient failure and must not reach the write path. */
+  if(!GuStockProfileAccepts(*Ss0,1,GU_STOCK_PROFILE_SS0)) {
+    StockProfileMismatch=TRUE;
+    GuLog("STOCK_PROFILE=REFUSED COMPILED=%s EXPECTED_SS0=%#x OBSERVED_SS0=%#x "
+          "REASON=CARD_DOES_NOT_MATCH_BUILD\n",
+          GU_STOCK_PROFILE_NAME,(unsigned)GU_STOCK_PROFILE_SS0,(unsigned)*Ss0);
+    return FALSE;
+  }
+  GuLog("STOCK_PROFILE=MATCH COMPILED=%s SS0=%#x\n",
+        GU_STOCK_PROFILE_NAME,(unsigned)*Ss0);
+#endif
   GuLog("Registers: cold state verified (PMC=0x%x, SS0=0x%x, SS1=%u)\n",
         pmc,*Ss0,*Ss1);
   return !platform->fault;
@@ -223,10 +310,16 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   struct gpu_unlock_fwsec fw;
   if(owner->started||owner->owned||owner->retained||owner->profile_verified||owner->fault)
     return EFI_NOT_READY;
+  /* Each of these three can touch the device: config space, then BAR0, then a
+   * CPU-side asset digest. RUN0011's log ended before the DIAGNOSTIC line below,
+   * which is two of these calls wide, so each one names itself first. */
+  GuTracePhase("diag-config");
   BOOLEAN config_ok=ConfigFor(owner);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-registers");
   BOOLEAN regs_ok=config_ok&&RegistersFor(owner,&before0,&before1);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-assets");
   BOOLEAN assets_ok=GuAd104AssetsValid(owner);
   GuLog("DIAGNOSTIC CONFIG=%u REGISTERS=%u PINNED_ASSETS=%u\n",
         (unsigned)config_ok,(unsigned)regs_ok,(unsigned)assets_ok);
@@ -236,13 +329,16 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!prom)return owner->fault||owner->retained?EFI_DEVICE_ERROR:EFI_OUT_OF_RESOURCES;
   if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-prom-copy");
   BOOLEAN copied=GuCopyFromIo(owner,prom,(VOID *)(UINTN)(owner->bar_base+0x300000),1048576U);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   if(!DiagnosticBufferMatches(owner,prom))return EFI_DEVICE_ERROR;
-  BOOLEAN prom_ok=copied&&!owner->fault&&GuAd104PromMatches(owner,prom,1048576U);
+  BOOLEAN prom_ok=copied&&!owner->fault&&GuAd104PromMatches(owner,prom,1048576U,FALSE);
+  GuTracePhase("diag-prom-parse");
   int parsed=prom_ok?gpu_unlock_vbios_fwsec(prom,1048576U,&fw):-1;
   BOOLEAN fw_ok=parsed==0&&GuAd104FwsecMatches(&fw);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
+  GuTracePhase("diag-stability");
   BOOLEAN cfg2=ConfigFor(owner);
   if(!DiagnosticOwnerMatches(owner,bs,pci,handle))return EFI_DEVICE_ERROR;
   BOOLEAN reg2=cfg2&&RegistersFor(owner,&after0,&after1);
@@ -262,11 +358,23 @@ EFI_STATUS GuDiagnosticScan(GU_PLATFORM *owner) {
 }
 EFI_STATUS GuAd104Prepare(VOID) {
   UINT32 ss0=0,ss1=0,after0=0,after1=0;VOID *prom=NULL;struct gpu_unlock_fwsec fw;
+  StockProfileMismatch=FALSE;
+  PromReferenceMismatch=FALSE;
   GuLog("GuAd104Prepare: start\n");
   /* V2 structural parsing is not signature acceptance. The dedicated
    * Turing falcon loader/selector contract is not verified in this fork. */
   if(Gu.is_turing) {
     GuLog("TURING_PREPARE=REFUSED REASON=SIGNED_LOADER_NOT_VERIFIED\n");
+    return EFI_UNSUPPORTED;
+  }
+  /* The pinned offsets are one chip's geometry. An Ada part without its own
+   * captured table must be refused before the first BAR access rather than
+   * driven with AD102 offsets; the read-only diagnostic stays available so
+   * the missing table can still be captured. */
+  if(GuSkuGeometryRefuses(Gu.device_id)) {
+    const GU_SKU_GEOMETRY *row=GuSkuGeometryFor(Gu.device_id);
+    GuLog("SKU_GEOMETRY=REFUSED DEVICE=%04x CHIP=%s SKU=%s REASON=NO_CAPTURED_REGISTER_TABLE DIAGNOSTIC_ALLOWED=1\n",
+          (unsigned)Gu.device_id,row&&row->Chip?row->Chip:"unknown",row&&row->Sku?row->Sku:"unknown");
     return EFI_UNSUPPORTED;
   }
   if(Gu.started || Gu.fault || Gu.retained || Gu.allocations || Gu.profile_verified || Gu.prom_verified) {
@@ -280,8 +388,11 @@ EFI_STATUS GuAd104Prepare(VOID) {
   }
   if(!RegistersFor(&Gu,&ss0,&ss1)) {
     GuLog("GuAd104Prepare: Registers() returned FALSE\n");
-    return EFI_NOT_READY;
+    /* A card that is not the one this image was built for is unsupported, not
+     * unready: retrying cannot help and nothing was changed. */
+    return StockProfileMismatch?EFI_UNSUPPORTED:EFI_NOT_READY;
   }
+  GuTracePhase("profile-assets");
   if(!GuAd104AssetsValid(&Gu)) {
     GuLog("GuAd104Prepare: Assets invalid\n");
     return EFI_CRC_ERROR;
@@ -291,8 +402,10 @@ EFI_STATUS GuAd104Prepare(VOID) {
     GuLog("GuAd104Prepare: PROM alloc failed\n");
     return EFI_OUT_OF_RESOURCES;
   }
+  GuTracePhase("profile-prom-copy");
   BOOLEAN copied=GuCopyFromIo(&Gu,prom,(VOID *)(UINTN)(Gu.bar_base+0x300000),1048576);
-  BOOLEAN prom_match = copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576);
+  BOOLEAN prom_match = copied&&!Gu.fault&&GuAd104PromMatches(&Gu,prom,1048576,TRUE);
+  GuTracePhase("profile-prom-parse");
   int fwsec_res = prom_match?gpu_unlock_vbios_fwsec(prom,1048576,&fw):-1;
   BOOLEAN fwsec_match = (fwsec_res == 0) && GuAd104FwsecMatches(&fw);
   BOOLEAN cfg2 = ConfigFor(&Gu);
@@ -302,8 +415,11 @@ EFI_STATUS GuAd104Prepare(VOID) {
         prom_match, fwsec_res, fwsec_match, cfg2, reg2, (ss0==after0 && ss1==after1));
   GuFree(prom);
   if(Gu.fault||Gu.retained)return EFI_DEVICE_ERROR;
-  if(!valid) return EFI_COMPROMISED_DATA;
+  /* A card with no captured reference is not compromised data: it is a card
+   * this image has no reference for, which retrying cannot change. */
+  if(!valid) return PromReferenceMismatch?EFI_UNSUPPORTED:EFI_COMPROMISED_DATA;
   Gu.prom_verified=TRUE;
+  GuTracePhase("profile-latch-selectors");
   if(!GuLatchEntrySelectors(ss0,ss1)) {
     Gu.prom_verified=FALSE;
     GuLog("GuAd104Prepare: GuLatchEntrySelectors failed\n");

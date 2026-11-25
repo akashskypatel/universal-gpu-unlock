@@ -1,7 +1,7 @@
 name: GPU discovery and gated active preparation verification
 on:
   push:
-    branches: [main]
+    branches: [main, 'arena/**']
     paths:
       - 'src/**'
       - 'tests/**'
@@ -11,6 +11,12 @@ on:
       - 'Setup-AdaUnlock.ps1'
       - 'Check-GPU-Unlock.bat'
       - 'README.md'
+      - 'sim/**'
+      - 'docs/HOST_SIMULATOR.md'
+      - 'docs/image_variants.json'
+      - 'docs/BUILD_SIGN_DEPLOY.md'
+      - 'docs/hardware_session.json'
+      - 'docs/DONOR_HARDWARE_SESSION.md'
       - '.github/workflows/gpu-topology-diagnostic.yml'
   pull_request:
     paths:
@@ -22,6 +28,12 @@ on:
       - 'Setup-AdaUnlock.ps1'
       - 'Check-GPU-Unlock.bat'
       - 'README.md'
+      - 'sim/**'
+      - 'docs/HOST_SIMULATOR.md'
+      - 'docs/image_variants.json'
+      - 'docs/BUILD_SIGN_DEPLOY.md'
+      - 'docs/hardware_session.json'
+      - 'docs/DONOR_HARDWARE_SESSION.md'
       - '.github/workflows/gpu-topology-diagnostic.yml'
   workflow_dispatch:
 permissions:
@@ -45,9 +57,13 @@ jobs:
       - name: Compile and execute bounded host tests
         shell: bash
         run: |
-          set -euo pipefail
+          set +e -uo pipefail
+          HOST_LOG="$RUNNER_TEMP/gu-log/host.log"
           (
-            trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .; exit "$rc"' EXIT
+            set -eEuo pipefail
+            # Name the command that failed, not just the exit code.
+            trap 'rc=$?; printf "::error::HOST_FAILED rc=%s cmd=%s\n" "$rc" "$BASH_COMMAND" >&2' ERR
+            trap 'rc=$?; echo "HOST_EXIT=$rc"; git status --short; df -h .' EXIT
             # MSI 7E56 requires an exact passive dual-NVIDIA hardware fingerprint.
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -Isrc tests/test_msi_b850_rom_diag.c -o "$RUNNER_TEMP/test_msi_b850_rom_diag_$compiler"
@@ -77,11 +93,110 @@ jobs:
             "$RUNNER_TEMP/test_gpu_topology_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_gpu_inventory.c src/gpu_inventory.c -o "$RUNNER_TEMP/test_gpu_inventory_ubsan"
             "$RUNNER_TEMP/test_gpu_inventory_ubsan"
+            # Runtime target selection: the operator text parser and the
+            # variable round-trip, executed on the host under UBSan.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_SELECTION_HOST_TEST -Isrc -Itests tests/test_gpu_selection.c src/gpu_selection.c -o "$RUNNER_TEMP/test_gpu_selection_$compiler"
+              "$RUNNER_TEMP/test_gpu_selection_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_runtime_selection_contract.py -v
+            python3 -m unittest discover -s tests -p test_runtime_esp_contract.py -v
+            # Persisted boot record: the only state that survives a failed boot.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_BOOT_STATE_HOST_TEST -Isrc -Itests tests/test_boot_state.c src/boot_state.c -o "$RUNNER_TEMP/test_boot_state_$compiler"
+              "$RUNNER_TEMP/test_boot_state_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_boot_state_contract.py -v
+            # Per-SKU geometry: an uncaptured Ada part is refused, not assumed.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_sku_geometry.c src/gpu_sku_geometry.c -o "$RUNNER_TEMP/test_sku_geometry_$compiler"
+              "$RUNNER_TEMP/test_sku_geometry_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_sku_geometry_contract.py -v
+            # Staged firmware bundle: digest, CURRENT/STALE decision, refusals.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_ASSET_INSTALL_HOST_TEST -DGU_SHA256_HOST_TEST -Isrc -Itests tests/test_asset_install.c src/asset_install.c src/sha256.c -o "$RUNNER_TEMP/test_asset_install_$compiler"
+              "$RUNNER_TEMP/test_asset_install_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_asset_install_contract.py -v
+            # Compiled stock profile: an image refuses a card it was not built for.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -Isrc tests/test_stock_profile.c -o "$RUNNER_TEMP/test_stock_profile_$compiler"
+              "$RUNNER_TEMP/test_stock_profile_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_stock_profile_contract.py -v
+            python3 -m unittest discover -s tests -p test_watchdog_contract.py -v
+            python3 -m unittest discover -s tests -p test_unsafe_bench_experiment.py -v
+            # Per-card firmware acceptance: an explicit allowlist, or nothing.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_PROM_REFERENCE_HOST_TEST -DGU_PROM_REFERENCE_SYNTHETIC -Isrc tests/test_prom_reference.c src/prom_reference.c -o "$RUNNER_TEMP/test_prom_reference_ref_$compiler"
+              "$RUNNER_TEMP/test_prom_reference_ref_$compiler"
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_PROM_REFERENCE_HOST_TEST -DGU_PROM_REFERENCE_EMPTY_TEST -Isrc tests/test_prom_reference.c src/prom_reference.c -o "$RUNNER_TEMP/test_prom_reference_empty_$compiler"
+              "$RUNNER_TEMP/test_prom_reference_empty_$compiler"
+              "$compiler" -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_PROM_REFERENCE_HOST_TEST -DGU_PROM_REFERENCE_CAPTURED -Isrc tests/test_prom_reference.c src/prom_reference.c -o "$RUNNER_TEMP/test_prom_reference_captured_$compiler"
+              "$RUNNER_TEMP/test_prom_reference_captured_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_prom_reference_contract.py -v
+            # S1/D2: build the admitted (waiver) image and diff it against the
+            # checked one - one macro flips, no module gains or loses code.
+            python3 tools/waiver_build_diff.py
+            python3 -m unittest discover -s tests -p test_waiver_build_diff.py -v
+            # The recovery matrix must stay grounded in code that exists.
+            python3 -m unittest discover -s tests -p test_recovery_matrix.py -v
+            # Pre-Stop capture: the admission contract is a pure decision over an
+            # explicit observation, and a zero observation must refuse.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_STOP_CONTRACT_HOST_TEST -Isrc tests/test_stop_contract.c src/stop_contract.c -o "$RUNNER_TEMP/test_stop_contract_$compiler"
+              "$RUNNER_TEMP/test_stop_contract_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_stop_contract_contract.py -v
+            # Launch source: a stick always, the ESP only when every gate holds.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -DGU_LAUNCH_SOURCE_HOST_TEST -Isrc tests/test_launch_source.c src/launch_source.c -o "$RUNNER_TEMP/test_launch_source_$compiler"
+              "$RUNNER_TEMP/test_launch_source_$compiler"
+            done
+            python3 -m unittest discover -s tests -p test_launch_source_contract.py -v
+            # Donor-hardware session gates: every gate token is a format string
+            # this source prints, and the verifier never claims hardware proof.
+            python3 tools/render_hardware_session.py > /dev/null
+            python3 tools/verify_run_log.py tests/fixtures/hardware_session/readonly.txt --self-test --stage readonly
+            python3 tools/verify_run_log.py tests/fixtures/hardware_session/actuate_boot1.txt tests/fixtures/hardware_session/actuate_boot2.txt --self-test --stage actuate
+            python3 tools/session_preflight.py --help > /dev/null
+            python3 -m unittest discover -s tests -p test_hardware_session.py -v
+            # One stage passing is not permission to run the next one.
+            python3 -m unittest discover -s tests -p test_donor_gate.py -v
+            # The variant catalogue is data: every builder, switch, output name
+            # and attestation is checked against the source, and the matrix in
+            # the user document must be its render.
+            python3 tools/render_image_variants.py > /dev/null
+            python3 -m unittest discover -s tests -p test_image_variants.py -v
+            # The readiness headline is generated, not typed into prose.
+            python3 -m unittest discover -s tests -p test_readiness_summary.py -v
+            # Every stock profile must link, and keep its own selector contract.
+            python3 tools/run_simulation.py matrix
+            python3 -m unittest discover -s tests -p test_stock_profile_matrix.py -v
+            python3 -m unittest discover -s tests -p test_turing_build_gate.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             CC=clang python3 -m unittest discover -s tests -p test_falcon_halt_source.py -v
             python3 -m unittest discover -s tests -p test_release_handoff_contract.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_pci_master_transition.py -v
             CC=clang python3 -m unittest discover -s tests -p test_pci_master_transition.py -v
+            # Post-Stop DMA quiescence: the PCIe Transaction Pending bit, polled
+            # a bounded number of times, refusing a card that never drains.
+            CC=gcc python3 -m unittest discover -s tests -p test_dma_quiescence.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_dma_quiescence.py -v
+            # C8: the link itself - training, ASPM, logged errors, hot-plug.
+            CC=gcc python3 -m unittest discover -s tests -p test_link_state.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_link_state.py -v
+            # The admission policy itself, compiled from src/checks.c.
+            CC=gcc python3 -m unittest discover -s tests -p test_admission_gates.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_admission_gates.py -v
+            # Two modelled cards: selection refuses ambiguity, snapshots stay apart.
+            CC=gcc python3 -m unittest discover -s tests -p test_multi_target.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_multi_target.py -v
+            # The shipped mock's own two-card expectations, from the host suite.
+            CC=gcc python3 -m unittest discover -s tests -p test_two_card_contract.py -v
+            CC=clang python3 -m unittest discover -s tests -p test_two_card_contract.py -v
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_pci_master_policy.c -o "$RUNNER_TEMP/test_pci_master_policy_$compiler"
               "$RUNNER_TEMP/test_pci_master_policy_$compiler"
@@ -97,25 +212,64 @@ jobs:
             python3 -m unittest discover -s tests -p test_boot_binding_contract.py -v
             python3 -m unittest discover -s tests -p test_driver_nvram_capacity.py -v
             python3 -m unittest discover -s tests -p test_compat_dma_mask.py -v
+            python3 -m unittest discover -s tests -p test_actuation_trace.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             CC=clang python3 -m unittest discover -s tests -p test_gpu_asset_lifetime.py -v
             CC=gcc python3 -m unittest discover -s tests -p test_turing_cold_state.py -v
             CC=clang python3 -m unittest discover -s tests -p test_turing_cold_state.py -v
             python3 -m unittest discover -s tests -p test_profile_asset_contract.py -v
             python3 -m unittest discover -s tests -p test_firmware_diagnostic_contract.py -v
+            python3 -m unittest discover -s tests -p test_diagnostic_log_completeness.py -v
+            # The probe's write set, its read-only boundary, the ROM window it
+            # copies, the file that window is written to and the parser that
+            # reads that file back.
+            python3 -m unittest discover -s tests -p test_vram_block_probe.py -v
             python3 -m unittest discover -s tests -p test_stop_only_observation_contract.py -v
             python3 -m unittest discover -s tests -p test_quick_check.py -v
+            python3 -m unittest discover -s tests -p test_benchmark_attribution.py -v
+            python3 -m unittest discover -s tests -p test_legacy_inventory_boundary.py -v
             for compiler in gcc clang; do
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_$compiler"
               "$RUNNER_TEMP/test_prom_identity_$compiler"
             done
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic tests/test_prom_identity.c -o "$RUNNER_TEMP/test_prom_identity_ubsan"
             "$RUNNER_TEMP/test_prom_identity_ubsan"
+            # One name format for a captured window: the probe prints it into
+            # its log and the prepared capture would create the file under it.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic tests/test_prom_filename.c -o "$RUNNER_TEMP/test_prom_filename_$compiler"
+              "$RUNNER_TEMP/test_prom_filename_$compiler"
+            done
+            gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic tests/test_prom_filename.c -o "$RUNNER_TEMP/test_prom_filename_ubsan"
+            "$RUNNER_TEMP/test_prom_filename_ubsan"
             python3 -m unittest discover -s tests -p test_reference_asset_integrity.py -v
             python3 tools/verify_reference_assets.py --root .
+            # D3: every payload the image can load has a provenance record that
+            # agrees with the firmware's own pin table. Authenticity is not
+            # claimed - the tool prints SIGNATURE_AUTHENTICATED=0.
+            python3 tools/verify_provenance.py --root .
+            python3 -m unittest discover -s tests -p test_provenance_records.py -v
             python3 -m unittest discover -s tests -p test_firmware_evidence.py -v
             # Parse the Python half of the hybrid batch script without CUDA.
             python3 -c 'from pathlib import Path; s=Path("Check-GPU-Unlock.bat").read_text(encoding="utf-8"); parts=s.split(chr(39)*3,2); assert len(parts)==3; compile(parts[2], "Check-GPU-Unlock.bat", "exec"); print("PASS benchmark Python syntax (no CUDA execution)")'
+            # EFI-only passive sources are not linked by the host tests. A
+            # -fshort-wchar syntax check against the vendored EDK II headers
+            # catches type/signature errors in the same sources the MSVC job
+            # builds, including the durable-log variant of the diagnostic.
+            # vram_block is the build that reads the ROM window and writes it
+            # to a file: its capture path is compiled here, not only on Windows.
+            for variant in plain save_log gop_text_cycle vram_block; do
+              define=""
+              if [ "$variant" = save_log ]; then define="-DGU_TOPO_SAVE_LOG"; fi
+              if [ "$variant" = gop_text_cycle ]; then define="-DGU_TOPO_SAVE_LOG -DGU_TOPO_GOP_TEXT_CYCLE"; fi
+              if [ "$variant" = vram_block ]; then define="-DGU_TOPO_SAVE_LOG -DGU_VRAM_BLOCK_PROBE"; fi
+              for src in src/gpu_topology_efi.c src/gpu_pci_observation.c; do
+                gcc -std=c11 -fshort-wchar -fsyntax-only -Wall -Wextra \
+                  -DGU_GPU_DIAGNOSTIC_ONLY $define -Isrc \
+                  -Isrc/vendor/edk2/Include -Isrc/vendor/edk2/Include/X64 "$src"
+              done
+            done
+            echo 'EFI_DIAGNOSTIC_SYNTAX=PASS VARIANTS=plain,save_log,gop_text_cycle,vram_block'
             # The real discovery entrypoint must reject selected active EFI
             # builds before GuInit even on one or three GPUs.
             mkdir -p "$RUNNER_TEMP/active-selected"
@@ -141,6 +295,17 @@ jobs:
               "$compiler" -std=c11 -O2 -Wall -Wextra -Werror -pedantic -DGU_ACTIVE_SINGLE_TARGET -DGU_SYNTHETIC_COMPILE_ONLY -I"$RUNNER_TEMP/active-selected" -Isrc tests/test_gpu_discovery.c src/gpu_inventory.c src/gpu_execution_state.c -o "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
               "$RUNNER_TEMP/test_ordered_active_compile_$compiler"
             done
+            # The explicit GU_ACTIVE_UNVERIFIED_ACTUATION waiver is the only
+            # non-synthetic configuration that admits an ordered multi-target
+            # list. It is an operator acceptance, not a verification result:
+            # the compile check proves the gate opens, nothing more.
+            for compiler in gcc clang; do
+              "$compiler" -std=c11 -fsyntax-only -DGU_ACTIVE_SINGLE_TARGET \
+                -DGU_ACTIVE_UNVERIFIED_ACTUATION -DGU_AD104_TRANSACTION \
+                -DGU_ENTRY_LATCHED_SS1_FULL -I"$RUNNER_TEMP/active-selected" -Isrc \
+                tests/test_gpu_discovery.c
+            done
+            python3 -m unittest tests.test_unverified_actuation_waiver
             # Exercise the real adapter with 18 requested identities and two protected peers.
             python3 -c 'from pathlib import Path; import sys; buses=[7,9,3]+list(range(23,38)); Path(sys.argv[1]).write_text("#define GU_GPU_SELECTION_COUNT 18U\n#define GU_GPU_SELECTION_LOCATIONS { "+", ".join("{ 0U,%dU,0U,0U }"%b for b in buses)+" }\n")' "$RUNNER_TEMP/active-selected/gpu-selection.h"
             for compiler in gcc clang; do
@@ -200,7 +365,26 @@ jobs:
             "$RUNNER_TEMP/test_gpu_pci_observation_ubsan"
             gcc -std=c11 -O1 -g -fsanitize=undefined -fno-sanitize-recover=all -Wall -Wextra -Werror -pedantic -fshort-wchar -DGU_GPU_DIAGNOSTIC_ONLY -DGU_TOPO_WINDOWS_HANDOFF -DGU_TOPO_SAVE_LOG -DGU_WINDOWS_HANDOFF_HOST_TEST -Isrc tests/test_gpu_windows_handoff.c src/gpu_windows_handoff.c src/gpu_windows_path.c -o "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
             "$RUNNER_TEMP/test_gpu_windows_handoff_ubsan"
-          ) 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
+          ) 2>&1 | tee -a "$HOST_LOG"
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            # The activity log needs artifact access to read; an annotation does
+            # not, so a failing command is named where a reviewer will see it.
+            # The last lines before this trap ran: the failing check names now,
+            # not the shell noise of the trap itself.
+            detail=$(grep -v -e '^HOST_EXIT=' -e '^Filesystem' -e '^/dev/' -e '^ [MADRCU?!][ MADRCU?!]* ' \
+                       "$HOST_LOG" | tail -n 6 | tr '\n' '|' | cut -c1-900)
+            printf '::error::HOST_EXIT=%s %s\n' "$rc" "${detail:-(no diagnostic line in the log)}"
+          fi
+          exit "$rc"
+      - name: Run the host simulator scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "=== host simulator $(date -u +%FT%TZ) ==="
+            python3 tools/run_simulation.py verify
+          } 2>&1 | tee -a "$RUNNER_TEMP/gu-log/host.log"
       - name: Preserve final host status
         if: always()
         shell: bash
@@ -221,11 +405,31 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\gu-log" | Out-Null
           @("event=$env:GITHUB_EVENT_NAME sha=$env:GITHUB_SHA ref=$env:GITHUB_REF run=$env:GITHUB_RUN_ID", "utc=$((Get-Date).ToUniversalTime().ToString('o'))", "host=$env:RUNNER_OS", "powershell=$($PSVersionTable.PSVersion)") | Out-File -Encoding utf8 "$env:RUNNER_TEMP\gu-log\efi.log"
       - uses: actions/checkout@v4
+      - name: Parse the build/sign/deploy script (syntax only, never run)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'src\Build-Sign-Deploy-UniversalGPU.ps1'),
+            [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) {
+            $errors | ForEach-Object { Write-Error ("{0}: {1}" -f $_.Extent.StartLineNumber, $_.Message) }
+            throw 'Build-Sign-Deploy-UniversalGPU.ps1 does not parse'
+          }
+          Write-Output 'PARSE_OK src/Build-Sign-Deploy-UniversalGPU.ps1 (not executed)'
       - name: Compile isolated diagnostic EFI with MSVC
         shell: pwsh
         run: |
           try {
             $ErrorActionPreference='Stop'
+            # Separate maintenance image: compile/link only, never execute or stage it.
+            & .\src\Build-Boot-State-Maintenance.ps1 *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC maintenance build failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_boot_state_maintenance\BOOT-STATE-MAINTENANCE.EFI)){throw 'Maintenance EFI missing'}
+            $pinnedMaintenance = & .\src\Build-Boot-State-Maintenance.ps1 -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            $maintenanceStatus = @($pinnedMaintenance | Where-Object { "$_" -match '^STATUS=BUILT PATH=' })
+            if($maintenanceStatus.Count -ne 1 -or "$($maintenanceStatus[0])" -notmatch 'STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789'){throw 'Pinned maintenance attestation mismatch'}
             # Synthetic, non-deployable partition GUID: compile coverage only.
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -WindowsEspGuid '12345678-1234-4234-8234-123456789abc' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC handoff variant failed: $LASTEXITCODE"}
@@ -235,6 +439,10 @@ jobs:
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_diagnostic\GPU-TOPOLOGY-DIAGNOSTIC.EFI)){throw 'EFI missing'}
+            & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -CycleGopText *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC GOP text cycle diagnostic failed: $LASTEXITCODE"}
+            if(-not (Test-Path .\src\build_diagnostic\GPU-TOPOLOGY-GOP-TEXT-CYCLE-DIAGNOSTIC.EFI)){throw 'GOP text cycle EFI missing'}
+            'GOP_TEXT_CYCLE_COMPILE_EXIT=0 DISPLAY_OUTPUT_NOT_EXECUTED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -SelectionBdf '0000:09:02.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC synthetic BDF A diagnostic failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_diagnostic\GPU-SELECTION-0000-09-02-0-DIAGNOSTIC.EFI)){throw 'PCI BDF A selection EFI missing'}
@@ -277,6 +485,51 @@ jobs:
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered DXE compilation failed'}
             if(-not (Test-Path .\src\build_dxe\GPU-SEQUENCE-COMPILE-ONLY-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Ordered DXE EFI missing'}
             'ORDERED_SEQUENCE_COMPILE_EXIT=0 HARDWARE_ACTION=NONE NOT_FOR_DEPLOYMENT=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # S1/D2: compile the admitted (waiver) image with the real toolchain.
+            # tools/waiver_build_diff.py shows the waiver flips two macros and no
+            # symbols in a hosted GCC build; this shows MSVC still emits a complete
+            # binary from the same sources. Neither output is uploaded: the waiver
+            # exists to be reviewed, not deployed.
+            # -RuntimeEsp because the pinned path needs the private, gitignored
+            # local/boot_profile.h; a runner has no reviewed GUID, and the waiver
+            # may not use the synthetic host-test GUID. Runtime identification is
+            # the documented way to build an actuating image without that file.
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target waiver app compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-ONE-TARGET-UNVERIFIED-ACTUATION-0000-09-02-0.EFI)){throw 'One-target waiver app EFI missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'One-target waiver DXE compilation failed'}
+            if(-not (Test-Path .\src\build_dxe\GPU-ONE-TARGET-UNVERIFIED-ACTUATION-DXE-0000-09-02-0.efi)){throw 'One-target waiver DXE EFI missing'}
+            & .\src\Build-Experimental-MSVC.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered waiver app compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-SEQUENCE-UNVERIFIED-ACTUATION-0000-09-02-0--0001-2A-03-1.EFI)){throw 'Ordered waiver app EFI missing'}
+            & .\src\Build-Dxe-Driver.ps1 -SelectionBdfs '0000:09:02.0,0001:2A:03.1' -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Ordered waiver DXE compilation failed'}
+            if(-not (Test-Path .\src\build_dxe\GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Ordered waiver DXE EFI missing'}
+            $autoDxe = & .\src\Build-Dxe-Driver.ps1 -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -SelectAllGpus *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            $autoDxeStatus = @($autoDxe | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+            if($autoDxeStatus.Count -ne 1 -or "$($autoDxeStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=1 INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1' -or "$($autoDxeStatus[0])" -notmatch 'FIRMWARE_REATTACH=1 S3_POLICY=OPTIONAL TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION'){throw 'Combined automatic DXE receipt mismatch'}
+            $pinnedDxe = & .\src\Build-Dxe-Driver.ps1 -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -SelectAllGpus -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            $pinnedDxeStatus = @($pinnedDxe | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+            if($pinnedDxeStatus.Count -ne 1 -or "$($pinnedDxeStatus[0])" -notmatch 'S3_POLICY=OPTIONAL TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789'){throw 'Dedicated DXE receipt mismatch'}
+            # The waiver's own interlocks must still refuse, without compiling.
+            $waiverNeedsSingle = $false
+            try { & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -AcceptUnverifiedActuation } catch {
+              $waiverNeedsSingle = $_.Exception.Message -match 'requires -EnableSingleTargetExecution'
+            }
+            if(-not $waiverNeedsSingle){throw 'Waiver without single-target execution was not rejected'}
+            $waiverNeedsActuation = $false
+            try { & .\src\Build-Dxe-Driver.ps1 -SelectionBdf '0000:09:02.0' -AcceptUnverifiedActuation } catch {
+              $waiverNeedsActuation = $_.Exception.Message -match 'requires -EnableSingleTargetExecution'
+            }
+            if(-not $waiverNeedsActuation){throw 'DXE waiver without single-target execution was not rejected'}
+            $waiverNoSynthetic = $false
+            try { & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -EnableSingleTargetExecution -AcceptUnverifiedActuation -SyntheticCompileProfile } catch {
+              $waiverNoSynthetic = $_.Exception.Message -match 'cannot be combined with -SyntheticCompileProfile'
+            }
+            if(-not $waiverNoSynthetic){throw 'Waiver combined with a compile-only profile was not rejected'}
+            'WAIVER_MSVC=COMPILED ONE_TARGET=1 ORDERED_SEQUENCE=1 DXE=1 HARDWARE_ACTION=NONE PUBLISHED=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            'WAIVER_INTERLOCKS=REFUSED BEFORE_COMPILATION=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             # Live-active output must fail before any compiler or USB stage.
             # This negative check must still pass when Visual Studio is present.
             foreach ($builder in @('.\src\Build-Experimental-MSVC.ps1', '.\src\Build-Dxe-Driver.ps1')) {
@@ -411,7 +664,7 @@ jobs:
             if($maxSpec.Count -ne 128 -or $maxSpec.Locations[127] -ne '0000:80:00.0'){throw '128-target parser boundary failed'}
             $overRejected = $false
             try { New-GuGpuSelectionSpec -SelectionBdfs ($maximum+',0000:81:00.0') -OutputDirectory $env:RUNNER_TEMP | Out-Null } catch {
-              $overRejected = $_.Exception.Message -match 'requires 2-128'
+              $overRejected = $_.Exception.Message -match 'requires 1-128'
             }
             if(-not $overRejected){throw '129-target parse must fail'}
             $largeSpec = New-GuGpuSelectionSpec -SelectionBdfs $large -OutputDirectory $env:RUNNER_TEMP
@@ -426,9 +679,64 @@ jobs:
             'MULTI_TARGET_3_BDF_SPEC=PASS MAX_TARGETS=128 PREPARATION_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'ACTIVE_APP_DXE_PREP_COMPILE_EXIT=0 GU_PREFLIGHT_ONLY=1 MULTI_NVIDIA_MUTATION=REFUSED' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'SELECTION_EFI_COMPILE_EXIT=0 ACTIVE_ENTRYPOINTS_COMPILED=1 READ_ONLY=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Compile the explicitly owner-authorized Stop/reconnect-only EFI.
+            # No firmware transaction is linked. The runtime build selects live
+            # NVIDIA PCI devices and requires the mandatory USB file log.
+            # Compile/link fixed operation profiles only; never boot or stage them.
+            $operationImages = @{
+              Unlock = 'UNLOCK'
+              UnlockWithResume = 'UNLOCK-WITH-RESUME'
+              InstallDriver = 'INSTALL-DRIVER'
+              RemoveDriver = 'REMOVE-DRIVER'
+            }
+            foreach ($operation in @('Unlock','UnlockWithResume','InstallDriver','RemoveDriver')) {
+              $operationBuild = & .\src\Build-Experimental-MSVC.ps1 -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation $operation *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+              if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "Fixed operation EFI failed: $operation"}
+              $operationFile = "GPU-RUNTIME-SELECTION-UNVERIFIED-ACTUATION-$($operationImages[$operation]).EFI"
+              if(-not (Test-Path (Join-Path .\src\build $operationFile))){throw "Fixed operation EFI missing: $operationFile"}
+              $operationFirmware = [int]($operation -in @('Unlock','UnlockWithResume'))
+              $operationStatus = @($operationBuild | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+              if($operationStatus.Count -ne 1 -or "$($operationStatus[0])" -notmatch "APP_OPERATION=$operation FIXED_OPERATION=1 FIRMWARE_TRANSACTION=$operationFirmware UNLOCK=$operationFirmware"){throw "Fixed operation attestation mismatch: $operation"}
+            }
+            # Compile the distinct combined profile; never boot or stage it.
+            $combined = & .\src\Build-Experimental-MSVC.ps1 -FirmwareReattach -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation Unlock *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Combined firmware reattachment compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-RUNTIME-FIRMWARE-REATTACH.EFI)){throw 'Combined firmware reattachment EFI missing'}
+            $combinedStatus = @($combined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+            if($combinedStatus.Count -ne 1 -or "$($combinedStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=1 INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1' -or "$($combinedStatus[0])" -notmatch 'FIRMWARE_TRANSACTION=1 UNLOCK=1 REATTACH_ATTEMPTED=1 REATTACH_VERIFIED=0 FIRMWARE_REATTACH=1'){throw 'Combined firmware reattachment attestation mismatch'}
+            $dedicatedCombined = & .\src\Build-Experimental-MSVC.ps1 -FirmwareReattach -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation Unlock -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if (-not ($dedicatedCombined -match 'STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789')) { throw 'Dedicated launch pin attestation missing' }
+            $pinnedCombined = & .\src\Build-Experimental-MSVC.ps1 -FirmwareReattach -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation Unlock -WindowsEspGuid '12345678-1234-5678-9abc-def012345678' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Explicit Windows ESP combined compilation failed'}
+            $pinnedStatus = @($pinnedCombined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+            if($pinnedStatus.Count -ne 1 -or "$($pinnedStatus[0])" -notmatch 'WINDOWS_ESP_GUID=12345678-1234-5678-9abc-def012345678'){throw 'Explicit Windows ESP attestation mismatch'}
+            $autoCombined = & .\src\Build-Experimental-MSVC.ps1 -FirmwareReattach -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation Unlock -SelectAllGpus -WindowsEspGuid '12345678-1234-5678-9abc-def012345678' -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            $autoStatus = @($autoCombined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+            if($autoStatus.Count -ne 1 -or "$($autoStatus[0])" -notmatch 'TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION WINDOWS_ESP_GUID=12345678-1234-5678-9abc-def012345678 STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789'){throw 'Automatic selection and partition pin attestation mismatch'}
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime app compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI)){throw 'Stop-only runtime EFI missing'}
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -StopReleaseWindowsHandoff -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only runtime Windows handover compilation failed'}
+            if(-not (Test-Path .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME-WINDOWS-HANDOFF.EFI)){throw 'Stop-only runtime Windows handover EFI missing'}
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp -SelectionBdf '0000:09:02.0' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only one-card app compilation failed'}
+            & .\src\Build-Experimental-MSVC.ps1 -StopReleaseOnlyBench -EnableSingleTargetExecution -AcceptUnverifiedActuation -FileOnlyBootLog -RuntimeEsp -SelectionBdfs '0000:09:02.0,0001:2A:03.1' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Stop-only two-card app compilation failed'}
+            # Only the runtime-select-all build is packaged as an experimental
+            # USB boot image. The synthetic BDF builds remain compile checks.
+            $bootDir = '.\src\build\stop-release-usb\EFI\BOOT'
+            New-Item -ItemType Directory -Path $bootDir -Force | Out-Null
+            Copy-Item -LiteralPath .\src\build\GPU-SEQUENCE-STOP-RELEASE-BENCH-RUNTIME.EFI -Destination (Join-Path $bootDir 'BOOTX64.EFI')
+            $bootHash = (Get-FileHash -LiteralPath (Join-Path $bootDir 'BOOTX64.EFI') -Algorithm SHA256).Hash
+            "UNSIGNED=1 NOT_PRODUCTION_VERIFIED=1 STOP_RELEASE_ONLY=1 FIRMWARE_TRANSACTION=0 ASPM_ADMISSION_BYPASSED=1 FILE_ONLY_OUTPUT=1 SHA256=$bootHash" | Out-File -Encoding ascii -FilePath '.\src\build\stop-release-usb\IMAGE-STATUS.txt'
+            'STOP_ONLY_RUNTIME_EFI=COMPILED UNSIGNED=1 NOT_PRODUCTION_VERIFIED=1' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
             'BUILD_EXIT=0' | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
           } catch {
             "BUILD_EXIT=1 $($_.Exception.Message)" | Out-File -Append "$env:RUNNER_TEMP\gu-log\efi.log"
+            # Annotations are readable without artifact access; the log is not.
+            $efiTail = (Get-Content -LiteralPath "$env:RUNNER_TEMP\gu-log\efi.log" -Tail 4) -join ' | '
+            Write-Host "::error title=EFI build::BUILD_EXIT=1 $($_.Exception.Message) :: $efiTail"
             throw
           }
       - name: Preserve final EFI status
@@ -484,4 +792,12 @@ jobs:
           path: |
             src/build/GPU-ACTIVE-PREP-*.EFI
             src/build_dxe/GPU-ACTIVE-PREP-DXE-*.efi
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        if: success() && startsWith(github.ref, 'refs/heads/arena/')
+        with:
+          name: experimental-stop-release-reattach-unsigned-${{ github.sha }}
+          path: src/build/stop-release-usb/**
+          retention-days: 3
           if-no-files-found: error

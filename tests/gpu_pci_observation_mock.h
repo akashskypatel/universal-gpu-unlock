@@ -35,6 +35,9 @@ typedef struct {
 #define EFI_OPEN_PROTOCOL_BY_DRIVER 0x10U
 #define EFIERR(n) (0x8000000000000000ULL | (uint64_t)(n))
 #define EFI_SUCCESS 0
+/* UEFI success codes that are not completion. */
+#define EFI_WARN_UNKNOWN_GLYPH 1U
+#define EFI_WARN_STALE_DATA 5U
 #define EFI_UNSUPPORTED EFIERR(3)
 #define EFI_BAD_BUFFER_SIZE EFIERR(4)
 #define EFI_NOT_FOUND EFIERR(14)

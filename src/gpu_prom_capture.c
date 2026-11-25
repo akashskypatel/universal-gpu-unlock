@@ -5,12 +5,28 @@
 #include "gpu_prom_capture.h"
 #include <string.h>
 
+/* Half-open [base,base+bytes) comparison. An unknown extent (zero bytes)
+ * still detects a point inside the other range; a range that could wrap the
+ * address space is reported as overlapping. */
+static int Overlaps(const void *a, size_t a_bytes, const void *b, size_t b_bytes) {
+  size_t a0 = (size_t)(uintptr_t)a, b0 = (size_t)(uintptr_t)b;
+  if (!a || !b) return 0;
+  if (a0 > SIZE_MAX - a_bytes || b0 > SIZE_MAX - b_bytes) return 1;
+  return a0 < b0 + b_bytes && b0 < a0 + a_bytes;
+}
+
 int GuPromCapture(const GU_PROM_READER *reader, uint8_t *output,
                   size_t output_size) {
   size_t i;
   if (!output || output_size != GU_PROM_CAPTURE_BYTES) return 0;
-  memset(output, 0, GU_PROM_CAPTURE_BYTES);
   if (!reader || !reader->read32) return 0;
+  /* The capture owns the entire output window. A reader record or caller
+   * context that lives inside it would be cleared or overwritten by this
+   * function, so the pairing is refused before the first write rather than
+   * repaired after the caller's storage has already been destroyed. */
+  if (Overlaps(reader, sizeof(*reader), output, output_size)) return 0;
+  if (Overlaps(reader->context, 0, output, output_size)) return 0;
+  memset(output, 0, GU_PROM_CAPTURE_BYTES);
   for (i = 0; i < GU_PROM_CAPTURE_BYTES / 4U; ++i) {
     uint32_t word = 0;
     if (!reader->read32(reader->context,

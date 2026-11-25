@@ -134,14 +134,35 @@ static EFI_STATUS CheckOrderedReconnect(EFI_RUNTIME_SERVICES *rs,
   return EFI_SUCCESS;
 }
 
+/* RUN0014 pressed I and got one line: `Failed to install DXE Driver:
+ * 0x800000000000000e`. That status is EFI_NOT_FOUND, and the only thing in this
+ * path that returns it is this open: the resident driver binary is not on the
+ * volume the application was launched from. An operator cannot act on a status
+ * code, so the path and the stage are logged beside it - the ASCII spelling of
+ * DriverFile is pinned against the wide literal by tests/test_driver_nvram_capacity.py. */
 static EFI_STATUS DriverFilePresent(EFI_BOOT_SERVICES *bs, EFI_HANDLE volume) {
   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs = NULL;
   EFI_FILE_PROTOCOL *root = NULL, *file = NULL;
   EFI_STATUS s = bs->HandleProtocol(volume, &FsGuid, (VOID **)&fs);
-  if (s != EFI_SUCCESS || !fs) return EFI_UNSUPPORTED;
+  if (s != EFI_SUCCESS || !fs) {
+    GuLog("DRIVER_INSTALL=REFUSED PHASE=open-volume-status REASON=NO_FILE_SYSTEM "
+          "FILE=\\EFI\\Drivers\\AdaUnlockDxe.efi STATUS=%#llx\n",
+          (unsigned long long)s);
+    return EFI_UNSUPPORTED;
+  }
   s = fs->OpenVolume(fs, &root);
-  if (s != EFI_SUCCESS || !root) return EFI_DEVICE_ERROR;
+  if (s != EFI_SUCCESS || !root) {
+    GuLog("DRIVER_INSTALL=REFUSED PHASE=open-volume REASON=VOLUME_UNREADABLE "
+          "STATUS=%#llx\n", (unsigned long long)s);
+    return EFI_DEVICE_ERROR;
+  }
   s = root->Open(root, &file, (CHAR16 *)DriverFile, EFI_FILE_MODE_READ, 0);
+  GuLog("DRIVER_INSTALL=%s PHASE=driver-file FILE=\\EFI\\Drivers\\AdaUnlockDxe.efi "
+        "STATUS=%#llx\n", s == EFI_SUCCESS ? "PRESENT" : "ANSWERED",
+        (unsigned long long)s);
+  if (s == EFI_NOT_FOUND)
+    GuLog("DRIVER_INSTALL=REFUSED REASON=DRIVER_FILE_ABSENT "
+          "FIX='stage the dxe-* variant beside this image, or skip I'\n");
   if (s == EFI_SUCCESS && file) file->Close(file);
   root->Close(root);
   return s;

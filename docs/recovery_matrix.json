@@ -1,0 +1,305 @@
+{
+  "schema": "gu-recovery-matrix/1",
+  "note": "Every class names a log line this source actually prints and the boot-record state that survives the failure. The markdown document is generated from this file by tests/test_recovery_matrix.py, so the two cannot drift.",
+  "classes": [
+    {
+      "id": "power-loss-mid-transaction",
+      "title": "Power lost during the transaction",
+      "symptoms": [
+        {
+          "token": "BOOT_STATE WARNING=previous attempt interrupted or awaiting owner acceptance",
+          "file": "src/boot_io.c"
+        }
+      ],
+      "record": [
+        "Phase",
+        "BootCount",
+        "DeviceId",
+        "Armed"
+      ],
+      "record_state": "Phase == INTENT (1): the record was written before mutation. The attempt may have stopped early or completed preboot and still await owner acceptance. Read the saved log to distinguish these cases.",
+      "card_state": "Unknown. The selection write, the WPR2 window, or an engine reset may have been applied; the card may still be executing or may be halted with reset released.",
+      "machine_state": "Unknown. The host may have been mid-DMA; firmware state is whatever it was when power dropped.",
+      "steps": [
+        "Do not warm-reboot: a warm reset can leave a falcon running with host buffers already freed.",
+        "Remove power at the wall for 30 s so the card's own firmware state is discarded.",
+        "Next boot, read the .LOG file on the removable media for BOOT_STATE lines and for the last stage before the sequence.",
+        "Confirm the card enumerates with its stock identity in the read-only diagnostic; do not run a transaction on that boot.",
+        "If the diagnostic cannot read configuration space, treat the card as faulty and stop."
+      ],
+      "proof": [
+        "BOOT_STATE PRESENT=1 with PHASE=1 (INTENT) and no automatic repeat",
+        "the read-only diagnostic completes with STABLE=1",
+        "a subsequent normal boot reaches Windows with the card present"
+      ],
+      "sim_scenario": null,
+      "verified": false,
+      "why_unverified": "No hardware run has ever lost power mid-transaction; the software-visible record is exercised on the host only."
+    },
+    {
+      "id": "dma-buffers-retained",
+      "title": "Firmware did not stop, so its buffers were retained",
+      "symptoms": [
+        {
+          "token": "firmware did not stop; keeping its DMA buffers until power off",
+          "file": "src/vendor/unlock_610.c"
+        }
+      ],
+      "record": [
+        "Phase",
+        "Status",
+        "Armed"
+      ],
+      "record_state": "INTENT remains on failure; the saved log records the failed transaction and retained buffers.",
+      "card_state": "Firmware may still be running. The unlock was not verified and the stock driver must not bind while it is active.",
+      "machine_state": "The image retains the DMA buffers and the device reference on purpose; freeing them would be a use-after-free from the card's point of view.",
+      "steps": [
+        "Do not start Windows on this boot. The image already refuses to hand over in this state.",
+        "Remove power at the wall; the retained buffers die with the boot.",
+        "Next boot, check BOOT_STATE PRESENT=1 PHASE=1 and the previous transaction log for the recorded failure.",
+        "Run the read-only diagnostic only; it does not touch firmware state."
+      ],
+      "proof": [
+        "the next boot retains INTENT and does not repeat the transaction",
+        "the diagnostic reads a valid PMC, SS0/SS1 and PROM digest"
+      ],
+      "sim_scenario": "transaction flr-refused",
+      "verified": false,
+      "why_unverified": "The simulator shows the image retaining buffers and refusing handover; no card has been observed continuing to DMA."
+    },
+    {
+      "id": "function-reset-refused",
+      "title": "The card refused the function-level reset",
+      "symptoms": [
+        {
+          "token": "PCIe FLR returned: result=",
+          "file": "src/vendor/unlock_610.c"
+        }
+      ],
+      "record": [
+        "Phase",
+        "Status",
+        "Armed"
+      ],
+      "record_state": "INTENT remains on failure; see the previous transaction log for the reset result.",
+      "card_state": "The permission window is still open: the selectors were written and the reset that closes it did not happen.",
+      "machine_state": "Bus master is clear and the image keeps the buffers it allocated.",
+      "steps": [
+        "Do not boot into Windows: the stock driver expects a reset GSP and an open permission window is not a state it recovers from.",
+        "Power off at the wall, wait, and power on.",
+        "Next boot, confirm BOOT_STATE shows the failure and run the read-only diagnostic to confirm the selectors are back to their cold values."
+      ],
+      "proof": [
+        "the diagnostic reports the cold selector values, not the unlock value",
+        "a later transaction is not attempted automatically"
+      ],
+      "sim_scenario": "transaction flr-refused",
+      "verified": false,
+      "why_unverified": "Modelled, never observed on silicon."
+    },
+    {
+      "id": "wpr2-left-open",
+      "title": "The WPR2 window is still open after the reset",
+      "symptoms": [
+        {
+          "token": "post-FLR WPR2 remains enabled",
+          "file": "src/vendor/unlock_610.c"
+        }
+      ],
+      "record": [
+        "Phase",
+        "Status"
+      ],
+      "record_state": "INTENT remains on failure; see the previous transaction log for the error.",
+      "card_state": "FWSEC did not close its window. The stock driver rejects a preexisting WPR2 on this path, so it will not bind.",
+      "machine_state": "The image stops before any further write and retains its buffers.",
+      "steps": [
+        "Power off at the wall; the window is firmware state and does not survive a cold boot.",
+        "Next boot, run the read-only diagnostic and confirm WPR2 reads zero.",
+        "If WPR2 is still nonzero after a cold boot, treat the card as faulty."
+      ],
+      "proof": [
+        "WPR2 low/high both read zero in the diagnostic",
+        "the stock driver binds without a WPR2 complaint"
+      ],
+      "sim_scenario": null,
+      "verified": false,
+      "why_unverified": "The simulator never leaves WPR2 open; this is a hardware-only failure mode."
+    },
+    {
+      "id": "stop-hang",
+      "title": "The vendor driver Stop call never returns",
+      "symptoms": [
+        {
+          "token": "MSI release refused",
+          "file": "src/msi_release.c"
+        },
+        {
+          "token": "WATCHDOG=ARMED",
+          "file": "src/boot_io.c"
+        }
+      ],
+      "record": [
+        "Phase",
+        "BootCount"
+      ],
+      "record_state": "Phase == INTENT: the record is written before the detach, so a hang inside the vendor callback leaves INTENT behind.",
+      "card_state": "Whatever the vendor Stop callback was doing. The image has no proof that it is safe to continue.",
+      "machine_state": "The firmware watchdog is the only thing that ends the hang, and only in a build that arms it (GU_WATCHDOG_SECONDS).",
+      "steps": [
+        "Wait for the machine to reset itself if the bounded build is in use; do not power off during a vendor callback.",
+        "If no reset arrives, power off at the wall.",
+        "On the next boot, expect the same BOOT_STATE WARNING as a mid-transaction power loss and follow that procedure."
+      ],
+      "proof": [
+        "the machine resets without operator action, or powers off cleanly",
+        "the next boot reports the INTENT record from the hung boot"
+      ],
+      "sim_scenario": "transaction watchdog",
+      "verified": false,
+      "why_unverified": "No Stop bound has been measured, which is why the timer is opt-in and the AD102/GA102 Stop path is refused."
+    },
+    {
+      "id": "card-refused-before-any-write",
+      "title": "The image refuses this card before writing anything",
+      "symptoms": [
+        {
+          "token": "STOCK_PROFILE=REFUSED",
+          "file": "src/profile.c"
+        },
+        {
+          "token": "SKU_GEOMETRY=REFUSED",
+          "file": "src/profile.c"
+        },
+        {
+          "token": "PROM_IDENTITY=%s",
+          "file": "src/profile.c"
+        }
+      ],
+      "record": [
+        "DeviceId",
+        "Status"
+      ],
+      "record_state": "No mutation was attempted. INTENT may already have been stored before the active preflight, so its presence alone does not prove hardware work.",
+      "card_state": "Untouched. Zero BAR0 writes, zero FLRs, WPR2 not opened.",
+      "machine_state": "Windows boots normally, or the diagnostic runs. Nothing to recover.",
+      "steps": [
+        "Read the refusal: it names the compiled profile, the chip, or the observed digest and the reason.",
+        "For a stock-profile refusal, this image was built for a different card; use the build that matches, or capture the card's values with the diagnostic.",
+        "For a SKU refusal, no register table exists for that chip; the diagnostic still runs and is the way to capture one.",
+        "For a reference refusal, capture the digest the log prints and add a reference to a reviewed build."
+      ],
+      "proof": [
+        "the diagnostic completes with STABLE=1 and the digest printed",
+        "the saved log confirms refusal before GPU mutation"
+      ],
+      "sim_scenario": "prepare stock-mismatch",
+      "verified": false,
+      "why_unverified": "The refusal semantics are simulated; the digests and cold values of real cards are not captured."
+    },
+    {
+      "id": "asset-install-incomplete",
+      "title": "The staged bundle on the ESP is stale or incomplete",
+      "symptoms": [
+        {
+          "token": "ASSET_INSTALL PRESENT=1",
+          "file": "src/boot_io.c"
+        }
+      ],
+      "record": [
+        "BootCount"
+      ],
+      "record_state": "The install record is a separate NVRAM variable; it names the boot that staged it and the bundle digest.",
+      "card_state": "Untouched: the install build never prepares or drives the card.",
+      "machine_state": "Nothing to recover; the next boot either re-stages from removable media or reports the mismatch.",
+      "steps": [
+        "Compare the recorded bundle digest with the pinned version in the image.",
+        "Re-run the install build from removable media; it is resumable and does not overwrite a verified file.",
+        "If the record reports CORRUPT, delete the variable and re-stage."
+      ],
+      "proof": [
+        "ASSET_INSTALL PRESENT=1 with the pinned bundle digest and STATE=CURRENT",
+        "a boot without removable media loads the staged bundle"
+      ],
+      "sim_scenario": "prepare install-assets",
+      "verified": false,
+      "why_unverified": "Install and resume are simulated; no ESP has been written by this image."
+    },
+    {
+      "id": "partial-multi-target",
+      "title": "A multi-target sequence stopped between cards",
+      "symptoms": [
+        {
+          "token": "SELECTED_GPU_STEP=",
+          "file": "src/gpu_discovery.c"
+        }
+      ],
+      "record": [
+        "Phase",
+        "Status",
+        "DeviceId",
+        "Segment",
+        "Bus",
+        "Device",
+        "Function"
+      ],
+      "record_state": "INTENT identifies the original attempted sequence; the saved log identifies the current target and the earlier completed targets.",
+      "card_state": "The completed cards are in their post-transaction state; the next card was never touched.",
+      "machine_state": "Peers are unchanged, because the coordinator verifies them before and after each card.",
+      "steps": [
+        "Read the SELECTED_GPU_STEP lines in order: COMPLETE for finished cards, then the failing step.",
+        "Recovery is per card, using the class that matches the failure, not for the sequence as a whole.",
+        "Re-run only after the failing card's class procedure has been followed to its proof."
+      ],
+      "proof": [
+        "each card's own class proof holds",
+        "the next boot preserves INTENT and does not repeat the transaction"
+      ],
+      "sim_scenario": null,
+      "verified": false,
+      "why_unverified": "Only one card has ever been driven, and not on hardware; the two-target run in the plan has not happened."
+    },
+    {
+      "id": "dxe-failure-recovery-latch",
+      "title": "DXE transaction failed and the next boot must not repeat it",
+      "symptoms": [
+        {
+          "token": "DXE_RECOVERY=FAILED_OR_INTERRUPTED",
+          "file": "src/dxe_main.c"
+        },
+        {
+          "token": "USB_RECOVERY=FAILED_OR_INTERRUPTED",
+          "file": "src/app.c"
+        }
+      ],
+      "record": [
+        "Phase",
+        "Status",
+        "BootCount",
+        "DeviceId",
+        "Segment",
+        "Bus",
+        "Device",
+        "Function"
+      ],
+      "record_state": "INTENT (interrupted or awaiting owner acceptance) or an OUTCOME whose Status is not EFI_SUCCESS blocks another transaction.",
+      "card_state": "Unknown until separately diagnosed. Recovery changes only AdaUnlock boot registration; it does not reset or repair GPU state.",
+      "machine_state": "The next DXE invocation performs no GPU discovery or mutation and removes the owned option from DriverOrder. The USB recovery route removes the owned Driver#### entry entirely before handing off to Windows.",
+      "steps": [
+        "Without USB, allow the next boot to reach the DXE recovery check; it skips GPU work, disables the owned DriverOrder entry, and continues normal boot.",
+        "With USB, launch the app; it detects the failed/interrupted or pending-acceptance record before GPU discovery, removes the owned DXE entry, and boots Windows without touching PCI.",
+        "If the NVRAM operation fails, stop and use the firmware boot picker to choose Windows Boot Manager; do not select an unlock/transaction mode.",
+        "After recovery, use only the read-only diagnostic until GPU state is independently confirmed."
+      ],
+      "proof": [
+        "the recovery log reports DXE_RECOVERY or USB_RECOVERY and no transaction is attempted",
+        "the owned AdaUnlock option is absent from DriverOrder (no-USB route) or removed from Driver#### and DriverOrder (USB route)",
+        "the system reaches Windows without another DXE transaction",
+        "the persistent failure or pending-acceptance record is not automatically cleared"
+      ],
+      "sim_scenario": null,
+      "verified": false,
+      "why_unverified": "Source contract tests cover ordering and ownership of the recovery actions. Manual failed-transaction cold-power recovery passed on owner evidence (60 seconds powered off, USB removed). Independent verification of these specific automatic boot-registration actions remains open."
+    }
+  ]
+}

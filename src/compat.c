@@ -141,6 +141,7 @@ BOOLEAN GuCompatDelay(const struct pci_dev *D,UINTN Microseconds) {
     owner->fault=TRUE;owner->retained=TRUE;return FALSE;
   }
   owner->ticks+=Microseconds;
+  GuTraceDelay(owner->ticks);
   return !owner->fault&&!owner->retained;
 }
 /* Vendor access must carry the transaction's retained device reference.
@@ -178,7 +179,12 @@ BOOLEAN GuCopyFromIo(GU_PLATFORM *owner,VOID *D,const VOID *S,size_t N) {
       memset(D,0,N);owner->fault=TRUE;return FALSE;
     }
     Done+=Count;
+    /* One line per 64 KiB: sixteen for the 1 MiB PROM, which is the longest
+     * silent band in the preparation path. Without it a slow read and a hang
+     * look the same from the log. */
+    if((Done&0xffffU)==0)GuTraceProgress("io-copy",Done,N);
   }
+  if(N>0x10000U)GuTraceProgress("io-copy",N,N);
   return TRUE;
 }
 BOOLEAN GuCompatCopyFromIo(const struct pci_dev *D,VOID *Destination,const VOID *Source,size_t N) {

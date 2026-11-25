@@ -5,8 +5,8 @@ function New-GuGpuSelectionSpec {
     param(
         [string]$SelectionBdf,
         [string]$SelectionBdfs,
-        [Parameter(Mandatory=$true)][string]$OutputDirectory,
-        [ValidateRange(2,128)][int]$MaximumTargets = 128
+        [string]$OutputDirectory,
+        [ValidateRange(1,128)][int]$MaximumTargets = 128
     )
     if ($SelectionBdf -and $SelectionBdfs) {
         throw '-SelectionBdf and -SelectionBdfs cannot be combined.'
@@ -15,8 +15,8 @@ function New-GuGpuSelectionSpec {
     if ($SelectionBdf) { $requested = @($SelectionBdf) }
     elseif ($SelectionBdfs) {
         $requested = @($SelectionBdfs.Split(','))
-        if ($requested.Count -lt 2 -or $requested.Count -gt $MaximumTargets) {
-            throw "-SelectionBdfs requires 2-$MaximumTargets comma-separated PCI locations."
+        if ($requested.Count -lt 1 -or $requested.Count -gt $MaximumTargets) {
+            throw "-SelectionBdfs requires 1-$MaximumTargets comma-separated PCI locations."
         }
     }
     $canonical = @()
@@ -40,11 +40,15 @@ function New-GuGpuSelectionSpec {
     }
     $label = ''
     if ($canonical.Count) {
-        $header = Join-Path $OutputDirectory 'gpu-selection.h'
-        @(
-            "#define GU_GPU_SELECTION_COUNT $($canonical.Count)U",
-            "#define GU_GPU_SELECTION_LOCATIONS { $($entries -join ', ') }"
-        ) | Set-Content -LiteralPath $header -Encoding ascii
+        # Resolution without an output directory validates and labels only.
+        # Builders still supply their own directory to write the header.
+        if ($OutputDirectory) {
+            $header = Join-Path $OutputDirectory 'gpu-selection.h'
+            @(
+                "#define GU_GPU_SELECTION_COUNT $($canonical.Count)U",
+                "#define GU_GPU_SELECTION_LOCATIONS { $($entries -join ', ') }"
+            ) | Set-Content -LiteralPath $header -Encoding ascii
+        }
         if ($canonical.Count -le 2) {
             $label = ($canonical | ForEach-Object { $_ -replace '[:.]','-' }) -join '--'
         } else {

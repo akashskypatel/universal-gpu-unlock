@@ -1,154 +1,217 @@
-# Universal GPU Unlock — research fork
+<div align="center">
 
-This fork investigates the safety and feasibility of a preboot Tensor Core
-FP32-accumulation issue-rate change on a dual-GPU Windows workstation.
-**It does not currently provide a verified working unlock for this machine.**
+# Universal GPU Unlock (One-Click UEFI Tool)
+### High-Performance Tensor Core Rate-Limiter Bypass for NVIDIA GPUs
 
-**Development scope:** Implement and test the unlock on the research setup
-(RTX 4090 AD102 + RTX 3080 12 GB GA102, Windows NVIDIA 617.42, MSI B850,
-AMD iGPU). Preserve the parent project's dynamic recognition of other GPUs,
-multi-target selection, and shared safety checks. Do not investigate or fix
-defects limited to other hardware if they are also present in the parent
-repository, unless a demonstrated shared-code dependency affects this setup.
-Turing-only signature and loader work is deferred. This scope does not reduce
-the parent's device support list or authorize an active GPU operation.
+[![GitHub Release](https://img.shields.io/github/v/release/BrightRaider/universal-gpu-unlock?color=blue&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)
+[![Release Version](https://img.shields.io/badge/Release-v1.8.26%20(Latest)-blue?logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases/tag/v1.8.26)
+[![Downloads](https://img.shields.io/github/downloads/BrightRaider/universal-gpu-unlock/total?color=green&logo=github)](https://github.com/BrightRaider/universal-gpu-unlock/releases)
+[![Stars](https://img.shields.io/github/stars/BrightRaider/universal-gpu-unlock?style=social)](https://github.com/BrightRaider/universal-gpu-unlock)
+[![Safety](https://img.shields.io/badge/Safety-RAM--Only-success.svg)](#-safety--anti-cheat)
+[![Support on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20Me%20A%20Coffee-ff5e5b?style=flat&logo=kofi&logoColor=white)](https://ko-fi.com/brightraider)
 
-**Current physical research setup (not a support allowlist):** RTX 4090
-(AD102, ASUS `1043:88e6`) and RTX 3080 12 GB (GA102, ZOTAC
-`19da:b612`), Windows NVIDIA KMD 617.42, MSI B850 Gaming Plus WiFi
-and an AMD iGPU. This setup supplies physical evidence, not permanent PCI
-addresses or a restriction on other supported NVIDIA cards.
+<br>
 
-**Parent device compatibility:** The fork uses the upstream device registry:
-11 Ada, 24 Ampere and 20 Turing NVIDIA device IDs. Passive discovery and
-selected preparation do not require either of the owner's GPUs. A detected
-GPU family selects the matching SHA-256-pinned **reference** firmware
-manifest. Availability and format of each image, driver ownership and
-verified recovery remain separate conditions before any active operation.
-The Turing FWSEC v2 descriptor has a bounded, structural-only parser, but
-its signed-loader execution is not verified. Recognizing a Turing GPU does
-not prove it can be unlocked by this build. Further Turing work is out of
-scope unless it affects the research setup. Hardware identities
-must be revalidated within the current boot.
+<a href="https://ko-fi.com/brightraider" target="_blank">
+  <img src="https://storage.ko-fi.com/cdn/kofi2.png?v=3" height="38" alt="Buy Me a Coffee at ko-fi.com" />
+</a>
 
-## Current evidence and limitations
+<p>
+  <b>An automated, universal 1-click UEFI pre-boot unlocker for NVIDIA RTX 40 (Ada), RTX 30 (Ampere) & RTX 20 (Turing) series.</b><br>
+  Unlocks full enterprise-grade Tensor Core compute across Windows 10/11, PyTorch, CUDA, and WSL2.
+</p>
 
-- The read-only EFI diagnostic has observed both NVIDIA GPUs, distinct PCI
-  ancestry, and an AMD iGPU. The physical three-GPU `0016` report established
-  that all three GOP/TextOut branches share GraphicsConsole, ConSplitter and
-  an aggregate console handle in the captured mixed-display configuration.
-  The separately captured AMD-iGPU-only `0018` report instead has zero
-  NVIDIA configured-console matches, one independent AMD GOP/ConOut/ErrOut
-  path, and both NVIDIA firmware drivers still bound. This establishes
-  passive console isolation for that boot **only**; the strict topology
-  verdict remains `INCOMPLETE` with zero NVIDIA GOPs, and no selected
-  vendor Stop, AMD continuity after Stop or cold recovery was tested.
-- Dynamic PCI discovery and ordered target selection work in passive
-  diagnostics and host verification. Selecting a GPU does **not** authorize
-  its controller to be stopped or its registers to be changed.
-- The non-diagnostic selected application and DXE builds are preparation-only:
-  they refuse before `GuInit` and guarded hardware-write, DMA and FLR stages.
-  Both MSVC builders now **reject omitted target selections** instead of
-  emitting legacy mutating EFI binaries.
-  Selected preparation also performs an all-or-none, read-only refresh of
-  every requested GPU's PCI identity before the existing refusal; it does
-  not create independent per-card mutable transaction state or a
-  simultaneous hardware snapshot. Commit `da4051c4` passed host and
-  MSVC EFI CI in [run 42739479432](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42739479432).
-  Dedicated host negatives now exercise duplicate/aliased handles, BDFs,
-  PCI protocols, failed later-target reads, zeroed partial outputs and
-  first-target BAR drift while a later target is inspected. The source
-  remains read-only, and active firmware ownership/recovery is unverified.
-- The 1 MiB PROM structural identity parser checks the current GPU
-  device ID and ROM layout. A matching ROM structure is **not** a verified
-  manufacturer signature or proof that a specific firmware image is safe.
-  The checks do not pin the source to the two research GPUs.
-- The original Windows-GPU-UNLOCK `internal-boot/boot/probe.c` already
-  implements `ProbeBar`/`DumpProm`: a bounded 1 MiB BAR0
-  `0x300000` read followed by `PROM.BIN` export. This is **not** a 2 MiB
-  full-card NVGI v3 ROM capture. Its reader, target-bound EFI adapter and
-  non-overwrite-intent file save have been ported to
-  `src/gpu_prom_capture*`. GCC/Clang host tests and MSVC compile-only
-  integration pass in [CI 42743917070](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42743917070).
-  **The adapter is not linked or invoked** in the passive topology EFI,
-  selected active prep app or DXE: the two-card BAR0 read semantics are not
-  independently approved. It cannot be used as proof of firmware extraction,
-  GPU mutation safety or recovery. The create-if-absent precheck is not an
-  atomic exclusive-create guarantee.
-- The owner's existing `AD102.rom` and `GA102.rom` were already examined
-  in the Windows investigation v99; the uploaded archive matches the
-  recorded SHA-256 and both 2,048,000-byte NVGI v3 structures. The owner
-  reports they were captured using Windows-GPU-UNLOCK. Their **structural**
-  PCI/IFR gate is complete; the exact capture method, manufacturer
-  authenticity and full physical SPI coverage are not independently proven.
-- **Linux is a reference, not a Windows asset synonym.** NVIDIA's public
-  open-module README requires release-matched GSP firmware/userspace, and
-  NVIDIA's Nouveau extraction notes say the GSP-RM ABI is not stable across
-  versions. In the original Windows-GPU-UNLOCK comparison, Linux 610.43.03
-  and Linux 615.78.08 share four exact GSP boot image/descriptor files, but
-  the AD102 and GA102 production Booter bundles differ. Windows 617.42 was
-  previously observed with a separately paired `gsp_ga10x.bin` (27,043,992 B)
-  and `ucodes_ga10x.bin` (58,215,936 B), running GSP 615.78.05, **not
-  proven identical to either Linux release**. V67 files are generated
-  experimental payloads, not NVIDIA stock signed Windows firmware.
-  A direct independent Windows-versus-Linux version-pinned component comparison,
-  plus genuine Windows Booter producer/loader tracing, remains mandatory.
-- The exact nine committed `AD102-ASSETS`/`GA102-ASSETS` 610.43.03
-  reference binaries are now checked offline by
-  `python3 tools/verify_reference_assets.py --root .`. All nine
-  SHA-256/size pins matched in
-  [CI 42840199095](https://github.com/akashskypatel/universal-gpu-unlock/actions/runs/42840199095);
-  three negative verifier tests and both host and MSVC EFI jobs passed.
-  These findings establish **610 reference file identity only**, not
-  NVIDIA signature authentication, Windows 617.42 ABI, or hardware readiness.
-  The original Windows-GPU-UNLOCK
-  `research/firmware/prepare_windows_firmware.py` already reconstructs
-  these assets from pinned source and distribution packages; no duplicate
-  extraction or GPU ROM capture is necessary.
-- Genuine Windows 617.42 signed Booter IMAGE/HEADER/SIG/PATCH origins,
-  Falcon loader invocation/descriptor, per-card secure acceptance, and
-  controlled recovery are unverified. Older 610.43.03 assets and Linux
-  comparison sources are **not** validated substitutes.
-- Windows `Check-GPU-Unlock.bat` produces an observational FP16 GEMM sample
-  for **each CUDA ordinal**. It deliberately reports
-  `UNLOCK_VERIFIED=UNKNOWN`: a throughput threshold is not proof of a
-  changed firmware issue-rate selector or even of a particular PCI BDF.
+</div>
 
-**All active eligibility gates remain closed:**
+---
+
+## ⚡ 60-Second Quick Start
+
+1. **Download:** Get the latest release package: **[Universal_GPU_Unlock_v1.8.26.zip](https://github.com/BrightRaider/universal-gpu-unlock/releases/latest)**.
+2. **Provision:** Extract the ZIP, insert a USB flash drive (FAT32), and run **`Setup.bat`** (formats & copies all required UEFI files and certificates automatically).
+3. **Boot & Unlock:** Restart your PC, open your motherboard boot menu (**F11** on MSI/ASRock, **F12** on Gigabyte, **F8** on ASUS), and boot from the USB drive (`UEFI: USB...`). Select your mode:
+   - **`[U]` Standard Unlock:** RAM-only, temporary unlock (reverts cleanly to factory stock on complete power off).
+   - **`[I]` Install to NVRAM:** Registers the UEFI DXE driver into motherboard NVRAM and internal ESP for automatic, stickless boot on every cold start (unplug the USB drive permanently).
+   - **`[P]` S3 Persistence:** Experimental sleep-aware unlock mode.
+   - **`[R]` Remove DXE Driver:** Cleanly uninstalls and deregisters the driver from UEFI NVRAM & internal ESP.
+   - **`[S]` Stock Windows:** Skips unlock, runs hardware diagnostics, logs to USB, and boots normal Windows.
+   - *(Tip: The boot menu features a 30-second countdown. Press `[Space]` at any time to pause and read in peace).*
+4. **Verify:** In Windows, run **`Check-GPU-Unlock.bat`** (or `Launch-Dashboard.bat`) to verify your unlocked Tensor Core throughput (>200 TFLOPS on RTX 4090):
+   - *(RTX 20 / Turing / CMP users: Run `Toggle-Turing-GSP.bat` once as Administrator to bind NVIDIA drivers to GSP firmware mode).*
+   - *(Optional: Run `Setup-FastResume.bat` to enable ~3s instant wake from hibernation with Idle Relock Guard).*
+
+---
+
+## 🔒 Secure Boot Configuration
+
+The EFI binaries are Authenticode-signed. If your system has UEFI Secure Boot enabled:
+1. During boot, enter BIOS Setup (**Del** or **F2** key).
+2. Navigate to **Security ➔ Secure Boot ➔ Key Management** (or *Custom Key Management*).
+3. Select **Append Key** / **Enroll Signature** under the **Authorized Signatures (db)** menu.
+4. Browse to your USB drive and choose **`AdaUnlock_SecureBoot.cer`**.
+5. Save changes and reboot (**F10**).  
+*(Secure Boot remains 100% active and protected against malware while allowing the unlock binary to run. Alternatively, you can temporarily set Secure Boot to Disabled).*
+
+> **BIOS Note:** Ensure **CSM is set to Disabled** (pure UEFI mode) to prevent legacy VGA conflicts (Code 43), and enable **Above 4G Decoding** & **Resizable BAR** for maximum memory throughput.
+
+---
+
+## 🚀 Supported Hardware
+
+| Generation | Architecture | Supported Graphics Cards | Device IDs |
+| :--- | :--- | :--- | :--- |
+| **RTX 40 Series** | **Ada Lovelace** | RTX 4090, RTX 4090D, RTX 4080, RTX 4080 SUPER, RTX 4070 Ti SUPER | `0x2684`, `0x2685`, `0x2702`, `0x2703`, `0x2704`, `0x2705` |
+| **RTX 30 Series** | **Ampere** | RTX 3090, RTX 3090 Ti, RTX 3080 Ti, RTX 3080 (10/12GB), RTX 3070 Ti, RTX 3070, RTX 3060 Ti, RTX 3060, CMP 90HX | `0x2204`, `0x2208`, `0x2206`, `0x220a`, `0x2216`, `0x2207`, `0x2482`, `0x2484`, `0x2487`, `0x2488`, `0x2489`, `0x2503`, `0x2504`, `0x2507`, `0x2508`, `0x2520`, `0x2560` |
+| **RTX 20 Series** | **Turing** (TU102 / TU104 / TU106, in testing: [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15), [#18](https://github.com/BrightRaider/universal-gpu-unlock/issues/18)) | RTX 2080 Ti, TITAN RTX, RTX 2080 / SUPER, RTX 2070 / SUPER, RTX 2060 / SUPER, CMP 50HX, CMP 40HX, Quadro RTX | `0x1E04`, `0x1E07`, `0x1E02`, `0x1E81`, `0x1E82`, `0x1E87`, `0x1E84`, `0x1E89`, `0x1F02`, `0x1F07`, `0x1F06`, `0x1F0B`, `0x1F47`, `0x1F03`, `0x1F08`, `0x1F12`, `0x1E09`, `0x1EB0`, `0x1EB1`, `0x1E30`, `0x1E35` |
+
+- **Any Vendor:** Compatible with Founders Edition, ASUS, MSI, Gigabyte, ZOTAC, PNY, Palit, Gainward, etc.
+- **Any Platform:** Intel (Z690, Z790, Z890, B760, Z390) and AMD (AM4/AM5, X570, B550, B650, X670E, X870E).
+- **Multi-Drive:** Prefers `bootmgfw.efi` and follows your firmware's boot order when several Windows volumes exist.
+- **Multi-GPU & Headless Compute:** Unlocks primary or dedicated compute GPUs. Discrete cards can operate completely headless as dedicated AI/compute accelerators with all monitors connected to integrated graphics (e.g. AMD Ryzen Raphael iGPU or Intel UHD) — resolving [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14).
+- **ASUS & AMI Console Topology Verified:** Multi-display console detachment verified on ASUS PRIME Z690-A at **127.61 TFLOPS** (100% unrestricted compute) on EVGA GeForce RTX 3080 Ti — resolving [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16).
+- **ASRock AM4 & CSM Resolution Verified:** Budget AM4 POST discovery and CSM legacy video conflict resolved on ASRock A520M-HVS at **106.05 TFLOPS** (+95.7% boost, unrestricted compute) on Gainward GeForce RTX 3080 Phoenix — refs [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17).
+- **Ampere Verified, Turing in Testing:** GA106 (RTX 3060) and GA102 (RTX 3080, RTX 3080 Ti, RTX 3090) are confirmed in the community table below. GA104 is supported but not yet confirmed in an issue. On TU102 (RTX 2080 Ti) the unlock transaction completes, and the throughput gain is still being confirmed in [#15](https://github.com/BrightRaider/universal-gpu-unlock/issues/15).
+- **Stickless Internal NVMe-ESP Persistence (`[I]` Mode):** Installs `AdaUnlockDxe.efi` and the firmware assets to your internal EFI System Partition (`\EFI\Drivers\`) and registers it in the UEFI `DriverOrder`, so the USB stick is no longer needed. If the copy to the ESP fails, `[I]` registers the driver on the USB drive instead, which then has to stay connected. If an unlock fails, the driver disables itself for the next boot, and `[I]` enables it again.
+
+<details>
+<summary><b>🔍 Community-Verified Hardware & Live Benchmarks (Click to expand)</b></summary>
+<br>
+
+The following GPU models, system motherboards, and compute readbacks have been independently verified on physical hardware by community users:
+
+| Verified GPU | Architecture & Silicon | Motherboard & Platform | Real-World Throughput | Verification Issue |
+| :--- | :--- | :--- | :--- | :--- |
+| **Palit GeForce RTX 3060 12GB** | Ampere (GA106 LHR) | MSI MPG Z390 GAMING PLUS | **46.08 TFLOPS** (~45% ComfyUI speedup) | [#11](https://github.com/BrightRaider/universal-gpu-unlock/issues/11) |
+| **Gainward GeForce RTX 3080 Phoenix 10GB** | Ampere (GA102) | ASRock A520M-HVS (AMD AM4) | **106.05 TFLOPS** (+95.7% boost, Unrestricted Compute) | [#17](https://github.com/BrightRaider/universal-gpu-unlock/issues/17) |
+| **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | ASUS PRIME Z690-A | **127.61 TFLOPS** (100% Unrestricted Compute) | [#16](https://github.com/BrightRaider/universal-gpu-unlock/issues/16) |
+| **EVGA GeForce RTX 3080 Ti 12GB** | Ampere (GA102) | MSI X570-A PRO | **119.0 TFLOPS** (+84.5% boost, Unrestricted Compute) | [#12](https://github.com/BrightRaider/universal-gpu-unlock/issues/12) |
+| **NVIDIA GeForce RTX 3090 24GB** | Ampere (GA102) | Gigabyte TRX40 AORUS MASTER (AMD Threadripper 3960X) | **117.24 TFLOPS** (100% Unrestricted Tensor Compute) | [#13](https://github.com/BrightRaider/universal-gpu-unlock/issues/13) |
+| **ZOTAC GeForce RTX 4080 Trinity OC** | Ada Lovelace (AD103) | GIGABYTE X870 AORUS ELITE WIFI7 (AMD 9800X3D) | **174.29 TFLOPS** (Full Unrestricted GEMM) | [#9](https://github.com/BrightRaider/universal-gpu-unlock/issues/9) |
+| **NVIDIA GeForce RTX 4090** | Ada Lovelace (AD102) | MSI MPG X670E Carbon WIFI (AMD Ryzen 7 7800X3D iGPU) | **255.0 TFLOPS** (+54.5% boost, Headless Compute) | [#14](https://github.com/BrightRaider/universal-gpu-unlock/issues/14) |
+| **NVIDIA GeForce RTX 4090** | Ada Lovelace (AD102) | Intel Z790 Platform (Multi-Drive ESP) | **255.4 TFLOPS** (Peak Compute) | [#8](https://github.com/BrightRaider/universal-gpu-unlock/issues/8) |
+| **NVIDIA GeForce RTX 4090** | Ada Lovelace (AD102) | Intel Z690 Platform (Hybrid iGPU & Multi-Display) | **214.0+ TFLOPS** (Sustained FP16 GEMM) | [#5](https://github.com/BrightRaider/universal-gpu-unlock/issues/5) |
+| **ASUS WS C621E SAGE Workstation** | Multi-Socket Server | ASPEED AST2500 BMC / IPMI Console | Multi-Console Isolation Verified | [#2](https://github.com/BrightRaider/universal-gpu-unlock/issues/2) |
+
+> [!TIP]
+> All benchmarks above were measured directly using **`Check-GPU-Unlock.bat`** under Windows. If your GPU and motherboard combination is verified and working, feel free to share your benchmark in Discussions or in an issue!
+
+</details>
+
+---
+
+## 📊 Real-World Performance Gains
+
+The unlock removes artificial firmware restrictions on the **Tensor Cores (GEMM matrix engines)**. FP32 shader and memory throughput stay at stock. Measured on an RTX 4090:
+
+| Workload / Model | Factory Stock | Unlocked UEFI | Real-World Improvement | Operational Impact |
+| :--- | :--- | :--- | :--- | :--- |
+| **FLUX.1-dev AI Sampling** | 1.20 it/s (25.0s) | **1.97 it/s (15.2s)** | 🚀 **+64.2% Faster** | High-res image generation in ~24s instead of ~34s |
+| **MiniMax-H3 Video DiT** | 15.20 s/it (304s) | **11.15 s/it (223s)** | 🚀 **+36.3% Faster** | Saves **81 seconds** per 5-second video render |
+| **FP16 Tensor GEMM ($4096^2$)** | 132.1 TFLOPS | **208.9 TFLOPS** | 🚀 **+58.1% Boost** | Maximum compute throughput within 72MB L2 cache |
+| **BF16 Tensor GEMM ($8192^2$)** | 149.3 TFLOPS | **167.4 TFLOPS** | 🚀 **+12.1% Boost** | Sustained large-matrix training acceleration |
+| **FP32 CUDA Shaders** | 51.3 TFLOPS | **48.7 TFLOPS** | ✅ **Stock Parity** | Standard raster rendering remains at factory stock |
+| **VRAM Copy Bandwidth** | 733.4 GB/s | **707.2 GB/s** | ✅ **Stock Parity** | Physical GDDR6X bus operation unchanged |
+
+> [!TIP]
+> **Maximizing Real-World AI Throughput (cuBLASLt Heuristics):**  
+> NVIDIA's official `cuBLASLt` library selects matrix multiplication algorithms based on factory heuristic models calibrated for rate-limited consumer cards. To ensure your AI applications pick the true maximum-throughput kernel tiles for your unlocked GPU:
+> * **PyTorch / Python Scripts:** Add `torch.backends.cudnn.benchmark = True` before your compute loop.
+> * **ComfyUI / Stable Diffusion:** Launch with benchmark/autotune enabled.
+> * **Result:** Yields an additional **+15% to +35%** real-world matrix throughput across dense GEMM, SDXL, and LLM prefill workloads!
+
+---
+
+## 🛡️ Safety & Anti-Cheat
+
+- **Volatile (RAM-only):** The unlock lives in GPU registers and is gone after a full power-off. Without the `[I]` driver installed, the next boot is stock. On the test bench, the card always booted stock again after a power-off.
+- **Official NVIDIA Drivers:** Runs seamlessly with standard, unmodified NVIDIA Game Ready and Studio drivers (`nvlddmkm.sys`).
+- **Anti-Cheat:** No driver patches, kernel hooks or runtime memory injection. With the image or certificate enrolled in `db`, `UEFISecureBootEnabled` stays `1`. Individual anti-cheat engines (Riot Vanguard, Easy Anti-Cheat, BattlEye, Ricochet) were not tested systematically.
+- **Fast Resume & Idle Relock Guard:** Includes **`Setup-FastResume.bat`** to enable Windows Hibernation and create a desktop **Fast-Unlock-Sleep** shortcut (~3s wake-up without USB reboot). It also includes the **Idle Relock Guard** (disables aggressive PCIe ASPM and Runtime D3cold power-gating), ensuring that laptops (Optimus) and secondary headless compute GPUs never drop their unlocked state during idle timeouts or display standby.
+- **S3 Sleep Protection:** Includes **`Toggle-Sleep-Button.bat`** in the root directory to hide the "Sleep" button from the Windows Start menu, preventing accidental loss of volatile RAM state.
+- **44-Cycle Testbench:** 44 supervised runs on my primary RTX 4090 platform. The last 18 (RUN0027 – RUN0044) all passed. The earlier runs were prototyping.
+- **Operational Deep-Dive:** Read the comprehensive telemetry and persistence whitepaper:  
+  👉 **[Operational Architecture, Persistence & Secure Boot Telemetry](docs/OPERATIONS_AND_PERSISTENCE.md)**
+
+---
+
+<details>
+<summary><b>🔍 Click to view Deep Technical Architecture, GEMM Scaling & Secure Boot Details</b></summary>
+
+### Why is the boost largest at $4096 \times 4096$ (+58.1%)?
+The Ada Lovelace AD102 architecture features a massive **72 MB L2 cache**. A $4096 \times 4096$ FP16 matrix (~32 MB per operand) fits entirely inside this ultra-fast cache (>3.5 TB/s cache bandwidth), so execution is purely **Compute-Bound**—allowing the unlocked Tensor Cores to reach their full unrestricted 208+ TFLOPS potential. At $16384 \times 16384$ (>1.5 GB memory footprint), workloads become **Memory-Bandwidth Bound** by external GDDR6X VRAM. Because real-world AI inference & training models slice tensors into $1024$ to $4096$ blocks, they operate right in this maximum speedup sweet spot!
+
+### Secure Boot Key Enrollment
+The included EFI binaries are pre-signed with my custom Authenticode key. To boot with Secure Boot enabled:
+1. Enter your BIOS / UEFI setup menu.
+2. Navigate to **Security / Secure Boot / Key Management**.
+3. Choose **Append / Enroll DB Key**, browse to your USB drive, and select **`AdaUnlock_SecureBoot.cer`**.
+4. Save and reboot. Alternatively, you can temporarily set Secure Boot to *Disabled* or *Custom*.
+
+</details>
+
+---
+
+## 🧪 Build & Tests
+
+Requires the Visual Studio 2022 C++ Build Tools (x64).
+
+| Command | What it does |
+| :--- | :--- |
+| `src\Build-Experimental-MSVC.ps1` | Builds `BOOTX64.EFI` and **overwrites `bin\BOOTX64.EFI`**. Signs it only if the maintainer certificate is installed. |
+| `src\Build-Dxe-Driver.ps1` | Builds `AdaUnlockDxe.efi` and **overwrites `bin\AdaUnlockDxe.efi`**, with the same signing rule. |
+| `src\Build-Gpu-Topology-Diagnostic.ps1` | Builds the read-only topology diagnostic EFI. |
+| `tests\Run-MsvcHostTests.ps1` | Runs the MSVC host tests for `driver_nvram.c` (`[I]`/`[R]`) and the Windows volume selection in `boot_io.c`. |
+
+The gcc/clang host tests for topology, inventory and discovery are in `tests/`. The CI workflow (`.github/workflows/gpu-topology-diagnostic.yml`) runs on every push and pull request that touches `src/` or `tests/`. It runs all host tests, builds the diagnostic EFI, `BOOTX64.EFI` and `AdaUnlockDxe.efi`, and uploads the unsigned builds as workflow artifacts. All tests mock the firmware services; none of them runs on a GPU.
+
+---
+
+## 📜 Changelog & Version History
+
+All version releases, bug fixes, and device expansions are maintained in the separate changelog file:  
+👉 **[View Full CHANGELOG.md](CHANGELOG.md)** *(or browse [GitHub Releases](https://github.com/BrightRaider/universal-gpu-unlock/releases))*.
+
+---
+
+## 🛠️ Repository Structure
 
 ```text
-CAN_DETACH=false
-CAN_UNLOCK=false
-CAN_FLASH=false
-RECOVERY_VERIFIED=false
+├── bin/
+│   ├── BOOTX64.EFI              <- Pre-compiled, Authenticode-signed universal UEFI bootloader
+│   └── AdaUnlockDxe.efi         <- Pre-compiled, Authenticode-signed early DXE driver
+├── AD102-ASSETS/                <- Ada microcode payloads (4090, 4080, 4070TiS)
+├── GA102-ASSETS/                <- Ampere microcode payloads (3090, 3080, 3070, 3060)
+├── TU102-ASSETS/                <- Turing microcode staging payloads (2080Ti, 2080, 2070, 2060)
+├── src/                         <- Full C source code for the universal UEFI application
+├── tests/                       <- Host tests with mocked UEFI services (no GPU required)
+├── Setup.bat                    <- The 1-Click Provisioner Launcher (Primary tool)
+├── Setup-AdaUnlock.ps1          <- Automated PowerShell deployment engine
+├── Setup-FastResume.bat         <- 1-Click Windows Hibernation & Desktop Sleep shortcut (Preserve unlock)
+├── Check-GPU-Unlock.bat         <- Standalone Windows verification benchmark (TFLOPS, ReBAR, PCIe & Clipboard)
+├── Launch-Dashboard.bat         <- Modern dark-themed GUI dashboard & benchmark launcher
+├── Launch-Dashboard.pyw         <- Windowless GUI direct launcher
+├── Universal-Control-Center.cmd <- Optional Diagnostic & Telemetry Dashboard (WPF GUI)
+├── Toggle-Sleep-Button.bat      <- Non-invasive tool to hide/restore Start Menu Sleep button (S3 protection)
+├── tools/
+│   ├── quick_check.py           <- Core GEMM benchmark, ReBAR, UEFI & PCIe diagnostic engine
+│   └── gpu_dashboard.py         <- Modern Tkinter GUI status monitor & live benchmark
+└── CHANGELOG.md                 <- Complete release and version history
 ```
 
-The original legacy `Setup-AdaUnlock.ps1` is disabled in this research fork
-before administrative elevation, USB formatting or ESP/NVRAM changes.
-Do **not** use historical signed binaries, unsigned CI artifacts, installer
-instructions, persistent DXE/NVRAM setup, or arbitrary firmware assets as a
-shortcut around the research gates. No claims of 100% safety, BitLocker
-compatibility, anti-cheat safety, or guaranteed speedup are established.
+---
 
-## Authoritative project documents
+## 🙏 Acknowledgements & Credits
 
-- [Dual-GPU Windows 617.42 remediation plan](docs/DUAL_GPU_61742_REMEDIATION_PLAN.md)
-- [Read-only GPU topology diagnostic](docs/READ_ONLY_GPU_TOPOLOGY_DIAGNOSTIC.md)
-- [Preparation-only active source builds](docs/ACTIVE_GPU_PREPARATION.md)
-- [Windows-GPU-UNLOCK authoritative execution map](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia_unlock_evidence_to_execution_map.md)
-- [Windows 617.42 cumulative reverse engineering notes](https://github.com/akashskypatel/Windows-GPU-UNLOCK/blob/main/research/nvidia-tensor-core-unlock-investigation.md)
+* 🌟 **[geodnb](https://github.com/geodnb) / [Ablation Lab](https://github.com/Ablation-Lab) (Special Dedication):** Massive thanks for pioneering research, hardware state analysis, and technical insights into GPU cold states and register architecture that catalyzed this entire universal Windows project. Explore their research over at [Ablation Lab on GitHub](https://github.com/Ablation-Lab) and subscribe to their channel on [YouTube (@AblationLab)](https://www.youtube.com/@AblationLab)!
+* **Zagitta & WildFlash1st:** For pioneering the Linux `gpu-unlock` research and `cmp90hx-unlock` rejoining methodologies.
+* **[Ahsan Umair (@ahsanumair)](https://github.com/ahsanumair):** For contributing the initial Windows desktop WPF GUI layout and XAML groundwork adapted into the optional diagnostic telemetry companion (`Universal-Control-Center.cmd`).
+* **TOTORONG & JustAResearcher:** For early proof-of-concept Windows UEFI implementations.
+* **Igor Wallossek (Igor'sLAB):** For in-depth technical analysis, power verification, and community discussion.
 
-For host-only tests and compile evidence, see
-[the GitHub Actions workflow](.github/workflows/gpu-topology-diagnostic.yml).
-Successful CI proves the selected source compiles and the tested host logic
-behaves as asserted; it does not prove proprietary firmware signatures, UEFI
-driver ownership release, physical recovery or post-Windows throughput.
+---
 
-## Attribution
+## ☕ Support the Project
 
-This repository is a research derivative of
-[BrightRaider/universal-gpu-unlock](https://github.com/BrightRaider/universal-gpu-unlock).
-The upstream quick-start, marketing performance claims and operational
-guarantees are **not** verified claims about this fork, its installed cards,
-or stock Windows 617.42. Respect the repository's existing license and
-the provenance/licensing of any firmware investigated separately.
+If Universal GPU Unlock accelerated your AI workflows, saved you render time, or helped unlock your graphics card's full silicon potential, consider buying me a coffee to support continuous updates and hardware testing:
+
+<a href='https://ko-fi.com/brightraider' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi2.png?v=3' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>

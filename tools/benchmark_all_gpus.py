@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 
 import torch
+from quick_check import check_numerical_accuracy
 
 
 SIZES = (4096, 8192, 16384)
@@ -68,6 +69,9 @@ def _benchmark_device(index, device):
     print("=" * 79)
     print(f"GPU {index}: {props.name}")
     print(f"CUDA index         : {index}")
+    print(f"PCI bus id         : {getattr(props, 'pci_bus_id', None) or 'UNKNOWN'}")
+    print(f"UUID               : {getattr(props, 'uuid', None) or 'UNKNOWN'}")
+    print("Attribution        : CUDA ordinal is not a PCI BDF; measured only")
     print(f"Compute capability : {props.major}.{props.minor}")
     print(f"Total GPU memory   : {props.total_memory / (1024**3):.2f} GiB")
     print(f"Multiprocessors    : {props.multi_processor_count}")
@@ -153,6 +157,8 @@ def _benchmark_device(index, device):
         del x, y
         torch.cuda.empty_cache()
 
+    print("\n--- NUMERICAL ACCURACY ---")
+    failures += check_numerical_accuracy(torch, device, index)
     print(f"Measurements failed on GPU {index}: {failures}\n")
     return {"index": index, "name": props.name, "failures": failures,
             "results": results, "bandwidth": bandwidth}
@@ -177,6 +183,7 @@ def main():
     print("CUDA devices (integrated GPUs are excluded):")
     for index in range(torch.cuda.device_count()):
         name = torch.cuda.get_device_name(index)
+        props = torch.cuda.get_device_properties(index)
         try:
             integrated = is_integrated(runtime, index)
         except Exception as exc:
@@ -186,7 +193,8 @@ def main():
         if integrated:
             print(f"  cuda:{index}: {name} - SKIP (integrated)")
         else:
-            print(f"  cuda:{index}: {name} - selected")
+            print(f"  cuda:{index}: {name} "
+                  f"pci={getattr(props, 'pci_bus_id', None) or 'UNKNOWN'} - selected")
             selected.append(index)
 
     if not selected:

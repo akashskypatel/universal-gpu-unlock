@@ -6,6 +6,15 @@
     defined(GU_ENTRY_LATCHED_SS1_FULL) || defined(GU_FULL_UNLOCK)
 #error This file may only be built as a standalone read-only diagnostic
 #endif
+/* The visible text cycle is a display-write diagnostic, not a pure
+ * descriptor read. Require a durable log and forbid firmware handoff or
+ * independent MSI hardware probes in the same image. */
+#if defined(GU_TOPO_GOP_TEXT_CYCLE) && \
+    (!defined(GU_TOPO_SAVE_LOG) || defined(GU_TOPO_WINDOWS_HANDOFF) || \
+     defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || \
+     defined(GU_MSI_B850_SEC2_UCODE1) || defined(GU_VRAM_BLOCK_PROBE))
+#error GOP text cycling requires its standalone logged diagnostic variant
+#endif
 #include <Uefi.h>
 #include <Protocol/PciIo.h>
 #include <Protocol/DevicePath.h>
@@ -18,6 +27,7 @@
 #endif
 #include "gpu_topology.h"
 #include "sha256.h"
+#include "prom_filename.h"
 #include "gpu_loaded_pe_text.h"
 #ifdef GU_TOPO_SELECTION_ENABLED
 #ifdef GU_TOPO_WINDOWS_HANDOFF
@@ -31,15 +41,23 @@ static const GU_GPU_LOCATION SelectedLocations[GU_GPU_SELECTION_COUNT] =
     GU_GPU_SELECTION_LOCATIONS;
 #endif
 #include "gpu_pci_observation.h"
-#if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1)
+#if defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1) || defined(GU_VRAM_BLOCK_PROBE)
 #include "msi_b850_rom_diag.h"
 #if defined(GU_TOPO_SELECTION_ENABLED)
 #error MSI B850 source diagnostics cannot select GPUs
 #endif
 #endif
+#if defined(GU_VRAM_BLOCK_PROBE) && (defined(GU_MSI_B850_ROM_VARIABLES) || defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1))
+#error The VRAM block probe must be built as its own image
+#endif
 #if (defined(GU_MSI_B850_ROM_VARIABLES) && (defined(GU_MSI_B850_FUSE_VERSION) || defined(GU_MSI_B850_SEC2_UCODE1))) || \
     (defined(GU_MSI_B850_FUSE_VERSION) && defined(GU_MSI_B850_SEC2_UCODE1))
 #error MSI B850 diagnostics must be built separately
+#endif
+#ifdef GU_VRAM_BLOCK_PROBE
+/* The address map of the waived transaction, named once. This header holds
+ * constants only; the probe below reads them and never writes. */
+#include "vram_blocks.h"
 #endif
 #ifdef GU_TOPO_WINDOWS_HANDOFF
 #include "gpu_windows_handoff.h"
@@ -54,6 +72,11 @@ static EFI_GUID GopGuid=EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID TextOutGuid=EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL_GUID;
 static EFI_GUID DriverBindingGuid=EFI_DRIVER_BINDING_PROTOCOL_GUID;
 static EFI_GUID LoadedGuid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
+/* EDID interfaces are optional UEFI protocols; keep their tiny wire layout
+ * local so older EDK2 header sets can still build this read-only image. */
+static EFI_GUID EdidActiveGuid={0xbd8c1056,0x9f36,0x44ec,{0x92,0xa8,0xa6,0x33,0x7f,0x81,0x79,0x86}};
+static EFI_GUID EdidDiscoveredGuid={0x1c0c34f6,0xd380,0x41fa,{0xa0,0x49,0x8a,0xd0,0x6c,0x1a,0x66,0xaa}};
+typedef struct { UINT32 SizeOfEdid; UINT8 *Edid; } GU_EDID_PROTOCOL;
 #ifdef GU_MSI_B850_ROM_VARIABLES
 static EFI_GUID LoadedImagePathGuid=EFI_LOADED_IMAGE_DEVICE_PATH_PROTOCOL_GUID;
 #endif
@@ -75,6 +98,9 @@ static int SelectionRead(void *opaque, size_t index, GU_GPU_RECORD *out) {
 /* Independent, read-only *evidence*, never used as a topology pass. */
 static GU_PCI_OBS_CAPTURE Supplemental;
 static EFI_SYSTEM_TABLE *System;
+/* The loaded image, kept so a stage that captured bytes can reach the same
+ * EFI volume this application was started from. */
+static EFI_HANDLE SelfImage;
 #ifdef GU_TOPO_SAVE_LOG
 static char LogBytes[131072];
 static size_t LogUsed;
@@ -82,15 +108,51 @@ static int LogOverflow;
 static EFI_GUID FsGuid=EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID;
 #endif
 
+/* Number of formatted lines that could not be published. A dropped line is a
+ * diagnostic omission, so it is counted and reported instead of vanishing. */
+static size_t LogDropped;
+static void ReportGopDisplayState(EFI_BOOT_SERVICES *bs);
+
+/* One bounded, format-free marker per capture. The rejected content is never
+ * partially published, and this routine cannot recurse through formatting. */
+static void SayDropped(void) {
+  static const char marker[]="DIAGNOSTIC_LINE_DROPPED=1 CONTENT_WITHHELD=1\r\n";
+  size_t i;
+  CHAR16 wide[sizeof(marker)];
+  if(LogDropped++)return;
+#ifdef GU_TOPO_SAVE_LOG
+  if(sizeof(marker)-1>sizeof(LogBytes)-LogUsed)LogOverflow=1;
+  else {memcpy(LogBytes+LogUsed,marker,sizeof(marker)-1);LogUsed+=sizeof(marker)-1;}
+#endif
+  for(i=0;i<sizeof(marker)-1;i++)wide[i]=(CHAR16)(unsigned char)marker[i];
+  wide[sizeof(marker)-1]=0;
+  if(System && System->ConOut && System->ConOut->OutputString)
+    (VOID)System->ConOut->OutputString(System->ConOut,wide);
+}
+
+/* Completeness is measured, not assumed: an invalid or oversized formatted
+ * line is refused and the durable log records that refusal. */
+static void Say(const char *format, ...);
+static void SayCompleteness(void) {
+  Say("DIAGNOSTIC_LOG_COMPLETENESS=%s DROPPED=%llu OVERFLOW=%u\r\n",
+      LogDropped?"INCOMPLETE":"COMPLETE",(unsigned long long)LogDropped,
+#ifdef GU_TOPO_SAVE_LOG
+      (unsigned)LogOverflow);
+#else
+      0U);
+#endif
+}
+
 static void Say(const char *format, ...) {
   char line[320];CHAR16 wide[321];size_t i,n;
   va_list ap;va_start(ap,format);n=GuFormatV(line,sizeof(line),format,ap);va_end(ap);
-  if(n==SIZE_MAX || n>=sizeof(line))return;
+  if(n==SIZE_MAX || n>=sizeof(line)) {SayDropped();return;}
 #ifdef GU_TOPO_SAVE_LOG
   if(n>sizeof(LogBytes)-LogUsed)LogOverflow=1;
   else {memcpy(LogBytes+LogUsed,line,n);LogUsed+=n;}
 #endif
-  for(i=0;i<n;i++)wide[i]=(CHAR16)(unsigned char)line[i];wide[n]=0;
+  for(i=0;i<n;i++)wide[i]=(CHAR16)(unsigned char)line[i];
+  wide[n]=0;
   if(System && System->ConOut && System->ConOut->OutputString)
     (VOID)System->ConOut->OutputString(System->ConOut,wide);
 }
@@ -264,6 +326,668 @@ static void ReportMsiB850Sec2Ucode1(int pci_ok) {
         (unsigned)(raw&0xffffU),GuMsiB850FuseVersion((uint16_t)raw));
   }
   Say("MSI_B850_SEC2_UCODE1_END READS_SUCCEEDED=%u EXPECTED=2 NO_GPU_WRITES=1 SECURE_ACCEPTANCE=UNVERIFIED\r\n",observed);
+}
+#endif
+
+#ifdef GU_TOPO_SAVE_LOG
+/* Opt-in diagnostic files on the app's own EFI volume: this text log, and the
+ * ROM window the block probe read (SavePromWindow below). Never overwrite an
+ * earlier capture of either. These are the ONLY intended persistent
+ * mutations. */
+/* A failed file ownership operation must not allow another log attempt
+ * in this diagnostic image. Independently confirmed references still close. */
+static int LogFileFault;
+
+static EFI_STATUS LogOpenResult(EFI_STATUS status,int *fault,
+                                EFI_FILE_PROTOCOL **out,const char *stage) {
+  if(status==EFI_SUCCESS)return *out?EFI_SUCCESS:EFI_DEVICE_ERROR;
+  if(*out) {
+    if(fault)*fault=1;
+    Say("LOG_OPEN_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,(VOID *)*out,(unsigned long long)status);
+    *out=NULL;
+    return EFI_DEVICE_ERROR;
+  }
+  return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
+}
+
+static EFI_STATUS CloseLogFile(int *fault,EFI_FILE_PROTOCOL **out,
+                               const char *stage) {
+  EFI_FILE_PROTOCOL *file=*out;
+  EFI_STATUS status;
+  *out=NULL;
+  if(!file)return EFI_SUCCESS;
+  status=file->Close?file->Close(file):EFI_UNSUPPORTED;
+  if(status!=EFI_SUCCESS) {
+    if(fault)*fault=1;
+    Say("LOG_CLOSE_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
+        stage,(VOID *)file,(unsigned long long)status);
+  }
+  return status;
+}
+
+static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
+  EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
+  EFI_FILE_PROTOCOL *root=NULL,*file=NULL,*prior=NULL;
+  EFI_STATUS s,closed;
+  UINTN bytes,attempt,chars=0;
+  CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
+  if(LogFileFault)return EFI_DEVICE_ERROR;
+  if(LogOverflow || !LogUsed)return EFI_BAD_BUFFER_SIZE;
+  s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
+  if(s!=EFI_SUCCESS||!li)return EFI_NOT_FOUND;
+  s=table->BootServices->HandleProtocol(li->DeviceHandle,&FsGuid,(VOID **)&fs);
+  if(s!=EFI_SUCCESS||!fs||!fs->OpenVolume)return EFI_UNSUPPORTED;
+  s=fs->OpenVolume(fs,&root);
+  s=LogOpenResult(s,&LogFileFault,&root,"volume");
+  if(s!=EFI_SUCCESS)return s;
+  if(!root->Open||!root->Close){s=EFI_UNSUPPORTED;goto finish;}
+  /* Preserve the existing non-overwriting numbered capture policy. */
+  while(name[chars])chars++;
+  for(attempt=0;attempt<10000;attempt++) {
+    name[chars-8]=(CHAR16)('0'+attempt/1000);
+    name[chars-7]=(CHAR16)('0'+(attempt/100)%10);
+    name[chars-6]=(CHAR16)('0'+(attempt/10)%10);
+    name[chars-5]=(CHAR16)('0'+attempt%10);
+    s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
+    s=LogOpenResult(s,&LogFileFault,&prior,"prior");
+    if(s==EFI_SUCCESS) {
+      if(prior==root){
+        LogFileFault=1;
+        Say("LOG_OPEN_ALIAS STAGE=prior ADDRESS=%p\r\n",(VOID *)prior);
+        prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+      }
+      s=CloseLogFile(&LogFileFault,&prior,"prior");
+      if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
+      continue;
+    }
+    if(s!=EFI_NOT_FOUND)goto finish;
+    s=root->Open(root,&file,name,
+                 EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    s=LogOpenResult(s,&LogFileFault,&file,"create");
+    if(s!=EFI_SUCCESS)goto finish;
+    if(file==root){
+      LogFileFault=1;
+      Say("LOG_OPEN_ALIAS STAGE=create ADDRESS=%p\r\n",(VOID *)file);
+      file=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+    }
+    if(!file->Write||!file->Close){s=EFI_UNSUPPORTED;goto finish;}
+    Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
+    break;
+  }
+  if(attempt==10000){s=EFI_VOLUME_FULL;goto finish;}
+  if(LogOverflow){s=EFI_BAD_BUFFER_SIZE;goto finish;}
+  bytes=(UINTN)LogUsed;
+  s=file->Write(file,&bytes,LogBytes);
+  if(s==EFI_SUCCESS && bytes!=(UINTN)LogUsed)s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS && (!file->Flush || file->Flush(file)!=EFI_SUCCESS))s=EFI_DEVICE_ERROR;
+finish:
+  closed=CloseLogFile(&LogFileFault,&file,"file");
+  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  closed=CloseLogFile(&LogFileFault,&root,"volume");
+  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
+  /* UEFI warnings are not confirmed completion of the durable log. */
+  return s==EFI_SUCCESS?EFI_SUCCESS:EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
+}
+
+#ifdef GU_VRAM_BLOCK_PROBE
+/* The megabyte the block probe just copied and hashed, written beside the log it
+ * belongs to. A digest alone cannot answer the question the transaction asks
+ * before its first write - whether the ROM carries a FWSEC-FRTS descriptor it
+ * will accept - and nothing in this image parses a descriptor, so the bytes
+ * have to leave the bench with the log. The window is written while the buffer
+ * that produced the digest is still live, so no pool lifetime changes and no
+ * second read of the card happens.
+ *
+ * The name is src/prom_filename.h's, the same builder the unlinked prepared
+ * capture uses, and the run index is chosen here by trying names in order: a
+ * fixed name would make the second boot of the same bench capture nothing.
+ * Returns 1 with `text` naming the file that was created and closed, or 0 with
+ * `text` empty and nothing left behind. */
+/* Separate from LogFileFault on purpose: the log is written last, and an
+ * uncertain file operation on the megabyte would otherwise suppress the whole
+ * report of what was read. Each file answers only for itself. */
+static int PromFileFault;
+
+static int SavePromWindow(EFI_HANDLE image,EFI_SYSTEM_TABLE *table,
+                          const GU_GPU_RECORD *target,const UINT8 *rom,
+                          UINTN rom_bytes,char *text,UINTN text_chars) {
+  EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
+  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
+  EFI_FILE_PROTOCOL *root=NULL,*file=NULL,*prior=NULL;
+  EFI_STATUS s=EFI_DEVICE_ERROR,closed;
+  CHAR16 name[GU_PROM_FILE_CHARS];
+  UINTN bytes;
+  unsigned run,chosen=0U;
+  int written=0;
+  if(text && text_chars)text[0]=0;
+  if(PromFileFault)return 0;
+  if(!image || !table || !table->BootServices || !target || !rom ||
+     !rom_bytes || !text || text_chars<GU_PROM_FILE_CHARS)return 0;
+  s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
+  if(s!=EFI_SUCCESS || !li)return 0;
+  s=table->BootServices->HandleProtocol(li->DeviceHandle,&FsGuid,(VOID **)&fs);
+  if(s!=EFI_SUCCESS || !fs || !fs->OpenVolume)return 0;
+  s=fs->OpenVolume(fs,&root);
+  s=LogOpenResult(s,&PromFileFault,&root,"prom-volume");
+  if(s!=EFI_SUCCESS)return 0;
+  if(!root->Open || !root->Close){s=EFI_UNSUPPORTED;goto finish;}
+  for(run=0U;run<10000U;run++) {
+    if(!GuPromFileName((GU_PROM_CHAR *)(VOID *)name,GU_PROM_FILE_CHARS,
+                       target->segment,target->bus,target->device,
+                       target->function,run)) {
+      Say("PROM_CAPTURE_NAME_REFUSED SEGMENT=%u BUS=%u DEVICE=%u FUNCTION=%u NO_FILE=1\r\n",
+          (unsigned)target->segment,(unsigned)target->bus,
+          (unsigned)target->device,(unsigned)target->function);
+      s=EFI_INVALID_PARAMETER;goto finish;
+    }
+    s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
+    s=LogOpenResult(s,&PromFileFault,&prior,"prom-prior");
+    if(s==EFI_SUCCESS) {
+      if(prior==root) {
+        PromFileFault=1;
+        Say("PROM_CAPTURE_OPEN_ALIAS STAGE=prior ADDRESS=%p\r\n",(VOID *)prior);
+        prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+      }
+      s=CloseLogFile(&PromFileFault,&prior,"prom-prior");
+      if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
+      continue;
+    }
+    if(s!=EFI_NOT_FOUND)goto finish;
+    s=root->Open(root,&file,name,
+                 EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
+    s=LogOpenResult(s,&PromFileFault,&file,"prom-create");
+    if(s!=EFI_SUCCESS)goto finish;
+    if(file==root) {
+      PromFileFault=1;
+      Say("PROM_CAPTURE_OPEN_ALIAS STAGE=create ADDRESS=%p\r\n",(VOID *)file);
+      file=NULL;s=EFI_COMPROMISED_DATA;goto finish;
+    }
+    if(!file->Write || !file->Close){s=EFI_UNSUPPORTED;goto finish;}
+    chosen=run;
+    break;
+  }
+  if(run==10000U){s=EFI_VOLUME_FULL;goto finish;}
+  bytes=rom_bytes;
+  s=file->Write(file,&bytes,(VOID *)rom);
+  if(s==EFI_SUCCESS && bytes!=rom_bytes)s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS && (!file->Flush || file->Flush(file)!=EFI_SUCCESS))
+    s=EFI_DEVICE_ERROR;
+  if(s==EFI_SUCCESS &&
+     GuPromFileText(text,text_chars,target->segment,target->bus,target->device,
+                    target->function,chosen))written=1;
+finish:
+  /* A file this call created and could not complete is removed while the
+   * handle is still ours. A removal that cannot be confirmed latches the
+   * capture's own fault, so no later capture is attempted - and the log, which
+   * is written after every stage, is still written. */
+  if(!written && file && file->Delete) {
+    closed=file->Delete(file);
+    file=NULL;
+    if(closed!=EFI_SUCCESS) {
+      PromFileFault=1;
+      Say("PROM_CAPTURE_DELETE_UNCERTAIN STATUS=%#llx\r\n",
+          (unsigned long long)closed);
+    }
+  }
+  closed=CloseLogFile(&PromFileFault,&file,"prom-file");
+  if(closed!=EFI_SUCCESS)written=0;
+  closed=CloseLogFile(&PromFileFault,&root,"prom-volume");
+  if(closed!=EFI_SUCCESS)written=0;
+  if(!written && text)text[0]=0;
+  return written;
+}
+#endif
+#endif
+
+#ifdef GU_VRAM_BLOCK_PROBE
+/* The waived transaction writes 42 distinct BAR0 words: twenty SEC2 register
+ * deltas, the same twenty deltas at the GSP engine, and the two speed
+ * selectors. Before the first actuation the operator needs evidence that a
+ * read-only image addresses those same words on this silicon, because an
+ * address that does not come back leaves the actuating run writing into a
+ * block nobody has looked at.
+ *
+ * This probe reads exactly the two tables in vram_blocks.h - the write set and
+ * the transaction's own read set - once per identity-verified card, and writes
+ * nothing: no register write, no detach,
+ * no unlock, no NVIDIA Stop, no DMA, no reset, no FLR. A successful read
+ * proves the word is reachable through PCI I/O and reports its entry-state
+ * value. It proves nothing about what the value means: an engine mask, a
+ * signature slot or a selector value is not authenticated here, and a
+ * before/after comparison of two logs is an observation, not an acceptance.
+ * The probe does not read back a write it never issued.
+ *
+ * tests/test_vram_block_probe.py derives the write set from unlock_610.c and
+ * fails if this table and the writer disagree; that test, not this comment, is
+ * what keeps the two in step. */
+typedef struct {
+  const char *name;
+  UINT32 offset;
+} GU_VRAM_BLOCK_ROW;
+
+/* The transaction already knows what an unreadable register looks like:
+ * src/vendor/unlock_610.c's inaccessible() is
+ *   value == ~0u || (value & 0xffff0000u) == 0xbadf0000u
+ * and poll_us() refuses with -EIO on the same two shapes. A read can succeed at
+ * the PCI I/O level and still return one of them, so the probe classifies every
+ * word with the same predicate instead of presenting a read-rejection signature
+ * as entry state. The first physical run returned 0xbadf5620 on 45 of the 84
+ * write-set words across the two cards (docs/PRODUCTION_READINESS_INVENTORY.md
+ * section 11.33), which is why this exists. */
+static UINT32 GuVramBlockAccessible(UINT32 value) {
+  return (value == 0xffffffffU || (value & 0xffff0000U) == 0xbadf0000U) ? 0U : 1U;
+}
+
+/* gpu_unlock_fuse_version() of src/vendor/prep_610.c, in this image's types: an
+ * inaccessible shape and a zero low half both mean version zero, and otherwise
+ * the version is the rank of the highest set bit of the low sixteen bits. This
+ * is the value the transaction uses to index the ROM's packed signatures, so a
+ * probe that reported the low half's rank for an inaccessible word would report
+ * 15 where the transaction computes 0 - a different slot, not a different word.
+ * A host test drives this and the original over the same inputs. */
+static UINT32 GuVramFuseVersion(UINT32 raw) {
+  if(raw == 0xffffffffU || (raw & 0xffff0000U) == 0xbadf0000U) return 0U;
+  return (UINT32)GuMsiB850FuseVersion((uint16_t)(raw & 0xffffU));
+}
+
+static const GU_VRAM_BLOCK_ROW VramWriteSet[] = {
+  {"SEC2.ENGINE_ID",GU_VRAM_BLOCK_SEC2_ENGINE_ID},
+  {"SEC2.CHIP",GU_VRAM_BLOCK_SEC2_CHIP},
+  {"SEC2.CPUCTL",GU_VRAM_BLOCK_SEC2_CPUCTL},
+  {"SEC2.CPUCTL_ALT",GU_VRAM_BLOCK_SEC2_CPUCTL_ALT},
+  {"SEC2.CODE_VA",GU_VRAM_BLOCK_SEC2_CODE_VA},
+  {"SEC2.MAILBOX0",GU_VRAM_BLOCK_SEC2_MAILBOX0},
+  {"SEC2.MAILBOX1",GU_VRAM_BLOCK_SEC2_MAILBOX1},
+  {"SEC2.DMA_CTRL",GU_VRAM_BLOCK_SEC2_DMA_CTRL},
+  {"SEC2.DMA_SRC_LO",GU_VRAM_BLOCK_SEC2_DMA_SRC_LO},
+  {"SEC2.DMA_SRC_HI",GU_VRAM_BLOCK_SEC2_DMA_SRC_HI},
+  {"SEC2.DMA_DEST",GU_VRAM_BLOCK_SEC2_DMA_DEST},
+  {"SEC2.DMA_MEM_OFF",GU_VRAM_BLOCK_SEC2_DMA_MEM_OFF},
+  {"SEC2.DMA_CMD",GU_VRAM_BLOCK_SEC2_DMA_CMD},
+  {"SEC2.BOOTVEC",GU_VRAM_BLOCK_SEC2_BOOTVEC},
+  {"SEC2.UCODE_ID",GU_VRAM_BLOCK_SEC2_UCODE_ID},
+  {"SEC2.ENGINE_MASK",GU_VRAM_BLOCK_SEC2_ENGINE_MASK},
+  {"SEC2.SIG_DMEM",GU_VRAM_BLOCK_SEC2_SIG_DMEM},
+  {"SEC2.BCR",GU_VRAM_BLOCK_SEC2_BCR},
+  {"SEC2.FBIF_TRANS",GU_VRAM_BLOCK_SEC2_FBIF_TRANS},
+  {"SEC2.FBIF_TRANS_24",GU_VRAM_BLOCK_SEC2_FBIF_TRANS_24},
+  {"GSP.ENGINE_ID",GU_VRAM_BLOCK_GSP_ENGINE_ID},
+  {"GSP.CHIP",GU_VRAM_BLOCK_GSP_CHIP},
+  {"GSP.CPUCTL",GU_VRAM_BLOCK_GSP_CPUCTL},
+  {"GSP.CPUCTL_ALT",GU_VRAM_BLOCK_GSP_CPUCTL_ALT},
+  {"GSP.CODE_VA",GU_VRAM_BLOCK_GSP_CODE_VA},
+  {"GSP.MAILBOX0",GU_VRAM_BLOCK_GSP_MAILBOX0},
+  {"GSP.MAILBOX1",GU_VRAM_BLOCK_GSP_MAILBOX1},
+  {"GSP.DMA_CTRL",GU_VRAM_BLOCK_GSP_DMA_CTRL},
+  {"GSP.DMA_SRC_LO",GU_VRAM_BLOCK_GSP_DMA_SRC_LO},
+  {"GSP.DMA_SRC_HI",GU_VRAM_BLOCK_GSP_DMA_SRC_HI},
+  {"GSP.DMA_DEST",GU_VRAM_BLOCK_GSP_DMA_DEST},
+  {"GSP.DMA_MEM_OFF",GU_VRAM_BLOCK_GSP_DMA_MEM_OFF},
+  {"GSP.DMA_CMD",GU_VRAM_BLOCK_GSP_DMA_CMD},
+  {"GSP.BOOTVEC",GU_VRAM_BLOCK_GSP_BOOTVEC},
+  {"GSP.UCODE_ID",GU_VRAM_BLOCK_GSP_UCODE_ID},
+  {"GSP.ENGINE_MASK",GU_VRAM_BLOCK_GSP_ENGINE_MASK},
+  {"GSP.SIG_DMEM",GU_VRAM_BLOCK_GSP_SIG_DMEM},
+  {"GSP.BCR",GU_VRAM_BLOCK_GSP_BCR},
+  {"GSP.FBIF_TRANS",GU_VRAM_BLOCK_GSP_FBIF_TRANS},
+  {"GSP.FBIF_TRANS_24",GU_VRAM_BLOCK_GSP_FBIF_TRANS_24},
+  {"FEAT.SS0",GU_VRAM_BLOCK_FEAT_SS0},
+  {"FEAT.SS1",GU_VRAM_BLOCK_FEAT_SS1}
+};
+#define GU_VRAM_BLOCK_WRITE_COUNT (sizeof(VramWriteSet)/sizeof(VramWriteSet[0]))
+
+/* The writer reads these and never writes them; the probe reports them for
+ * context and keeps them out of the write-set digest. They are the transaction's
+ * other hazard: poll_us() and every read_bar()+inaccessible() pair return
+ * -EIO/-ENODEV on a refused read, so a NOT_ACCESSIBLE word here is where an
+ * actuating run stops - or would have stopped, if it got that far. HWCFG is the
+ * word falcon_reset() polls before its first write; RISCV is the halt word the
+ * falcon waits are built on; CHIP is BAR0+0, which the transaction copies into
+ * each engine's 0x84. tests/test_vram_block_probe.py derives the whole list from
+ * the writer's read_bar()/poll_us() sites and fails if this table drifts. */
+static const GU_VRAM_BLOCK_ROW VramReadContext[] = {
+  {"SEC2.HWCFG",GU_VRAM_BLOCK_CONTEXT_SEC2_HWCFG},
+  {"GSP.HWCFG",GU_VRAM_BLOCK_CONTEXT_GSP_HWCFG},
+  {"BAR0.CHIP",GU_VRAM_BLOCK_CONTEXT_CHIP},
+  {"FEAT.PLM",GU_VRAM_BLOCK_CONTEXT_FEAT_PLM},
+  {"FEAT.READOUT1",GU_VRAM_BLOCK_CONTEXT_FEAT_READOUT1},
+  {"SEC2.IRQSTAT",GU_VRAM_BLOCK_CONTEXT_SEC2_IRQSTAT},
+  {"GSP.IRQSTAT",GU_VRAM_BLOCK_CONTEXT_GSP_IRQSTAT},
+  {"SEC2.RM_OS",GU_VRAM_BLOCK_CONTEXT_SEC2_RM_OS},
+  {"GSP.RM_OS",GU_VRAM_BLOCK_CONTEXT_GSP_RM_OS},
+  {"SEC2.DEBUG",GU_VRAM_BLOCK_CONTEXT_SEC2_DEBUG},
+  {"GSP.DEBUG",GU_VRAM_BLOCK_CONTEXT_GSP_DEBUG},
+  {"SEC2.HWCFG2",GU_VRAM_BLOCK_CONTEXT_SEC2_HWCFG2},
+  {"GSP.HWCFG2",GU_VRAM_BLOCK_CONTEXT_GSP_HWCFG2},
+  {"SEC2.RISCV",GU_VRAM_BLOCK_CONTEXT_SEC2_RISCV},
+  {"GSP.RISCV",GU_VRAM_BLOCK_CONTEXT_GSP_RISCV},
+  {"GFW.PLM",GU_VRAM_BLOCK_CONTEXT_GFW_PLM},
+  {"GFW.BOOT",GU_VRAM_BLOCK_CONTEXT_GFW_BOOT},
+  {"BOOT.MEM_MB",GU_VRAM_BLOCK_CONTEXT_BOOT_MEM_MB},
+  {"FB.PLM_LOCK",GU_VRAM_BLOCK_CONTEXT_PLM_LOCK},
+  {"FB.WPR2_LO",GU_VRAM_BLOCK_CONTEXT_WPR2_LO},
+  {"FB.WPR2_HI",GU_VRAM_BLOCK_CONTEXT_WPR2_HI},
+  {"FB.BOOT_DESC_LO",GU_VRAM_BLOCK_CONTEXT_BOOT_DESC_LO},
+  {"FB.BOOT_DESC_HI",GU_VRAM_BLOCK_CONTEXT_BOOT_DESC_HI},
+  {"FB.VGA_CONFIG",GU_VRAM_BLOCK_CONTEXT_VGA_CONFIG}
+};
+#define GU_VRAM_BLOCK_CONTEXT_COUNT (sizeof(VramReadContext)/sizeof(VramReadContext[0]))
+
+/* The ROM window. Before the transaction writes anything it copies 1 MiB from
+ * BAR0 + 0x300000 and refuses a board whose image is not a PCI ROM naming this
+ * device: GuDiagnosticScan() and GuAd104Prepare() both call it, and
+ * unlock_transaction_fwsec() re-reads the same window. That refusal is a read,
+ * so this probe can make it - the same window, the same 1 KiB Mem.Read chunks
+ * GuCopyFromIo() uses (src/compat.c), and the same predicate
+ * GuPromImageMatchesDevice() applies (src/prom_identity.h).
+ *
+ * A host test compiles that predicate and GuVramRomMatches() together and drives
+ * them over the same buffers, so the two cannot drift. Nothing here is
+ * authenticated: a structural match says the ROM names this device, and the log
+ * says SIGNATURE_AUTHENTICATED=0 by omission of any such claim. */
+#define GU_VRAM_ROM_OFFSET 0x00300000U
+#define GU_VRAM_ROM_BYTES  1048576U
+#define GU_VRAM_ROM_CHUNK  1024U
+
+static UINT32 GuVramRomWord(const UINT8 *rom,UINTN at) {
+  return (UINT32)((UINT32)rom[at] | ((UINT32)rom[at+1U] << 8));
+}
+
+/* GuPromImageMatchesDevice() of src/prom_identity.h, in this image's types:
+ * signature set, PCIR offset from ROM+0x18, the four PCIR bytes, NVIDIA's vendor
+ * id and the live device id. Same order of comparisons, same bounds check. */
+static UINT32 GuVramRomMatches(const UINT8 *rom,UINTN bytes,UINT32 device) {
+  UINTN pcir;
+  UINT32 vendor,reported,signature;
+  if(!rom || bytes!=GU_VRAM_ROM_BYTES || device>0xffffU)return 0U;
+  signature=GuVramRomWord(rom,0U);
+  if(signature!=0xaa55U && signature!=0x4e56U && signature!=0xbb77U)return 0U;
+  pcir=(UINTN)GuVramRomWord(rom,0x18U);
+  if(pcir>bytes-0x16U)return 0U;
+  if(rom[pcir]!='P' || rom[pcir+1U]!='C' || rom[pcir+2U]!='I' || rom[pcir+3U]!='R')return 0U;
+  vendor=GuVramRomWord(rom,pcir+4U);
+  reported=GuVramRomWord(rom,pcir+6U);
+  return (vendor==0x10deU && reported==device)?1U:0U;
+}
+
+/* One line per card, or one refusal line and no ROM line. The header word is
+ * read first so an unmapped window costs one read instead of a megabyte of
+ * silent zeros, and every failing path names why.
+ *
+ * When this image also keeps a log, the same megabyte is written to a file
+ * beside it and the line that follows says which file and under which digest.
+ * The bytes are still read once: the save happens while the buffer that
+ * produced the digest is live. */
+static UINT32 ReportVramRom(EFI_BOOT_SERVICES *bs,EFI_PCI_IO_PROTOCOL *pci,
+                            const char *gpu,const GU_GPU_RECORD *target,
+                            UINT32 device) {
+  static const char digits[]="0123456789abcdef";
+  UINT32 header=0U,signature;
+  UINTN done=0U;
+  UINT8 *rom;
+  UINT8 digest[32];
+  char hex[65];
+  size_t k;
+  EFI_STATUS status;
+  if(!bs || !pci || !pci->Mem.Read)return 0U;
+  status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,GU_VRAM_ROM_OFFSET,1U,&header);
+  if(EFI_ERROR(status)) {
+    Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=PCI_IO_ERROR EFI_STATUS=%#llx NO_COPY=1 READ_ONLY=1\r\n",
+        gpu,(unsigned)(header & 0xffffU),(unsigned long long)status);
+    return 0U;
+  }
+  signature=header & 0xffffU;
+  if(signature!=0xaa55U && signature!=0x4e56U && signature!=0xbb77U) {
+    Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=NOT_A_ROM_HEADER NO_COPY=1 READ_ONLY=1\r\n",
+        gpu,(unsigned)signature);
+    return 0U;
+  }
+  status=bs->AllocatePool(EfiLoaderData,GU_VRAM_ROM_BYTES,(VOID **)&rom);
+  if(EFI_ERROR(status) || !rom) {
+    Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=ALLOC_FAILED EFI_STATUS=%#llx NO_COPY=1 READ_ONLY=1\r\n",
+        gpu,(unsigned)signature,(unsigned long long)status);
+    return 0U;
+  }
+  while(done<GU_VRAM_ROM_BYTES) {
+    UINTN chunk=GU_VRAM_ROM_BYTES-done<GU_VRAM_ROM_CHUNK?GU_VRAM_ROM_BYTES-done:GU_VRAM_ROM_CHUNK;
+    status=pci->Mem.Read(pci,EfiPciIoWidthUint8,0U,GU_VRAM_ROM_OFFSET+(UINT32)done,chunk,rom+done);
+    if(EFI_ERROR(status)) {
+      (VOID)bs->FreePool(rom);
+      Say("ROM_WINDOW_UNREADABLE GPU=%s BAR0_OFFSET=0x300000 SIGNATURE=0x%04x REASON=PCI_IO_ERROR EFI_STATUS=%#llx BYTES_READ=%u NO_COPY=1 READ_ONLY=1\r\n",
+          gpu,(unsigned)signature,(unsigned long long)status,(unsigned)done);
+      return 0U;
+    }
+    done+=chunk;
+  }
+  GuSha256(rom,(UINTN)GU_VRAM_ROM_BYTES,digest);
+  for(k=0;k<32;k++) {
+    hex[2*k]=digits[digest[k]>>4];
+    hex[2*k+1]=digits[digest[k]&15U];
+  }
+  hex[64]=0;
+  Say("VRAM_BLOCK_PROBE_ROM GPU=%s BAR0_OFFSET=0x300000 BYTES=%u SIGNATURE=0x%04x PCIR_OFFSET=0x%04x PCIR_VENDOR=0x%04x PCIR_DEVICE=0x%04x LIVE_DEVICE=0x%04x MATCH=%u SHA256=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+      gpu,(unsigned)GU_VRAM_ROM_BYTES,(unsigned)signature,
+      (unsigned)GuVramRomWord(rom,0x18U),
+      (unsigned)GuVramRomWord(rom,(UINTN)GuVramRomWord(rom,0x18U)+4U),
+      (unsigned)GuVramRomWord(rom,(UINTN)GuVramRomWord(rom,0x18U)+6U),
+      (unsigned)device,(unsigned)GuVramRomMatches(rom,GU_VRAM_ROM_BYTES,device),hex);
+#if defined(GU_TOPO_SAVE_LOG)
+  /* A separate line rather than a field on the line above: the structural
+   * readout has to stay readable by a verifier that knows nothing about
+   * files, and a capture that failed must not look like one that was never
+   * attempted. */
+  {
+    char file[GU_PROM_FILE_CHARS];
+    if(SavePromWindow(SelfImage,System,target,rom,(UINTN)GU_VRAM_ROM_BYTES,
+                      file,sizeof(file)))
+      Say("VRAM_BLOCK_PROBE_ROM_FILE GPU=%s BYTES=%u FILE=%s SHA256=%s ROLE=PARSE_OFFLINE READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+          gpu,(unsigned)GU_VRAM_ROM_BYTES,file,hex);
+    else
+      Say("VRAM_BLOCK_PROBE_ROM_FILE=UNAVAILABLE GPU=%s BYTES=%u REASON=FILE_NOT_WRITTEN NO_COPY=1 READ_ONLY=1\r\n",
+          gpu,(unsigned)GU_VRAM_ROM_BYTES);
+  }
+#else
+  (VOID)target;
+#endif
+  (VOID)bs->FreePool(rom);
+  return 1U;
+}
+
+/* The window the transaction reads to choose a packed signature: sixteen words,
+ * one per possible ucode id, at GU_FUSE_FWSEC_UCODE1. Read once per card,
+ * read-only, and reported word by word so an inaccessible word is a line rather
+ * than an absence - the transaction treats that shape as version zero, so
+ * "unreadable" and "version zero" are the same outcome there and must not look
+ * the same here.
+ *
+ * These reads are deliberately not added to the write-set counters: the ending
+ * line counts the transaction's write set and its read context, and this window
+ * is neither. It has its own summary per card. */
+static void ReportVramFuse(EFI_PCI_IO_PROTOCOL *pci,const char *gpu,UINT32 bus) {
+  UINT32 raw=0U,ucode_raw=0U,ucode_access=0U;
+  UINT32 read=0U,failed=0U,ucode_seen=0U;
+  unsigned i;
+  if(!pci || !pci->Mem.Read)return;
+  for(i=0U;i<GU_FUSE_FWSEC_WORDS;i++) {
+    UINT32 offset=GU_FUSE_FWSEC_UCODE1+(UINT32)i*GU_FUSE_FWSEC_STRIDE;
+    EFI_STATUS status;
+    raw=0U;
+    status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,offset,1U,&raw);
+    if(EFI_ERROR(status)) {
+      failed++;
+      Say("VRAM_BLOCK_PROBE_FUSE GPU=%s BDF=0000:%02x:00.0 OFFSET=%#x UCODE_ID=%u STATUS=UNAVAILABLE EFI_STATUS=%#llx NO_FALLBACK=1 READ_ONLY=1\r\n",
+          gpu,(unsigned)bus,(unsigned)offset,(unsigned)(i+1U),
+          (unsigned long long)status);
+      continue;
+    }
+    read++;
+    Say("VRAM_BLOCK_PROBE_FUSE GPU=%s BDF=0000:%02x:00.0 OFFSET=%#x UCODE_ID=%u RAW=%#010x VERSION=%u ACCESS=%s READ_ONLY=1\r\n",
+        gpu,(unsigned)bus,(unsigned)offset,(unsigned)(i+1U),(unsigned)raw,
+        (unsigned)GuVramFuseVersion(raw),
+        GuVramBlockAccessible(raw)?"STATE":"NOT_ACCESSIBLE");
+    if(offset==GU_FUSE_FWSEC_UCODE9) {
+      ucode_raw=raw;
+      ucode_access=GuVramBlockAccessible(raw);
+      ucode_seen=1U;
+    }
+  }
+  if(!read) {
+    Say("VRAM_BLOCK_PROBE_FUSE_WINDOW_UNREADABLE GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u FAILED=%u READ_ONLY=1\r\n",
+        gpu,(unsigned)bus,(unsigned)GU_FUSE_FWSEC_UCODE1,
+        (unsigned)GU_FUSE_FWSEC_WORDS,failed);
+    return;
+  }
+  /* UCODE9_UNREAD: the one word this run was actually after did not come back.
+   * UCODE9_VERSION is what the transaction would compute from the word, which is
+   * 0 when the shape is inaccessible - the same value as a fuse that says 0. */
+  if(ucode_seen)
+    Say("VRAM_BLOCK_PROBE_FUSE_END GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u READ=%u FAILED=%u UCODE9_OFFSET=%#x UCODE9_RAW=%#010x UCODE9_VERSION=%u UCODE9_ACCESS=%s UCODE9_UNREAD=0 READ_ONLY=1 NO_GPU_WRITES=1\r\n",
+        gpu,(unsigned)bus,(unsigned)GU_FUSE_FWSEC_UCODE1,
+        (unsigned)GU_FUSE_FWSEC_WORDS,read,failed,
+        (unsigned)GU_FUSE_FWSEC_UCODE9,(unsigned)ucode_raw,
+        (unsigned)GuVramFuseVersion(ucode_raw),
+        ucode_access?"STATE":"NOT_ACCESSIBLE");
+  else
+    Say("VRAM_BLOCK_PROBE_FUSE_END GPU=%s BDF=0000:%02x:00.0 BASE=%#x WORDS=%u READ=%u FAILED=%u UCODE9_OFFSET=%#x UCODE9_RAW=0x00000000 UCODE9_VERSION=0 UCODE9_ACCESS=UNKNOWN UCODE9_UNREAD=1 READ_ONLY=1 NO_GPU_WRITES=1\r\n",
+        gpu,(unsigned)bus,(unsigned)GU_FUSE_FWSEC_UCODE1,
+        (unsigned)GU_FUSE_FWSEC_WORDS,read,failed,
+        (unsigned)GU_FUSE_FWSEC_UCODE9);
+}
+
+static void ReportVramBlocks(int pci_ok) {
+  static const char digits[]="0123456789abcdef";
+  size_t i,j;
+  unsigned cards=0U,reads=0U,failed=0U,digests=0U;
+  unsigned observed=0U,refused=0U,roms=0U;
+  Say("VRAM_BLOCK_PROBE_BEGIN SOURCE=UNLOCK_610_WRITE_SET BLOCKS=%u CONTEXT=%u MODE=READ_ONLY READ_ONLY=1 NO_STOP=1 NO_DMA=1 NO_RESET=1 NO_UNLOCK=1 NO_FLR=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 NO_GPU_WRITES=1\r\n",
+      (unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
+      (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT);
+  if(!pci_ok || !GuMsiB850KnownRomDiagnosticHardware(&Snapshot)) {
+    Say("VRAM_BLOCK_PROBE STATUS=REFUSED REASON=PLATFORM_FINGERPRINT_NO_MATCH NO_GPU_READS=1 NO_GPU_WRITES=1\r\n");
+    return;
+  }
+  for(i=0;i<Snapshot.pci_count;i++) {
+    const GU_TOPO_PCI *node=&Snapshot.pci[i];
+    const GU_GPU_RECORD *id=&node->identity;
+    EFI_PCI_IO_PROTOCOL *pci=(EFI_PCI_IO_PROTOCOL *)id->pci;
+    unsigned ada,expected_bus,card_reads=0U,card_failed=0U;
+    unsigned card_observed=0U,card_refused=0U;
+    UINT8 words[GU_VRAM_BLOCK_WRITE_COUNT*4U];
+    UINT8 digest[32];
+    char hex[65];
+    int digest_complete=1;
+    if(!GuMsiB850IsOwnerNvidia(id))continue;
+    ada=(id->pci_id==0x268410deU);
+    expected_bus=ada?1U:4U;
+    if(id->segment!=0U || id->bus!=expected_bus ||
+       id->device!=0U || id->function!=0U ||
+       !node->openers_known || node->by_driver!=1U ||
+       !node->first_owner_agent || !pci || !pci->Mem.Read) {
+      Say("VRAM_BLOCK_PROBE GPU=%s STATUS=REFUSED REASON=PCI_OWNER_OR_BDF_MISMATCH NO_GPU_READS=1\r\n",
+          ada?"4090":"3080");
+      continue;
+    }
+    cards++;
+    for(j=0;j<GU_VRAM_BLOCK_WRITE_COUNT;j++) {
+      UINT32 raw=0U;
+      EFI_STATUS status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,
+                                      VramWriteSet[j].offset,1U,&raw);
+      if(EFI_ERROR(status)) {
+        card_failed++;
+        digest_complete=0;
+        words[4U*j]=0U;words[4U*j+1U]=0U;
+        words[4U*j+2U]=0U;words[4U*j+3U]=0U;
+        Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=UNAVAILABLE EFI_STATUS=%#llx NO_FALLBACK=1 READ_ONLY=1\r\n",
+            ada?"4090":"3080",expected_bus,
+            VramWriteSet[j].name,(unsigned)VramWriteSet[j].offset,
+            (unsigned long long)status);
+        continue;
+      }
+      card_reads++;
+      if(GuVramBlockAccessible(raw)) card_observed++; else card_refused++;
+      words[4U*j]=(UINT8)(raw & 0xffU);
+      words[4U*j+1U]=(UINT8)((raw>>8) & 0xffU);
+      words[4U*j+2U]=(UINT8)((raw>>16) & 0xffU);
+      words[4U*j+3U]=(UINT8)((raw>>24) & 0xffU);
+      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=WRITE STATUS=OBSERVED RAW=%#010x ACCESS=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",expected_bus,
+          VramWriteSet[j].name,(unsigned)VramWriteSet[j].offset,(unsigned)raw,
+          GuVramBlockAccessible(raw)?"STATE":"NOT_ACCESSIBLE");
+    }
+    for(j=0;j<GU_VRAM_BLOCK_CONTEXT_COUNT;j++) {
+      UINT32 raw=0U;
+      EFI_STATUS status=pci->Mem.Read(pci,EfiPciIoWidthUint32,0U,
+                                      VramReadContext[j].offset,1U,&raw);
+      if(EFI_ERROR(status)) {
+        card_failed++;
+        Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=READ_CONTEXT STATUS=UNAVAILABLE EFI_STATUS=%#llx NO_FALLBACK=1 READ_ONLY=1\r\n",
+            ada?"4090":"3080",expected_bus,
+            VramReadContext[j].name,(unsigned)VramReadContext[j].offset,
+            (unsigned long long)status);
+        continue;
+      }
+      card_reads++;
+      if(GuVramBlockAccessible(raw)) card_observed++; else card_refused++;
+      Say("VRAM_BLOCK_PROBE GPU=%s BDF=0000:%02x:00.0 BLOCK=%s BAR0_OFFSET=%#x ROLE=READ_CONTEXT STATUS=OBSERVED RAW=%#010x ACCESS=%s READ_ONLY=1 ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",expected_bus,
+          VramReadContext[j].name,(unsigned)VramReadContext[j].offset,
+          (unsigned)raw,GuVramBlockAccessible(raw)?"STATE":"NOT_ACCESSIBLE");
+    }
+    /* One digest over the forty-two write-set words in table order, so a second
+     * run of this same image after actuation shows which block moved. It is a
+     * change detector, not a signature: nothing here is authenticated. */
+    if(digest_complete) {
+      size_t k;
+      GuSha256(words,(UINTN)sizeof(words),digest);
+      for(k=0;k<32;k++) {
+        hex[2*k]=digits[digest[k]>>4];
+        hex[2*k+1]=digits[digest[k]&15U];
+      }
+      hex[64]=0;
+      digests++;
+      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u OBSERVED=%u NOT_ACCESSIBLE=%u WRITE_SET_SHA256=%s DIGEST_CV=CHANGE_DETECTOR_ONLY ACCEPTANCE=UNVERIFIED\r\n",
+          ada?"4090":"3080",card_reads,card_failed,card_observed,card_refused,hex);
+    } else {
+      Say("VRAM_BLOCK_PROBE_CARD GPU=%s READ=%u FAILED=%u OBSERVED=%u NOT_ACCESSIBLE=%u WRITE_SET_SHA256=UNAVAILABLE INCOMPLETE_READ_SET=1\r\n",
+          ada?"4090":"3080",card_reads,card_failed,card_observed,card_refused);
+    }
+    /* A word can be addressable and still refused by the engine: the PCI I/O
+     * read succeeds and returns the transaction's own inaccessible() shape.
+     * Say so once per card rather than leaving the reader to spot a constant
+     * in eighty-four RAW fields. The cause is not inferred here. */
+    if(card_refused)
+      Say("VRAM_BLOCK_PROBE_REFUSED GPU=%s WORDS=%u OF=%u SIGNATURE=0xbadf0000 ACCESS=NOT_ACCESSIBLE MEANING=THE_TRANSACTION_TREATS_THIS_AS_INACCESSIBLE CAUSE=UNKNOWN READ_ONLY=1\r\n",
+          ada?"4090":"3080",card_refused,card_reads);
+    /* The other thing the transaction reads before it writes: the ROM window,
+     * and the structure check that decides whether the board is even a
+     * candidate. Read-only, one megabyte, once per card.
+     *
+     * pci_id is vendor in the low half and device in the high half - the same
+     * encoding the PCI[] line prints as %04x:%04x and this file tests with
+     * `pci_id==0x268410deU`. The first build of this reader passed the vendor
+     * half (`pci_id & 0xffff`), so -0008 reported LIVE_DEVICE=0x10de and
+     * MATCH=0 for two ROMs that name their cards exactly. The comparison is
+     * only as good as the field it is handed. */
+    roms+=ReportVramRom(System?System->BootServices:NULL,pci,
+                        ada?"4090":"3080",id,(UINT32)(id->pci_id>>16U));
+    /* The last word the transaction reads before its first write: which packed
+     * signature this board's fuse selects. Read-only, one window per card. */
+    ReportVramFuse(pci,ada?"4090":"3080",expected_bus);
+    reads+=card_reads;
+    failed+=card_failed;
+    observed+=card_observed;
+    refused+=card_refused;
+  }
+  /* OBSERVED and NOT_ACCESSIBLE are appended after the verdict fields on
+   * purpose: a log captured before these counters existed still satisfies the
+   * gate's closing token, and the counters are still what the operator reads. */
+  Say("VRAM_BLOCK_PROBE_END CARDS=%u BLOCKS=%u CONTEXT=%u EXPECTED_READS=%u READS_SUCCEEDED=%u READS_FAILED=%u DIGESTS=%u NO_GPU_WRITES=1 SECURITY_ACCEPTANCE=UNVERIFIED OBSERVED=%u NOT_ACCESSIBLE=%u ROMS=%u\r\n",
+      cards,(unsigned)GU_VRAM_BLOCK_WRITE_COUNT,
+      (unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT,
+      cards*((unsigned)GU_VRAM_BLOCK_WRITE_COUNT+(unsigned)GU_VRAM_BLOCK_CONTEXT_COUNT),
+      reads,failed,digests,observed,refused,roms);
 }
 #endif
 
@@ -942,6 +1666,68 @@ static int PathCopy(const EFI_DEVICE_PATH_PROTOCOL *source, GU_TOPO_PATH *out) {
   return 0;
 }
 
+#ifdef GU_TOPO_SAVE_LOG
+/* Supplemental raw boot-variable evidence. Keep this separate from the
+ * topology verdict and never link the variable mutation modules here. */
+static EFI_STATUS ObserveBootVariable(EFI_SYSTEM_TABLE *table,CHAR16 *name,
+                                      EFI_GUID *guid,const char *label,
+                                      UINT8 *data,UINTN capacity,UINTN *size) {
+  UINT32 attrs=0;
+  *size=capacity;
+  EFI_STATUS status=table->RuntimeServices&&table->RuntimeServices->GetVariable?
+      table->RuntimeServices->GetVariable(name,guid,&attrs,size,data):EFI_UNSUPPORTED;
+  Say("BOOT_VARIABLE NAME=%s STATUS=%#llx BYTES=%zu ATTRS=%#x READ_ONLY=1\r\n",
+      label,(unsigned long long)status,(size_t)*size,(unsigned)attrs);
+  if(status!=EFI_SUCCESS)return status;
+  if(*size>capacity)return EFI_COMPROMISED_DATA;
+  static const char digits[]="0123456789abcdef";
+  for(UINTN at=0;at<*size;) {
+    char hex[97];
+    UINTN count=*size-at;
+    if(count>48U)count=48U;
+    for(UINTN i=0;i<count;i++) {
+      hex[2*i]=digits[data[at+i]>>4];
+      hex[2*i+1]=digits[data[at+i]&15U];
+    }
+    hex[2*count]=0;
+    Say("BOOT_VARIABLE_DATA NAME=%s OFFSET=%zu HEX=%s\r\n",label,(size_t)at,hex);
+    at+=count;
+  }
+  return EFI_SUCCESS;
+}
+
+static void ReportExperimentBootVariables(EFI_SYSTEM_TABLE *table) {
+  /* Same variable identities as gpu_selection.c and boot_state.c.
+   * Report bytes, not a second implementation of their admission parsers. */
+  EFI_GUID targets={0x5c1f2b40,0x8e21,0x4ef7,{0x9d,0x2b,0x7a,0x11,0x3c,0x5e,0x84,0x02}};
+  EFI_GUID state={0x2a7d54c1,0x5b3e,0x4a19,{0x8f,0x60,0x9d,0x21,0xc4,0xb7,0xe8,0x03}};
+  UINT8 data[4096],order[256];
+  UINTN bytes=0,order_bytes=0;
+  int complete=1;
+  EFI_STATUS s=ObserveBootVariable(table,L"GuTargets",&targets,"GuTargets",data,sizeof(data),&bytes);
+  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND)complete=0;
+  s=ObserveBootVariable(table,L"GuBootState",&state,"GuBootState",data,sizeof(data),&bytes);
+  if(s!=EFI_SUCCESS&&s!=EFI_NOT_FOUND)complete=0;
+  s=ObserveBootVariable(table,L"DriverOrder",&GlobalGuid,"DriverOrder",order,sizeof(order),&order_bytes);
+  if(s==EFI_SUCCESS&&!(order_bytes%2U)&&order_bytes<=sizeof(order)) {
+    static const char digits[]="0123456789ABCDEF";
+    for(UINTN at=0;at<order_bytes;at+=2U) {
+      UINTN slot=(UINTN)order[at]|((UINTN)order[at+1U]<<8);
+      CHAR16 name[]=L"Driver0000";
+      char label[]="Driver0000";
+      for(UINTN i=0;i<4U;i++) {
+        char digit=digits[(slot>>(4U*i))&15U];
+        name[9U-i]=(CHAR16)digit;label[9U-i]=digit;
+      }
+      s=ObserveBootVariable(table,name,&GlobalGuid,label,data,1024U,&bytes);
+      if(s!=EFI_SUCCESS)complete=0;
+    }
+  } else if(s!=EFI_NOT_FOUND)complete=0;
+  Say("EXPERIMENT_BOOT_VARIABLES_CAPTURE=%s OBSERVATION_ONLY=1 NVRAM_WRITES=0\r\n",
+      complete?"COMPLETE":"INCOMPLETE");
+}
+#endif
+
 /* Configured ConOut and ErrOut are separate UEFI variables. Neither is
  * interchangeable with their *Dev inventories of possible output devices. */
 static int ReadConfiguredConsole(EFI_SYSTEM_TABLE *table, const CHAR16 *name,
@@ -1158,6 +1944,7 @@ static int ReadPci(EFI_BOOT_SERVICES *bs, EFI_HANDLE h, GU_TOPO_PCI *node) {
   node->identity.pci_id=cfg[0];node->identity.subsystem_id=cfg[11];
   node->identity.class_code=(UINT16)(cfg[2]>>16);
   node->bridge=node->identity.class_code==0x0604;
+  node->link_status=GuTopoReadPcieLink(cfg,&node->link);
   if(node->bridge) {
     node->primary=(UINT8)cfg[0x18/4];
     node->secondary=(UINT8)(cfg[0x18/4]>>8);
@@ -1285,6 +2072,22 @@ static void ReportPciEvidence(EFI_BOOT_SERVICES *bs) {
       (unsigned)Supplemental.first_failure_stage,
       (size_t)Supplemental.first_failure_index,
       (unsigned long long)Supplemental.first_failure_status);
+  /* A UEFI warning is a success code without confirmed completion, and an
+   * aliased or repeated pool reference is not a second owned buffer. Both are
+   * reported instead of being folded into COMPLETE. */
+  Say("PCI_OBS_CLASSIFICATION WARNINGS=%zu FIRST_WARN_STAGE=%u FIRST_WARN_STATUS=%#llx UNCERTAIN_BUFFERS=%zu ALIASES=%zu DUPLICATES=%zu\r\n",
+      (size_t)Supplemental.warnings,(unsigned)Supplemental.first_warning_stage,
+      (unsigned long long)Supplemental.first_warning_status,
+      (size_t)Supplemental.uncertain_pool_count,
+      (size_t)Supplemental.uncertain_alias,
+      (size_t)Supplemental.uncertain_duplicate);
+  for(i=0;i<Supplemental.uncertain_pool_count;i++)
+    Say("PCI_OBS_POOL_UNCERTAIN[%zu] STAGE=%u INDEX=%zu ADDRESS=%p BYTES=%zu STATUS=%#llx NOT_FREED=1\r\n",
+        (size_t)i,(unsigned)Supplemental.uncertain_pool[i].stage,
+        (size_t)Supplemental.uncertain_pool[i].index,
+        Supplemental.uncertain_pool[i].address,
+        (size_t)Supplemental.uncertain_pool[i].bytes,
+        (unsigned long long)Supplemental.uncertain_pool[i].status);
   for(i=0;i<Supplemental.record_count;i++) {
     const GU_PCI_OBS_RECORD *p=&Supplemental.records[i];
     UINT32 id=p->config[0];
@@ -1834,6 +2637,273 @@ static void ReportIndependentGopGraph(EFI_BOOT_SERVICES *bs) {
       unresolved?"PARTIAL_OR_UNKNOWN":"OBSERVED_ONLY");
 }
 
+/* A GOP handle may also expose device-local SimpleTextOut.
+ * OpenProtocolInformation identifies consumers, not a protocol installer.
+ * A single GOP BY_DRIVER agent is a candidate graphics-console provider,
+ * not proof it installed SimpleTextOut. These observations never bind drivers. */
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+#define GU_TEXT_CYCLE_LIMIT 16U
+typedef struct {
+  size_t gop_index,pci_index;
+  EFI_GRAPHICS_OUTPUT_PROTOCOL *gop;
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text;
+  EFI_HANDLE driver_agent;
+} GU_DIRECT_TEXT_CANDIDATE;
+static void GopTextHex(CHAR16 *out,size_t offset,size_t digits,UINTN value) {
+  static const CHAR16 digits_hex[]=L"0123456789ABCDEF";
+  size_t k;
+  for(k=0;k<digits;k++)
+    out[offset+k]=digits_hex[(value>>((digits-1U-k)*4U))&15U];
+}
+#endif
+
+static void ReportGopTextEndpoints(EFI_BOOT_SERVICES *bs) {
+  size_t i,interfaces=0,driver_images=0;
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+  GU_DIRECT_TEXT_CANDIDATE candidates[GU_TEXT_CYCLE_LIMIT];
+  size_t candidate_count=0,attempted=0,api_success=0;
+  EFI_HANDLE con_handle=System->ConsoleOutHandle;
+  EFI_HANDLE err_handle=System->StandardErrorHandle;
+  EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *con=System->ConOut,*err=System->StdErr;
+  memset(candidates,0,sizeof(candidates));
+#endif
+  Say("GOP_TEXT_INVENTORY_BEGIN GOP_COUNT=%zu SOURCE=GOP_HANDLE "
+      "PROTOCOL_INSTALLER_NOT_EXPOSED=1 NO_STOP=1\r\n",Snapshot.gop_count);
+  if(!bs||!bs->HandleProtocol||!bs->OpenProtocolInformation||
+     !bs->FreePool||ObservationPoolFault) {
+    Say("GOP_TEXT_INVENTORY=UNAVAILABLE SERVICES_OR_POOL_UNCERTAIN=1\r\n");
+    return;
+  }
+  for(i=0;i<Snapshot.gop_count&&!ObservationPoolFault;i++) {
+    const GU_TOPO_GOP *r=&Snapshot.gop[i];
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text=NULL;
+    EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+    EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *opens=NULL;
+    EFI_STATUS gs,ts,ps,os,freed;
+    EFI_HANDLE agent=NULL,image=NULL;
+    UINTN count=0,j;
+    size_t owner_count=0,owner=0,driver_count=0;
+    int same_path=0,driver_image_known=0;
+    gs=bs->HandleProtocol(r->handle,&GopGuid,(VOID **)&gop);
+    ts=bs->HandleProtocol(r->handle,&TextOutGuid,(VOID **)&text);
+    ps=bs->HandleProtocol(r->handle,&PathGuid,(VOID **)&path);
+    if(ps==EFI_SUCCESS&&path) {
+      GU_TOPO_PATH current;
+      same_path=PathCopy(path,&current)&&
+          current.length==r->path.length&&
+          !memcmp(current.bytes,r->path.bytes,current.length);
+    }
+    for(j=0;j<Snapshot.pci_count;j++) {
+      const GU_TOPO_PCI *p=&Snapshot.pci[j];
+      if((p->identity.class_code&0xff00U)!=0x0300U||
+         !GuTopoPathOnController(&p->path,&r->path))continue;
+      owner=j;owner_count++;
+    }
+    Say("GOP_TEXT_ENDPOINT[%zu] HANDLE=%p GOP_STATUS=%#llx "
+        "GOP_SAME=%u PATH_STATUS=%#llx PATH_SAME=%u "
+        "TEXT_STATUS=%#llx TEXT_PRESENT=%u TEXT_IFACE=%p "
+        "DISPLAY_OWNERS=%zu SYSTEM_CONOUT_ALIAS=%u\r\n",
+        i,r->handle,(unsigned long long)gs,
+        (unsigned)(gs==EFI_SUCCESS&&gop==r->protocol),
+        (unsigned long long)ps,(unsigned)same_path,
+        (unsigned long long)ts,(unsigned)(ts==EFI_SUCCESS&&!!text),
+        text,owner_count,(unsigned)(text&&text==System->ConOut));
+    if(owner_count==1U) {
+      const GU_GPU_RECORD *id=&Snapshot.pci[owner].identity;
+      Say("GOP_TEXT_OWNER[%zu] PCI_INDEX=%zu BDF=%04x:%02x:%02x.%u "
+          "VENDOR=%04x DEVICE=%04x\r\n",i,owner,
+          (unsigned)id->segment,(unsigned)id->bus,
+          (unsigned)id->device,(unsigned)id->function,
+          (unsigned)(id->pci_id&0xffffU),(unsigned)(id->pci_id>>16));
+    }
+    os=ObservationOpeners(bs,r->handle,&GopGuid,&opens,&count,NULL,
+                          "gop-text-driver");
+    if(os==EFI_SUCCESS&&count<=256U&&(!count||opens)) {
+      for(j=0;j<count;j++) {
+        const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&opens[j];
+        if(e->Attributes!=EFI_OPEN_PROTOCOL_BY_DRIVER)continue;
+        driver_count++;
+        if(driver_count==1U&&e->OpenCount==1U)agent=e->AgentHandle;
+      }
+      if(driver_count==1U&&agent) {
+        EFI_DRIVER_BINDING_PROTOCOL *binding=NULL;
+        EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
+        EFI_STATUS binding_status=bs->HandleProtocol(
+            agent,&DriverBindingGuid,(VOID **)&binding);
+        EFI_STATUS loaded_status=EFI_NOT_READY;
+        if(binding_status==EFI_SUCCESS&&binding&&binding->ImageHandle)
+          loaded_status=bs->HandleProtocol(
+              binding->ImageHandle,&LoadedGuid,(VOID **)&loaded);
+        if(loaded_status==EFI_SUCCESS&&loaded&&binding&&
+           binding->ImageHandle) {
+          image=binding->ImageHandle;driver_image_known=1;driver_images++;
+          Say("GOP_TEXT_DRIVER_IMAGE[%zu] AGENT=%p IMAGE=%p "
+              "BYTES=%llu BINDING_HANDLE=%p "
+              "TEXTOUT_INSTALLER_UNPROVEN=1\r\n",i,agent,image,
+              (unsigned long long)loaded->ImageSize,
+              binding->DriverBindingHandle);
+          if(loaded->FilePath) {
+            GU_TOPO_PATH file_path;
+            if(PathCopy(loaded->FilePath,&file_path)) {
+              Say("GOP_TEXT_DRIVER_PATH[%zu] BYTES=%zu\r\n",i,file_path.length);
+              SayPath("GOP_TEXT_DRIVER_PATH",i,&file_path);
+            }
+          }
+        } else Say("GOP_TEXT_DRIVER_IMAGE[%zu] AGENT=%p "
+                   "BINDING_STATUS=%#llx IMAGE_STATUS=%#llx UNRESOLVED=1\r\n",
+                   i,agent,(unsigned long long)binding_status,
+                   (unsigned long long)loaded_status);
+      }
+    }
+    freed=ObservationPoolRelease(bs,opens,"gop-text-driver");
+    Say("GOP_TEXT_DRIVER[%zu] GOP_DRIVER_EDGES=%zu AGENT=%p "
+        "IMAGE=%p OPEN_STATUS=%#llx OPEN_COUNT=%zu "
+        "FREE_STATUS=%#llx DRIVER_IMAGE_KNOWN=%u "
+        "TEXTOUT_INSTALLER_UNPROVEN=1\r\n",
+        i,driver_count,agent,image,(unsigned long long)os,
+        (size_t)count,(unsigned long long)freed,
+        (unsigned)driver_image_known);
+    if(gs!=EFI_SUCCESS||gop!=r->protocol||!same_path||
+       owner_count!=1U||ts!=EFI_SUCCESS||!text||
+       !text->Mode||!text->OutputString||!driver_image_known||
+       os!=EFI_SUCCESS||count>256U||freed!=EFI_SUCCESS||
+       ObservationPoolFault)continue;
+    interfaces++;
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+    if(Snapshot.gop_count<=GU_TEXT_CYCLE_LIMIT&&
+       candidate_count<GU_TEXT_CYCLE_LIMIT)
+      candidates[candidate_count++]=(GU_DIRECT_TEXT_CANDIDATE){i,owner,gop,text,agent};
+#endif
+  }
+  Say("GOP_TEXT_INVENTORY_END GOP_COUNT=%zu VERIFIED_INTERFACES=%zu "
+      "GOP_DRIVER_IMAGES=%zu INSTALLER_NOT_PROVEN=1 "
+      "NO_DRIVER_CONNECT=1 NO_STOP=1\r\n",
+      Snapshot.gop_count,interfaces,driver_images);
+#ifdef GU_TOPO_GOP_TEXT_CYCLE
+  Say("GOP_TEXT_CYCLE_BEGIN CANDIDATES=%zu DISPLAY_TEXT_WRITE=1 "
+      "NO_DRIVER_CONNECT=1 NO_SET_MODE=1 NO_NVRAM_WRITE=1\r\n",
+      candidate_count);
+  if(ObservationPoolFault||!bs->Stall||
+     Snapshot.gop_count>GU_TEXT_CYCLE_LIMIT) {
+    Say("GOP_TEXT_CYCLE=SKIPPED POOL_UNCERTAIN=%u STALL_PRESENT=%u "
+        "COUNT_WITHIN_LIMIT=%u MAX_GOPS=%u\r\n",
+        (unsigned)ObservationPoolFault,(unsigned)!!bs->Stall,
+        (unsigned)(Snapshot.gop_count<=GU_TEXT_CYCLE_LIMIT),
+        (unsigned)GU_TEXT_CYCLE_LIMIT);
+    return;
+  }
+  for(i=0;i<candidate_count;i++) {
+    const GU_DIRECT_TEXT_CANDIDATE *candidate=&candidates[i];
+    const GU_TOPO_GOP *r=&Snapshot.gop[candidate->gop_index];
+    const GU_GPU_RECORD *id=&Snapshot.pci[candidate->pci_index].identity;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=NULL;
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *text=NULL;
+    EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+    EFI_STATUS gs,ts,ps,call,stalled;
+    size_t j,duplicates=0;
+    CHAR16 message[]=L"\r\nGOP 000 PCI 0000:00:00.0 DIRECT TEXT TEST\r\n";
+    GU_TOPO_PATH current_path;
+    for(j=0;j<candidate_count;j++)
+      if(i!=j&&candidates[j].text==candidate->text)duplicates++;
+    if(duplicates||
+       (candidate->text==con&&r->handle!=con_handle)||
+       (candidate->text==err&&r->handle!=err_handle)) {
+      Say("GOP_TEXT_CYCLE[%zu] STATUS=SKIPPED "
+          "REASON=SHARED_OR_VIRTUAL_TEXT ALIASES=%zu\r\n",
+          candidate->gop_index,duplicates);
+      continue;
+    }
+    if(System->ConsoleOutHandle!=con_handle||
+       System->StandardErrorHandle!=err_handle||
+       System->ConOut!=con||System->StdErr!=err) {
+      Say("GOP_TEXT_CYCLE[%zu] STATUS=ABORTED GLOBAL_CONSOLE_DRIFT=1\r\n",
+          candidate->gop_index);
+      break;
+    }
+    gs=bs->HandleProtocol(r->handle,&GopGuid,(VOID **)&gop);
+    ts=bs->HandleProtocol(r->handle,&TextOutGuid,(VOID **)&text);
+    ps=bs->HandleProtocol(r->handle,&PathGuid,(VOID **)&path);
+    if(gs!=EFI_SUCCESS||ts!=EFI_SUCCESS||ps!=EFI_SUCCESS||
+       gop!=candidate->gop||text!=candidate->text||!text||
+       !text->Mode||!text->OutputString||!path||!PathCopy(path,&current_path)||
+       current_path.length!=r->path.length||
+       memcmp(current_path.bytes,r->path.bytes,current_path.length)) {
+      Say("GOP_TEXT_CYCLE[%zu] STATUS=SKIPPED "
+          "REASON=HANDLE_PROTOCOL_OR_PATH_DRIFT GOP=%#llx "
+          "TEXT=%#llx PATH=%#llx\r\n",
+          candidate->gop_index,(unsigned long long)gs,
+          (unsigned long long)ts,(unsigned long long)ps);
+      continue;
+    }
+    /* Re-read the open graph immediately before a firmware text callback.
+     * A replacement console driver invalidates the saved admission. */
+    {
+      EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *live_opens=NULL;
+      EFI_STATUS open_status,free_status;
+      UINTN open_count=0,k,driver_count=0;
+      EFI_HANDLE driver_agent=NULL;
+      open_status=ObservationOpeners(bs,r->handle,&GopGuid,&live_opens,
+                                    &open_count,NULL,"gop-text-cycle-recheck");
+      if(open_status==EFI_SUCCESS&&open_count<=256U&&
+         (!open_count||live_opens)) {
+        for(k=0;k<open_count;k++) {
+          const EFI_OPEN_PROTOCOL_INFORMATION_ENTRY *e=&live_opens[k];
+          if(e->Attributes!=EFI_OPEN_PROTOCOL_BY_DRIVER)continue;
+          driver_count++;
+          if(driver_count==1U&&e->OpenCount==1U)
+            driver_agent=e->AgentHandle;
+        }
+      }
+      free_status=ObservationPoolRelease(bs,live_opens,
+                                         "gop-text-cycle-recheck");
+      if(open_status!=EFI_SUCCESS||open_count>256U||
+         driver_count!=1U||driver_agent!=candidate->driver_agent||
+         free_status!=EFI_SUCCESS||ObservationPoolFault) {
+        Say("GOP_TEXT_CYCLE[%zu] STATUS=SKIPPED REASON=DRIVER_GRAPH_DRIFT "
+            "OPEN_STATUS=%#llx OPEN_COUNT=%zu FREE_STATUS=%#llx\r\n",
+            candidate->gop_index,(unsigned long long)open_status,
+            (size_t)open_count,(unsigned long long)free_status);
+        continue;
+      }
+    }
+    GopTextHex(message,6U,3U,candidate->gop_index);
+    GopTextHex(message,14U,4U,id->segment);
+    GopTextHex(message,19U,2U,id->bus);
+    GopTextHex(message,22U,2U,id->device);
+    GopTextHex(message,25U,1U,id->function);
+    attempted++;
+    call=text->OutputString(text,message);
+    if(call==EFI_SUCCESS)api_success++;
+    Say("GOP_TEXT_CYCLE[%zu] PCI=%04x:%02x:%02x.%u "
+        "DIRECT_TEXTOUT_STATUS=%#llx SUCCESS=%u "
+        "PHYSICAL_PIXELS_VERIFIED=0 GLOBAL_CONOUT_UNCHANGED=%u\r\n",
+        candidate->gop_index,(unsigned)id->segment,(unsigned)id->bus,
+        (unsigned)id->device,(unsigned)id->function,
+        (unsigned long long)call,(unsigned)(call==EFI_SUCCESS),
+        (unsigned)(System->ConsoleOutHandle==con_handle&&
+                   System->StandardErrorHandle==err_handle&&
+                   System->ConOut==con&&System->StdErr==err));
+    if(System->ConsoleOutHandle!=con_handle||
+       System->StandardErrorHandle!=err_handle||
+       System->ConOut!=con||System->StdErr!=err)break;
+    stalled=bs->Stall(2000000U);
+    if(stalled!=EFI_SUCCESS) {
+      Say("GOP_TEXT_CYCLE[%zu] STALL_STATUS=%#llx NEXT_GOP_SKIPPED=1\r\n",
+          candidate->gop_index,(unsigned long long)stalled);
+      break;
+    }
+  }
+  Say("GOP_TEXT_CYCLE_END ATTEMPTED=%zu API_SUCCEEDED=%zu "
+      "VISIBLE_PIXELS_VERIFIED=0 GLOBAL_CONOUT_UNCHANGED=%u "
+      "NO_STOP=1 NO_DRIVER_CONNECT=1\r\n",
+      attempted,api_success,
+      (unsigned)(System->ConsoleOutHandle==con_handle&&
+                 System->StandardErrorHandle==err_handle&&
+                 System->ConOut==con&&System->StdErr==err));
+#endif
+}
+
 /* Capture one complete boot-local GOP inventory. Publish only after
  * every identity and path is valid and the handle buffer is released. */
 static int CaptureGopRecords(EFI_BOOT_SERVICES *bs, GU_TOPO_GOP **out,
@@ -1934,105 +3004,6 @@ static int RevalidateGop(EFI_BOOT_SERVICES *bs) {
   return okay;
 }
 
-#ifdef GU_TOPO_SAVE_LOG
-/* Opt-in diagnostic file on the app's own EFI volume. Never overwrite an
- * earlier capture. The ONLY intended persistent mutation is this new file. */
-/* A failed file ownership operation must not allow another log attempt
- * in this diagnostic image. Independently confirmed references still close. */
-static int LogFileFault;
-
-static EFI_STATUS LogOpenResult(EFI_STATUS status,EFI_FILE_PROTOCOL **out,
-                                const char *stage) {
-  if(status==EFI_SUCCESS)return *out?EFI_SUCCESS:EFI_DEVICE_ERROR;
-  if(*out) {
-    LogFileFault=1;
-    Say("LOG_OPEN_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
-        stage,(VOID *)*out,(unsigned long long)status);
-    *out=NULL;
-    return EFI_DEVICE_ERROR;
-  }
-  return EFI_ERROR(status)?status:EFI_DEVICE_ERROR;
-}
-
-static EFI_STATUS CloseLogFile(EFI_FILE_PROTOCOL **out,const char *stage) {
-  EFI_FILE_PROTOCOL *file=*out;
-  EFI_STATUS status;
-  *out=NULL;
-  if(!file)return EFI_SUCCESS;
-  status=file->Close?file->Close(file):EFI_UNSUPPORTED;
-  if(status!=EFI_SUCCESS) {
-    LogFileFault=1;
-    Say("LOG_CLOSE_UNCERTAIN STAGE=%s ADDRESS=%p STATUS=%#llx\r\n",
-        stage,(VOID *)file,(unsigned long long)status);
-  }
-  return status;
-}
-
-static EFI_STATUS SaveLog(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
-  EFI_LOADED_IMAGE_PROTOCOL *li=NULL;
-  EFI_SIMPLE_FILE_SYSTEM_PROTOCOL *fs=NULL;
-  EFI_FILE_PROTOCOL *root=NULL,*file=NULL,*prior=NULL;
-  EFI_STATUS s,closed;
-  UINTN bytes,attempt,chars=0;
-  CHAR16 name[]=L"\\GPU-TOPOLOGY-DIAGNOSTIC-0000.TXT";
-  if(LogFileFault)return EFI_DEVICE_ERROR;
-  if(LogOverflow || !LogUsed)return EFI_BAD_BUFFER_SIZE;
-  s=table->BootServices->HandleProtocol(image,&LoadedGuid,(VOID **)&li);
-  if(s!=EFI_SUCCESS||!li)return EFI_NOT_FOUND;
-  s=table->BootServices->HandleProtocol(li->DeviceHandle,&FsGuid,(VOID **)&fs);
-  if(s!=EFI_SUCCESS||!fs||!fs->OpenVolume)return EFI_UNSUPPORTED;
-  s=fs->OpenVolume(fs,&root);
-  s=LogOpenResult(s,&root,"volume");
-  if(s!=EFI_SUCCESS)return s;
-  if(!root->Open||!root->Close){s=EFI_UNSUPPORTED;goto finish;}
-  /* Preserve the existing non-overwriting numbered capture policy. */
-  while(name[chars])chars++;
-  for(attempt=0;attempt<10000;attempt++) {
-    name[chars-8]=(CHAR16)('0'+attempt/1000);
-    name[chars-7]=(CHAR16)('0'+(attempt/100)%10);
-    name[chars-6]=(CHAR16)('0'+(attempt/10)%10);
-    name[chars-5]=(CHAR16)('0'+attempt%10);
-    s=root->Open(root,&prior,name,EFI_FILE_MODE_READ,0);
-    s=LogOpenResult(s,&prior,"prior");
-    if(s==EFI_SUCCESS) {
-      if(prior==root){
-        LogFileFault=1;
-        Say("LOG_OPEN_ALIAS STAGE=prior ADDRESS=%p\r\n",(VOID *)prior);
-        prior=NULL;s=EFI_COMPROMISED_DATA;goto finish;
-      }
-      s=CloseLogFile(&prior,"prior");
-      if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;goto finish;}
-      continue;
-    }
-    if(s!=EFI_NOT_FOUND)goto finish;
-    s=root->Open(root,&file,name,
-                 EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
-    s=LogOpenResult(s,&file,"create");
-    if(s!=EFI_SUCCESS)goto finish;
-    if(file==root){
-      LogFileFault=1;
-      Say("LOG_OPEN_ALIAS STAGE=create ADDRESS=%p\r\n",(VOID *)file);
-      file=NULL;s=EFI_COMPROMISED_DATA;goto finish;
-    }
-    if(!file->Write||!file->Close){s=EFI_UNSUPPORTED;goto finish;}
-    Say("LOG_FILE=\\GPU-TOPOLOGY-DIAGNOSTIC-%04u.TXT\r\n",(unsigned)attempt);
-    break;
-  }
-  if(attempt==10000){s=EFI_VOLUME_FULL;goto finish;}
-  if(LogOverflow){s=EFI_BAD_BUFFER_SIZE;goto finish;}
-  bytes=(UINTN)LogUsed;
-  s=file->Write(file,&bytes,LogBytes);
-  if(s==EFI_SUCCESS && bytes!=(UINTN)LogUsed)s=EFI_DEVICE_ERROR;
-  if(s==EFI_SUCCESS && (!file->Flush || file->Flush(file)!=EFI_SUCCESS))s=EFI_DEVICE_ERROR;
-finish:
-  closed=CloseLogFile(&file,"file");
-  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
-  closed=CloseLogFile(&root,"volume");
-  if(closed!=EFI_SUCCESS&&s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;
-  /* UEFI warnings are not confirmed completion of the durable log. */
-  return s==EFI_SUCCESS?EFI_SUCCESS:EFI_ERROR(s)?s:EFI_DEVICE_ERROR;
-}
-#endif
 
 /* Final disposal is independent of the graph verdict. Consume confirmed
  * references before calling firmware, including when a release is uncertain. */
@@ -2084,13 +3055,28 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #ifndef GU_TOPO_SAVE_LOG
   (void)image;
 #endif
-  if(!table || !table->BootServices || !table->ConOut ||
+  if(!table || !table->BootServices ||
      !table->BootServices->LocateHandleBuffer ||
      !table->BootServices->HandleProtocol ||
      !table->BootServices->FreePool)return EFI_INVALID_PARAMETER;
-  System=table;bs=table->BootServices;
+#ifndef GU_TOPO_SAVE_LOG
+  /* Without a screen or a durable file this standalone image would lose the
+   * observation entirely. Permit headless capture only in the save-log build. */
+  if(!table->ConOut)return EFI_INVALID_PARAMETER;
+#endif
+  System=table;bs=table->BootServices;SelfImage=image;
+  Say("DIAGNOSTIC_OUTPUT SCREEN=%s DURABLE_LOG=%u\r\n",
+      table->ConOut&&table->ConOut->OutputString?"AVAILABLE":"UNAVAILABLE",
+#ifdef GU_TOPO_SAVE_LOG
+      1U);
+#else
+      0U);
+#endif
   Say("GPU TOPOLOGY DIAGNOSTIC ONLY - no GPU hardware writes or unlock calls\r\n");
   Say("READ_ONLY=1 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLR=0\r\n");
+#ifdef GU_TOPO_SAVE_LOG
+  ReportExperimentBootVariables(table);
+#endif
   pci_ok=CapturePci(bs);
   if(!pci_ok)ReportPciEvidence(bs);
 #ifdef GU_MSI_B850_ROM_VARIABLES
@@ -2101,6 +3087,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
 #endif
 #ifdef GU_MSI_B850_SEC2_UCODE1
   ReportMsiB850Sec2Ucode1(pci_ok);
+#endif
+#ifdef GU_VRAM_BLOCK_PROBE
+  ReportVramBlocks(pci_ok);
 #endif
   gop_ok=CaptureGop(bs);
   console_ok=ReadConfiguredConsole(table,L"ConOut","CONOUT",
@@ -2126,6 +3115,8 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   /* A stale GOP census cannot support a final read-only COMPLETE verdict. */
   if(gop_ok)gop_ok=RevalidateGop(bs);
   else Say("GOP_CAPTURE_RECHECK STABLE=0 SKIPPED_INITIAL_CAPTURE_FAILED=1 NON_ATOMIC=1\r\n");
+  if(gop_ok)ReportGopDisplayState(bs);
+  else Say("GOP_DISPLAY_DATA=UNAVAILABLE GOP_CAPTURE_NOT_STABLE=1\r\n");
   console_ok=console_stable;
   error_ok=error_stable;
   Snapshot.console_available=(uint8_t)console_ok;
@@ -2186,6 +3177,19 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
       (unsigned)p->identity.class_code,(unsigned)p->root_port,
       (unsigned)p->primary,(unsigned)p->secondary,(unsigned)p->subordinate,
       p->by_driver,(unsigned)p->openers_known,p->first_owner_agent,p->path.length);
+    Say("PCI_LINK_NODE BDF=%04x:%02x:%02x.%u OBS=%s SIDE_LOCAL=1 READ_ONLY=1",
+        (unsigned)p->identity.segment,(unsigned)p->identity.bus,
+        (unsigned)p->identity.device,(unsigned)p->identity.function,
+        p->link_status>0?"VALID":p->link_status==0?"ABSENT":"MALFORMED");
+    if(p->link_status>0)
+      Say(" PCIE_CAP=%#x TYPE=%u ASPM=%u SPEED=%u WIDTH=%u MAX_SPEED=%u MAX_WIDTH=%u TRAINING=%u DLL_ACTIVE=%u DEVICE_ERRORS=%u\r\n",
+          (unsigned)p->link.capability_offset,(unsigned)p->link.port_type,
+          (unsigned)p->link.aspm,(unsigned)p->link.speed,(unsigned)p->link.width,
+          (unsigned)p->link.max_speed,(unsigned)p->link.max_width,
+          (unsigned)p->link.training,(unsigned)p->link.dll_active,
+          (unsigned)p->link.device_errors);
+    else
+      Say(" NO_LINK_FIELDS=1\r\n");
     SayPath("PCI",i,&p->path);
   }
   for(i=0;i<Snapshot.gop_count;i++) {
@@ -2230,6 +3234,7 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
     if(gop_ok) {
       ReportNvidiaGopGraph(bs);
       ReportIndependentGopGraph(bs);
+      ReportGopTextEndpoints(bs);
     } else {
       Say("NVIDIA_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1\r\n");
       Say("INDEPENDENT_GOP_GRAPH=UNAVAILABLE GOP_CAPTURE_FAILED=1\r\n");
@@ -2242,6 +3247,9 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   Say("SUPPLEMENTARY_PROTOCOL_POOL_STATUS=%s NO_STOP_EVIDENCE=1\r\n",
       ObservationPoolFault?"UNCERTAIN":"NO_UNCERTAIN_RESULT_OBSERVED");
   Say("DIAGNOSTIC FINISHED; GPU hardware untouched.\r\n");
+  /* Emitted after every other line, before the durable write, so a consumer
+   * can distinguish a complete report from one with withheld lines. */
+  SayCompleteness();
 #ifdef GU_TOPO_WINDOWS_HANDOFF
   Say("WINDOWS_HANDOFF=REQUESTED; pinned Windows ESP, no reset/BootOrder write\r\n");
 #endif
@@ -2270,4 +3278,94 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image, EFI_SYSTEM_TABLE *table) {
   return result==GU_TOPO_COMPLETE?EFI_SUCCESS:EFI_UNSUPPORTED;
 #endif
 #endif
+}
+
+/* Kept after UefiMain so host tests can isolate the pure capture/cleanup
+ * routines without importing GOP/EDID firmware protocol definitions. */
+static void ReportEdid(EFI_BOOT_SERVICES *bs,EFI_HANDLE handle,size_t index,
+                       const char *kind,const EFI_GUID *guid) {
+  GU_EDID_PROTOCOL *protocol=NULL;
+  EFI_STATUS status=bs->HandleProtocol(handle,(EFI_GUID *)guid,(VOID **)&protocol);
+  if(EFI_ERROR(status) || !protocol) {
+    Say("GOP_EDID[%zu] TYPE=%s STATUS=%#llx PRESENT=0 READ_ONLY=1\r\n",
+        index,kind,(unsigned long long)status);
+    return;
+  }
+  if(!protocol->Edid || protocol->SizeOfEdid<128U ||
+     protocol->SizeOfEdid>4096U || (protocol->SizeOfEdid%128U)!=0) {
+    Say("GOP_EDID[%zu] TYPE=%s STATUS=0 SIZE=%u DATA=INVALID_OR_UNBOUNDED READ_ONLY=1\r\n",
+        index,kind,(unsigned)protocol->SizeOfEdid);
+    return;
+  }
+  {
+    const UINT8 *edid=protocol->Edid;
+    UINTN i;
+    UINT8 checksum=0;
+    UINT16 manufacturer=(UINT16)(((UINT16)edid[8]<<8U)|edid[9]);
+    UINT16 product=(UINT16)((UINT16)edid[10]|((UINT16)edid[11]<<8U));
+    UINTN a=(manufacturer>>10U)&31U,b=(manufacturer>>5U)&31U,c=manufacturer&31U;
+    char vendor[4]="???";
+    if(a>=1U&&a<=26U&&b>=1U&&b<=26U&&c>=1U&&c<=26U) {
+      vendor[0]=(char)('A'+a-1U);vendor[1]=(char)('A'+b-1U);
+      vendor[2]=(char)('A'+c-1U);
+    }
+    for(i=0;i<128U;i++)checksum=(UINT8)(checksum+edid[i]);
+    Say("GOP_EDID[%zu] TYPE=%s STATUS=0 SIZE=%u BLOCKS=%u HEADER_VALID=%u BASE_CHECKSUM_VALID=%u MANUFACTURER=%s PRODUCT=%#x READ_ONLY=1 SERIAL_OMITTED=1\r\n",
+        index,kind,(unsigned)protocol->SizeOfEdid,
+        (unsigned)(protocol->SizeOfEdid/128U),
+        (unsigned)(edid[0]==0x00&&edid[1]==0xff&&edid[2]==0xff&&
+                   edid[3]==0xff&&edid[4]==0xff&&edid[5]==0xff&&
+                   edid[6]==0xff&&edid[7]==0x00),
+        (unsigned)(checksum==0),vendor,(unsigned)product);
+  }
+}
+
+/* Report descriptor-level graphics state without setting a mode, issuing a
+ * BLT, mapping/touching the framebuffer, or treating a GOP as a Stop target. */
+static void ReportGopDisplayState(EFI_BOOT_SERVICES *bs) {
+  size_t j;
+  for(j=0;j<Snapshot.gop_count;j++) {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop=(EFI_GRAPHICS_OUTPUT_PROTOCOL *)Snapshot.gop[j].protocol;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *mode=gop?gop->Mode:NULL;
+    size_t i,owner_count=0,owner_index=0,nvidia_count=0;
+    const char *owner_class="UNKNOWN";
+    for(i=0;i<Snapshot.pci_count;i++) {
+      const GU_TOPO_PCI *p=&Snapshot.pci[i];
+      if((p->identity.class_code&0xff00U)!=0x0300U ||
+         !GuTopoPathOnController(&p->path,&Snapshot.gop[j].path))continue;
+      owner_count++;
+      owner_index=i;
+      if((p->identity.pci_id&0xffffU)==0x10deU)nvidia_count++;
+    }
+    if(owner_count==1U) {
+      const GU_TOPO_PCI *p=&Snapshot.pci[owner_index];
+      owner_class=(p->identity.pci_id&0xffffU)==0x10deU?"NVIDIA_DISPLAY":"INDEPENDENT_DISPLAY";
+    } else if(owner_count>1U)owner_class=nvidia_count?"AMBIGUOUS_NVIDIA_PATH":"AMBIGUOUS_PATH";
+    Say("GOP_DISPLAY[%zu] HANDLE=%p OWNER_CLASS=%s GRAPHICS_PCI_MATCHES=%zu ",
+        j,Snapshot.gop[j].handle,owner_class,owner_count);
+    if(owner_count==1U) {
+      const GU_GPU_RECORD *id=&Snapshot.pci[owner_index].identity;
+      Say("OWNER_BDF=%04x:%02x:%02x.%u OWNER_ID=%04x:%04x ",
+          (unsigned)id->segment,(unsigned)id->bus,(unsigned)id->device,
+          (unsigned)id->function,(unsigned)(id->pci_id&0xffffU),
+          (unsigned)(id->pci_id>>16));
+    }
+    if(!gop || !mode || !mode->Info || mode->SizeOfInfo<sizeof(EFI_GRAPHICS_OUTPUT_MODE_INFORMATION)) {
+      Say("MODE_DESCRIPTOR=INVALID GOP_PRESENT=%u MODE_PRESENT=%u\r\n",
+          (unsigned)!!gop,(unsigned)!!mode);
+    } else {
+      EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info=mode->Info;
+      unsigned fb_present=(unsigned)(mode->FrameBufferBase!=0 && mode->FrameBufferSize!=0 &&
+                                     info->PixelFormat!=PixelBltOnly);
+      Say("MODE_DESCRIPTOR=VALID MODE=%u MAX_MODE=%u INFO_SIZE=%zu RESOLUTION=%ux%u PIXEL_FORMAT=%u PIXELS_PER_SCANLINE=%u FB_BASE=%#llx FB_SIZE=%#llx FB_DESCRIPTOR_PRESENT=%u READ_ONLY=1\r\n",
+          (unsigned)mode->Mode,(unsigned)mode->MaxMode,(size_t)mode->SizeOfInfo,
+          (unsigned)info->HorizontalResolution,(unsigned)info->VerticalResolution,
+          (unsigned)info->PixelFormat,(unsigned)info->PixelsPerScanLine,
+          (unsigned long long)mode->FrameBufferBase,
+          (unsigned long long)mode->FrameBufferSize,fb_present);
+    }
+    ReportEdid(bs,Snapshot.gop[j].handle,j,"ACTIVE",&EdidActiveGuid);
+    ReportEdid(bs,Snapshot.gop[j].handle,j,"DISCOVERED",&EdidDiscoveredGuid);
+  }
+  Say("GOP_DISPLAY_DATA=DESCRIPTORS_ONLY FRAMEBUFFER_NOT_TOUCHED MODE_NOT_SET NO_STOP_EVIDENCE=1\r\n");
 }

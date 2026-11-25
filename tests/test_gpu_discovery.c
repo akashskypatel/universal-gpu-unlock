@@ -27,11 +27,13 @@ static GU_PLATFORM *last_candidate;
 #endif
 #ifdef GU_ACTIVE_SINGLE_TARGET
 static int refuse_advance,refuse_completed,refuse_final_graph,drift_after_graph;
+static int refuse_target_completion;
 #endif
 #define CHECK(c) do { checks++; if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
 typedef struct {
   EFI_PCI_IO_PROTOCOL protocol;
+  EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR bar;
   UINT32 dwords[64];
   UINTN segment, bus, device, function;
   int read_fail, location_fail, mutate_at_full_read;
@@ -43,7 +45,7 @@ static EFI_HANDLE handles[24];
 static size_t count;
 static unsigned init_calls, free_calls, log_calls, resolve_calls, locate_calls;
 static void *failed_handle_buffer;
-static unsigned prep_markers, prep_refusals, global_refusals;
+static unsigned prep_markers, prep_refusals, global_refusals, link_refusals;
 static int fail_pool_free, fail_locate, redirect_on_refresh, refuse_init;
 
 static GU_PLATFORM MockPrimaryPlatform;
@@ -61,6 +63,7 @@ void GuLog(const char *format, ...) {
   if(strstr(format,"ACTIVE_SEQUENCE=PREPARED_NOT_STARTED"))prep_markers++;
   if(strstr(format,"REASON=SELECTION_PREPARATION_ONLY"))prep_refusals++;
   if(strstr(format,"REASON=MULTI_NVIDIA_GLOBAL_STATE"))global_refusals++;
+  if(strstr(format,"REASON=PCIE_LINK"))link_refusals++;
 }
 int GuIsSupportedPciId(UINT32 pci) {
   return pci == Primary.pci_id || pci == Secondary.pci_id;
@@ -81,6 +84,33 @@ int GuCheckConfigInitialMaster(const UINT32 c[64], UINTN seg, UINTN bus,
   memcpy(without_master,c,sizeof(without_master));
   without_master[1]&=~4u;
   return GuCheckConfig(without_master,seg,bus,dev,fun,caps);
+}
+/* The mock models admission, not the link: its config snapshots are not real
+ * PCIe capability structures. One switch makes the link unacceptable so the
+ * refusal path is exercised here too; the real policy over crafted config space
+ * is pinned by tests/test_link_state.py. */
+static GU_LINK_VERDICT link_refusal;
+GU_LINK_VERDICT GuCheckLinkState(const UINT32 c[64], UINT16 pcie, GU_LINK *out) {
+  GU_LINK link = {0};
+  (void)c;
+  if (!out || !pcie) return GU_LINK_ABSENT;
+  link.width = 16; link.max_width = 16; link.speed = 3; link.max_speed = 4;
+  link.trained = 1; link.up = 1;
+  *out = link;
+  return link_refusal;
+}
+int GuLinkAccepted(GU_LINK_VERDICT verdict) { return verdict == GU_LINK_OK; }
+const char *GuLinkReason(GU_LINK_VERDICT verdict) {
+  switch (verdict) {
+    case GU_LINK_OK: return "OK";
+    case GU_LINK_ABSENT: return "PCIE_CAPABILITY_ABSENT";
+    case GU_LINK_ERROR_LOGGED: return "PCIE_ERROR_LOGGED";
+    case GU_LINK_ASPM_ENABLED: return "ASPM_ENABLED";
+    case GU_LINK_NOT_TRAINED: return "LINK_NOT_TRAINED";
+    case GU_LINK_DOWN: return "LINK_DOWN";
+    case GU_LINK_UNUSABLE: return "LINK_UNUSABLE";
+    default: return "LINK_STATE_UNKNOWN";
+  }
 }
 static EFI_STATUS Read(EFI_PCI_IO_PROTOCOL *io, int width, UINT32 offset, UINTN n, VOID *out) {
   MOCK_DEVICE *m = (MOCK_DEVICE *)io->context;
@@ -117,7 +147,21 @@ static EFI_STATUS Resolve(EFI_HANDLE h, EFI_GUID *guid, VOID **io) {
   *io = (redirect_on_refresh && resolve_calls > count) ? handles[1] : h;
   return EFI_SUCCESS;
 }
+static EFI_STATUS BarAttributes(EFI_PCI_IO_PROTOCOL *p, UINT8 index,
+                               UINT64 *supports, VOID **out) {
+  MOCK_DEVICE *m = (MOCK_DEVICE *)p->context;
+  if (index != 0 || !supports || !out) return EFI_INVALID_PARAMETER;
+  *supports = 0;
+  *out = &m->bar;
+  return EFI_SUCCESS;
+}
 static EFI_STATUS Free(VOID *p) {
+  /* Bounded by the mock array, not by the inventory limit: this used to walk
+   * 4096 entries of a 24-entry array, so the comparison could match an unrelated
+   * static and skip the pool free. Which statics follow `gpu` is the compiler's
+   * choice, which is why only one compiler failed. */
+  for (size_t i = 0; i < sizeof(gpu) / sizeof(gpu[0]); i++)
+    if (p == &gpu[i].bar) return EFI_SUCCESS;   /* firmware descriptor, not pool */
   if(p && p!=handles) {
     if(fail_state_free){fail_state_free=0;last_failed_free=p;return EFI_NOT_READY;}
     free(p);state_frees++;return EFI_SUCCESS;
@@ -188,21 +232,30 @@ EFI_STATUS GuVerifyCompletedPlatforms(EFI_BOOT_SERVICES *bs,
     return EFI_NOT_READY;
   return EFI_SUCCESS;
 }
+int GuMsiCompletedPlatform(const GU_PLATFORM *platform,const void *token){
+  return !refuse_target_completion&&platform==GuPlatformActive&&token&&platform->release_state==token;
+}
 int GuMsiVerifyFinalGraph(void){
   if(drift_after_graph)gpu[1].dwords[4]^=0x4000U;
   return !refuse_final_graph;
 }
 #endif
 static EFI_BOOT_SERVICES services = { Locate, Resolve, Free, Allocate };
-static EFI_SYSTEM_TABLE system_table = { &services };
+static EFI_SYSTEM_TABLE system_table = { &services, NULL };
 static void Populate(size_t i, GU_GPU_IDENTITY id) {
   MOCK_DEVICE *m = &gpu[i]; memset(m, 0, sizeof(*m));
   m->protocol.GetLocation = GetLocation; m->protocol.Pci.Read = Read;
   m->protocol.context = m;
+  m->protocol.GetBarAttributes = BarAttributes;
   m->dwords[0] = id.pci_id;
   m->dwords[2] = 0x03000000U;
   m->dwords[0x2c / 4] = id.subsystem_id;
   m->dwords[4] = 0xfb000000U + (UINT32)(i * 0x1000000U);
+  /* A firmware-assigned 16 MiB window at the address config space reports. */
+  m->bar.Desc = 0x8a; m->bar.Len = 43;
+  m->bar.AddrRangeMin = m->dwords[4] & 0xfffffff0U;
+  m->bar.AddrLen = 0x1000000ULL;
+  m->bar.AddrRangeMax = m->bar.AddrRangeMin + m->bar.AddrLen - 1;
   m->segment = id.segment; m->bus = id.bus;
   m->device = id.device; m->function = id.function;
   handles[i] = &m->protocol;
@@ -233,7 +286,18 @@ static int CheckHandleBufferLifetime(void) {
     if(scenario==2)fail_state_alloc=1;
     if(scenario==3)gpu[0].read_fail=1;
     fail_pool_free=1;
-    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+    {
+      EFI_STATUS census_status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
+      /* Printed only when the lifetime contract breaks, so a compiler-specific
+       * difference names its own numbers instead of costing a round trip. */
+      if(census_status!=EFI_UNSUPPORTED||init_calls||locate_calls!=1||free_calls!=1)
+        fprintf(stderr,
+                "CENSUS scenario=%d status=%#x count=%u init_calls=%d "
+                "locate_calls=%d free_calls=%d state_allocs=%u\n",
+                scenario,(unsigned)census_status,(unsigned)count,init_calls,
+                locate_calls,free_calls,state_allocs);
+      CHECK(census_status==EFI_UNSUPPORTED);
+    }
     CHECK(!init_calls&&locate_calls==1&&free_calls==1);
     CHECK(UnreleasedPciHandles==handles&&UnreleasedPciHandles==failed_handle_buffer);
     CHECK(state_allocs==(unsigned)(scenario>=2));
@@ -302,7 +366,7 @@ static void ResetActivePair(void) {
   ActiveSequenceValid=ActiveInventoryValid=0;
   state_allocs=state_frees=fail_state_alloc=0;
   context_allocs=context_frees=fail_context_free=0;
-  refuse_advance=refuse_completed=refuse_final_graph=drift_after_graph=0;
+  refuse_advance=refuse_completed=refuse_final_graph=drift_after_graph=refuse_target_completion=0;
   ResetPair();gpu[1].segment=0;gpu[1].device=0;gpu[1].function=0;
 }
 static void PrepareMockOwners(void) {
@@ -389,6 +453,13 @@ int main(void) {
   return 0;
 #endif
   EFI_STATUS status;
+  /* C8: a link this image refuses to actuate on ends the active path before
+   * GuInit, and the refusal names itself. */
+  ResetActivePair();
+  link_refusal=GU_LINK_ASPM_ENABLED;
+  CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_UNSUPPORTED);
+  CHECK(init_calls==0 && link_refusals==1);
+  link_refusal=GU_LINK_OK;
   ResetActivePair();
   status=GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table);
   CHECK(status==EFI_SUCCESS && init_calls==1);
@@ -558,6 +629,22 @@ int main(void) {
         ActiveSequence.halted);
   CHECK(ActiveSequence.targets[ActiveSequence.order[0]].phase==GU_GPU_EXEC_FAILED);
 
+  /* A successful caller verdict is insufficient if independent completion
+   * or graph verification fails. Neither refusal publishes a successor. */
+  for(int reason=0;reason<2;reason++) {
+    ResetActivePair();
+    CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
+    Gu.profile_verified=Gu.prom_verified=1;
+    PrepareMockOwners();
+    CHECK(GuBeginSelectedGpuStep(&system_table,&Gu,
+                                  &release_owner_token,Gu.asset_entries)==EFI_SUCCESS);
+    refuse_target_completion=reason==0;
+    refuse_final_graph=reason==1;
+    CHECK(GuFinishSelectedGpuStep(&system_table,1,&Gu,
+                                  &release_owner_token,Gu.asset_entries)==EFI_NOT_READY);
+    CHECK(ActiveSequence.halted&&ActiveSequence.next_step==0);
+  }
+
   /* Reject a changed live owner even if PCI and handover are unchanged. */
   ResetActivePair();
   CHECK(GuDiscoverSingleGpu((EFI_HANDLE)1,&system_table)==EFI_SUCCESS);
@@ -626,7 +713,7 @@ int main(void) {
     GU_GPU_LOCATION requested[2]={{0,7,0,0},{0,3,0,0}};
     GU_PLATFORM *second=NULL;
     CHECK(ReadGpuRecords(&system_table,prepared.inventory.nvidia,storage.capacity,&prepared.inventory.count)==EFI_SUCCESS);
-    CHECK(SelectPreparedRecords(&prepared,requested,2)==EFI_SUCCESS);
+    CHECK(SelectPreparedRecords(&prepared,requested,2,FALSE)==EFI_SUCCESS);
     CHECK(RefreshGpuRecords(&system_table,&prepared,storage.live,storage.scanned,storage.capacity)==EFI_SUCCESS);
     for(size_t i=0;i<2;i++){
       storage.observed[i].identity=prepared.inventory.nvidia[i];
