@@ -886,16 +886,17 @@ $script:formats = 0
 $script:disk = [pscustomobject]@{ Number=0; UniqueId='disk-fixture'; SerialNumber='serial'; Size=10GB; LargestFreeExtent=2GB; LogicalSectorSize=512; BusType='NVMe'; PartitionStyle='GPT'; IsBoot=$false; IsSystem=$false; IsOffline=$false; IsReadOnly=$false; FriendlyName='fixture' }
 $script:parts = @([pscustomobject]@{ Guid='11111111-1111-1111-1111-111111111111'; Offset=1MB; Size=1GB; PartitionNumber=1; DiskNumber=0; GptType='ebd0a0a2-b9e5-4433-87c0-68b6b72699c7'; IsSystem=$false; IsBoot=$false; DriveLetter='F' })
 $script:newGuid = '22222222-2222-2222-2222-222222222222'
+if ($Mode -ge 10) { $script:parts[0].GptType='c12a7328-f81f-11d2-ba4b-00a0c93ec93b'; $script:disk.LargestFreeExtent=0 }
 if ($Mode -eq 2) { $script:disk.LargestFreeExtent=256MB }
 if ($Mode -eq 3) { $script:disk.IsSystem=$true }
 if ($Mode -eq 6) { $script:parts[0].GptType='c12a7328-f81f-11d2-ba4b-00a0c93ec93b' }
 if ($Mode -eq 8) { $script:disk.PartitionStyle='RAW' }
 function Get-Disk { param($Number,$ErrorAction) $script:disk | Select-Object * }
 function Get-Partition { param($DiskNumber,$DriveLetter,$ErrorAction) if ($DriveLetter) { $script:parts | Where-Object DriveLetter -eq $DriveLetter } else { $script:parts | ForEach-Object { $_ | Select-Object * } } }
-function Get-Volume { param($DriveLetter,$ErrorAction) [pscustomobject]@{FileSystem='FAT32';Size=1GB;UniqueId='volume-fixture'} }
+function Get-Volume { param($DriveLetter,$ErrorAction) [pscustomobject]@{FileSystem='FAT32';FileSystemLabel='GPUUNLOCK';Size=1GB;UniqueId='volume-fixture'} }
 function Assert-NormalDirectory { param($Root) }
 function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
-function Read-Host { param($Prompt) if ($Mode -eq 1) { return 'NO' }; if ($Mode -eq 4) { $script:disk.UniqueId='replacement' }; if ($Mode -eq 9) { $script:parts[0].Size=2GB }; return 'CREATE 0 1024' }
+function Read-Host { param($Prompt) if ($Mode -eq 1 -or $Mode -eq 11) { return 'NO' }; if ($Mode -eq 4) { $script:disk.UniqueId='replacement' }; if ($Mode -eq 9 -or $Mode -eq 12) { $script:parts[0].Size=2GB }; if ($Mode -ge 10) { return 'REUSE 0 11111111-1111-1111-1111-111111111111' }; return 'CREATE 0 1024' }
 function New-Partition {
     param($DiskId,$Size,$GptType,[switch]$AssignDriveLetter,$ErrorAction)
     $script:creates++
@@ -911,6 +912,8 @@ function Format-Volume {
     if ($Partition.Guid -ne $script:newGuid -or $FileSystem -ne 'FAT32' -or $AllocationUnitSize -ne 512) { throw 'Unexpected format target' }
 }
 ''' + functions + r'''
+# Receipt and content matching is tested separately against files.
+function Get-StageReuseEvidence { param($Disk,$Partition,$Root,$ReceiptDirectory) if ($Mode -lt 10 -or $Mode -eq 13) { throw 'No matching receipt' }; [pscustomobject]@{Hash='fixture-hash';Receipt='receipt-fixture'} }
 $failed=$false
 if ((Get-StagePartitionSizeMB 84585936 512 0) -ne 162 -or
     (Get-StagePartitionSizeMB 84585936 4096 0) -ne 272 -or
@@ -918,7 +921,10 @@ if ((Get-StagePartitionSizeMB 84585936 512 0) -ne 162 -or
     (Get-StagePartitionSizeMB 84585936 512 200) -ne 200) { throw 'Unexpected automatic partition size' }
 try { [void](Get-StagePartitionSizeMB 84585936 512 100); throw 'Undersized override accepted' } catch { if ($_.Exception.Message -notlike 'PartitionSizeMB must be at least*') { throw } }
 try {
-    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7)
+    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7) 0 'receipt-directory'
+    if ($Mode -eq 10) {
+        if (-not $script:ProvisionedStage.Reused -or $script:ProvisionedStage.Guid -ne [guid]'11111111-1111-1111-1111-111111111111' -or (Assert-UsbVolume 'F') -ne 'F:\') { throw 'Invalid reuse identity' }
+    }
     if ($Mode -eq 0) {
         if ($script:ProvisionedStage.Guid -ne [guid]$script:newGuid -or (Assert-UsbVolume 'G') -ne 'G:\') { throw 'Wrong stage identity' }
         $script:parts[1].Guid='33333333-3333-3333-3333-333333333333'
@@ -927,6 +933,8 @@ try {
 } catch { $failed=$true; [Console]::Out.WriteLine($_.Exception.Message) }
 if ($Mode -eq 0) {
     if ($failed -or $script:creates -ne 1 -or $script:formats -ne 1) { throw 'Expected exact successful create/format' }
+} elseif ($Mode -eq 10) {
+    if ($failed -or $script:creates -ne 0 -or $script:formats -ne 0) { throw 'Verified reuse must not provision or format' }
 } elseif ($Mode -eq 5) {
     if (-not $failed -or $script:creates -ne 1 -or $script:formats -ne 0) { throw 'Changed layout must prevent format' }
 } else {
@@ -936,13 +944,85 @@ if ($Mode -eq 0) {
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "disk.ps1"
             script.write_text(host, encoding="utf-8")
-            for mode in range(10):
+            for mode in range(14):
                 with self.subTest(mode=mode):
                     result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(script), str(mode)],
                                             capture_output=True, text=True, timeout=30)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.resolve(["-Only", "diagnostic", "-StageDisk", "0"], valid=False)
         self.resolve(["-Only", "diagnostic", "-PartitionSizeMB", "1024"], valid=False)
+
+    def test_stage_reuse_requires_matching_local_deployment_evidence(self):
+        import hashlib
+        import struct
+        import subprocess
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            media = base / "media"
+            boot = media / "EFI" / "BOOT" / "BOOTX64.EFI"
+            boot.parent.mkdir(parents=True)
+            output = base / "signed"
+            output.mkdir()
+            image = bytearray(512)
+            struct.pack_into("<H", image, 0, 0x5A4D)
+            struct.pack_into("<I", image, 0x3C, 0x80)
+            struct.pack_into("<IH", image, 0x80, 0x4550, 0x8664)
+            struct.pack_into("<H", image, 0x98, 0x20B)
+            struct.pack_into("<H", image, 0x98 + 68, 10)
+            boot.write_bytes(image)
+            artifact = output / "UniversalGPU-fixture-signed.efi"
+            artifact.write_bytes(image)
+            receipt = output / (artifact.name + ".json")
+            pin = "11111111-1111-1111-1111-111111111111"
+            record = {
+                "ProvisionedPartitionGuid": pin,
+                "ProvisionedDiskUniqueId": "disk-fixture",
+                "SignedSha256": hashlib.sha256(image).hexdigest(),
+                "VerifiedBySbverify": True,
+                "Destination": r"G:\EFI\BOOT\BOOTX64.EFI",
+                "Subsystem": 10,
+                "AttestationsVerified": ["STAGE_PARTITION_GUID=" + pin],
+            }
+            helpers = SCRIPT[SCRIPT.index("function Get-Sha256"):SCRIPT.index("# A switch plus one optional")]
+            helpers += SCRIPT[SCRIPT.index("function Get-StageReuseEvidence("):SCRIPT.index("function Get-StageReuseTarget(")]
+            helpers += SCRIPT[SCRIPT.index("function Get-ExistingEfi("):SCRIPT.index("function Get-DbCertificateDer")]
+            harness = base / "reuse.ps1"
+            harness.write_text(
+                "param([string]$Media,[string]$Receipts)\nSet-StrictMode -Version Latest\n$ErrorActionPreference='Stop'\n"
+                + helpers + "\n"
+                "$disk=[pscustomobject]@{UniqueId='disk-fixture';BusType='NVMe'}\n"
+                "$part=[pscustomobject]@{Guid='11111111-1111-1111-1111-111111111111'}\n"
+                "$evidence=Get-StageReuseEvidence $disk $part $Media $Receipts\n"
+                "if (-not $evidence.Hash) { throw 'Missing evidence' }\n",
+                encoding="utf-8")
+            def check(valid):
+                result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(harness), str(media), str(output)],
+                                        text=True, capture_output=True, timeout=30)
+                self.assertEqual(result.returncode == 0, valid, result.stdout + result.stderr)
+            check(False)
+            receipt.write_text(json.dumps(record), encoding="utf-8")
+            check(True)
+            for key, value in (("ProvisionedPartitionGuid", "22222222-2222-2222-2222-222222222222"),
+                               ("ProvisionedDiskUniqueId", "other-disk"), ("SignedSha256", "0" * 64),
+                               ("VerifiedBySbverify", False), ("AttestationsVerified", []),
+                               ("Destination", None), ("Subsystem", 11)):
+                with self.subTest(field=key):
+                    receipt.write_text(json.dumps(dict(record, **{key: value})), encoding="utf-8")
+                    check(False)
+            receipt.write_text(json.dumps(record), encoding="utf-8")
+            artifact.write_bytes(b"changed")
+            check(False)
+            artifact.write_bytes(image)
+            foreign = boot.parent / "foreign.efi"
+            foreign.write_bytes(image)
+            check(False)
+            foreign.unlink()
+            changed = bytearray(image)
+            changed[-1] = 1
+            boot.write_bytes(changed)
+            check(False)
+            boot.write_bytes(image)
+            check(True)
 
     def test_firmware_asset_staging_on_temporary_media(self):
         import subprocess
