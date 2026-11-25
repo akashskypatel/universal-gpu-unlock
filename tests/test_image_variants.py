@@ -883,6 +883,21 @@ if ($script:DiskStageRequested) {
                             self.assertIn("DriveLetter", result.stdout)
                             self.assertIn("G,H", result.stdout)
 
+    def test_staging_confirmation_accepts_only_the_five_documented_answers(self):
+        import subprocess
+        function = SCRIPT[SCRIPT.index("function Confirm-StageAction("):SCRIPT.index("function New-StagePartition(")]
+        harness = function + r'''
+function Read-Host { param($Prompt) if ($Prompt -notlike '*Type YES/Yes/yes/y/Y to confirm') { throw 'Wrong prompt' }; return $script:answer }
+foreach ($value in @('YES','Yes','yes','y','Y','YeS','yEs','NO','', ' YES','YES ', 'CREATE 0 512','REUSE 0 abc')) {
+    $script:answer=$value
+    $expected=@('YES','Yes','yes','y','Y') -ccontains $value
+    if ((Confirm-StageAction 'Fixture action') -ne $expected) { throw "Unexpected confirmation for [$value]" }
+}
+'''
+        result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", harness],
+                                text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_disk_provisioning_with_mock_storage_services(self):
         import subprocess
         functions = SCRIPT[SCRIPT.index("function Get-StageDiskIdentity("):SCRIPT.index("function Get-ExistingEfi(")]
@@ -896,7 +911,7 @@ $script:formats = 0
 $script:disk = [pscustomobject]@{ Number=0; UniqueId='disk-fixture'; SerialNumber='serial'; Size=10GB; LargestFreeExtent=2GB; LogicalSectorSize=512; BusType='NVMe'; PartitionStyle='GPT'; IsBoot=$false; IsSystem=$false; IsOffline=$false; IsReadOnly=$false; FriendlyName='fixture' }
 $script:parts = @([pscustomobject]@{ Guid='11111111-1111-1111-1111-111111111111'; Offset=1MB; Size=1GB; PartitionNumber=1; DiskNumber=0; GptType='ebd0a0a2-b9e5-4433-87c0-68b6b72699c7'; IsSystem=$false; IsBoot=$false; DriveLetter='F' })
 $script:newGuid = '22222222-2222-2222-2222-222222222222'
-if ($Mode -ge 10) { $script:parts[0].GptType='c12a7328-f81f-11d2-ba4b-00a0c93ec93b'; $script:disk.LargestFreeExtent=0 }
+if ($Mode -ge 10 -and $Mode -ne 17) { $script:parts[0].GptType='c12a7328-f81f-11d2-ba4b-00a0c93ec93b'; $script:disk.LargestFreeExtent=0 }
 if ($Mode -eq 2) { $script:disk.LargestFreeExtent=256MB }
 if ($Mode -eq 3) { $script:disk.IsSystem=$true }
 if ($Mode -eq 6) { $script:parts[0].GptType='c12a7328-f81f-11d2-ba4b-00a0c93ec93b' }
@@ -932,7 +947,7 @@ if ((Get-StagePartitionSizeMB 84585936 512 0) -ne 162 -or
 try { [void](Get-StagePartitionSizeMB 84585936 512 100); throw 'Undersized override accepted' } catch { if ($_.Exception.Message -notlike 'PartitionSizeMB must be at least*') { throw } }
 try {
     $letter = if ($Mode -eq 15) { 'F' } elseif ($Mode -eq 16) { 'G' } else { '' }
-    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7) 0 'receipt-directory' -ExistingLetter $letter -ExistingGuid ([guid]'11111111-1111-1111-1111-111111111111') -ReuseOnly:($Mode -ge 15)
+    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7) 0 'receipt-directory' -ExistingLetter $letter -ExistingGuid ([guid]'11111111-1111-1111-1111-111111111111') -ReuseOnly:($Mode -in @(15,16)) -InternalReuseOnly:($Mode -eq 17)
     if ($Mode -eq 10 -or $Mode -eq 15) {
         if (-not $script:ProvisionedStage.Reused -or $script:ProvisionedStage.Guid -ne [guid]'11111111-1111-1111-1111-111111111111' -or (Assert-UsbVolume 'F') -ne 'F:\') { throw 'Invalid reuse identity' }
     }
@@ -955,7 +970,7 @@ if ($Mode -eq 0) {
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "disk.ps1"
             script.write_text(host, encoding="utf-8")
-            for mode in range(17):
+            for mode in range(18):
                 with self.subTest(mode=mode):
                     result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(script), str(mode)],
                                             capture_output=True, text=True, timeout=30)

@@ -446,7 +446,7 @@ function Confirm-StageAction([string]$Action) {
     return @('YES','Yes','yes','y','Y') -ccontains (Read-Host "$Action. Type YES/Yes/yes/y/Y to confirm")
 }
 
-function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal,[uint64]$AssetBytes=0,[string]$ReceiptDirectory,[string]$ExistingLetter,[guid]$ExistingGuid=[guid]::Empty,[switch]$ReuseOnly) {
+function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal,[uint64]$AssetBytes=0,[string]$ReceiptDirectory,[string]$ExistingLetter,[guid]$ExistingGuid=[guid]::Empty,[switch]$ReuseOnly,[switch]$InternalReuseOnly) {
     $disk = Get-StageDiskIdentity $Number
     if ($disk.BusType -ne 'USB' -and -not $AllowInternal) {
         throw 'Internal disk staging supports firmware-transaction UnlockReattach or ReviewBootState maintenance only.'
@@ -465,7 +465,7 @@ function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal
     if ($ExistingLetter -and ($existingEsp.Count -ne 1 -or [string]$existingEsp[0].DriveLetter -ne $ExistingLetter -or [guid]$existingEsp[0].Guid -ne $ExistingGuid)) {
         throw 'Selected drive is not the verified dedicated EFI partition.'
     }
-    if ($ReuseOnly -and $existingEsp.Count -ne 1) { throw 'Maintenance requires an existing dedicated staging partition on an internal disk.' }
+    if (($ReuseOnly -or ($InternalReuseOnly -and $disk.BusType -ne 'USB')) -and $existingEsp.Count -ne 1) { throw 'An existing dedicated staging partition is required; no partition was created.' }
     if ($existingEsp.Count -eq 1) {
         $reuse = Get-StageReuseTarget $disk $existingEsp[0] $beforeKey $size $ReceiptDirectory
         Say ("STAGE_REUSE DISK={0} ID={1} MODEL={2} SERIAL={3} GUID={4} DRIVE={5} BYTES={6} RECEIPT={7}" -f
@@ -1680,8 +1680,7 @@ try {
             }
         }
         $allowInternal = (Test-VariantSwitch $deployVariant 'FirmwareReattach') -or $deployVariant.safety -eq 'maintenance'
-        $reuseOnly = [bool]$selectedStageLetter -or ($deployVariant.safety -eq 'maintenance' -and (Get-Disk -Number $selectedStageDisk -ErrorAction Stop).BusType -ne 'USB')
-        $script:ProvisionedStage = New-StagePartition $selectedStageDisk $PartitionSizeMB $allowInternal $stageAssetBytes $OutputDirectory -ExistingLetter $selectedStageLetter -ExistingGuid $selectedStageGuid -ReuseOnly:$reuseOnly
+        $script:ProvisionedStage = New-StagePartition $selectedStageDisk $PartitionSizeMB $allowInternal $stageAssetBytes $OutputDirectory -ExistingLetter $selectedStageLetter -ExistingGuid $selectedStageGuid -ReuseOnly:([bool]$selectedStageLetter) -InternalReuseOnly:($deployVariant.safety -eq 'maintenance')
         $drive = $script:ProvisionedStage.Letter
         if ($script:ProvisionedStage.Disk.BusType -ne 'USB') { $script:StagePartitionGuid = $script:ProvisionedStage.Guid.ToString('D') }
         $usbRoot = Assert-UsbVolume $drive
