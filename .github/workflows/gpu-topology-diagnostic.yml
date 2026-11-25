@@ -505,7 +505,7 @@ jobs:
             if(-not (Test-Path .\src\build_dxe\GPU-SEQUENCE-UNVERIFIED-ACTUATION-DXE-0000-09-02-0--0001-2A-03-1.efi)){throw 'Ordered waiver DXE EFI missing'}
             $autoDxe = & .\src\Build-Dxe-Driver.ps1 -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -SelectAllGpus *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             $autoDxeStatus = @($autoDxe | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
-            if($autoDxeStatus.Count -ne 1 -or "$($autoDxeStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=0 INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1' -or "$($autoDxeStatus[0])" -notmatch 'FIRMWARE_REATTACH=1 S3_POLICY=OPTIONAL TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION'){throw 'Combined automatic DXE receipt mismatch'}
+            if($autoDxeStatus.Count -ne 1 -or "$($autoDxeStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=1 INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1' -or "$($autoDxeStatus[0])" -notmatch 'FIRMWARE_REATTACH=1 S3_POLICY=OPTIONAL TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION'){throw 'Combined automatic DXE receipt mismatch'}
             # The waiver's own interlocks must still refuse, without compiling.
             $waiverNeedsSingle = $false
             try { & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -AcceptUnverifiedActuation } catch {

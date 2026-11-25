@@ -862,11 +862,11 @@
         "REATTACH_ATTEMPTED=1",
         "REATTACH_VERIFIED=0",
         "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
-        "ASPM_ADMISSION_BYPASSED=0",
+        "ASPM_ADMISSION_BYPASSED=1",
         "S3_POLICY=OPTIONAL"
       ],
       "requires_selection": "single",
-      "note": "NVRAM-installed driver form; -StageDxeCompanion stages this paired build at EFI\\Drivers\\AdaUnlockDxe.efi, never as BOOTX64.EFI. Shared verified reattachment sequence and optional S3 registration; strict ASPM admission retained. Physical DXE execution unverified.",
+      "note": "NVRAM-installed driver form; -StageDxeCompanion stages this paired build at EFI\\Drivers\\AdaUnlockDxe.efi, never as BOOTX64.EFI. Shared verified reattachment sequence and optional S3 registration; same ASPM-only admission exception as the combined application; other link-health checks retained. Physical DXE execution unverified.",
       "requires_local_boot_profile": true,
       "profile": "firmware-transaction"
     },
@@ -890,11 +890,11 @@
         "REATTACH_ATTEMPTED=1",
         "REATTACH_VERIFIED=0",
         "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
-        "ASPM_ADMISSION_BYPASSED=0",
+        "ASPM_ADMISSION_BYPASSED=1",
         "S3_POLICY=OPTIONAL"
       ],
       "requires_selection": "sequence",
-      "note": "NVRAM-installed driver form, ordered. Shared verified reattachment sequence and optional S3 registration for each selected GPU; strict ASPM admission retained. Physical DXE execution unverified.",
+      "note": "NVRAM-installed driver form, ordered. Shared verified reattachment sequence and optional S3 registration for each selected GPU; same ASPM-only admission exception as the combined application; other link-health checks retained. Physical DXE execution unverified.",
       "requires_local_boot_profile": true,
       "profile": "firmware-transaction"
     },
@@ -953,13 +953,13 @@
         "REATTACH_ATTEMPTED=1",
         "REATTACH_VERIFIED=0",
         "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
-        "ASPM_ADMISSION_BYPASSED=0",
+        "ASPM_ADMISSION_BYPASSED=1",
         "S3_POLICY=OPTIONAL",
         "SELECTED_COUNT=RUNTIME",
         "ORDERED_SEQUENCE=1",
         "TARGET_ORDER=RUNTIME_SAVED_SELECTION"
       ],
-      "note": "NVRAM-installed driver with saved runtime target policy, or explicit -SelectAllGpus for live enumeration. Shared verified reattachment sequence and optional S3 registration; strict ASPM admission retained. Physical DXE execution unverified.",
+      "note": "NVRAM-installed driver with saved runtime target policy, or explicit -SelectAllGpus for live enumeration. Shared verified reattachment sequence and optional S3 registration; same ASPM-only admission exception as the combined application; other link-health checks retained. Physical DXE execution unverified.",
       "requires_local_boot_profile": true,
       "profile": "firmware-transaction"
     },

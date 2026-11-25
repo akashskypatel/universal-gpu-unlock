@@ -93,7 +93,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 #else
   /* Name the card before the first mutation so a power loss leaves evidence. */
 #ifdef GU_DXE_FIRMWARE_REATTACH
-  GuLog("DXE_FIRMWARE_REATTACH=1 S3_POLICY=OPTIONAL OS_HANDOFF=FIRMWARE ASPM_ADMISSION_BYPASSED=0\n");
+  GuLog("DXE_FIRMWARE_REATTACH=1 S3_POLICY=OPTIONAL OS_HANDOFF=FIRMWARE ASPM_ADMISSION_BYPASSED=1\n");
   GuBootSay(L"\r\n[OK] GPU preparation complete. A separate warning will appear before each GPU driver release.\r\n");
   GuBootSilence();
   GuTracePhase("record-boot-intent");

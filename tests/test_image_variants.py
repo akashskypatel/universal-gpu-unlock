@@ -280,7 +280,7 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
             "SINGLE_TARGET_ACTIVE": int((synthetic or accept) and (runtime or count == 1)),
             "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
             "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench or combined or (combined_dxe and runtime)),
-            "ASPM_ADMISSION_BYPASSED": int(unsafe_bench or combined),
+            "ASPM_ADMISSION_BYPASSED": int(unsafe_bench or combined or combined_dxe),
             "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": 1 if combined or combined_dxe else "CONDITIONAL" if unsafe_bench else 0,
             "FILE_ONLY_OUTPUT": unsafe_bench,
             "STOP_RELEASE_ONLY": unsafe_bench,
@@ -1241,7 +1241,7 @@ if ($Mode -eq 0) {
         self.assertIn("TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION", result["ResolvedAttestations"])
         self.assertIn("FIRMWARE_REATTACH=1", result["ResolvedAttestations"])
         self.assertIn("S3_POLICY=OPTIONAL", result["ResolvedAttestations"])
-        self.assertIn("ASPM_ADMISSION_BYPASSED=0", result["ResolvedAttestations"])
+        self.assertIn("ASPM_ADMISSION_BYPASSED=1", result["ResolvedAttestations"])
         self.resolve(dxe + ["-SelectAllGpus"] + two, valid=False)
         for operation in ("Unlock", "UnlockWithResume"):
             args = ["-Only", "firmware-transaction", "-Operation", operation]
