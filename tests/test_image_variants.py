@@ -706,6 +706,18 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertIn("-StageDrive stages exactly one image", SCRIPT)
         self.assertNotIn("nothing is copied without -Deploy", SCRIPT)
 
+    def test_disk_stage_is_explicit_and_non_destructive(self):
+        self.assertIn("[uint32]$StageDisk", SCRIPT)
+        self.assertIn("$PSBoundParameters.ContainsKey('StageDisk')", SCRIPT)
+        provision = SCRIPT.split('function New-StagePartition(', 1)[1].split('function Assert-UsbVolume(', 1)[0]
+        for forbidden in ('Clear-Disk', 'Initialize-Disk', 'Resize-Partition', 'Remove-Partition'):
+            self.assertNotIn(forbidden, provision)
+        self.assertLess(provision.index('Read-Host'), provision.index('New-Partition -DiskId'))
+        self.assertLess(provision.index('New-Partition -DiskId'), provision.index('Format-Volume -Partition $new[0]'))
+        self.assertIn('(Get-StageLayoutKey $old) -cne $beforeKey', provision)
+        self.assertIn('STAGE_PARTITION_GUID=$script:StagePartitionGuid', SCRIPT)
+        self.assertIn("$arguments['StagePartitionGuid'] = $script:StagePartitionGuid", SCRIPT)
+
     def test_staging_requires_explicit_profile(self):
         self.assertIn("if (-not $Only) { throw 'Staging requires an explicit -Only <profile> request.' }", SCRIPT)
         self.assertNotIn("[string]$Deploy,", SCRIPT)

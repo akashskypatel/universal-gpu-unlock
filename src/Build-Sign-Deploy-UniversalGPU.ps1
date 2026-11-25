@@ -64,6 +64,12 @@ one image -Only selected, builds it, signs it and copies it to
 EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
 -AcceptActuatingDeploy, and a matrix run (-All) can never stage.
 
+.PARAMETER StageDisk
+Select an existing GPT physical disk by number. Create one new FAT32 EFI
+partition in unallocated space after explicit confirmation. Never initialize,
+erase or resize a disk. Internal disks support UnlockReattach only.
+.PARAMETER PartitionSizeMB
+New partition size in MiB (default 1024; 512 through 4096). Requires -StageDisk.
 .PARAMETER StageDxeCompanion
 For -Only firmware-transaction -Operation Menu with one selected BDF and the pinned ESP policy: build and sign the matching
 `dxe-actuate-one-target` image, stage it at EFI\Drivers\AdaUnlockDxe.efi,
@@ -150,6 +156,9 @@ param(
     [string]$PublicCertificate,
     [ValidatePattern('^[D-Zd-z]$')]
     [string]$StageDrive,
+    [uint32]$StageDisk,
+    [ValidateRange(512,4096)]
+    [uint32]$PartitionSizeMB = 1024,
     [string]$SelectionBdf,
     [string]$SelectionBdfs,
     [string]$WindowsEspGuid,
@@ -190,6 +199,13 @@ foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','O
     if ($PSBoundParameters.ContainsKey($optionName)) { $script:ExplicitProfileOptions += $optionName }
 }
 $script:RequestedCanonicalProfile = $null
+$script:DiskStageRequested = $PSBoundParameters.ContainsKey('StageDisk')
+$script:ProvisionedStage = $null
+$script:StagePartitionGuid = $null
+if ($script:DiskStageRequested -and ($StageDrive -or $All -or $SignOnly -or $ResolveOnly -or $List -or $ListConfigurations -or $StageDxeCompanion -or -not $Only)) {
+    throw '-StageDisk requires one explicit profile and cannot be combined with StageDrive, inspection, SignOnly, All or StageDxeCompanion.'
+}
+if (-not $script:DiskStageRequested -and $PSBoundParameters.ContainsKey('PartitionSizeMB')) { throw '-PartitionSizeMB requires -StageDisk.' }
 $ErrorActionPreference = 'Stop'
 
 $KeyInWsl = 'secureboot-signing/uefi-db.key'
@@ -252,6 +268,96 @@ function Assert-EfiImage([string]$Path, [int]$ExpectedSubsystem) {
     } finally { $stream.Dispose() }
 }
 
+# Disk provisioning is separate from ordinary USB staging. All later writes
+# still pass the common volume guard and exact volume identity checks.
+function Get-StageDiskIdentity([uint32]$Number) {
+    $disks = @(Get-Disk -Number $Number -ErrorAction Stop)
+    if ($disks.Count -ne 1) { throw 'Expected one physical disk.' }
+    $disk = $disks[0]
+    if ($disk.PartitionStyle -ne 'GPT' -or $disk.BusType -notin @('USB','NVMe','SATA','ATA','SAS') -or
+        $disk.IsBoot -or $disk.IsSystem -or $disk.IsReadOnly -or $disk.IsOffline -or
+        -not [string]$disk.UniqueId) {
+        throw 'StageDisk requires an online writable non-system GPT physical disk with stable identity.'
+    }
+    if (@(Get-Disk -ErrorAction Stop | Where-Object { $_.UniqueId -eq $disk.UniqueId }).Count -ne 1) {
+        throw 'Disk identity is ambiguous.'
+    }
+    return $disk
+}
+
+function Get-StageLayout($Disk) {
+    return @(Get-Partition -DiskNumber $Disk.Number -ErrorAction Stop | Sort-Object Offset)
+}
+
+function Get-StageLayoutKey($Partitions) {
+    return (@($Partitions | ForEach-Object {
+        if (-not $_.Guid -or [guid]$_.Guid -eq [guid]::Empty) { throw 'Partition identity unavailable.' }
+        '{0}|{1}|{2}|{3}|{4}' -f ([guid]$_.Guid),$_.Offset,$_.Size,([guid]$_.GptType),$_.PartitionNumber
+    }) -join ';')
+}
+
+function Assert-StageDiskIdentity($Expected) {
+    $live = Get-StageDiskIdentity $Expected.Number
+    if ($live.UniqueId -cne $Expected.UniqueId -or $live.Size -ne $Expected.Size -or
+        $live.BusType -ne $Expected.BusType -or $live.SerialNumber -cne $Expected.SerialNumber) {
+        throw 'Physical disk identity changed.'
+    }
+    return $live
+}
+
+function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal) {
+    $disk = Get-StageDiskIdentity $Number
+    if ($disk.BusType -ne 'USB' -and -not $AllowInternal) {
+        throw 'Internal disk staging currently supports firmware-transaction UnlockReattach only.'
+    }
+    $espType = [guid]'c12a7328-f81f-11d2-ba4b-00a0c93ec93b'
+    $size = [uint64]$SizeMB * 1MB
+    $before = @(Get-StageLayout $disk)
+    $beforeKey = Get-StageLayoutKey $before
+    if (@($before | Where-Object { $_.IsBoot -or $_.IsSystem -or ([guid]$_.GptType -eq $espType) }).Count) {
+        throw 'Disk already carries an EFI/system/boot partition; refusing automatic provisioning.'
+    }
+    if ($disk.LargestFreeExtent -lt $size) { throw 'Insufficient contiguous unallocated space; no resize or erase is permitted.' }
+    Say ("STAGE_DISK NUMBER={0} ID={1} MODEL={2} SERIAL={3} BUS={4} BYTES={5} FREE_EXTENT={6}" -f
+        $disk.Number,$disk.UniqueId,$disk.FriendlyName,$disk.SerialNumber,$disk.BusType,$disk.Size,$disk.LargestFreeExtent)
+    foreach ($part in $before) {
+        Say ("EXISTING_PARTITION NUMBER={0} GUID={1} OFFSET={2} BYTES={3} TYPE={4}" -f
+            $part.PartitionNumber,$part.Guid,$part.Offset,$part.Size,$part.GptType)
+    }
+    $confirm = "CREATE $Number $SizeMB"
+    if ((Read-Host "Create ONLY a new $SizeMB MiB FAT32 EFI partition in free space. Type $confirm") -cne $confirm) {
+        throw 'Partition creation cancelled.'
+    }
+    $live = Assert-StageDiskIdentity $disk
+    if ((Get-StageLayoutKey @(Get-StageLayout $live)) -cne $beforeKey -or $live.LargestFreeExtent -lt $size) {
+        throw 'Disk layout or free space changed after confirmation.'
+    }
+    # Select by the confirmed disk ID, not its potentially reassigned number.
+    $created = @(New-Partition -DiskId $disk.UniqueId -Size $size -GptType ('{' + $espType + '}') -AssignDriveLetter -ErrorAction Stop)
+    if ($created.Count -ne 1 -or -not $created[0].Guid) { throw 'New partition identity uncertain; no format attempted.' }
+    $guid = [guid]$created[0].Guid
+    $live = Assert-StageDiskIdentity $disk
+    $after = @(Get-StageLayout $live)
+    $new = @($after | Where-Object { [guid]$_.Guid -eq $guid })
+    $old = @($after | Where-Object { [guid]$_.Guid -ne $guid })
+    if ($guid -eq [guid]::Empty -or $new.Count -ne 1 -or
+        (Get-StageLayoutKey $old) -cne $beforeKey -or
+        $new[0].Size -ne $size -or [guid]$new[0].GptType -ne $espType -or
+        $new[0].IsSystem -or $new[0].IsBoot -or
+        [string]$new[0].DriveLetter -notmatch '^[D-Z]$') {
+        throw 'New partition verification failed; no format attempted. Review disk layout manually.'
+    }
+    $letter = [string]$new[0].DriveLetter
+    # Format only the just-created and independently re-observed partition object.
+    [void](Format-Volume -Partition $new[0] -FileSystem FAT32 -NewFileSystemLabel GPUUNLOCK -Confirm:$false -ErrorAction Stop)
+    $live = Assert-StageDiskIdentity $disk
+    $after = @(Get-StageLayout $live)
+    if ((Get-StageLayoutKey $after) -cne (Get-StageLayoutKey @($old + $new | Sort-Object Offset))) {
+        throw 'Partition layout changed during formatting; no staging attempted.'
+    }
+    return [pscustomobject]@{ Disk=$disk; Guid=$guid; Letter=$letter; Size=$size; EspType=$espType }
+}
+
 function Assert-UsbVolume([string]$Drive) {
     $root = '{0}:\' -f $Drive.ToUpperInvariant()
     $partitions = @(Get-Partition -DriveLetter $Drive -ErrorAction Stop)
@@ -262,7 +368,17 @@ function Assert-UsbVolume([string]$Drive) {
     $part = $partitions[0]
     $volume = $volumes[0]
     $disk = Get-Disk -Number $part.DiskNumber -ErrorAction Stop
-    if ($disk.BusType -ne 'USB' -or $volume.FileSystem -ne 'FAT32' -or
+    $allowedBus = $disk.BusType -eq 'USB'
+    if ($script:ProvisionedStage) {
+        $expected = $script:ProvisionedStage
+        [void](Assert-StageDiskIdentity $expected.Disk)
+        if ($disk.UniqueId -cne $expected.Disk.UniqueId -or [guid]$part.Guid -ne $expected.Guid -or
+            $part.Size -ne $expected.Size -or [guid]$part.GptType -ne $expected.EspType -or $Drive -ne $expected.Letter) {
+            throw 'Provisioned stage partition identity changed.'
+        }
+        $allowedBus = $true
+    }
+    if (-not $allowedBus -or $volume.FileSystem -ne 'FAT32' -or
         $part.IsBoot -or $part.IsSystem -or $disk.IsBoot -or $disk.IsSystem -or
         $disk.IsReadOnly -or $disk.IsOffline) {
         throw "Refusing unsafe volume $root (requires writable, non-system FAT32 USB data drive)."
@@ -999,6 +1115,7 @@ function Get-ResolvedAttestations($Variant) {
     if (Test-VariantSwitch $Variant 'FirmwareReattach') {
         $expectedEsp = if ($WindowsEspGuid) { (ConvertTo-GuWindowsEspGuid $WindowsEspGuid).ToString('D') } else { 'NONE' }
         "WINDOWS_ESP_GUID=$expectedEsp"
+        if ($script:StagePartitionGuid) { "STAGE_PARTITION_GUID=$script:StagePartitionGuid" }
     }
 }
 
@@ -1029,6 +1146,10 @@ function Build-VariantArguments($Variant) {
     }
     if ((Test-VariantSwitch $Variant 'FirmwareReattach') -and $WindowsEspGuid) {
         $arguments['WindowsEspGuid'] = $WindowsEspGuid
+    }
+    if ($script:StagePartitionGuid) {
+        if (-not (Test-VariantSwitch $Variant 'FirmwareReattach')) { throw 'Internal launch pin requires combined application.' }
+        $arguments['StagePartitionGuid'] = $script:StagePartitionGuid
     }
     if ($CapturedPromReference) {
         # The two per-card firmware references this bench captured, compiled into
@@ -1222,7 +1343,7 @@ try {
             throw '-StageDxeCompanion requires -AcceptActuatingDeploy; it stages the waived app and its matching DXE driver.'
         }
     }
-    if ($StageDrive) {
+    if ($StageDrive -or $script:DiskStageRequested) {
         if (-not $Only) { throw 'Staging requires an explicit -Only <profile> request.' }
         # The selection is what names the image; a stick holds one BOOTX64.EFI, so
         # staging more than one variant is not a thing.
@@ -1297,7 +1418,7 @@ try {
     }
 
     $drive = $null; $usbRoot = $null; $targetVolumeId = $null
-    if ($stageVariantId) {
+    if ($StageDrive) {
         $drive = $StageDrive.ToUpperInvariant()
         $usbRoot = Assert-UsbVolume $drive
         if ($assetRepoForStage) { $assetRepoForStage = $RepoRoot }
@@ -1327,6 +1448,18 @@ try {
 
     # Prove the WSL target can sign before spending a whole matrix of builds on it.
     [void](Test-WslSigningReady -PublicCer $PublicCertificate)
+    if ($script:DiskStageRequested) {
+        $skipReason = Test-VariantSelection $deployVariant
+        if ($skipReason) { throw "Cannot provision for $($deployVariant.id): $skipReason" }
+        [void](Build-VariantArguments $deployVariant)
+        $script:ProvisionedStage = New-StagePartition $StageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach'))
+        $drive = $script:ProvisionedStage.Letter
+        if ($script:ProvisionedStage.Disk.BusType -ne 'USB') { $script:StagePartitionGuid = $script:ProvisionedStage.Guid.ToString('D') }
+        $usbRoot = Assert-UsbVolume $drive
+        $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
+        if (-not $targetVolumeId) { throw 'Provisioned volume identity unavailable.' }
+        Say ("STAGE_PARTITION CREATED GUID={0} DRIVE={1} SIZE={2}" -f $script:ProvisionedStage.Guid,$drive,$script:ProvisionedStage.Size)
+    }
 
     if ($script:SelectionSpec.Count) {
         Say ("SELECTION label={0} count={1} bdfs={2}" -f $script:SelectionSpec.Label,
@@ -1524,6 +1657,8 @@ try {
                 VerifiedBySbverify = $true
                 Destination = $(if ($deployment) { $deployment.Path } else { $null })
                 FirmwareAssets = @(if ($deployment) { $deployment.FirmwareAssets })
+                ProvisionedPartitionGuid = $(if ($deployment -and $script:ProvisionedStage) { $script:ProvisionedStage.Guid.ToString('D') } else { $null })
+                ProvisionedDiskUniqueId = $(if ($deployment -and $script:ProvisionedStage) { $script:ProvisionedStage.Disk.UniqueId } else { $null })
                 DxeCompanionStaged = [bool]($dxeStageVariantId -and $variantId -eq $dxeStageVariantId -and $deployment)
                 DxeCompanionPath = $null
                 DxeCompanionSha256 = $null

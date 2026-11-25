@@ -628,6 +628,14 @@ static BOOLEAN EspCarriesWindowsManager(EFI_BOOT_SERVICES *b,EFI_HANDLE handle);
 static BOOLEAN StagedBundleRecordUsable(VOID);
 #endif
 
+#ifdef GU_DEDICATED_STAGE_PIN
+#if !defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_ESP) || defined(GU_ESP_RESIDENT)
+#error Dedicated stage partition requires the combined runtime reattachment application
+#endif
+#include "stage-partition-pin.h"
+static const uint8_t DedicatedStagePin[16]=GU_STAGE_PARTITION_PIN_BYTES;
+#endif
+
 EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(Table)return EFI_ALREADY_STARTED;
@@ -662,9 +670,16 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 #else
   launch.EspResidentBuild=GU_LS_FALSE;
 #endif
+  BOOLEAN dedicated=FALSE;
+#ifdef GU_DEDICATED_STAGE_PIN
+  /* Exact GPT identity in the signed image, independent of Windows ESP selection.
+   * Never allow a copied pinned image to start from another partition. */
+  if(usb||!GuWindowsEspPathMatches((const uint8_t *)path,length,DedicatedStagePin))return EFI_ACCESS_DENIED;
+  dedicated=TRUE;
+#endif
   if(usb) {
     BootFromUsb=TRUE;
-  } else {
+  } else if(!dedicated) {
 #ifdef GU_ESP_RESIDENT
     launch.PinnedEsp=GU_LS_TRUE; /* nothing is pinned in a runtime-ESP build */
     launch.WindowsLoader=EspCarriesWindowsManager(b,OwnVolume)?GU_LS_TRUE:GU_LS_FALSE;
@@ -725,7 +740,10 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
         TraceBootFineValid?"UEFI_TIMESTAMP":"RTC_OR_UNAVAILABLE",
         (unsigned long long)(TraceBootFineValid?TraceTimestampInfo.Frequency:0));
 
-  if(!BootFromUsb) {
+  if(dedicated) {
+    GuLog("LAUNCH_SOURCE=DEDICATED_PINNED_GPT LOG_WRITABLE=1 INSTALL_STILL_REQUIRES_USB=1 ACTUATION_GATES_UNCHANGED=1\n");
+    if(BootFileStatus!=EFI_SUCCESS){s=BootFileStatus;goto failed;}
+  } else if(!BootFromUsb) {
     /* The last gate: a resident image needs its own writable log directory, which
      * is what the lines above just proved by creating the file. */
     launch.LogWritable=GU_LS_TRUE;

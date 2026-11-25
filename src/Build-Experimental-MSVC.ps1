@@ -12,6 +12,7 @@ param(
     [switch]$RuntimeSelection,
     [switch]$RuntimeEsp,
     [string]$WindowsEspGuid,
+    [string]$StagePartitionGuid,
     [switch]$EspResident,
     [switch]$CapturedPromReference,
     [ValidateSet('Menu','Unlock','UnlockWithResume','InstallDriver','RemoveDriver')]
@@ -19,6 +20,14 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $espPinText = 'NONE'
+$stagePinText = 'NONE'
+if ($StagePartitionGuid) {
+    if (-not $FirmwareReattach) { throw '-StagePartitionGuid requires -FirmwareReattach.' }
+    . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
+    $stagePin = ConvertTo-GuWindowsEspGuid $StagePartitionGuid
+    $stagePinText = $stagePin.ToString('D')
+    if ($WindowsEspGuid -and $stagePin -eq (ConvertTo-GuWindowsEspGuid $WindowsEspGuid)) { throw 'Stage and Windows ESP GUIDs must differ.' }
+}
 if ($WindowsEspGuid) {
     if (-not $FirmwareReattach -or -not $RuntimeEsp) { throw '-WindowsEspGuid requires -FirmwareReattach and -RuntimeEsp in this builder.' }
     . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
@@ -136,6 +145,12 @@ try {
         $clFlags += ' /DGU_RUNTIME_ESP_PIN'
     }
 
+    if ($StagePartitionGuid) {
+        $octets = @($stagePin.ToByteArray() | ForEach-Object { '0x{0:x2}' -f $_ })
+        Set-Content -LiteralPath (Join-Path $buildDir 'stage-partition-pin.h') -Encoding ascii -Value ('#define GU_STAGE_PARTITION_PIN_BYTES {' + ($octets -join ',') + '}')
+        $clFlags += ' /DGU_DEDICATED_STAGE_PIN'
+    }
+
     if ($RuntimeSelection) {
         # Targets come from the "GuTargets" UEFI variable at boot, so the count
         # is unknown at build time. The runtime admission gates are unchanged.
@@ -187,7 +202,7 @@ try {
     $singleTargetActive = if ($StopReleaseOnlyBench) { 0 } else { [int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1)) }
     $stopOnlyAssertions = if ($StopReleaseWindowsHandoff) { 'FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 OS_HANDOFF=WINDOWS_AFTER_SUCCESS' } elseif ($StopReleaseOnlyBench) { 'FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 OS_HANDOFF=NONE' } else { '' }
     $stopConsolePolicy = if ($FirmwareReattach) { '1' } elseif ($StopReleaseOnlyBench) { 'CONDITIONAL' } else { '0' }
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench -or $FirmwareReattach)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]($StopReleaseOnlyBench -or $FirmwareReattach)) INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=$stopConsolePolicy FILE_ONLY_OUTPUT=$([int][bool]$FileOnlyBootLog) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) $stopOnlyAssertions APP_OPERATION=$ApplicationOperation FIXED_OPERATION=$fixedOperation FIRMWARE_TRANSACTION=$firmwareTransaction UNLOCK=$firmwareTransaction REATTACH_ATTEMPTED=$([int][bool]($StopReleaseOnlyBench -or $FirmwareReattach)) REATTACH_VERIFIED=0 FIRMWARE_REATTACH=$([int][bool]$FirmwareReattach) TARGET_ORDER=$targetOrder WINDOWS_ESP_GUID=$espPinText NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench -or $FirmwareReattach)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]($StopReleaseOnlyBench -or $FirmwareReattach)) INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=$stopConsolePolicy FILE_ONLY_OUTPUT=$([int][bool]$FileOnlyBootLog) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) $stopOnlyAssertions APP_OPERATION=$ApplicationOperation FIXED_OPERATION=$fixedOperation FIRMWARE_TRANSACTION=$firmwareTransaction UNLOCK=$firmwareTransaction REATTACH_ATTEMPTED=$([int][bool]($StopReleaseOnlyBench -or $FirmwareReattach)) REATTACH_VERIFIED=0 FIRMWARE_REATTACH=$([int][bool]$FirmwareReattach) TARGET_ORDER=$targetOrder WINDOWS_ESP_GUID=$espPinText STAGE_PARTITION_GUID=$stagePinText NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
 } finally {
     Pop-Location
 }
