@@ -45,7 +45,7 @@
     },
     "compile-only": {
       "writes_gpu": false,
-      "may_be_staged": false,
+      "may_be_staged": true,
       "why": "a synthetic-profile image returns before any firmware or GPU operation; it exists to prove the sources compile"
     },
     "stop-only": {
@@ -1096,7 +1096,7 @@
         "NOT_FOR_AUTOMATIC_DEPLOYMENT=1",
         "HARDWARE_TESTED=0"
       ],
-      "note": "Independent maintenance application. Requires explicit deployment consent and isolated USB media or verified dedicated internal staging partition. Displays the exact record, requires D/d confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified.",
+      "note": "Independent maintenance application. Requires explicit deployment consent and a selected staging volume. Displays the exact record, requires D/d confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified.",
       "profile": "maintenance"
     }
   ],
@@ -1111,7 +1111,7 @@
     },
     {
       "id": "dxe-as-bootx64",
-      "why": "a DXE boot-service driver is PE subsystem 11; firmware will not run it as BOOTX64.EFI, and the script refuses to stage one"
+      "why": "a DXE boot-service driver is PE subsystem 11; firmware will not run it as BOOTX64.EFI; the script stages it at EFI\\Drivers\\AdaUnlockDxe.efi"
     },
     {
       "id": "esp-resident-dxe",

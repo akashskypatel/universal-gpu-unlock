@@ -755,9 +755,6 @@ static BOOLEAN StagedBundleRecordUsable(VOID);
 #endif
 
 #ifdef GU_DEDICATED_STAGE_PIN
-#if !defined(GU_FIRMWARE_REATTACH) || defined(GU_ESP_RESIDENT) || (!defined(GU_RUNTIME_ESP) && !defined(GU_DXE_FIRMWARE_REATTACH))
-#error Dedicated stage partition requires combined firmware reattachment
-#endif
 #include "stage-partition-pin.h"
 static const uint8_t DedicatedStagePin[16]=GU_STAGE_PARTITION_PIN_BYTES;
 #endif
@@ -801,7 +798,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   /* Exact GPT identity in the signed image, independent of Windows ESP selection.
    * Never allow a copied pinned image to start from another partition. */
   if(usb||!GuWindowsEspPathMatches((const uint8_t *)path,length,DedicatedStagePin))return EFI_ACCESS_DENIED;
-#if defined(GU_DXE_FIRMWARE_REATTACH) && !defined(GU_RUNTIME_ESP)
+#ifndef GU_RUNTIME_ESP
   if(!memcmp(DedicatedStagePin,&WindowsPartition,sizeof(DedicatedStagePin)))return EFI_ACCESS_DENIED;
 #endif
   dedicated=TRUE;

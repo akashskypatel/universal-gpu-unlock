@@ -2,7 +2,7 @@
 
 ## Select a staging destination
 
-`-StageDrive G` stages to an existing eligible FAT32 USB volume or, for UnlockReattach and ReviewBootState, the exact verified dedicated internal partition. `-StageDisk 2` selects a non-system, writable, online GPT disk with enough contiguous unallocated space. Review its ID, model, serial and partition layout, then type `YES`, `Yes`, `yes`, `y` or `Y` to confirm. The partition defaults to twice the verified staged firmware asset bytes rounded up to a whole MiB, subject to the FAT32 minimum. The current 84,585,936-byte nine-file bundle needs 162 MiB on a 512-byte logical-sector disk (272 MiB minimum on a 4 KiB logical-sector disk). `-PartitionSizeMB` may explicitly increase the size but cannot fall below the computed requirement. The script creates a new EFI partition, checks that the old partitions are unchanged, formats only the new partition as FAT32, signs and stages one explicit profile. No erase, resize, initialize, unrelated ESP reuse, or boot-order changes. Internal NVMe/SATA/ATA/SAS targets support the combined `firmware-transaction -Operation UnlockReattach` application and reuse for `maintenance -Operation ReviewBootState`; the signed image has the new partition GUID compiled in, separate from the Windows ESP. USB GPT provisioning supports ordinary stageable applications. Do not select Windows boot/system disks; keep separate recovery media. A provisioning/build/stage error may leave the new partition; inspect it rather than automatically retry or delete it. Firmware boot-menu visibility and physical launch compatibility are unverified.
+`-StageDrive G` stages to an existing eligible FAT32 USB volume or, the exact verified dedicated internal partition. `-StageDisk 2` selects a non-system, writable, online GPT disk with enough contiguous unallocated space. Review its ID, model, serial and partition layout, then type `YES`, `Yes`, `yes`, `y` or `Y` to confirm. The partition defaults to twice the verified staged firmware asset bytes rounded up to a whole MiB, subject to the FAT32 minimum. The current 84,585,936-byte nine-file bundle needs 162 MiB on a 512-byte logical-sector disk (272 MiB minimum on a 4 KiB logical-sector disk). `-PartitionSizeMB` may explicitly increase the size but cannot fall below the computed requirement. The script creates a new EFI partition, checks that the old partitions are unchanged, formats only the new partition as FAT32, signs and stages one explicit profile. No erase, resize, initialize, unrelated ESP reuse, or boot-order changes. All five profiles can stage on internal or USB GPT disks. Application and driver execution builders use the dedicated partition pin; standalone diagnostics and Stop observation already use the loaded volume. DXE drivers stage under EFI\Drivers, never BOOTX64.EFI. Do not select Windows boot/system disks; keep separate recovery media. A provisioning/build/stage error may leave the new partition; inspect it rather than automatically retry or delete it. Firmware boot-menu visibility and physical launch compatibility are unverified.
 
 ```powershell
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -StageDisk 2 -AcceptActuatingDeploy
@@ -12,7 +12,7 @@ The combined application checks its launch volume's free space at startup, befor
 
 ### Reuse a dedicated GPU Unlock partition
 
-Run the same StageDisk command for a later deployment. If exactly one EFI partition exists on the selected disk, the script checks its FAT32 GPUUNLOCK volume label, disk and partition identifiers, capacity and existing application. It requires a previous successful local deployment receipt and the matching local signed EFI artifact in OutputDirectory (default artifacts/signed). The receipt must match the disk ID, partition GUID, installed SHA-256 digest and, for an internal disk, the partition-pin build attestation. No other EFI executable may exist on the dedicated volume. A label alone does not establish ownership. The local receipt is trusted deployment evidence, not an independently authenticated ownership certificate.
+Run the same StageDisk command for a later deployment. If exactly one EFI partition exists on the selected disk, the script checks its FAT32 GPUUNLOCK volume label, disk and partition identifiers, capacity and existing project images. Each installed application or driver needs a previous local deployment receipt and matching signed artifact in OutputDirectory (default artifacts/signed). Receipts match disk ID, partition GUID and installed digest; pin-capable internal builds also require the pin attestation. The project application and DXE driver can coexist; unrelated EFI executables remain refused. A label alone does not establish ownership. The local receipt is trusted deployment evidence, not an independently authenticated ownership certificate.
 
 The partition must already have a drive letter D through Z. No automatic mounting, formatting or resizing occurs on reuse. Type `YES`, `Yes`, `yes`, `y` or `Y` to confirm reuse, then confirm replacement of the old boot image when requested. Existing firmware assets are verified, missing assets and the temporary new image require sufficient free space, and existing logs remain untouched. The signed internal application keeps the existing partition GUID. Keep the previous local signed artifact and receipt. A missing or inconsistent receipt, unrelated EFI partition, multiple EFI partitions or insufficient capacity causes refusal; do not manually relabel or forge evidence to bypass this check. Physical reuse is not yet verified.
 
@@ -30,7 +30,7 @@ Run one of these commands from an elevated PowerShell session at the repository 
 
 `-StageDisk` displays the physical disk inventory with these columns: Number, FriendlyName, BusType, PartitionStyle, IsBoot, IsSystem, LogicalSectorSize, UnallocatedMiB. At `Enter disk number (Enter to cancel)`, enter the disk number (including 0 if applicable). The script checks eligibility and requires a separate `Type YES/Yes/yes/y/Y to confirm` prompt before partition creation or verified reuse.
 
-`-StageDrive` displays the same columns and adds DriveLetter. Multiple assigned letters on one disk appear together, for example G,H. At `Enter drive letter (Enter to cancel)`, enter one letter D through Z, without a colon. This mode uses an existing FAT32 USB volume or, for UnlockReattach and ReviewBootState, an existing verified dedicated internal partition. It does not create or resize a partition.
+`-StageDrive` displays the same columns and adds DriveLetter. Multiple assigned letters on one disk appear together, for example G,H. At `Enter drive letter (Enter to cancel)`, enter one letter D through Z, without a colon. This mode uses an existing FAT32 USB volume or an existing verified dedicated internal partition. It does not create or resize a partition.
 
 Explicit targets such as `-StageDisk 2` and `-StageDrive G` skip the selection prompt. Blank input cancels staging. Invalid or unlisted interactive targets are refused. The inventory includes ineligible disks: appearing in the list does not authorize staging. Do not combine the two staging modes, or combine staging with `-All`, `-SignOnly`, `-ResolveOnly`, `-List` or `-ListConfigurations`.
 
@@ -110,7 +110,9 @@ Optional `-SelectAllGpus` is valid with `-Only firmware-transaction -Operation U
 
 DXE firmware transactions use the same peer warning, release, firmware verification, reattachment, final graph verification and logging source as the combined application. The driver retains its optional S3 script after each verified reattachment, checks the live BAR before each script entry, and blocks the sequence on an uncertain or partial write. S3 resume itself remains unverified. DXE uses the same ASPM-only admission exception as the combined application; link training, negotiated width/speed and uncorrected error refusals are unchanged. DXE executes in the ReadyToBoot callback, and returns to the firmware rather than calling Windows LoadImage/StartImage. Prior INTENT disables repeat execution; no automatic rearm, internal driver installation or physical qualification is introduced.
 
-Dedicated DXE launch preparation: `-Only firmware-transaction -Operation DxeTransaction -ImageKind Dxe -SelectAllGpus -StagePartitionGuid <dedicated-partition-guid> -SignOnly` signs a driver that uses the existing exact non-USB GPT launch check and writable log checks. It retains the private Windows ESP profile and refuses a stage GUID matching that compiled Windows ESP. No file is copied to the stage and no driver entry is registered. The isolated boot-image reuse and maintenance rules remain unchanged; persistent staging and registration need an independently verified removal/recovery workflow before use.
+Dedicated DXE staging: `-Only firmware-transaction -Operation DxeTransaction -ImageKind Dxe -SelectAllGpus -StageDisk 0 -AcceptActuatingDeploy` signs and stages the driver using the dedicated partition pin. This copies the driver only; registration remains the separate InstallDriver operation. The driver retains its private Windows ESP profile and S3 policy.
+
+Delete a project-created GPUUNLOCK partition with `-WipeStageDisk 0` or `-WipeStageDrive G` in elevated PowerShell. Omit the number or letter to select interactively. This deletes the entire identified partition, including logs and assets, and returns its space to the disk; it is not a secure sector overwrite. It does not delete other partitions, resize adjacent partitions, or change firmware driver registration. The local creation or prior deployment receipt identifies the target. Confirm with YES.
 
 ## Canonical profiles and arguments
 
@@ -158,7 +160,7 @@ distinct. ESP = EFI System Partition. DXE = Driver Execution Environment.
 | `Unlock` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. RAM-only. |
 | `UnlockWithResume` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. Requests the existing S3 resume policy. Physical resume verification is pending. |
 | `Menu` | `-SelectionBdf` or `-SelectionBdfs`, `-EspPolicy Pinned/Resident` | Application only. Omit selection for runtime selection. Pinned is default and needs private ESP profile. Resident supports zero or one compiled target, not a sequence. No explicit ESP pin. |
-| `DxeTransaction` | `-ImageKind Dxe`, optional `-SelectAllGpus` or `-SelectionBdf`/`-SelectionBdfs`, `-EspPolicy Pinned` | Pinned private ESP profile required. Shared reattachment sequence; optional S3 registration. Same ASPM-only admission exception as UnlockReattach. No explicit Windows ESP pin or captured reference. Optional `-StagePartitionGuid` with SignOnly or ResolveOnly builds a driver pinned to a dedicated internal partition; cannot stage as BOOTX64.EFI. |
+| `DxeTransaction` | `-ImageKind Dxe`, optional `-SelectAllGpus` or `-SelectionBdf`/`-SelectionBdfs`, `-EspPolicy Pinned` | Pinned private ESP profile required. Shared reattachment sequence; optional S3 registration. Same ASPM-only admission exception as UnlockReattach. No explicit Windows ESP pin or captured reference. StageDisk or StageDrive pins internal drivers automatically. An explicit StagePartitionGuid may identify the selected existing internal partition. Drivers stage to EFI\Drivers\AdaUnlockDxe.efi. |
 
 The combined operation has a historical physical PASS on the RTX 4090 and
 RTX 3080 with displays connected. Manual cold-power recovery after a failed
@@ -172,14 +174,14 @@ Choose `-Operation InstallDriver`, `RemoveDriver` or `ReviewBootState`.
 All three use an application. Compiled GPU selection, ESP pin, captured
 reference and companion staging are not applicable. InstallDriver and
 RemoveDriver retain their existing preparation and recovery behavior.
-ReviewBootState remains a separate image with its existing isolation,
+ReviewBootState remains a separate image with its existing record review,
 record review and confirmation checks.
 
 ### Compile validation
 
 `compile-check` requires `-SelectionBdf` or `-SelectionBdfs`.
 `-ImageKind Application` is the default. Use `-ImageKind Dxe` for a
-boot-service driver build. This profile cannot stage or execute. No ESP or
+boot-service driver build. This profile can stage; the image still returns before any GPU or firmware operation. No ESP or
 captured reference options apply.
 
 ### Common arguments
@@ -190,7 +192,7 @@ captured reference options apply.
 | `-List`, `-ListConfigurations` | List public profiles or build configurations. |
 | `-ResolveOnly` | Inspect one configuration. Does not build or stage. |
 | `-SignOnly` | Build and sign. Do not stage. |
-| `-StageDrive [letter]` | Stage one EFI application to an existing verified FAT32 USB volume. Omit the letter for interactive selection. |
+| `-StageDrive [letter]` | Stage one EFI application or DXE driver to an existing verified FAT32 staging volume. Omit the letter for interactive selection. |
 | `-StageDisk [number]` | Create or reuse a verified dedicated staging partition on an eligible GPT disk. Omit the number for interactive selection. Cannot combine with StageDrive or StageDxeCompanion. |
 | `-PartitionSizeMB <MiB>` | Optional StageDisk size override (64–4096 MiB, at or above the calculated minimum). Default: twice the verified staged asset bytes, rounded up, subject to the FAT32 minimum. |
 | `-AcceptActuatingDeploy` | Explicit consent required for deployment of driver-transition, firmware-transaction and maintenance images. |
@@ -307,13 +309,13 @@ Build configuration matrix (also available with `-ListConfigurations`). Configur
 
 | Configuration ID | Output | Safety | Needs | What it is |
 | --- | --- | --- | --- | --- |
-| `boot-state-maintenance` | `BOOT-STATE-MAINTENANCE.EFI` | `maintenance` | nothing | Independent maintenance application. Requires explicit deployment consent and isolated USB media or verified dedicated internal staging partition. Displays the exact record, requires D/d confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified. |
+| `boot-state-maintenance` | `BOOT-STATE-MAINTENANCE.EFI` | `maintenance` | nothing | Independent maintenance application. Requires explicit deployment consent and a selected staging volume. Displays the exact record, requires D/d confirmation, refuses any present or unreadable DriverOrder, checks the record again and verifies absence after deletion. No GPU action, boot entry change or reset. Physical execution is unverified. |
 
 ### Not buildable, and why
 
 * `legacy-experimental` — the unselected mutating Experimental image is deliberately disabled: its mutation path is not generally hardware-safe, and the builder throws if asked
 * `stop-dual-without-handoff` — the dual Stop requires a pinned Windows handoff, so a no-handoff dual image has no legal build
-* `dxe-as-bootx64` — a DXE boot-service driver is PE subsystem 11; firmware will not run it as BOOTX64.EFI, and the script refuses to stage one
+* `dxe-as-bootx64` — a DXE boot-service driver is PE subsystem 11; firmware will not run it as BOOTX64.EFI; the script stages it at EFI\Drivers\AdaUnlockDxe.efi
 * `esp-resident-dxe` — GU_ESP_RESIDENT gates the launch of an application image; a Driver#### entry is not launched from a volume, so the combination would advertise a gate that cannot run
 * `prep-runtime-selection` — a preparation-only image cannot also read its targets at boot: src/port.h requires the ordered selected-target mode (GU_ACTIVE_SINGLE_TARGET) for GU_RUNTIME_SELECTION, and src/gpu_discovery.c refuses that mode with a preflight-only profile, so no define set satisfies both - the source needs a preparation profile for runtime target selection first
 * `prep-runtime-selection-resident` — a preparation-only image cannot also read its targets at boot: src/port.h requires the ordered selected-target mode (GU_ACTIVE_SINGLE_TARGET) for GU_RUNTIME_SELECTION, and src/gpu_discovery.c refuses that mode with a preflight-only profile, so no define set satisfies both - the source needs a preparation profile for runtime target selection first
@@ -327,7 +329,7 @@ Build configuration matrix (also available with `-ListConfigurations`). Configur
 
 **One-use active experiment:** Explicitly waived firmware transaction images retain the readback-verified `GuBootState` INTENT through successful preboot completion and Windows handover. The next boot refuses another GPU transaction while this record remains. A successful preboot result is not owner acceptance. No automatic record deletion or rearm is provided. The Stop-only profiles remain separate and do not create an active transaction record.
 
-**Administrative maintenance image:** The separate `src/Build-Boot-State-Maintenance.ps1` still builds only `src/build_boot_state_maintenance/BOOT-STATE-MAINTENANCE.EFI`. The `maintenance -Operation ReviewBootState` profile signs it through the existing workflow. Staging requires `-Only maintenance -Operation ReviewBootState -StageDrive <letter> -AcceptActuatingDeploy` or `-StageDisk <number>` in place of StageDrive. The selected volume must contain no other EFI executable apart from the boot image that the script replaces after a verified backup. Internal staging requires an existing verified dedicated GPU Unlock partition; the maintenance image contains and checks that partition GUID, and its signed receipt permits later reuse by UnlockReattach. Preserve firmware assets and logs. Use isolated maintenance media and disconnect other experimental boot media before booting; for an internal partition, replace the maintenance image only after completing the review and returning to stock Windows. The script never registers the image. It links only the boot-record, console and CPU formatting/runtime source. The image displays the exact record and requires an explicit typed confirmation. It checks the reviewed record again, refuses any existing or unreadable `DriverOrder` (including unrelated entries), and verifies absence after removing the owned record. It cannot accept a GPU result or verify stock recovery. Owner review and separately authorized next experiment are prerequisites; no automatic reactivation. Do not remove unrelated firmware boot entries to satisfy this restriction. The utility stops after a deletion attempt, including uncertain readback, and does not start an image or request a reset. Physical qualification remains outstanding. Run it only for a separately authorized experiment.
+**Administrative maintenance image:** The separate `src/Build-Boot-State-Maintenance.ps1` still builds only `src/build_boot_state_maintenance/BOOT-STATE-MAINTENANCE.EFI`. The `maintenance -Operation ReviewBootState` profile signs it through the existing workflow. Staging requires `-Only maintenance -Operation ReviewBootState -StageDrive <letter> -AcceptActuatingDeploy` or `-StageDisk <number>` in place of StageDrive. The selected volume can retain its project DXE driver; the script replaces the boot image after a verified backup. Internal staging uses a new or verified dedicated GPU Unlock partition; the maintenance image contains and checks that partition GUID, and its signed receipt permits later reuse by UnlockReattach. Preserve firmware assets and logs. Remove active driver registration before attempting record deletion; for an internal partition, replace the maintenance image only after completing the review and returning to stock Windows. The script never registers the image. It links only the boot-record, console and CPU formatting/runtime source. The image displays the exact record and requires an explicit typed confirmation. It checks the reviewed record again, refuses any existing or unreadable `DriverOrder` (including unrelated entries), and verifies absence after removing the owned record. It cannot accept a GPU result or verify stock recovery. Owner review and separately authorized next experiment are prerequisites; no automatic reactivation. Do not remove unrelated firmware boot entries to satisfy this restriction. The utility stops after a deletion attempt, including uncertain readback, and does not start an image or request a reset. Physical qualification remains outstanding. Run it only for a separately authorized experiment.
 
 ```powershell
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only maintenance -Operation ReviewBootState -SignOnly
@@ -520,7 +522,7 @@ the sequence ones build; with one BDF it is the other way round
 (`REASON=NEEDS_TWO_OR_MORE_BDFS`). Run `-All` twice with both shapes, or use
 `-Only` for the images you actually need.
 
-Staging requires a destination and exactly one image. Use `-StageDrive [letter]` for an existing USB volume or eligible verified internal volume, or `-StageDisk [number]` to create or reuse a verified dedicated partition. Omit the letter or number to select interactively. Use `-Only <profile>` and its arguments to select the image. Neither `-SignOnly` nor `-All` permits staging. The ordinary staging run replaces only the boot application at `EFI\BOOT\BOOTX64.EFI` and stages the required reference assets for firmware-transaction. For the waived
+Staging requires a destination and exactly one image. Use `-StageDrive [letter]` for an existing USB volume or eligible verified internal volume, or `-StageDisk [number]` to create or reuse a verified dedicated partition. Omit the letter or number to select interactively. Use `-Only <profile>` and its arguments to select the image. Neither `-SignOnly` nor `-All` permits staging. The ordinary staging run replaces only its subsystem-specific file: `EFI\BOOT\BOOTX64.EFI` for applications or `EFI\Drivers\AdaUnlockDxe.efi` for drivers and stages the required reference assets for firmware-transaction. For the waived
 one-target image, `-StageDxeCompanion` is an explicit paired build: it builds and
 signs the matching `dxe-actuate-one-target` variant first, stages that image at
 `EFI\Drivers\AdaUnlockDxe.efi` (the path the I/NVRAM installer opens), then
@@ -530,7 +532,7 @@ the application configuration `-Only firmware-transaction -Operation Menu` with 
 `-AcceptActuatingDeploy`; the driver is never renamed to BOOTX64.EFI. The output
 includes `STAGED_DXE_COMPANION` and `STAGED actuate-one-target` receipts. The
 bench-override sequence is a standalone DXE image, not a paired one-target
-companion; `-StageDrive` deliberately refuses it. After signing, install it only
+companion; `-StageDrive` stages it directly. After signing, install it only
 at the existing `Driver####` file path (`EFI\\Drivers\\AdaUnlockDxe.efi`) on the
 volume that option references, after backing up the prior file and verifying
 both hashes. The image itself logs on that volume and emits no screen messages.
@@ -565,7 +567,6 @@ does not build is worse than a failed command.
 | Staging preflight | Non-FAT32, read-only, system or boot volume; a non-USB volume unless newly provisioned and verified by StageDisk; a changed target identity |
 | Backup and rollback | Replacing `BOOTX64.EFI` without a verified local copy, or leaving a half-written one |
 | `-AcceptActuatingDeploy` | Staging a `stop-only` or `actuates` image by habit |
-| Compile-only refusal | Staging an image that returns before it observes anything |
 | DXE refusal | Staging a PE subsystem 11 driver as `BOOTX64.EFI` |
 
 ## 5. Receipts

@@ -37,14 +37,13 @@ class TheDefaultBuildIsUnchanged(unittest.TestCase):
         self.assertIn("if(!observation->EspResidentBuild) return GU_LAUNCH_REASON_BUILD_REFUSES;", MODULE)
 
     def test_dedicated_partition_pin_is_separate_from_resident_and_usb(self):
-        self.assertIn('#error Dedicated stage partition requires combined firmware reattachment', BOOT)
         self.assertIn('if(usb||!GuWindowsEspPathMatches((const uint8_t *)path,length,DedicatedStagePin))return EFI_ACCESS_DENIED;', BOOT)
         self.assertLess(BOOT.index('DedicatedStagePin))return EFI_ACCESS_DENIED;'), BOOT.index('s=fs->OpenVolume(fs,&Root);'))
         self.assertIn('LAUNCH_SOURCE=DEDICATED_PINNED_GPT LOG_WRITABLE=1', BOOT)
         for builder in BUILDERS:
             self.assertIn("/DGU_DEDICATED_STAGE_PIN", (ROOT / 'src' / builder).read_text(encoding='utf-8'))
         self.assertIn('!memcmp(DedicatedStagePin,&WindowsPartition,sizeof(DedicatedStagePin))', BOOT)
-        self.assertIn('!defined(GU_RUNTIME_ESP) && !defined(GU_DXE_FIRMWARE_REATTACH)', BOOT)
+        self.assertIn('#ifndef GU_RUNTIME_ESP\n  if(!memcmp(DedicatedStagePin', BOOT)
 
     def test_the_refusal_names_the_reason(self):
         self.assertIn('GuLog("LAUNCH_SOURCE DECISION=%s REASON=%s REMOVABLE=%u PARTITION=%u "', BOOT)

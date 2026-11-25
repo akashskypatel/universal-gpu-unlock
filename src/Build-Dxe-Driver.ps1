@@ -17,7 +17,6 @@ $ErrorActionPreference = 'Stop'
 $firmwareReattach = $AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench
 $stagePinText = 'NONE'
 if ($StagePartitionGuid) {
-    if (-not $firmwareReattach -or $EspResident -or $SyntheticCompileProfile) { throw '-StagePartitionGuid requires combined DXE firmware reattachment.' }
     . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
     $stagePin = ConvertTo-GuWindowsEspGuid $StagePartitionGuid
     $stagePinText = $stagePin.ToString('D')

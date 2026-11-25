@@ -428,12 +428,12 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
 
     def test_the_staging_rule_mirrors_the_safety_classes(self):
         for name, safety in MANIFEST["safety_classes"].items():
-            expected = (not safety["writes_gpu"]) and name not in ("compile-only", "maintenance")
+            expected = (not safety["writes_gpu"]) and name != "maintenance"
             self.assertEqual(safety["may_be_staged"] is True, expected,
                              f"{name}: may_be_staged must be true exactly when the image "
-                             "is safe to boot and has something to observe")
+                             "does not require explicit deployment consent")
 
-    def test_maintenance_is_explicit_and_isolated(self):
+    def test_maintenance_is_explicit_and_preserves_other_images(self):
         variants = [v for v in MANIFEST["variants"] if v["family"] == "maintenance"]
         self.assertEqual(len(variants), 1)
         variant = variants[0]
@@ -451,15 +451,11 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         gate = SCRIPT.index("if ($safety.may_be_staged -ne $true -and -not $AcceptActuatingDeploy)")
         maintenance = SCRIPT.index("if ($deployVariant.safety -eq 'maintenance')")
         self.assertLess(gate, maintenance)
-        self.assertIn("Maintenance staging requires -Only maintenance -Operation ReviewBootState.", SCRIPT)
         stage = SCRIPT[SCRIPT.index("function Stage-SignedEfi"):SCRIPT.index("# --- catalogue")]
-        self.assertLess(stage.index("if ($MaintenanceOnly -and $otherEfiCount -ne 0)"),
-                        stage.index("$replacementStarted = $false"))
-        self.assertLess(stage.index("Maintenance media is no longer isolated"),
-                        stage.index("Copy-Item -LiteralPath $SignedFile -Destination $temporary"))
-        self.assertIn("-MaintenanceOnly:($variant.safety -eq 'maintenance')", SCRIPT)
-        self.assertIn("($Variant.safety -eq 'maintenance' -or (Test-DxeFirmwareTransaction $Variant)) -and $script:StagePartitionGuid", SCRIPT)
-        self.assertIn("$deployVariant.safety -eq 'maintenance'", SCRIPT)
+        self.assertIn("Assert-StageInventory $Root", stage)
+        self.assertNotIn("MaintenanceOnly", stage)
+        self.assertIn("PreservedOtherEfiCount", stage)
+        self.assertIn("$Variant.family -in @('prepare','prepare-dxe','maintenance') -and $script:StagePartitionGuid", SCRIPT)
         self.assertIn("STAGE_PARTITION_GUID=", builder)
         source = (ROOT / 'src' / 'boot_state_maintenance.c').read_text(encoding='utf-8')
         self.assertLess(source.index('s=VerifyStagePartition(image,t)'), source.index('GuBootStateRead(t,&reviewed)'))
@@ -470,7 +466,9 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertIn("-SignOnly and -StageDrive are mutually exclusive", SCRIPT)
 
     def test_the_script_refuses_a_dxe_as_a_boot_application(self):
-        self.assertIn("A DXE boot-service driver cannot be staged as BOOTX64.EFI", SCRIPT)
+        self.assertIn("-Subsystem ([int]$familySpec.subsystem)", SCRIPT)
+        self.assertIn("if ($Subsystem -eq 11) { Join-Path $efiRoot 'Drivers' }", SCRIPT)
+        self.assertIn("if ($Subsystem -eq 11) { 'AdaUnlockDxe.efi' } else { 'BOOTX64.EFI' }", SCRIPT)
 
     def test_actuating_one_target_can_stage_its_signed_dxe_companion_in_driver_path(self):
         self.assertIn("[switch]$StageDxeCompanion", SCRIPT)
@@ -483,7 +481,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertIn("if ($result.id -eq $stageVariantId) { $result.destination = $bootDeployment.Path }", SCRIPT)
         self.assertIn("$companion[0]) + @($variants)", SCRIPT)
         self.assertIn("Stage-SignedDxeCompanion", SCRIPT)
-        self.assertIn("Join-Path $driversDir 'AdaUnlockDxe.efi'", SCRIPT)
+        self.assertIn("Join-Path $bootDir $imageName", SCRIPT)
         self.assertIn("EFI\\Drivers\\AdaUnlockDxe.efi", SCRIPT)
         self.assertIn("STAGED_DXE_COMPANION PATH=", SCRIPT)
         self.assertIn("$dxeStageVariantId -and $dxeStageVariantId -eq $variantId", SCRIPT)
@@ -741,7 +739,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
 
 
     def test_firmware_asset_stage_is_restricted_to_firmware_transactions(self):
-        self.assertIn("if ($deployVariant.profile -eq 'firmware-transaction')", SCRIPT)
+        self.assertIn("if ($deployVariant.profile -eq 'firmware-transaction' -or", SCRIPT)
         self.assertEqual(SCRIPT.count("-FirmwareAssetRepo $assetRepoForStage"), 2)
         stage = SCRIPT[SCRIPT.index("function Stage-SignedEfi"):SCRIPT.index("# --- catalogue")]
         self.assertLess(stage.index("Stage-FirmwareAssets -AssetRepo"), stage.index("$replacementStarted = $true"))
@@ -920,6 +918,7 @@ function Get-Disk { param($Number,$ErrorAction) $script:disk | Select-Object * }
 function Get-Partition { param($DiskNumber,$DriveLetter,$ErrorAction) if ($DriveLetter) { $script:parts | Where-Object DriveLetter -eq $DriveLetter } else { $script:parts | ForEach-Object { $_ | Select-Object * } } }
 function Get-Volume { param($DriveLetter,$ErrorAction) [pscustomobject]@{FileSystem='FAT32';FileSystemLabel='GPUUNLOCK';Size=1GB;UniqueId='volume-fixture'} }
 function Assert-NormalDirectory { param($Root) }
+function Set-Content { param($LiteralPath,$Encoding,$ErrorAction,[Parameter(ValueFromPipeline=$true)]$Value) process { if ($LiteralPath -notlike '*GPUUNLOCK-partition-*.json') { throw 'Unexpected receipt path' } } }
 function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
 function Read-Host { param($Prompt) if ($Mode -eq 1 -or $Mode -eq 11) { return 'NO' }; if ($Mode -eq 4) { $script:disk.UniqueId='replacement' }; if ($Mode -eq 9 -or $Mode -eq 12) { $script:parts[0].Size=2GB }; if ($Mode -eq 14) { return 'YeS' }; if ($Mode -ge 10) { return 'y' }; return 'Yes' }
 function New-Partition {
@@ -938,7 +937,7 @@ function Format-Volume {
 }
 ''' + functions + r'''
 # Receipt and content matching is tested separately against files.
-function Get-StageReuseEvidence { param($Disk,$Partition,$Root,$ReceiptDirectory) if ($Mode -lt 10 -or $Mode -eq 13) { throw 'No matching receipt' }; [pscustomobject]@{Hash='fixture-hash';Receipt='receipt-fixture'} }
+function Get-StageReuseEvidence { param($Disk,$Partition,$Root,$ReceiptDirectory) if ($Mode -lt 10 -or $Mode -eq 13) { throw 'No matching receipt' }; [pscustomobject]@{Hash='fixture-hash';DxeHash=$null;Receipt='receipt-fixture'} }
 $failed=$false
 if ((Get-StagePartitionSizeMB 84585936 512 0) -ne 162 -or
     (Get-StagePartitionSizeMB 84585936 4096 0) -ne 272 -or
@@ -947,7 +946,8 @@ if ((Get-StagePartitionSizeMB 84585936 512 0) -ne 162 -or
 try { [void](Get-StagePartitionSizeMB 84585936 512 100); throw 'Undersized override accepted' } catch { if ($_.Exception.Message -notlike 'PartitionSizeMB must be at least*') { throw } }
 try {
     $letter = if ($Mode -eq 15) { 'F' } elseif ($Mode -eq 16) { 'G' } else { '' }
-    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7) 0 'receipt-directory' -ExistingLetter $letter -ExistingGuid ([guid]'11111111-1111-1111-1111-111111111111') -ReuseOnly:($Mode -in @(15,16)) -InternalReuseOnly:($Mode -eq 17)
+    $pin = if ($Mode -eq 7 -or $Mode -eq 17) { [guid]'33333333-3333-3333-3333-333333333333' } else { [guid]::Empty }
+    $script:ProvisionedStage = New-StagePartition 0 1024 0 'receipt-directory' -ExistingLetter $letter -ExistingGuid ([guid]'11111111-1111-1111-1111-111111111111') -ReuseOnly:($Mode -in @(15,16)) -ExpectedPin $pin
     if ($Mode -eq 10 -or $Mode -eq 15) {
         if (-not $script:ProvisionedStage.Reused -or $script:ProvisionedStage.Guid -ne [guid]'11111111-1111-1111-1111-111111111111' -or (Assert-UsbVolume 'F') -ne 'F:\') { throw 'Invalid reuse identity' }
     }
@@ -1010,7 +1010,7 @@ if ($Mode -eq 0) {
                 "AttestationsVerified": ["STAGE_PARTITION_GUID=" + pin],
             }
             helpers = SCRIPT[SCRIPT.index("function Get-Sha256"):SCRIPT.index("# A switch plus one optional")]
-            helpers += SCRIPT[SCRIPT.index("function Get-StageReuseEvidence("):SCRIPT.index("function Get-StageReuseTarget(")]
+            helpers += SCRIPT[SCRIPT.index("function Get-StageImageReceipt("):SCRIPT.index("function Get-StageReuseTarget(")]
             helpers += SCRIPT[SCRIPT.index("function Get-ExistingEfi("):SCRIPT.index("function Get-DbCertificateDer")]
             harness = base / "reuse.ps1"
             harness.write_text(

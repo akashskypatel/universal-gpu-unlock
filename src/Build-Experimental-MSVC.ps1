@@ -24,7 +24,6 @@ $espPinText = 'NONE'
 $stagePinText = 'NONE'
 if ($SelectAllGpus -and -not $FirmwareReattach) { throw '-SelectAllGpus requires -FirmwareReattach.' }
 if ($StagePartitionGuid) {
-    if (-not $FirmwareReattach) { throw '-StagePartitionGuid requires -FirmwareReattach.' }
     . (Join-Path $PSScriptRoot 'Windows-Esp-Build.ps1')
     $stagePin = ConvertTo-GuWindowsEspGuid $StagePartitionGuid
     $stagePinText = $stagePin.ToString('D')
