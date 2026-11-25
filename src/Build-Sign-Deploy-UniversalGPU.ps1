@@ -67,9 +67,9 @@ EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
 
 .PARAMETER StageDisk
 Select an existing GPT physical disk by number, or omit the number to list
-disks and select interactively. Create one new FAT32 EFI
-partition in unallocated space after explicit confirmation. Never initialize,
-erase or resize a disk. Internal disks support UnlockReattach only.
+disks and select interactively. Create a new FAT32 EFI partition in free space,
+or reuse a verified dedicated GPU Unlock partition with local deployment evidence.
+Never initialize, erase, resize or reformat an existing partition. Internal disks support UnlockReattach only.
 .PARAMETER PartitionSizeMB
 Optional size override in MiB (64 through 4096). Default is twice the verified staged
 asset bytes rounded up, with a FAT32 sector-size minimum. Requires -StageDisk.
@@ -375,7 +375,67 @@ function Get-StagePartitionSizeMB([uint64]$AssetBytes,[uint32]$LogicalSectorSize
     return $requiredMB
 }
 
-function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal,[uint64]$AssetBytes=0) {
+# Use the previous local receipt and signed artifact, never a label alone.
+function Get-StageReuseEvidence($Disk,$Partition,[string]$Root,[string]$ReceiptDirectory) {
+    if (-not $ReceiptDirectory) { throw 'Existing EFI partition has no local deployment evidence.' }
+    Assert-NormalDirectory $ReceiptDirectory
+    Assert-NormalDirectory $Root
+    $bootPath = Join-Path $Root 'EFI\BOOT\BOOTX64.EFI'
+    $efiFiles = @(Get-ExistingEfi $Root)
+    if ($efiFiles.Count -ne 1 -or $efiFiles[0].FullName -ine $bootPath) {
+        throw 'Existing EFI partition is not an isolated GPU Unlock boot volume.'
+    }
+    Assert-EfiImage $bootPath 10
+    $bootHash = Get-Sha256 $bootPath
+    $pin = ([guid]$Partition.Guid).ToString('D')
+    $fields = @('ProvisionedPartitionGuid','ProvisionedDiskUniqueId','SignedSha256','VerifiedBySbverify','Destination','Subsystem','AttestationsVerified')
+    foreach ($recordFile in @(Get-ChildItem -LiteralPath $ReceiptDirectory -File -Filter 'UniversalGPU-*-signed.efi.json' -ErrorAction Stop)) {
+        if ($recordFile.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+        try { $record = Get-Content -LiteralPath $recordFile.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch { continue }
+        if ($null -eq $record -or @($fields | Where-Object { $_ -notin $record.PSObject.Properties.Name }).Count) { continue }
+        if ([string]$record.ProvisionedPartitionGuid -ine $pin -or
+            [string]$record.ProvisionedDiskUniqueId -cne [string]$Disk.UniqueId -or
+            $record.VerifiedBySbverify -isnot [bool] -or -not $record.VerifiedBySbverify -or
+            $record.Subsystem -ne 10 -or
+            [string]$record.Destination -notmatch '^[D-Z]:\\EFI\\BOOT\\BOOTX64\.EFI$' -or
+            [string]$record.SignedSha256 -cne $bootHash) { continue }
+        if ($Disk.BusType -ne 'USB' -and
+            "STAGE_PARTITION_GUID=$pin" -cnotin @($record.AttestationsVerified)) { continue }
+        $artifactPath = $recordFile.FullName.Substring(0,$recordFile.FullName.Length-5)
+        if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) { continue }
+        $artifact = Get-Item -LiteralPath $artifactPath -Force -ErrorAction Stop
+        if (($artifact.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            (Get-Sha256 $artifactPath) -cne $bootHash) { continue }
+        return [pscustomobject]@{ Hash=$bootHash; Receipt=$recordFile.FullName }
+    }
+    throw 'Existing EFI partition has no matching verified local deployment receipt and signed artifact.'
+}
+
+function Get-StageReuseTarget($Disk,$Partition,[string]$LayoutKey,[uint64]$RequiredBytes,[string]$ReceiptDirectory) {
+    $letter = [string]$Partition.DriveLetter
+    if ($letter -notmatch '^[D-Z]$' -or $Partition.Size -lt $RequiredBytes) {
+        throw 'Existing EFI partition needs an assigned D-Z drive letter and sufficient capacity; no format or resize attempted.'
+    }
+    $observed = @(Get-Partition -DriveLetter $letter -ErrorAction Stop)
+    $volumes = @(Get-Volume -DriveLetter $letter -ErrorAction Stop)
+    if ($observed.Count -ne 1 -or $observed[0].DiskNumber -ne $Disk.Number -or
+        (Get-StageLayoutKey $observed) -cne (Get-StageLayoutKey @($Partition)) -or
+        $observed[0].IsBoot -or $observed[0].IsSystem -or
+        $volumes.Count -ne 1 -or $volumes[0].FileSystem -ne 'FAT32' -or
+        $volumes[0].FileSystemLabel -cne 'GPUUNLOCK' -or -not [string]$volumes[0].UniqueId) {
+        throw 'Existing EFI partition identity or GPU Unlock volume label is not verified.'
+    }
+    $root = '{0}:\' -f $letter
+    if ($ReceiptDirectory -and [IO.Path]::GetPathRoot($ReceiptDirectory).TrimEnd('\') -ieq $root.TrimEnd('\')) {
+        throw 'Local deployment evidence must be outside the selected staging volume.'
+    }
+    $evidence = Get-StageReuseEvidence $Disk $Partition $root $ReceiptDirectory
+    return [pscustomobject]@{ Disk=$Disk; Guid=[guid]$Partition.Guid; Letter=$letter; Size=$Partition.Size;
+        EspType=[guid]$Partition.GptType; LayoutKey=$LayoutKey; Offset=$Partition.Offset; Number=$Partition.PartitionNumber;
+        Reused=$true; VolumeId=[string]$volumes[0].UniqueId; ReuseBootSha256=$evidence.Hash; OwnershipReceipt=$evidence.Receipt }
+}
+
+function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal,[uint64]$AssetBytes=0,[string]$ReceiptDirectory) {
     $disk = Get-StageDiskIdentity $Number
     if ($disk.BusType -ne 'USB' -and -not $AllowInternal) {
         throw 'Internal disk staging currently supports firmware-transaction UnlockReattach only.'
@@ -386,8 +446,28 @@ function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal
     Say ("STAGE_SIZE ASSET_BYTES={0} LOGICAL_SECTOR={1} PARTITION_MIB={2}" -f $AssetBytes,$disk.LogicalSectorSize,$SizeMB)
     $before = @(Get-StageLayout $disk)
     $beforeKey = Get-StageLayoutKey $before
-    if (@($before | Where-Object { $_.IsBoot -or $_.IsSystem -or ([guid]$_.GptType -eq $espType) }).Count) {
-        throw 'Disk already carries an EFI/system/boot partition; refusing automatic provisioning.'
+    if (@($before | Where-Object { $_.IsBoot -or $_.IsSystem }).Count) {
+        throw 'Disk already carries a system/boot partition; refusing staging.'
+    }
+    $existingEsp = @($before | Where-Object { [guid]$_.GptType -eq $espType })
+    if ($existingEsp.Count -gt 1) { throw 'Multiple existing EFI partitions; refusing ambiguous reuse.' }
+    if ($existingEsp.Count -eq 1) {
+        $reuse = Get-StageReuseTarget $disk $existingEsp[0] $beforeKey $size $ReceiptDirectory
+        Say ("STAGE_REUSE DISK={0} ID={1} MODEL={2} SERIAL={3} GUID={4} DRIVE={5} BYTES={6} RECEIPT={7}" -f
+            $disk.Number,$disk.UniqueId,$disk.FriendlyName,$disk.SerialNumber,$reuse.Guid,$reuse.Letter,$reuse.Size,$reuse.OwnershipReceipt)
+        $reuseConfirm = "REUSE $Number $($reuse.Guid.ToString('D'))"
+        if ((Read-Host "Reuse verified GPU Unlock partition without formatting. Type $reuseConfirm") -cne $reuseConfirm) {
+            throw 'Partition reuse cancelled.'
+        }
+        $live = Assert-StageDiskIdentity $disk
+        $after = @(Get-StageLayout $live)
+        if ((Get-StageLayoutKey $after) -cne $beforeKey) { throw 'Disk layout changed after reuse confirmation.' }
+        $confirmed = @($after | Where-Object { [guid]$_.Guid -eq $reuse.Guid })
+        if ($confirmed.Count -ne 1) { throw 'Reuse partition identity changed.' }
+        $checkedReuse = Get-StageReuseTarget $live $confirmed[0] $beforeKey $size $ReceiptDirectory
+        if ($checkedReuse.Letter -ne $reuse.Letter -or $checkedReuse.VolumeId -cne $reuse.VolumeId -or
+            $checkedReuse.ReuseBootSha256 -cne $reuse.ReuseBootSha256) { throw 'Reuse volume or boot image changed after confirmation.' }
+        return $checkedReuse
     }
     if ($disk.LargestFreeExtent -lt $size) { throw 'Insufficient contiguous unallocated space; no resize or erase is permitted.' }
     Say ("STAGE_DISK NUMBER={0} ID={1} MODEL={2} SERIAL={3} BUS={4} BYTES={5} FREE_EXTENT={6}" -f
@@ -427,7 +507,7 @@ function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal
     if ((Get-StageLayoutKey $after) -cne (Get-StageLayoutKey @($old + $new | Sort-Object Offset))) {
         throw 'Partition layout changed during formatting; no staging attempted.'
     }
-    return [pscustomobject]@{ Disk=$disk; Guid=$guid; Letter=$letter; Size=$size; EspType=$espType; LayoutKey=(Get-StageLayoutKey $after); Offset=$new[0].Offset; Number=$new[0].PartitionNumber }
+    return [pscustomobject]@{ Disk=$disk; Guid=$guid; Letter=$letter; Size=$size; EspType=$espType; LayoutKey=(Get-StageLayoutKey $after); Offset=$new[0].Offset; Number=$new[0].PartitionNumber; Reused=$false; VolumeId=$null; ReuseBootSha256=$null; OwnershipReceipt=$null }
 }
 
 function Assert-UsbVolume([string]$Drive) {
@@ -447,7 +527,8 @@ function Assert-UsbVolume([string]$Drive) {
         if ($disk.UniqueId -cne $expected.Disk.UniqueId -or [guid]$part.Guid -ne $expected.Guid -or
             $part.Size -ne $expected.Size -or [guid]$part.GptType -ne $expected.EspType -or $Drive -ne $expected.Letter -or
             $part.Offset -ne $expected.Offset -or $part.PartitionNumber -ne $expected.Number -or
-            (Get-StageLayoutKey @(Get-StageLayout $live)) -cne $expected.LayoutKey) {
+            (Get-StageLayoutKey @(Get-StageLayout $live)) -cne $expected.LayoutKey -or
+            ($expected.Reused -and ([string]$volume.UniqueId -cne $expected.VolumeId -or $volume.FileSystemLabel -cne 'GPUUNLOCK'))) {
             throw 'Provisioned stage partition identity changed.'
         }
         $allowedBus = $true
@@ -819,6 +900,22 @@ function Stage-SignedEfi {
     $allEfi = @(Get-ExistingEfi $Root)
     $oldBootPresent = Test-Path -LiteralPath $destination -PathType Leaf
     $otherEfiCount = @($allEfi | Where-Object { $_.FullName -ine $destination }).Count
+    $reuseStage = $script:ProvisionedStage -and $script:ProvisionedStage.Reused
+    if ($reuseStage) {
+        if (-not $oldBootPresent -or $otherEfiCount -ne 0 -or (Get-Sha256 $destination) -cne $script:ProvisionedStage.ReuseBootSha256) {
+            throw 'Verified GPU Unlock boot image or EFI inventory changed; refusing reuse.'
+        }
+        [uint64]$requiredFree = (Get-Item -LiteralPath $SignedFile -ErrorAction Stop).Length + 1MB
+        if ($FirmwareAssetRepo) {
+            foreach ($assetEntry in @(Get-FirmwareAssetPlan -AssetRepo $FirmwareAssetRepo -Root $Root)) {
+                if (-not (Test-Path -LiteralPath $assetEntry.Destination)) { $requiredFree += [uint64]$assetEntry.Pin.bytes }
+            }
+        }
+        $reuseVolume = Get-Volume -DriveLetter $Drive -ErrorAction Stop
+        if ([string]$reuseVolume.UniqueId -cne $ExpectedVolumeId -or $reuseVolume.SizeRemaining -lt $requiredFree) {
+            throw 'Existing staging partition identity or free capacity is insufficient; preserve logs and free space manually.'
+        }
+    }
     if ($MaintenanceOnly -and $otherEfiCount -ne 0) {
         throw 'Maintenance requires isolated USB media: other EFI files exist. Use separate media; no files were removed.'
     }
@@ -837,6 +934,7 @@ function Stage-SignedEfi {
         [void](New-Item -ItemType Directory -Path $backup -ErrorAction Stop)
         $savedOld = Join-Path $backup 'BOOTX64.EFI'
         $oldSha = Get-Sha256 $destination
+        if ($reuseStage -and $oldSha -cne $script:ProvisionedStage.ReuseBootSha256) { throw 'Verified GPU Unlock boot image changed before backup.' }
         Copy-Item -LiteralPath $destination -Destination $savedOld -ErrorAction Stop
         if ((Get-Sha256 $savedOld) -ne $oldSha -or (Get-Sha256 $destination) -ne $oldSha) {
             throw 'Existing BOOTX64.EFI backup verification failed; existing EFI not removed.'
@@ -859,7 +957,7 @@ function Stage-SignedEfi {
             [string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
             throw 'Target USB identity changed during staging.'
         }
-        if ($MaintenanceOnly -and @(Get-ExistingEfi $Root | Where-Object { $_.FullName -ine $destination }).Count -ne 0) {
+        if (($MaintenanceOnly -or $reuseStage) -and @(Get-ExistingEfi $Root | Where-Object { $_.FullName -ine $destination }).Count -ne 0) {
             throw 'Maintenance media is no longer isolated; no original EFI was removed.'
         }
         if ((Get-Sha256 $SignedFile) -ne $SignedSha256) { throw 'Signed EFI hash changed before USB copy.' }
@@ -1543,14 +1641,15 @@ try {
                 $stageAssetBytes += [uint64]$assetEntry.Pin.bytes
             }
         }
-        $script:ProvisionedStage = New-StagePartition $selectedStageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach')) $stageAssetBytes
+        $script:ProvisionedStage = New-StagePartition $selectedStageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach')) $stageAssetBytes $OutputDirectory
         $drive = $script:ProvisionedStage.Letter
         if ($script:ProvisionedStage.Disk.BusType -ne 'USB') { $script:StagePartitionGuid = $script:ProvisionedStage.Guid.ToString('D') }
         $usbRoot = Assert-UsbVolume $drive
         $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
         if (-not $targetVolumeId) { throw 'Provisioned volume identity unavailable.' }
         if ([IO.Path]::GetPathRoot($OutputDirectory).TrimEnd('\') -ieq $usbRoot.TrimEnd('\')) { throw 'Local outputs must remain outside the provisioned partition.' }
-        Say ("STAGE_PARTITION CREATED GUID={0} DRIVE={1} SIZE={2}" -f $script:ProvisionedStage.Guid,$drive,$script:ProvisionedStage.Size)
+        $stageAction = if ($script:ProvisionedStage.Reused) { "REUSED" } else { "CREATED" }
+        Say ("STAGE_PARTITION {0} GUID={1} DRIVE={2} SIZE={3}" -f $stageAction,$script:ProvisionedStage.Guid,$drive,$script:ProvisionedStage.Size)
     }
 
     if ($script:SelectionSpec.Count) {
@@ -1751,6 +1850,8 @@ try {
                 FirmwareAssets = @(if ($deployment) { $deployment.FirmwareAssets })
                 ProvisionedPartitionGuid = $(if ($deployment -and $script:ProvisionedStage) { $script:ProvisionedStage.Guid.ToString('D') } else { $null })
                 ProvisionedDiskUniqueId = $(if ($deployment -and $script:ProvisionedStage) { $script:ProvisionedStage.Disk.UniqueId } else { $null })
+                ReusedStagePartition = [bool]($deployment -and $script:ProvisionedStage -and $script:ProvisionedStage.Reused)
+                PreviousDeploymentReceipt = $(if ($deployment -and $script:ProvisionedStage) { $script:ProvisionedStage.OwnershipReceipt } else { $null })
                 DxeCompanionStaged = [bool]($dxeStageVariantId -and $variantId -eq $dxeStageVariantId -and $deployment)
                 DxeCompanionPath = $null
                 DxeCompanionSha256 = $null
