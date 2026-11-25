@@ -806,7 +806,7 @@ $script:ProvisionedStage = $null
 $script:creates = 0
 $script:formats = 0
 $script:disk = [pscustomobject]@{ Number=0; UniqueId='disk-fixture'; SerialNumber='serial'; Size=10GB; LargestFreeExtent=2GB; BusType='NVMe'; PartitionStyle='GPT'; IsBoot=$false; IsSystem=$false; IsOffline=$false; IsReadOnly=$false; FriendlyName='fixture' }
-$script:parts = @([pscustomobject]@{ Guid='11111111-1111-1111-1111-111111111111'; Offset=1MB; Size=1GB; PartitionNumber=1; GptType='ebd0a0a2-b9e5-4433-87c0-68b6b72699c7'; IsSystem=$false; IsBoot=$false; DriveLetter='F' })
+$script:parts = @([pscustomobject]@{ Guid='11111111-1111-1111-1111-111111111111'; Offset=1MB; Size=1GB; PartitionNumber=1; DiskNumber=0; GptType='ebd0a0a2-b9e5-4433-87c0-68b6b72699c7'; IsSystem=$false; IsBoot=$false; DriveLetter='F' })
 $script:newGuid = '22222222-2222-2222-2222-222222222222'
 if ($Mode -eq 2) { $script:disk.LargestFreeExtent=256MB }
 if ($Mode -eq 3) { $script:disk.IsSystem=$true }
@@ -822,7 +822,7 @@ function New-Partition {
     param($DiskId,$Size,$GptType,[switch]$AssignDriveLetter,$ErrorAction)
     $script:creates++
     if ($DiskId -ne 'disk-fixture' -or $Size -ne 1GB -or -not $AssignDriveLetter) { throw 'Unexpected create arguments' }
-    $p = [pscustomobject]@{Guid=$script:newGuid;Offset=2GB;Size=$Size;PartitionNumber=2;GptType=$GptType;IsSystem=$false;IsBoot=$false;DriveLetter='G'}
+    $p = [pscustomobject]@{Guid=$script:newGuid;Offset=2GB;Size=$Size;PartitionNumber=2;DiskNumber=0;GptType=$GptType;IsSystem=$false;IsBoot=$false;DriveLetter='G'}
     if ($Mode -eq 5) { $script:parts[0].Size=2GB }
     $script:parts += $p
     return $p
