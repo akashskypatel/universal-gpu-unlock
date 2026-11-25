@@ -169,7 +169,7 @@ int main(void) {
   Card(c, 0x50, card);
   EXPECT(GuCheckLinkState(c, 0x50, &link) == GU_LINK_ASPM_ENABLED);
   EXPECT(link.aspm == 3 && link.errors == 0);
-#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_FIRMWARE_REATTACH)
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || (defined(GU_FIRMWARE_REATTACH) && !defined(GU_DXE_FIRMWARE_REATTACH))
   EXPECT(GuLinkAccepted(GU_LINK_ASPM_ENABLED));
 #else
   EXPECT(!GuLinkAccepted(GU_LINK_ASPM_ENABLED));
@@ -283,7 +283,7 @@ int main(void) {
                                    GU_LINK_DOWN, GU_LINK_UNUSABLE};
     for (UINTN i = 0; i < sizeof(all) / sizeof(all[0]); ++i) {
       EXPECT(GuLinkReason(all[i]) != NULL && GuLinkReason(all[i])[0]);
-#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_FIRMWARE_REATTACH)
+#if defined(GU_UNVERIFIED_BENCH_CONDITIONS) || (defined(GU_FIRMWARE_REATTACH) && !defined(GU_DXE_FIRMWARE_REATTACH))
       EXPECT(GuLinkAccepted(all[i]) == (all[i] == GU_LINK_OK || all[i] == GU_LINK_ASPM_ENABLED));
 #else
       EXPECT(GuLinkAccepted(all[i]) == (all[i] == GU_LINK_OK));
@@ -398,6 +398,24 @@ class PciLinkState(unittest.TestCase):
                 [compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
                  "-DGU_FIRMWARE_REATTACH", "-I", str(ROOT / "src"),
                  str(source), "-o", str(binary)],
+                capture_output=True, text=True, timeout=60, check=False,
+            )
+            self.assertEqual(built.returncode, 0, built.stderr[-3000:])
+            executed = subprocess.run([str(binary)], capture_output=True, text=True,
+                                      timeout=30, check=False)
+            self.assertEqual(executed.returncode, 0, executed.stderr[-3000:])
+            self.assertRegex(executed.stdout, r"STATUS=COMPLETE PASS=\d+ PCI_LINK_STATE_CASES")
+
+    def test_dxe_reattach_retains_strict_aspm_admission(self):
+        compiler = os.environ.get("CC", "gcc")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "link.c"
+            binary = Path(directory) / "link"
+            source.write_text(harness(), encoding="utf-8")
+            built = subprocess.run(
+                [compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror",
+                 "-DGU_FIRMWARE_REATTACH", "-DGU_DXE_FIRMWARE_REATTACH",
+                 "-I", str(ROOT / "src"), str(source), "-o", str(binary)],
                 capture_output=True, text=True, timeout=60, check=False,
             )
             self.assertEqual(built.returncode, 0, built.stderr[-3000:])

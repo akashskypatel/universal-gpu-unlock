@@ -49,11 +49,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   /* Read again after GuBootOpen. The earlier log observation is not admission. */
   GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
   s=GuBootReadPriorState(t,&boot_state,&boot_state_present);
-  if(s!=EFI_SUCCESS) {
-    GuLog("DXE_RECOVERY=UNREADABLE STATUS=%#llx ACTION=SKIP_GPU\n",(unsigned long long)s);
-    EFI_STATUS closed=GuBootClose();
-    return closed==EFI_SUCCESS?s:closed;
-  }
+  if(s!=EFI_SUCCESS)return s;
 
 #if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
   if(GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)) {
