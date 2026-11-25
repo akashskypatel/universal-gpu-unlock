@@ -48,6 +48,17 @@ class BootBinding(unittest.TestCase):
         self.assertIn("ReadPinnedAssetFromConfiguredEsp(",loader)
         self.assertIn("GuFree((VOID *)GuAssets[i].firmware.data)",loader)
 
+    def test_log_retention_is_guarded_and_excludes_current(self):
+        boot = BOOT.split("EFI_STATUS GuBootOpen(", 1)[1].split("static EFI_STATUS ReadFile(", 1)[0]
+        self.assertLess(boot.index("current_log_slot=slot;"), boot.index("s=DeleteOldRunLogs(current_log_slot);"))
+        self.assertIn("read==EFI_NOT_FOUND||(read==EFI_SUCCESS&&!GuBootStateRequiresRecovery(&previous))", boot)
+        self.assertIn("LOG_RETENTION SKIPPED=1 REASON=RECOVERY_OR_UNCERTAIN_STATE", boot)
+        cleanup = BOOT.split("static EFI_STATUS DeleteOldRunLogs(", 1)[1].split("#endif", 1)[0]
+        self.assertIn("slot&&slot!=current", cleanup)
+        self.assertIn("RunLogInfoSlot((const VOID *)words,bytes)!=slot", cleanup)
+        self.assertLess(cleanup.index("if(s==EFI_SUCCESS&&!eof)"), cleanup.index("s=file->Delete(file);file=NULL;"))
+        self.assertNotIn("EFI_FILE_MODE_CREATE", cleanup)
+
     def test_shared_filesystem_census_refuses_uncertain_release(self):
         """Compile the real enumeration/release helpers with simulated services."""
         production = BOOT.split("static EFI_STATUS ReleaseBootFilesystemHandles(",1)[1].split(

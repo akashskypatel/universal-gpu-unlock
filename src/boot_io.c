@@ -617,6 +617,131 @@ static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **file) {
   return s==EFI_SUCCESS?s:RecordBootFileFailure(f);
 }
 
+#ifdef GU_FIRMWARE_REATTACH
+/* Standard EFI_FILE_SYSTEM_INFO prefix (the bundled headers omit this GUID).
+ * Only the launch volume is queried; no physical disk or Windows ESP scan. */
+typedef struct {
+  UINT64 Size;
+  BOOLEAN ReadOnly;
+  UINT64 VolumeSize,FreeSpace;
+  UINT32 BlockSize;
+  CHAR16 VolumeLabel[1];
+} GU_LOG_VOLUME_INFO;
+static EFI_GUID LogVolumeInfoGuid={0x09576e93,0x6d3f,0x11d2,{0x8e,0x39,0x00,0xa0,0xc9,0x69,0x72,0x3b}};
+
+static EFI_STATUS LogVolumeUsage(UINT64 *total,UINT64 *free_bytes) {
+  UINT64 words[128];
+  UINTN bytes=sizeof(words);
+  if(!Root||!Root->GetInfo)return EFI_UNSUPPORTED;
+  EFI_STATUS s=Root->GetInfo(Root,&LogVolumeInfoGuid,&bytes,words);
+  if(s!=EFI_SUCCESS)return s;
+  const GU_LOG_VOLUME_INFO *info=(const VOID *)words;
+  if(bytes>sizeof(words)||bytes<sizeof(GU_LOG_VOLUME_INFO)||
+     info->Size<sizeof(GU_LOG_VOLUME_INFO)||info->Size>bytes||
+     info->ReadOnly||!info->VolumeSize||!info->BlockSize||
+     info->FreeSpace>info->VolumeSize)return EFI_COMPROMISED_DATA;
+  *total=info->VolumeSize;*free_bytes=info->FreeSpace;
+  return EFI_SUCCESS;
+}
+
+static BOOLEAN LogVolumeFull(UINT64 total,UINT64 free_bytes) {
+  /* Division avoids overflow for large volumes. Exactly 90% is included. */
+  return total&&free_bytes<=total/10U;
+}
+
+static UINTN RunLogSlot(const CHAR16 *name,UINTN chars) {
+  if(!name||chars<12U||name[0]!='R'||name[1]!='U'||name[2]!='N'||
+     name[7]!='.'||name[8]!='T'||name[9]!='X'||name[10]!='T'||name[11])return 0;
+  UINTN slot=0;
+  for(UINTN i=3;i<7;i++) {
+    if(name[i]<'0'||name[i]>'9')return 0;
+    slot=slot*10U+(UINTN)(name[i]-'0');
+  }
+  return slot;
+}
+static UINTN RunLogInfoSlot(const EFI_FILE_INFO *info,UINTN bytes) {
+  const UINTN prefix=offsetof(EFI_FILE_INFO,FileName);
+  if(bytes<prefix+sizeof(CHAR16)||info->Size<prefix+sizeof(CHAR16)||
+     info->Size>bytes||(info->Attribute&EFI_FILE_DIRECTORY))return 0;
+  return RunLogSlot(info->FileName,(UINTN)(info->Size-prefix)/sizeof(CHAR16));
+}
+
+static EFI_STATUS DeleteOldRunLogs(UINTN current) {
+  if(!current||current>9999U||!Log||BootFileStatus!=EFI_SUCCESS)return EFI_NOT_READY;
+  UINT64 total=0,free_bytes=0;
+  EFI_STATUS s=LogVolumeUsage(&total,&free_bytes);
+  if(s!=EFI_SUCCESS) {
+    GuLog("LOG_RETENTION SKIPPED=1 REASON=VOLUME_USAGE_UNAVAILABLE STATUS=%#llx\n",(unsigned long long)s);
+    return BootFileStatus;
+  }
+  if(!LogVolumeFull(total,free_bytes)) {
+    GuLog("LOG_RETENTION SKIPPED=1 REASON=BELOW_THRESHOLD TOTAL=%llu FREE=%llu THRESHOLD=90\n",
+          (unsigned long long)total,(unsigned long long)free_bytes);
+    return BootFileStatus;
+  }
+  EFI_FILE_PROTOCOL *dir=NULL;
+  s=Root->Open(Root,&dir,L"\\AD102-UNLOCK",EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE,0);
+  s=BootFileOpenResult(s,&dir);
+  if(s!=EFI_SUCCESS||!dir)return s==EFI_SUCCESS?EFI_DEVICE_ERROR:s;
+  UINT8 slots[1250]={0};
+  UINT64 words[128];
+  UINTN deleted=0;
+  BOOLEAN eof=FALSE;
+  /* Census first; removing entries can invalidate directory cursor positions. */
+  for(UINTN entry=0;entry<16384U;entry++) {
+    UINTN bytes=sizeof(words);
+    s=dir->Read?dir->Read(dir,&bytes,words):EFI_UNSUPPORTED;
+    if(s!=EFI_SUCCESS)break;
+    if(!bytes){eof=TRUE;break;}
+    const EFI_FILE_INFO *info=(const VOID *)words;
+    const UINTN prefix=offsetof(EFI_FILE_INFO,FileName);
+    if(bytes>sizeof(words)||bytes<prefix+sizeof(CHAR16)||
+       info->Size<prefix+sizeof(CHAR16)||info->Size>bytes) {
+      s=EFI_COMPROMISED_DATA;break;
+    }
+    UINTN slot=RunLogInfoSlot(info,bytes);
+    if(slot&&slot!=current)slots[slot/8U]|=(UINT8)(1U<<(slot%8U));
+  }
+  if(s==EFI_SUCCESS&&!eof)s=EFI_OUT_OF_RESOURCES;
+  /* Slot order is deterministic, not a claim about age after slot reuse.
+   * Stop deleting as soon as the volume is below the threshold. */
+  for(UINTN slot=1;s==EFI_SUCCESS&&LogVolumeFull(total,free_bytes)&&slot<=9999U;slot++) {
+    if(!(slots[slot/8U]&(1U<<(slot%8U))))continue;
+    CHAR16 name[]=L"RUN0000.TXT";UINTN number=slot;
+    for(UINTN at=7;at>3;){at--;name[at]=(CHAR16)('0'+number%10);number/=10;}
+    /* The directory census may be stale; verify the reopened file. */
+    EFI_FILE_PROTOCOL *file=NULL;
+    s=dir->Open(dir,&file,name,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE,0);
+    s=BootFileOpenResult(s,&file);
+    if(s!=EFI_SUCCESS||!file){if(s==EFI_SUCCESS)s=EFI_DEVICE_ERROR;break;}
+    UINTN bytes=sizeof(words);
+    s=file->GetInfo?file->GetInfo(file,&InfoGuid,&bytes,words):EFI_UNSUPPORTED;
+    if(s==EFI_SUCCESS&&(bytes>sizeof(words)||RunLogInfoSlot((const VOID *)words,bytes)!=slot))
+      s=EFI_COMPROMISED_DATA;
+    if(s!=EFI_SUCCESS||!file->Delete) {
+      EFI_STATUS closed=CloseBootFile(&file);
+      if(closed!=EFI_SUCCESS)s=closed;
+      else if(s==EFI_SUCCESS)s=EFI_UNSUPPORTED;
+      break;
+    }
+    /* UEFI Delete consumes the file handle even on a delete warning. */
+    s=file->Delete(file);file=NULL;
+    if(s!=EFI_SUCCESS){s=EFI_DEVICE_ERROR;break;}
+    deleted++;
+    UINT64 observed=0;
+    s=LogVolumeUsage(&observed,&free_bytes);
+    if(s==EFI_SUCCESS&&observed!=total)s=EFI_COMPROMISED_DATA;
+  }
+  EFI_STATUS closed=CloseBootFile(&dir);
+  if(closed!=EFI_SUCCESS)s=closed;
+  GuLog("LOG_RETENTION CURRENT=%u DELETED=%u TOTAL=%llu FREE=%llu THRESHOLD=90 STILL_FULL=%u STATUS=%#llx\n",
+        (unsigned)current,(unsigned)deleted,(unsigned long long)total,(unsigned long long)free_bytes,
+        (unsigned)LogVolumeFull(total,free_bytes),(unsigned long long)s);
+  if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
+  return s;
+}
+#endif
+
 #ifdef GU_ESP_RESIDENT
 /* A resident image must identify its ESP at runtime. A compiled partition GUID
  * would tie the installed copy to one machine, which is the coupling A2 removed,
@@ -711,6 +836,9 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   if(s!=EFI_SUCCESS||!dir){s=EFI_DEVICE_ERROR;goto failed;}
 
+#ifdef GU_FIRMWARE_REATTACH
+  UINTN current_log_slot=0;
+#endif
   for(UINTN slot=1;slot<=9999;slot++) {
 
     CHAR16 name[]=L"RUN0000.TXT";UINTN number=slot;
@@ -727,6 +855,9 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
     s=dir->Open(dir,&Log,name,EFI_FILE_MODE_READ|EFI_FILE_MODE_WRITE|EFI_FILE_MODE_CREATE,0);
     s=BootFileOpenResult(s,&Log);
     if(s==EFI_SUCCESS&&Log) {
+#ifdef GU_FIRMWARE_REATTACH
+      current_log_slot=slot;
+#endif
       for(UINTN k=0;k<sizeof(name)/sizeof(CHAR16);k++) ActiveLogPath[14+k]=name[k];
     }
     break;
@@ -797,6 +928,15 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
       GuLog("BOOT_STATE PRESENT=0 READ_STATUS=%#llx VALID=0\n",
             (unsigned long long)read);
     }
+#ifdef GU_FIRMWARE_REATTACH
+    if((BootFromUsb||dedicated)&&
+       (read==EFI_NOT_FOUND||(read==EFI_SUCCESS&&!GuBootStateRequiresRecovery(&previous)))) {
+      s=DeleteOldRunLogs(current_log_slot);
+      if(s!=EFI_SUCCESS)goto failed;
+    } else {
+      GuLog("LOG_RETENTION SKIPPED=1 REASON=RECOVERY_OR_UNCERTAIN_STATE\n");
+    }
+#endif
   }
 
 #ifdef GU_ACTIVE_SEQUENCE_PREPARE_ONLY

@@ -8,6 +8,8 @@
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -StageDisk 2 -AcceptActuatingDeploy
 ```
 
+The combined application checks its launch volume's free space at startup, before GPU work. At 90% utilization or above, it deletes previous regular RUNnnnn.TXT logs from its own AD102-UNLOCK directory in slot order until utilization falls below 90%, or no eligible logs remain. It preserves the current log, unrelated names, directories, and all logs when the recovery state is unresolved or cannot be read. Below 90%, or if volume usage is unavailable, it deletes nothing. No cleanup occurs during hardware transactions or on the Windows EFI partition. Copy any historical logs you want to preserve. Other profiles keep their existing logging policy.
+
 Use the actual disk number. Boot manually using the firmware boot menu or the firmware's file selector for the dedicated partition's `EFI\BOOT\BOOTX64.EFI`. Do not modify Windows Boot Manager or boot order. Do not deploy before the pinned build and provisioning regression CI passes.
 
 
