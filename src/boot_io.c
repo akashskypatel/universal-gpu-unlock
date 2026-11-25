@@ -636,8 +636,9 @@ static EFI_STATUS LogVolumeUsage(UINT64 *total,UINT64 *free_bytes) {
   EFI_STATUS s=Root->GetInfo(Root,&LogVolumeInfoGuid,&bytes,words);
   if(s!=EFI_SUCCESS)return s;
   const GU_LOG_VOLUME_INFO *info=(const VOID *)words;
-  if(bytes>sizeof(words)||bytes<sizeof(GU_LOG_VOLUME_INFO)||
-     info->Size<sizeof(GU_LOG_VOLUME_INFO)||info->Size>bytes||
+  const UINTN minimum=offsetof(GU_LOG_VOLUME_INFO,VolumeLabel)+sizeof(CHAR16);
+  if(bytes>sizeof(words)||bytes<minimum||
+     info->Size<minimum||info->Size>bytes||
      info->ReadOnly||!info->VolumeSize||!info->BlockSize||
      info->FreeSpace>info->VolumeSize)return EFI_COMPROMISED_DATA;
   *total=info->VolumeSize;*free_bytes=info->FreeSpace;

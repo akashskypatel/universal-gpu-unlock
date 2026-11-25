@@ -59,6 +59,131 @@ class BootBinding(unittest.TestCase):
         self.assertLess(cleanup.index("if(s==EFI_SUCCESS&&!eof)"), cleanup.index("s=file->Delete(file);file=NULL;"))
         self.assertNotIn("EFI_FILE_MODE_CREATE", cleanup)
 
+    def test_log_cleanup_threshold_and_consumed_handles(self):
+        actual = BOOT.split("/* Standard EFI_FILE_SYSTEM_INFO prefix", 1)[1].split("\n#endif", 1)[0]
+        actual = "/* Standard EFI_FILE_SYSTEM_INFO prefix" + actual
+        host = r"""
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <wchar.h>
+typedef uint64_t UINT64;
+typedef uint32_t UINT32;
+typedef uint8_t UINT8;
+typedef size_t UINTN;
+typedef unsigned char BOOLEAN;
+typedef wchar_t CHAR16;
+typedef void VOID;
+typedef int EFI_STATUS;
+typedef struct {UINT32 a; uint16_t b,c; UINT8 d[8];} EFI_GUID;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFI_NOT_READY 1
+#define EFI_UNSUPPORTED 2
+#define EFI_COMPROMISED_DATA 3
+#define EFI_DEVICE_ERROR 4
+#define EFI_OUT_OF_RESOURCES 5
+#define EFI_FILE_MODE_READ 1
+#define EFI_FILE_MODE_WRITE 2
+#define EFI_FILE_DIRECTORY 16
+typedef struct {
+  UINT64 Size,FileSize,Attribute;
+  CHAR16 FileName[1];
+} EFI_FILE_INFO;
+typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
+struct EFI_FILE_PROTOCOL {
+  EFI_STATUS (*Open)(EFI_FILE_PROTOCOL *,EFI_FILE_PROTOCOL **,CHAR16 *,UINT64,UINT64);
+  EFI_STATUS (*GetInfo)(EFI_FILE_PROTOCOL *,EFI_GUID *,UINTN *,VOID *);
+  EFI_STATUS (*Read)(EFI_FILE_PROTOCOL *,UINTN *,VOID *);
+  EFI_STATUS (*Delete)(EFI_FILE_PROTOCOL *);
+};
+static EFI_FILE_PROTOCOL root,dir,file,*Root=&root,*Log=&file;
+static EFI_GUID InfoGuid;
+static EFI_STATUS BootFileStatus;
+static unsigned opened,closed,deleted,mode,index_entry,selected;
+static UINT64 capacity,available;
+static const CHAR16 *names[]={L"RUN0001.TXT",L"RUN0002.TXT",L"RUN0003.TXT",L"KEEP.TXT",L"RUN0004.TXT",L"RUN0005.TXT.bak"};
+static void GuLog(const char *fmt,...){(void)fmt;}
+static EFI_STATUS BootFileOpenResult(EFI_STATUS s,EFI_FILE_PROTOCOL **p){(void)p;return s;}
+static EFI_STATUS CloseBootFile(EFI_FILE_PROTOCOL **p){if(*p){closed++;*p=NULL;}return EFI_SUCCESS;}
+""" + actual + r"""
+static EFI_STATUS Info(EFI_FILE_PROTOCOL *f,EFI_GUID *g,UINTN *n,VOID *buf){
+  if(f==&root){
+    if(g!=&LogVolumeInfoGuid||mode==2)return EFI_UNSUPPORTED;
+    GU_LOG_VOLUME_INFO *i=buf;memset(buf,0,sizeof(*i));
+    i->Size=offsetof(GU_LOG_VOLUME_INFO,VolumeLabel)+sizeof(CHAR16);
+    i->VolumeSize=capacity;i->FreeSpace=available;i->BlockSize=512;
+    if(mode==3)i->FreeSpace=capacity+1;
+    *n=(UINTN)i->Size;return EFI_SUCCESS;
+  }
+  if(f!=&file||g!=&InfoGuid)return EFI_DEVICE_ERROR;
+  EFI_FILE_INFO *i=buf;
+  i->Attribute=mode==5?EFI_FILE_DIRECTORY:0;
+  const CHAR16 *name=names[selected];
+  i->Size=offsetof(EFI_FILE_INFO,FileName)+(wcslen(name)+1)*sizeof(CHAR16);
+  memcpy(i->FileName,name,(wcslen(name)+1)*sizeof(CHAR16));*n=(UINTN)i->Size;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Open(EFI_FILE_PROTOCOL *f,EFI_FILE_PROTOCOL **out,CHAR16 *name,UINT64 flags,UINT64 attrs){
+  (void)attrs;opened++;
+  if(flags!=3)return EFI_DEVICE_ERROR;
+  if(f==&root&&wcscmp(name,L"\\AD102-UNLOCK")==0){*out=&dir;return EFI_SUCCESS;}
+  if(f!=&dir)return EFI_DEVICE_ERROR;
+  for(unsigned i=0;i<sizeof(names)/sizeof(names[0]);i++)if(!wcscmp(name,names[i])){
+    selected=i;*out=&file;return EFI_SUCCESS;
+  }
+  return EFI_DEVICE_ERROR;
+}
+static EFI_STATUS Read(EFI_FILE_PROTOCOL *f,UINTN *n,VOID *buf){
+  if(f!=&dir)return EFI_DEVICE_ERROR;
+  if(index_entry==sizeof(names)/sizeof(names[0])){*n=0;return EFI_SUCCESS;}
+  unsigned i=index_entry++;
+  EFI_FILE_INFO *info=buf;const CHAR16 *name=names[i];
+  info->Attribute=i==4?EFI_FILE_DIRECTORY:0;
+  info->Size=offsetof(EFI_FILE_INFO,FileName)+(wcslen(name)+1)*sizeof(CHAR16);
+  memcpy(info->FileName,name,(wcslen(name)+1)*sizeof(CHAR16));*n=(UINTN)info->Size;
+  if(mode==6&&i==4)info->Size=*n+1;
+  return EFI_SUCCESS;
+}
+static EFI_STATUS Delete(EFI_FILE_PROTOCOL *f){
+  if(f!=&file||selected==1||selected>=3)return EFI_DEVICE_ERROR;
+  deleted++;
+  if(mode==4)return EFI_DEVICE_ERROR;
+  available+=mode==7?1:20;
+  return EFI_SUCCESS;
+}
+#define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL %d: %s mode=%u\n",__LINE__,#x,mode);return 1;}}while(0)
+int main(void){
+  root.Open=Open;root.GetInfo=Info;dir.Read=Read;dir.Open=Open;file.GetInfo=Info;file.Delete=Delete;
+  CHECK(LogVolumeFull(UINT64_MAX,UINT64_MAX/10));
+  CHECK(!LogVolumeFull(UINT64_MAX,UINT64_MAX/10+1));
+  for(mode=0;mode<8;mode++){
+    opened=closed=deleted=index_entry=selected=0;capacity=1000;available=mode==0?101:100;
+    if(mode==7)available=50;
+    EFI_STATUS s=DeleteOldRunLogs(2);
+    if(mode==0||mode==2||mode==3){CHECK(s==EFI_SUCCESS&&!opened&&!deleted&&!closed);}
+    if(mode==1){CHECK(s==EFI_SUCCESS&&deleted==1&&opened==2&&closed==1&&available==120);}
+    if(mode==4){CHECK(s!=EFI_SUCCESS&&deleted==1&&opened==2&&closed==1);}
+    if(mode==5){CHECK(s!=EFI_SUCCESS&&!deleted&&opened==2&&closed==2);}
+    if(mode==6){CHECK(s!=EFI_SUCCESS&&!deleted&&opened==1&&closed==1);}
+    if(mode==7){CHECK(s==EFI_SUCCESS&&deleted==2&&opened==3&&closed==1&&available==52);}
+  }
+  return 0;
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "retention.c"
+            path.write_text(host, encoding="utf-8")
+            for compiler in ("gcc", "clang"):
+                binary = Path(directory) / compiler
+                built = subprocess.run([compiler, "-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-pedantic",
+                                        str(path), "-o", str(binary)], capture_output=True, text=True)
+                self.assertEqual(built.returncode, 0, built.stderr)
+                result = subprocess.run([str(binary)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_shared_filesystem_census_refuses_uncertain_release(self):
         """Compile the real enumeration/release helpers with simulated services."""
         production = BOOT.split("static EFI_STATUS ReleaseBootFilesystemHandles(",1)[1].split(
