@@ -1009,6 +1009,7 @@ if ($Mode -eq 0) {
                         for a in attestations]
                 if switches.get("FirmwareReattach"):
                     attestations.append("WINDOWS_ESP_GUID=" + (guid or "NONE"))
+                    attestations.append("STAGE_PARTITION_GUID=NONE")
                 self.assertEqual(new["ResolvedAttestations"], attestations)
                 self.assertNotIn("RequestedLegacyAlias", new)
                 rewritten = self.resolve(["-Only"] + canonical + extra, script_path=renamed_script)

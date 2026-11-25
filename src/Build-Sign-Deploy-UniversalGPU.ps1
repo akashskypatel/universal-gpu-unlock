@@ -286,7 +286,7 @@ function Get-StageDiskIdentity([uint32]$Number) {
 }
 
 function Get-StageLayout($Disk) {
-    return @(Get-Partition -DiskNumber $Disk.Number -ErrorAction Stop | Sort-Object Offset)
+    return @(Get-Partition -ErrorAction Stop | Where-Object { $_.DiskNumber -eq $Disk.Number } | Sort-Object Offset)
 }
 
 function Get-StageLayoutKey($Partitions) {
@@ -355,7 +355,7 @@ function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal
     if ((Get-StageLayoutKey $after) -cne (Get-StageLayoutKey @($old + $new | Sort-Object Offset))) {
         throw 'Partition layout changed during formatting; no staging attempted.'
     }
-    return [pscustomobject]@{ Disk=$disk; Guid=$guid; Letter=$letter; Size=$size; EspType=$espType }
+    return [pscustomobject]@{ Disk=$disk; Guid=$guid; Letter=$letter; Size=$size; EspType=$espType; LayoutKey=(Get-StageLayoutKey $after); Offset=$new[0].Offset; Number=$new[0].PartitionNumber }
 }
 
 function Assert-UsbVolume([string]$Drive) {
@@ -371,9 +371,11 @@ function Assert-UsbVolume([string]$Drive) {
     $allowedBus = $disk.BusType -eq 'USB'
     if ($script:ProvisionedStage) {
         $expected = $script:ProvisionedStage
-        [void](Assert-StageDiskIdentity $expected.Disk)
+        $live = Assert-StageDiskIdentity $expected.Disk
         if ($disk.UniqueId -cne $expected.Disk.UniqueId -or [guid]$part.Guid -ne $expected.Guid -or
-            $part.Size -ne $expected.Size -or [guid]$part.GptType -ne $expected.EspType -or $Drive -ne $expected.Letter) {
+            $part.Size -ne $expected.Size -or [guid]$part.GptType -ne $expected.EspType -or $Drive -ne $expected.Letter -or
+            $part.Offset -ne $expected.Offset -or $part.PartitionNumber -ne $expected.Number -or
+            (Get-StageLayoutKey @(Get-StageLayout $live)) -cne $expected.LayoutKey) {
             throw 'Provisioned stage partition identity changed.'
         }
         $allowedBus = $true
@@ -1116,6 +1118,7 @@ function Get-ResolvedAttestations($Variant) {
         $expectedEsp = if ($WindowsEspGuid) { (ConvertTo-GuWindowsEspGuid $WindowsEspGuid).ToString('D') } else { 'NONE' }
         "WINDOWS_ESP_GUID=$expectedEsp"
         if ($script:StagePartitionGuid) { "STAGE_PARTITION_GUID=$script:StagePartitionGuid" }
+        else { 'STAGE_PARTITION_GUID=NONE' }
     }
 }
 
