@@ -1,6 +1,6 @@
 # Build, sign and deploy GPU profiles
 
-### Provision a dedicated staging partition
+## Select a staging destination
 
 `-StageDrive G` continues to stage to an existing eligible FAT32 USB volume. `-StageDisk 2` selects a non-system, writable, online GPT disk with enough contiguous unallocated space. Review its ID, model, serial and partition layout, then type the exact `CREATE <disk> <calculated MiB>` shown. The partition defaults to twice the verified staged firmware asset bytes rounded up to a whole MiB, subject to the FAT32 minimum. The current 84,585,936-byte nine-file bundle needs 162 MiB on a 512-byte logical-sector disk (272 MiB minimum on a 4 KiB logical-sector disk). `-PartitionSizeMB` may explicitly increase the size but cannot fall below the computed requirement. The script creates a new EFI partition, checks that the old partitions are unchanged, formats only the new partition as FAT32, signs and stages one explicit profile. No erase, resize, initialize, existing ESP reuse, or boot-order changes. Internal NVMe/SATA/ATA/SAS targets initially support only the combined `firmware-transaction -Operation UnlockReattach` application; the signed image has the new partition GUID compiled in, separate from the Windows ESP. USB GPT provisioning supports ordinary stageable applications. Do not select Windows boot/system disks; keep separate recovery media. A provisioning/build/stage error may leave the new partition; inspect it rather than automatically retry or delete it. Firmware boot-menu visibility and physical launch compatibility are unverified.
 
@@ -10,17 +10,33 @@
 
 The combined application checks its launch volume's free space at startup, before GPU work. At 90% utilization or above, it deletes previous regular RUNnnnn.TXT logs from its own AD102-UNLOCK directory in slot order until utilization falls below 90%, or no eligible logs remain. It preserves the current log, unrelated names, directories, and all logs when the recovery state is unresolved or cannot be read. Below 90%, or if volume usage is unavailable, it deletes nothing. No cleanup occurs during hardware transactions or on the Windows EFI partition. Copy any historical logs you want to preserve. Other profiles keep their existing logging policy.
 
-Omit the disk number to list physical disks and request a selection: `-StageDisk`. Omit the drive letter to list disks with their assigned drive letters and request a USB volume: `-StageDrive`. Explicit `-StageDisk 2` and `-StageDrive G` still work without the selection prompt. The inventory shows all disks, including ineligible ones; selection never bypasses the existing safety checks or the separate partition-creation confirmation. Blank input cancels staging.
+### Interactive selection
 
-Use the actual disk number. Boot manually using the firmware boot menu or the firmware's file selector for the dedicated partition's `EFI\BOOT\BOOTX64.EFI`. Do not modify Windows Boot Manager or boot order. Do not deploy before the pinned build and provisioning regression CI passes.
+Run one of these commands from an elevated PowerShell session at the repository root:
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -StageDisk -AcceptActuatingDeploy
+```
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -StageDrive -AcceptActuatingDeploy
+```
+
+`-StageDisk` displays the physical disk inventory with these columns: Number, FriendlyName, BusType, PartitionStyle, IsBoot, IsSystem, LogicalSectorSize, UnallocatedMiB. At `Enter disk number (Enter to cancel)`, enter the disk number (including 0 if applicable). The script checks eligibility and requires a separate `CREATE <disk> <calculated MiB>` confirmation before partition creation.
+
+`-StageDrive` displays the same columns and adds DriveLetter. Multiple assigned letters on one disk appear together, for example G,H. At `Enter USB drive letter (Enter to cancel)`, enter one letter D through Z, without a colon. This mode uses an existing FAT32 USB volume; it does not create or resize a partition.
+
+Explicit targets such as `-StageDisk 2` and `-StageDrive G` skip the selection prompt. Blank input cancels staging. Invalid or unlisted interactive targets are refused. The inventory includes ineligible disks: appearing in the list does not authorize staging. Do not combine the two staging modes, or combine staging with `-All`, `-SignOnly`, `-ResolveOnly`, `-List` or `-ListConfigurations`.
+
+Use the actual disk number when you specify a target. Boot manually using the firmware boot menu or the firmware's file selector for the dedicated partition's `EFI\BOOT\BOOTX64.EFI`. Do not modify Windows Boot Manager or boot order. Do not deploy before the pinned build and provisioning regression CI passes.
 
 
 `src/Build-Sign-Deploy-UniversalGPU.ps1` builds every EFI image this repository
 can produce, signs each one inside WSL with your personal Secure Boot certificate
 (the one already enrolled in the BIOS `db`), and - only when you name a single
-image and a stick - stages it as `EFI\BOOT\BOOTX64.EFI`.
+image and a staging destination - stages it as `EFI\BOOT\BOOTX64.EFI`.
 
-When you stage the `firmware-transaction` profile, the script also stages the required reference firmware files in `AD102-ASSETS` and `GA102-ASSETS` at the USB root. It checks the source and destination file sizes and SHA-256 digests against `docs/asset_provenance.json` before it replaces the boot image. Both architectures share the existing `AD102-ASSETS/gsp_ga10x.bin` file. If an older Ampere copy exists, the script checks that copy too. It refuses a mismatch and preserves existing files. A failed copy can leave verified new asset files on the USB, but does not replace the boot image. The `FirmwareAssets` receipt field records each verified destination. `-SignOnly`, `-ResolveOnly`, diagnostics, driver transitions and maintenance do not stage assets. This procedure does not authenticate NVIDIA firmware or prove hardware compatibility.
+When you stage the `firmware-transaction` profile, the script also stages the required reference firmware files in `AD102-ASSETS` and `GA102-ASSETS` at the staging volume root. It checks the source and destination file sizes and SHA-256 digests against `docs/asset_provenance.json` before it replaces the boot image. Both architectures share the existing `AD102-ASSETS/gsp_ga10x.bin` file. If an older Ampere copy exists, the script checks that copy too. It refuses a mismatch and preserves existing files. A failed copy can leave verified new asset files on the staging volume, but does not replace the boot image. The `FirmwareAssets` receipt field records each verified destination. `-SignOnly`, `-ResolveOnly`, diagnostics, driver transitions and maintenance do not stage assets. This procedure does not authenticate NVIDIA firmware or prove hardware compatibility.
 
 The list of images is data: [`image_variants.json`](image_variants.json). The
 script executes that catalogue, so "all combinations" is not a hand-maintained
@@ -162,7 +178,9 @@ captured reference options apply.
 | `-List`, `-ListConfigurations` | List public profiles or build configurations. |
 | `-ResolveOnly` | Inspect one configuration. Does not build or stage. |
 | `-SignOnly` | Build and sign. Do not stage. |
-| `-StageDrive <letter>` | Stage one EFI application to the verified USB volume. Cannot combine with SignOnly or All. |
+| `-StageDrive [letter]` | Stage one EFI application to an existing verified FAT32 USB volume. Omit the letter for interactive selection. |
+| `-StageDisk [number]` | Create a dedicated staging partition in contiguous unallocated space on an eligible GPT disk. Omit the number for interactive selection. Cannot combine with StageDrive or StageDxeCompanion. |
+| `-PartitionSizeMB <MiB>` | Optional StageDisk size override (64–4096 MiB, at or above the calculated minimum). Default: twice the verified staged asset bytes, rounded up, subject to the FAT32 minimum. |
 | `-AcceptActuatingDeploy` | Explicit consent required for deployment of driver-transition, firmware-transaction and maintenance images. |
 | `-All`, `-Family <builder-family>` | Build matrix controls. No canonical operation options with a matrix request. |
 | `-SelectionBdf`, `-SelectionBdfs` | One compiled PCI bus/device/function address (BDF), or a comma-separated ordered list, where supported. Do not combine them. |
@@ -489,10 +507,7 @@ the sequence ones build; with one BDF it is the other way round
 (`REASON=NEEDS_TWO_OR_MORE_BDFS`). Run `-All` twice with both shapes, or use
 `-Only` for the images you actually need.
 
-Staging takes two things, and neither is a duplicate of the other:
-`-StageDrive <letter>` selects the USB drive. `-Only <profile>` and its
-arguments select exactly one image because the drive holds one `BOOTX64.EFI`. `-SignOnly` is
-exclusive with `-StageDrive`, and `-All` can never stage. The ordinary staging run replaces only `EFI\BOOT\BOOTX64.EFI`. For the waived
+Staging requires a destination and exactly one image. Use `-StageDrive [letter]` for an existing USB volume or `-StageDisk [number]` to provision a new partition. Omit the letter or number to select interactively. Use `-Only <profile>` and its arguments to select the image. Neither `-SignOnly` nor `-All` permits staging. The ordinary staging run replaces only the boot application at `EFI\BOOT\BOOTX64.EFI` and stages the required reference assets for firmware-transaction. For the waived
 one-target image, `-StageDxeCompanion` is an explicit paired build: it builds and
 signs the matching `dxe-actuate-one-target` variant first, stages that image at
 `EFI\Drivers\AdaUnlockDxe.efi` (the path the I/NVRAM installer opens), then
@@ -532,7 +547,9 @@ does not build is worse than a failed command.
 | Cert/key/certificate match inside WSL | A key that is not the one enrolled, an expired certificate, or a `.cer` that is a different certificate |
 | `sbverify` | A signature the tool cannot verify |
 | Signed ≠ unsigned | A "signing" step that did nothing |
-| Staging preflight | A non-USB, non-FAT32, read-only, system or boot volume; a drive letter whose identity changed |
+| Target selection | Invalid, ambiguous or unlisted interactive target, conflicting staging modes or extra target arguments |
+| StageDisk provisioning | Non-GPT, system, boot, read-only or offline disk; existing EFI partition; insufficient unallocated space; changed disk identity or layout; missing creation confirmation |
+| Staging preflight | Non-FAT32, read-only, system or boot volume; a non-USB volume unless newly provisioned and verified by StageDisk; a changed target identity |
 | Backup and rollback | Replacing `BOOTX64.EFI` without a verified local copy, or leaving a half-written one |
 | `-AcceptActuatingDeploy` | Staging a `stop-only` or `actuates` image by habit |
 | Compile-only refusal | Staging an image that returns before it observes anything |
@@ -582,7 +599,12 @@ skipped and why.
 | WSL exit 3 | `wslpath` could not map a Windows path | Check `[automount] enabled = true` in `/etc/wsl.conf`, and that the repository is not on an unmounted drive |
 | WSL exit 4 | Key, certificate or `.cer` disagree, or the certificate is expired | Re-export the `.cer` from the same certificate; check `openssl x509 -noout -dates` |
 | WSL exit 5 | The unsigned image changed, or the signed file already existed | Re-run; if it repeats, something else is writing the build directory |
-| `-StageDrive stages exactly one image, but N variants are selected` | `-StageDrive` was given with a selection that names more than one image (or none) | Select one configuration, for example `-Only diagnostic -StageDrive G` |
+| `-StageDrive stages exactly one image, but N variants are selected` | The staging request does not select exactly one image | Select one configuration, for example `-Only diagnostic -StageDrive G` |
+| `Staging selection cancelled.` | No target was entered | Run the command again and select the intended disk or drive. |
+| `Selected disk was not uniquely listed.` / `Selected drive letter was not uniquely listed.` | The interactive target does not match exactly one listed entry | Review the inventory and select an existing target. |
+| `Insufficient contiguous unallocated space; no resize or erase is permitted.` | The selected disk cannot hold the required new partition | Select a different eligible disk or use StageDrive with an existing FAT32 USB volume. |
+| `Partition creation cancelled.` | The separate creation confirmation did not match | Review the disk identity and size before confirming a new request. |
+| `New partition verification failed` / format or staging failure after creation | A new partition may remain | Inspect the actual disk layout. Do not retry or delete automatically. |
 | `VARIANT_SKIPPED … REASON=NEEDS_SELECTION` | `-All` was run without a BDF | Pass `-SelectionBdf` or `-SelectionBdfs` |
 | `REASON=NEEDS_EXACTLY_ONE_BDF` | Two or more BDFs given, a single-target variant selected | Re-run with `-SelectionBdf '0000:01:00.0'` |
 | `REASON=NEEDS_TWO_OR_MORE_BDFS` | One BDF given, a sequence variant selected | Re-run with `-SelectionBdfs 'a,b'` |
