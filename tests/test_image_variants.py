@@ -795,6 +795,72 @@ class CanonicalProfileResolution(unittest.TestCase):
         return json.loads(result.stdout.strip())
 
 
+    def test_disk_provisioning_with_mock_storage_services(self):
+        import subprocess
+        functions = SCRIPT[SCRIPT.index("function Get-StageDiskIdentity("):SCRIPT.index("function Get-ExistingEfi(")]
+        host = r'''
+param([int]$Mode)
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+$script:ProvisionedStage = $null
+$script:creates = 0
+$script:formats = 0
+$script:disk = [pscustomobject]@{ Number=0; UniqueId='disk-fixture'; SerialNumber='serial'; Size=10GB; LargestFreeExtent=2GB; BusType='NVMe'; PartitionStyle='GPT'; IsBoot=$false; IsSystem=$false; IsOffline=$false; IsReadOnly=$false; FriendlyName='fixture' }
+$script:parts = @([pscustomobject]@{ Guid='11111111-1111-1111-1111-111111111111'; Offset=1MB; Size=1GB; PartitionNumber=1; GptType='ebd0a0a2-b9e5-4433-87c0-68b6b72699c7'; IsSystem=$false; IsBoot=$false; DriveLetter='F' })
+$script:newGuid = '22222222-2222-2222-2222-222222222222'
+if ($Mode -eq 2) { $script:disk.LargestFreeExtent=256MB }
+if ($Mode -eq 3) { $script:disk.IsSystem=$true }
+if ($Mode -eq 6) { $script:parts[0].GptType='c12a7328-f81f-11d2-ba4b-00a0c93ec93b' }
+if ($Mode -eq 8) { $script:disk.PartitionStyle='RAW' }
+function Get-Disk { param($Number,$ErrorAction) $script:disk | Select-Object * }
+function Get-Partition { param($DiskNumber,$DriveLetter,$ErrorAction) if ($DriveLetter) { $script:parts | Where-Object DriveLetter -eq $DriveLetter } else { $script:parts | ForEach-Object { $_ | Select-Object * } } }
+function Get-Volume { param($DriveLetter,$ErrorAction) [pscustomobject]@{FileSystem='FAT32';Size=1GB;UniqueId='volume-fixture'} }
+function Assert-NormalDirectory { param($Root) }
+function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
+function Read-Host { param($Prompt) if ($Mode -eq 1) { return 'NO' }; if ($Mode -eq 4) { $script:disk.UniqueId='replacement' }; if ($Mode -eq 9) { $script:parts[0].Size=2GB }; return 'CREATE 0 1024' }
+function New-Partition {
+    param($DiskId,$Size,$GptType,[switch]$AssignDriveLetter,$ErrorAction)
+    $script:creates++
+    if ($DiskId -ne 'disk-fixture' -or $Size -ne 1GB -or -not $AssignDriveLetter) { throw 'Unexpected create arguments' }
+    $p = [pscustomobject]@{Guid=$script:newGuid;Offset=2GB;Size=$Size;PartitionNumber=2;GptType=$GptType;IsSystem=$false;IsBoot=$false;DriveLetter='G'}
+    if ($Mode -eq 5) { $script:parts[0].Size=2GB }
+    $script:parts += $p
+    return $p
+}
+function Format-Volume {
+    param($Partition,$FileSystem,$NewFileSystemLabel,$Confirm,$ErrorAction)
+    $script:formats++
+    if ($Partition.Guid -ne $script:newGuid -or $FileSystem -ne 'FAT32') { throw 'Unexpected format target' }
+}
+''' + functions + r'''
+$failed=$false
+try {
+    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7)
+    if ($Mode -eq 0) {
+        if ($script:ProvisionedStage.Guid -ne [guid]$script:newGuid -or (Assert-UsbVolume 'G') -ne 'G:\') { throw 'Wrong stage identity' }
+        $script:parts[1].Guid='33333333-3333-3333-3333-333333333333'
+        try { [void](Assert-UsbVolume 'G'); throw 'Mismatched partition accepted' } catch { if ($_.Exception.Message -ne 'Provisioned stage partition identity changed.') { throw } }
+    }
+} catch { $failed=$true; [Console]::Out.WriteLine($_.Exception.Message) }
+if ($Mode -eq 0) {
+    if ($failed -or $script:creates -ne 1 -or $script:formats -ne 1) { throw 'Expected exact successful create/format' }
+} elseif ($Mode -eq 5) {
+    if (-not $failed -or $script:creates -ne 1 -or $script:formats -ne 0) { throw 'Changed layout must prevent format' }
+} else {
+    if (-not $failed -or $script:creates -ne 0 -or $script:formats -ne 0) { throw 'Expected refusal before writes' }
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "disk.ps1"
+            script.write_text(host, encoding="utf-8")
+            for mode in range(10):
+                with self.subTest(mode=mode):
+                    result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(script), str(mode)],
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.resolve(["-Only", "diagnostic", "-StageDisk", "0"], valid=False)
+        self.resolve(["-Only", "diagnostic", "-PartitionSizeMB", "1024"], valid=False)
+
     def test_firmware_asset_staging_on_temporary_media(self):
         import subprocess
         import verify_reference_assets

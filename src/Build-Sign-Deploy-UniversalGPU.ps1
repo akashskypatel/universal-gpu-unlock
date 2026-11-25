@@ -1458,6 +1458,7 @@ try {
         $usbRoot = Assert-UsbVolume $drive
         $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
         if (-not $targetVolumeId) { throw 'Provisioned volume identity unavailable.' }
+        if ([IO.Path]::GetPathRoot($OutputDirectory).TrimEnd('\') -ieq $usbRoot.TrimEnd('\')) { throw 'Local outputs must remain outside the provisioned partition.' }
         Say ("STAGE_PARTITION CREATED GUID={0} DRIVE={1} SIZE={2}" -f $script:ProvisionedStage.Guid,$drive,$script:ProvisionedStage.Size)
     }
 

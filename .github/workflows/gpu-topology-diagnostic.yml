@@ -695,6 +695,8 @@ jobs:
             if(-not (Test-Path .\src\build\GPU-RUNTIME-FIRMWARE-REATTACH.EFI)){throw 'Combined firmware reattachment EFI missing'}
             $combinedStatus = @($combined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
             if($combinedStatus.Count -ne 1 -or "$($combinedStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=1 INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1' -or "$($combinedStatus[0])" -notmatch 'FIRMWARE_TRANSACTION=1 UNLOCK=1 REATTACH_ATTEMPTED=1 REATTACH_VERIFIED=0 FIRMWARE_REATTACH=1'){throw 'Combined firmware reattachment attestation mismatch'}
+            $dedicatedCombined = & .\src\Build-Experimental-MSVC.ps1 -FirmwareReattach -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation Unlock -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            if (-not ($dedicatedCombined -match 'STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789')) { throw 'Dedicated launch pin attestation missing' }
             $pinnedCombined = & .\src\Build-Experimental-MSVC.ps1 -FirmwareReattach -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -ApplicationOperation Unlock -WindowsEspGuid '12345678-1234-5678-9abc-def012345678' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0){throw 'Explicit Windows ESP combined compilation failed'}
             $pinnedStatus = @($pinnedCombined | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })

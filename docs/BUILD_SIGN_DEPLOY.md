@@ -1,5 +1,16 @@
 # Build, sign and deploy GPU profiles
 
+### Provision a dedicated staging partition
+
+`-StageDrive G` continues to stage to an existing eligible FAT32 USB volume. `-StageDisk 2 -PartitionSizeMB 1024` selects a non-system, writable, online GPT disk with enough contiguous unallocated space. Review its ID, model, serial and partition layout, then type exactly `CREATE 2 1024`. The script creates a new EFI partition, checks that the old partitions are unchanged, formats only the new partition as FAT32, signs and stages one explicit profile. No erase, resize, initialize, existing ESP reuse, or boot-order changes. Internal NVMe/SATA/ATA/SAS targets initially support only the combined `firmware-transaction -Operation UnlockReattach` application; the signed image has the new partition GUID compiled in, separate from the Windows ESP. USB GPT provisioning supports ordinary stageable applications. Do not select Windows boot/system disks; keep separate recovery media. A provisioning/build/stage error may leave the new partition; inspect it rather than automatically retry or delete it. Firmware boot-menu visibility and physical launch compatibility are unverified.
+
+```powershell
+.\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -StageDisk 2 -PartitionSizeMB 1024 -AcceptActuatingDeploy
+```
+
+Use the actual disk number. Boot manually using the firmware boot menu or the firmware's file selector for the dedicated partition's `EFI\BOOT\BOOTX64.EFI`. Do not modify Windows Boot Manager or boot order. Do not deploy before the pinned build and provisioning regression CI passes.
+
+
 `src/Build-Sign-Deploy-UniversalGPU.ps1` builds every EFI image this repository
 can produce, signs each one inside WSL with your personal Secure Boot certificate
 (the one already enrolled in the BIOS `db`), and - only when you name a single
