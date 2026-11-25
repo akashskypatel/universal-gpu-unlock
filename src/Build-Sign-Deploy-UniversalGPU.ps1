@@ -36,11 +36,11 @@ The catalogue labels each variant:
   stop-only               calls the original vendor Stop; may hang
   actuates                performs waived hardware mutation; Stop/release-only and firmware-transaction variants are distinct
 
-One named application variant can be staged to EFI\BOOT\BOOTX64.EFI on a
-verified writable non-system FAT32 USB stick, after a verified local backup of
-the file being replaced. Stop-only/actuating images also require
--AcceptActuatingDeploy. Maintenance also requires explicit consent and isolated staging media. A DXE driver (subsystem 11) is never staged as
-BOOTX64.EFI. For the waived one-target app, -StageDxeCompanion additionally
+One named variant can be staged on a verified writable non-system FAT32 volume,
+after a verified local backup of the file being replaced. Applications use
+EFI\BOOT\BOOTX64.EFI; DXE drivers use EFI\Drivers\AdaUnlockDxe.efi.
+Stop-only and actuating images stage the complete firmware asset bundle and
+require -AcceptActuatingDeploy. Maintenance record review also requires explicit consent. For the waived one-target app, -StageDxeCompanion additionally
 builds, signs and stages its matching DXE image at
 EFI\Drivers\AdaUnlockDxe.efi for the app's explicit I path.
 
@@ -53,30 +53,34 @@ reason recorded, when you do not supply one. -All cannot be combined with
 .PARAMETER Only
 One canonical profile with typed options (see -List). Cannot be combined with
 -All or -Family. -ResolveOnly reports the selected
-configuration without compiling, signing or staging. Firmware transaction staging also copies the required reference assets to the USB root.
+configuration without compiling, signing or staging. All GPU-writing image staging also copies the full reference asset bundle to the staging volume root.
 
 .PARAMETER Family
 diagnostic, prepare, prepare-dxe, stop-observation or maintenance. Selects a build matrix family, not an individual configuration.
 
 .PARAMETER StageDrive
-The USB drive letter to stage onto, or omit the letter to select interactively.
+The staging drive letter, or omit the letter to select interactively.
 This is the switch that stages: it takes the
 one image -Only selected, builds it, signs it and copies it to
-EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
+the subsystem-specific EFI path after a verified backup. Anything actuating also needs
 -AcceptActuatingDeploy, and a matrix run (-All) can never stage.
 
 .PARAMETER StageDisk
 Select an existing GPT physical disk by number, or omit the number to list
 disks and select interactively. Create a new FAT32 EFI partition in free space,
 or reuse a verified dedicated GPU Unlock partition with local deployment evidence.
-Never initialize, erase, resize or reformat an existing partition. Internal disks support UnlockReattach only.
+Never initialize, erase, resize or reformat an existing partition during staging. All profiles support eligible internal disks.
+.PARAMETER WipeStageDisk
+Delete a project-created GPUUNLOCK partition on the selected disk. Omit the number to select interactively. All partition contents are lost.
+.PARAMETER WipeStageDrive
+Delete the project-created GPUUNLOCK partition at the selected drive letter. Omit the letter to select interactively.
 .PARAMETER PartitionSizeMB
 Optional size override in MiB (64 through 4096). Default is twice the verified staged
 asset bytes rounded up, with a FAT32 sector-size minimum. Requires -StageDisk.
 .PARAMETER StageDxeCompanion
 For -Only firmware-transaction -Operation Menu with one selected BDF and the pinned ESP policy: build and sign the matching
 `dxe-actuate-one-target` image, stage it at EFI\Drivers\AdaUnlockDxe.efi,
-then stage the application at EFI\BOOT\BOOTX64.EFI. Requires -StageDrive and
+then stage the application at EFI\BOOT\BOOTX64.EFI. Requires -StageDrive or -StageDisk and
 -AcceptActuatingDeploy; the paired stage is rolled back if application staging fails.
 
 .PARAMETER CapturedPromReference
@@ -231,8 +235,8 @@ if ($PSBoundParameters.ContainsKey('StagePartitionGuid') -and (
     throw '-StagePartitionGuid requires DxeTransaction -ImageKind Dxe with SignOnly, ResolveOnly or a staging target.'
 }
 $script:StagePartitionGuid = $null
-if ($script:DiskStageRequested -and ($StageDrive -or $All -or $SignOnly -or $ResolveOnly -or $List -or $ListConfigurations -or $StageDxeCompanion -or -not $Only)) {
-    throw '-StageDisk requires one explicit profile and cannot be combined with StageDrive, inspection, SignOnly, All or StageDxeCompanion.'
+if ($script:DiskStageRequested -and ($StageDrive -or $All -or $SignOnly -or $ResolveOnly -or $List -or $ListConfigurations -or -not $Only)) {
+    throw '-StageDisk requires one explicit profile and cannot be combined with StageDrive, inspection, SignOnly or All.'
 }
 if (-not $script:DiskStageRequested -and $PSBoundParameters.ContainsKey('PartitionSizeMB')) { throw '-PartitionSizeMB requires -StageDisk.' }
 $ErrorActionPreference = 'Stop'
@@ -435,7 +439,10 @@ function Get-StageReuseEvidence($Disk,$Partition,[string]$Root,[string]$ReceiptD
     $boot = $null; $dxe = $null
     if (Test-Path -LiteralPath $bootPath -PathType Leaf) { $boot = Get-StageImageReceipt $Disk $Partition $bootPath 10 $ReceiptDirectory }
     if (Test-Path -LiteralPath $dxePath -PathType Leaf) { $dxe = Get-StageImageReceipt $Disk $Partition $dxePath 11 $ReceiptDirectory }
-    if (-not $boot -and -not $dxe) { throw 'Existing EFI partition has no matching verified local deployment receipt and signed artifact.' }
+    if (-not $boot -and -not $dxe) {
+        if (-not (Test-StageCreationEvidence $Disk $Partition $ReceiptDirectory)) { throw 'Existing EFI partition has no matching verified local deployment receipt and signed artifact.' }
+        return [pscustomobject]@{ Hash=$null; DxeHash=$null; Receipt=(Join-Path $ReceiptDirectory ('GPUUNLOCK-partition-' + ([guid]$Partition.Guid).ToString('D') + '.json')) }
+    }
     return [pscustomobject]@{ Hash=$(if ($boot) { $boot.Hash }); DxeHash=$(if ($dxe) { $dxe.Hash }); Receipt=$(if ($boot) { $boot.Receipt } else { $dxe.Receipt }) }
 }
 
@@ -1573,7 +1580,7 @@ try {
         exit 0
     }
     if ($StageDxeCompanion) {
-        if (-not $StageDrive) { throw '-StageDxeCompanion requires -StageDrive (optional letter).' }
+        if (-not ($StageDrive -or $script:DiskStageRequested)) { throw '-StageDxeCompanion requires a staging drive or disk.' }
         if ($variants.Count -ne 1 -or (Get-SelectionCount) -ne 1 -or
             -not (Test-PairedTransactionVariant $variants[0] 'prepare')) {
             throw '-StageDxeCompanion requires firmware-transaction -Operation Menu, one selected BDF and the pinned application configuration.'
@@ -1593,8 +1600,8 @@ try {
         }
         $deployVariant = $variants[0]
         $stageVariantId = $deployVariant.id
-        if ($deployVariant.profile -eq 'firmware-transaction' -or ($deployVariant.profile -eq 'maintenance' -and $deployVariant.family -eq 'prepare')) { $assetRepoForStage = $RepoRoot }
         $safety = $catalogue.safety_classes.($deployVariant.safety)
+        if ($safety.writes_gpu) { $assetRepoForStage = $RepoRoot }
         # A DXE boot-service driver cannot be staged as BOOTX64.EFI; select its driver path by subsystem.
         if ($safety.may_be_staged -ne $true -and -not $AcceptActuatingDeploy) {
             throw ("Refusing to stage {0}: safety={1} writes_gpu={2}. Add -AcceptActuatingDeploy if the donor card, the recovery toolkit and the session plan are ready." -f
@@ -1628,6 +1635,7 @@ try {
     }
 
     $RepoRoot = [IO.Path]::GetFullPath($RepoRoot)
+    if ($assetRepoForStage) { $assetRepoForStage = $RepoRoot }
     if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) { throw "Repository missing: $RepoRoot" }
     Assert-NormalDirectory $RepoRoot
 
@@ -1657,14 +1665,15 @@ try {
         if ($selectedParts.Count -ne 1) { throw 'Expected exactly one selected drive partition.' }
         $selectedPart = $selectedParts[0]
         $selectedDisk = Get-Disk -Number $selectedPart.DiskNumber -ErrorAction Stop
-        if ($selectedDisk.BusType -ne 'USB') {
+        if ($selectedDisk.BusType -ne 'USB' -or ($selectedDisk.PartitionStyle -eq 'GPT' -and
+            [guid]$selectedPart.GptType -eq [guid]'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' -and
+            (Test-StageCreationEvidence $selectedDisk $selectedPart $OutputDirectory))) {
             $selectedStageDisk = $selectedPart.DiskNumber
             $selectedStageLetter = $drive
             $selectedStageGuid = [guid]$selectedPart.Guid
         } else {
             if ($requestedDxeStagePin) { throw 'An explicit internal stage GUID cannot select a USB drive.' }
             $usbRoot = Assert-UsbVolume $drive
-            if ($assetRepoForStage) { $assetRepoForStage = $RepoRoot }
             $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
             if (-not $targetVolumeId) { throw 'USB volume identity unavailable; refusing staging.' }
             if ([IO.Path]::GetPathRoot($OutputDirectory).TrimEnd('\') -ieq $usbRoot.TrimEnd('\')) {

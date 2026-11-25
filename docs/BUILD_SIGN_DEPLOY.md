@@ -42,7 +42,7 @@ can produce, signs each one inside WSL with your personal Secure Boot certificat
 (the one already enrolled in the BIOS `db`), and - only when you name a single
 image and a staging destination - stages it as `EFI\BOOT\BOOTX64.EFI`.
 
-When you stage the `firmware-transaction` profile, the script also stages the required reference firmware files in `AD102-ASSETS` and `GA102-ASSETS` at the staging volume root. It checks the source and destination file sizes and SHA-256 digests against `docs/asset_provenance.json` before it replaces the boot image. Both architectures share the existing `AD102-ASSETS/gsp_ga10x.bin` file. If an older Ampere copy exists, the script checks that copy too. It refuses a mismatch and preserves existing files. A failed copy can leave verified new asset files on the staging volume, but does not replace the boot image. The `FirmwareAssets` receipt field records each verified destination. `-SignOnly`, `-ResolveOnly`, diagnostics, driver transitions and maintenance do not stage assets. This procedure does not authenticate NVIDIA firmware or prove hardware compatibility.
+When you stage any GPU-writing configuration (including all firmware transactions, driver transitions, and GPU-writing maintenance configurations), the script also stages the complete reference firmware bundle in `AD102-ASSETS` and `GA102-ASSETS` at the staging volume root. It checks the source and destination file sizes and SHA-256 digests against `docs/asset_provenance.json` before it replaces the boot image. Both architectures share the existing `AD102-ASSETS/gsp_ga10x.bin` file. If an older Ampere copy exists, the script checks that copy too. It refuses a mismatch and preserves existing files. A failed copy can leave verified new asset files on the staging volume, but does not replace the boot image. The `FirmwareAssets` receipt field records each verified destination. `-SignOnly`, `-ResolveOnly`, read-only diagnostics, compile-check and ReviewBootState do not stage assets. Stop-only images receive the bundle too, but their execution code does not read it. This procedure does not authenticate NVIDIA firmware or prove hardware compatibility.
 
 The list of images is data: [`image_variants.json`](image_variants.json). The
 script executes that catalogue, so "all combinations" is not a hand-maintained
@@ -193,7 +193,7 @@ captured reference options apply.
 | `-ResolveOnly` | Inspect one configuration. Does not build or stage. |
 | `-SignOnly` | Build and sign. Do not stage. |
 | `-StageDrive [letter]` | Stage one EFI application or DXE driver to an existing verified FAT32 staging volume. Omit the letter for interactive selection. |
-| `-StageDisk [number]` | Create or reuse a verified dedicated staging partition on an eligible GPT disk. Omit the number for interactive selection. Cannot combine with StageDrive or StageDxeCompanion. |
+| `-StageDisk [number]` | Create or reuse a verified dedicated staging partition on an eligible GPT disk. Omit the number for interactive selection. Cannot combine with StageDrive. |
 | `-PartitionSizeMB <MiB>` | Optional StageDisk size override (64–4096 MiB, at or above the calculated minimum). Default: twice the verified staged asset bytes, rounded up, subject to the FAT32 minimum. |
 | `-AcceptActuatingDeploy` | Explicit consent required for deployment of driver-transition, firmware-transaction and maintenance images. |
 | `-All`, `-Family <builder-family>` | Build matrix controls. No canonical operation options with a matrix request. |
@@ -522,13 +522,13 @@ the sequence ones build; with one BDF it is the other way round
 (`REASON=NEEDS_TWO_OR_MORE_BDFS`). Run `-All` twice with both shapes, or use
 `-Only` for the images you actually need.
 
-Staging requires a destination and exactly one image. Use `-StageDrive [letter]` for an existing USB volume or eligible verified internal volume, or `-StageDisk [number]` to create or reuse a verified dedicated partition. Omit the letter or number to select interactively. Use `-Only <profile>` and its arguments to select the image. Neither `-SignOnly` nor `-All` permits staging. The ordinary staging run replaces only its subsystem-specific file: `EFI\BOOT\BOOTX64.EFI` for applications or `EFI\Drivers\AdaUnlockDxe.efi` for drivers and stages the required reference assets for firmware-transaction. For the waived
+Staging requires a destination and exactly one image. Use `-StageDrive [letter]` for an existing USB volume or eligible verified internal volume, or `-StageDisk [number]` to create or reuse a verified dedicated partition. Omit the letter or number to select interactively. Use `-Only <profile>` and its arguments to select the image. Neither `-SignOnly` nor `-All` permits staging. The ordinary staging run replaces only its subsystem-specific file: `EFI\BOOT\BOOTX64.EFI` for applications or `EFI\Drivers\AdaUnlockDxe.efi` for drivers and stages the full reference asset bundle for every GPU-writing configuration. For the waived
 one-target image, `-StageDxeCompanion` is an explicit paired build: it builds and
 signs the matching `dxe-actuate-one-target` variant first, stages that image at
 `EFI\Drivers\AdaUnlockDxe.efi` (the path the I/NVRAM installer opens), then
 stages the application at `EFI\BOOT\BOOTX64.EFI`. Both artifacts are hash
 verified and replacements receive local backups. It is restricted to
-the application configuration `-Only firmware-transaction -Operation Menu` with the pinned ESP policy (configuration ID `actuate-one-target`), a single BDF, `-StageDrive`, and
+the application configuration `-Only firmware-transaction -Operation Menu` with the pinned ESP policy (configuration ID `actuate-one-target`), a single BDF, `-StageDrive` or `-StageDisk`, and
 `-AcceptActuatingDeploy`; the driver is never renamed to BOOTX64.EFI. The output
 includes `STAGED_DXE_COMPANION` and `STAGED actuate-one-target` receipts. The
 bench-override sequence is a standalone DXE image, not a paired one-target

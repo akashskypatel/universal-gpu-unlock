@@ -738,8 +738,11 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertIn("$stagedPath = $deployment.Path", SCRIPT)
 
 
-    def test_firmware_asset_stage_is_restricted_to_firmware_transactions(self):
-        self.assertIn("if ($deployVariant.profile -eq 'firmware-transaction' -or", SCRIPT)
+    def test_all_gpu_writing_configurations_stage_firmware_assets(self):
+        self.assertIn("$safety = $catalogue.safety_classes.($deployVariant.safety)\n        if ($safety.writes_gpu) { $assetRepoForStage = $RepoRoot }", SCRIPT)
+        for variant in MANIFEST["variants"]:
+            safety = MANIFEST["safety_classes"][variant["safety"]]
+            self.assertEqual(safety["writes_gpu"], variant["safety"] in ("actuates", "stop-only"), variant["id"])
         self.assertEqual(SCRIPT.count("-FirmwareAssetRepo $assetRepoForStage"), 2)
         stage = SCRIPT[SCRIPT.index("function Stage-SignedEfi"):SCRIPT.index("# --- catalogue")]
         self.assertLess(stage.index("Stage-FirmwareAssets -AssetRepo"), stage.index("$replacementStarted = $true"))
@@ -1011,6 +1014,7 @@ if ($Mode -eq 0) {
             }
             helpers = SCRIPT[SCRIPT.index("function Get-Sha256"):SCRIPT.index("# A switch plus one optional")]
             helpers += SCRIPT[SCRIPT.index("function Get-StageImageReceipt("):SCRIPT.index("function Get-StageReuseTarget(")]
+            helpers += SCRIPT[SCRIPT.index("function Test-StageCreationEvidence("):SCRIPT.index("function Remove-StagePartition(")]
             helpers += SCRIPT[SCRIPT.index("function Get-ExistingEfi("):SCRIPT.index("function Get-DbCertificateDer")]
             harness = base / "reuse.ps1"
             harness.write_text(
@@ -1019,7 +1023,7 @@ if ($Mode -eq 0) {
                 "$disk=[pscustomobject]@{UniqueId='disk-fixture';BusType='NVMe'}\n"
                 "$part=[pscustomobject]@{Guid='11111111-1111-1111-1111-111111111111'}\n"
                 "$evidence=Get-StageReuseEvidence $disk $part $Media $Receipts\n"
-                "if (-not $evidence.Hash) { throw 'Missing evidence' }\n",
+                "if (-not $evidence.Hash -and -not $evidence.DxeHash) { throw 'Missing evidence' }\n",
                 encoding="utf-8")
             def check(valid):
                 result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(harness), str(media), str(output)],
@@ -1049,6 +1053,68 @@ if ($Mode -eq 0) {
             check(False)
             boot.write_bytes(image)
             check(True)
+            # Both subsystem-specific images may coexist. Each needs its own
+            # matching signed artifact and deployment receipt.
+            driver = media / "EFI" / "Drivers" / "AdaUnlockDxe.efi"
+            driver.parent.mkdir()
+            driver_image = bytearray(image)
+            struct.pack_into("<H", driver_image, 0x98 + 68, 11)
+            driver.write_bytes(driver_image)
+            check(False)
+            driver_artifact = output / "UniversalGPU-driver-signed.efi"
+            driver_artifact.write_bytes(driver_image)
+            driver_receipt = output / (driver_artifact.name + ".json")
+            driver_receipt.write_text(json.dumps(dict(record, Subsystem=11,
+                Destination=r"G:\EFI\Drivers\AdaUnlockDxe.efi",
+                SignedSha256=hashlib.sha256(driver_image).hexdigest())), encoding="utf-8")
+            check(True)
+            boot.unlink()
+            check(True)
+            driver.write_bytes(b"changed")
+            check(False)
+
+    def test_wipe_stage_partition_with_mock_storage_services(self):
+        import subprocess
+        functions = SCRIPT[SCRIPT.index("function Get-StageDiskIdentity("):SCRIPT.index("function Get-ExistingEfi(")]
+        host = r'''
+param([int]$Mode)
+Set-StrictMode -Version Latest
+$ErrorActionPreference='Stop'
+$script:deletes=0
+$script:disk=[pscustomobject]@{Number=0;UniqueId='disk-fixture';SerialNumber='serial';Size=10GB;LargestFreeExtent=0;LogicalSectorSize=512;BusType='NVMe';PartitionStyle='GPT';IsBoot=$false;IsSystem=$false;IsOffline=$false;IsReadOnly=$false;FriendlyName='fixture'}
+$script:parts=@(
+    [pscustomobject]@{Guid='11111111-1111-1111-1111-111111111111';Offset=1MB;Size=1GB;PartitionNumber=1;DiskNumber=0;GptType='ebd0a0a2-b9e5-4433-87c0-68b6b72699c7';IsSystem=$false;IsBoot=$false;DriveLetter='F'},
+    [pscustomobject]@{Guid='22222222-2222-2222-2222-222222222222';Offset=2GB;Size=512MB;PartitionNumber=2;DiskNumber=0;GptType='c12a7328-f81f-11d2-ba4b-00a0c93ec93b';IsSystem=$false;IsBoot=$false;DriveLetter='G'}
+)
+if ($Mode -eq 4) { $script:parts[1].IsSystem=$true }
+function Get-Disk { param($Number,$ErrorAction) $script:disk | Select-Object * }
+function Get-Partition { param($ErrorAction) $script:parts | ForEach-Object { $_ | Select-Object * } }
+function Get-Volume { param([Parameter(ValueFromPipeline=$true)]$Partition,$ErrorAction) process {
+    [pscustomobject]@{FileSystem='FAT32';FileSystemLabel=$(if($Mode -eq 3){'OTHER'}else{'GPUUNLOCK'});UniqueId='volume-fixture'}
+} }
+function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
+function Read-Host { param($Prompt) if ($Mode -eq 1) { return 'NO' }; if($Mode -eq 5){$script:parts[1].Size=1GB}; return 'YES' }
+function Remove-Partition { param($InputObject,$Confirm,$ErrorAction)
+    if ($InputObject.Guid -ne '22222222-2222-2222-2222-222222222222') { throw 'Wrong partition selected' }
+    $script:deletes++
+    $script:parts=@($script:parts | Where-Object Guid -ne $InputObject.Guid)
+}
+''' + functions + r'''
+function Test-StageCreationEvidence { param($Disk,$Partition,$ReceiptDirectory) return ($Mode -ne 2 -and $Partition.Guid -eq '22222222-2222-2222-2222-222222222222') }
+$failed=$false
+try { Remove-StagePartition 0 $(if ($Mode -eq 6){'F'}else{''}) (Get-Location).Path } catch { $failed=$true; [Console]::Out.WriteLine($_.Exception.Message) }
+if ($Mode -eq 0) {
+    if ($failed -or $script:deletes -ne 1 -or $script:parts.Count -ne 1 -or $script:parts[0].Guid -ne '11111111-1111-1111-1111-111111111111') { throw 'Expected only the project partition to be deleted' }
+} elseif (-not $failed -or $script:deletes -ne 0 -or $script:parts.Count -ne 2) { throw 'Expected refusal without deletion' }
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "wipe.ps1"
+            script.write_text(host, encoding="utf-8")
+            for mode in range(7):
+                with self.subTest(mode=mode):
+                    result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(script), str(mode)],
+                                            capture_output=True, text=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_firmware_asset_staging_on_temporary_media(self):
         import subprocess
