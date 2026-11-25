@@ -115,7 +115,7 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #if defined(GU_RUNTIME_ESP_PIN) && (!defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_ESP))
 #error Explicit runtime ESP pin requires the combined runtime application
 #endif
-#if defined(GU_DXE_FIRMWARE_REATTACH) && (!defined(GU_FIRMWARE_REATTACH) || defined(GU_APP_OPERATION) || defined(GU_INTERACTIVE_WINDOWS_ESP) || defined(GU_RUNTIME_ESP_PIN) || defined(GU_DEDICATED_STAGE_PIN))
+#if defined(GU_DXE_FIRMWARE_REATTACH) && (!defined(GU_FIRMWARE_REATTACH) || defined(GU_APP_OPERATION) || defined(GU_INTERACTIVE_WINDOWS_ESP) || defined(GU_RUNTIME_ESP_PIN))
 #error DXE reattachment cannot use application entry or handover policy
 #endif
 #ifdef GU_FIRMWARE_REATTACH

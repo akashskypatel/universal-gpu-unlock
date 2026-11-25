@@ -110,6 +110,8 @@ Optional `-SelectAllGpus` is valid with `-Only firmware-transaction -Operation U
 
 DXE firmware transactions use the same peer warning, release, firmware verification, reattachment, final graph verification and logging source as the combined application. The driver retains its optional S3 script after each verified reattachment, checks the live BAR before each script entry, and blocks the sequence on an uncertain or partial write. S3 resume itself remains unverified. DXE uses the same ASPM-only admission exception as the combined application; link training, negotiated width/speed and uncorrected error refusals are unchanged. DXE executes in the ReadyToBoot callback, and returns to the firmware rather than calling Windows LoadImage/StartImage. Prior INTENT disables repeat execution; no automatic rearm, internal driver installation or physical qualification is introduced.
 
+Dedicated DXE launch preparation: `-Only firmware-transaction -Operation DxeTransaction -ImageKind Dxe -SelectAllGpus -StagePartitionGuid <dedicated-partition-guid> -SignOnly` signs a driver that uses the existing exact non-USB GPT launch check and writable log checks. It retains the private Windows ESP profile and refuses a stage GUID matching that compiled Windows ESP. No file is copied to the stage and no driver entry is registered. The isolated boot-image reuse and maintenance rules remain unchanged; persistent staging and registration need an independently verified removal/recovery workflow before use.
+
 ## Canonical profiles and arguments
 
 Use `-Only <profile>` with the operation-specific arguments below. The five
@@ -156,7 +158,7 @@ distinct. ESP = EFI System Partition. DXE = Driver Execution Environment.
 | `Unlock` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. RAM-only. |
 | `UnlockWithResume` | `-EspPolicy Runtime` | Runtime application selection only. No compiled BDF list or ESP pin. Requests the existing S3 resume policy. Physical resume verification is pending. |
 | `Menu` | `-SelectionBdf` or `-SelectionBdfs`, `-EspPolicy Pinned/Resident` | Application only. Omit selection for runtime selection. Pinned is default and needs private ESP profile. Resident supports zero or one compiled target, not a sequence. No explicit ESP pin. |
-| `DxeTransaction` | `-ImageKind Dxe`, optional `-SelectAllGpus` or `-SelectionBdf`/`-SelectionBdfs`, `-EspPolicy Pinned` | Pinned private ESP profile required. Shared reattachment sequence; optional S3 registration. Same ASPM-only admission exception as UnlockReattach. No explicit ESP pin or captured reference. Cannot stage as BOOTX64.EFI. |
+| `DxeTransaction` | `-ImageKind Dxe`, optional `-SelectAllGpus` or `-SelectionBdf`/`-SelectionBdfs`, `-EspPolicy Pinned` | Pinned private ESP profile required. Shared reattachment sequence; optional S3 registration. Same ASPM-only admission exception as UnlockReattach. No explicit Windows ESP pin or captured reference. Optional `-StagePartitionGuid` with SignOnly or ResolveOnly builds a driver pinned to a dedicated internal partition; cannot stage as BOOTX64.EFI. |
 
 The combined operation has a historical physical PASS on the RTX 4090 and
 RTX 3080 with displays connected. Manual cold-power recovery after a failed

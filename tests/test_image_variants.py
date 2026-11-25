@@ -458,7 +458,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertLess(stage.index("Maintenance media is no longer isolated"),
                         stage.index("Copy-Item -LiteralPath $SignedFile -Destination $temporary"))
         self.assertIn("-MaintenanceOnly:($variant.safety -eq 'maintenance')", SCRIPT)
-        self.assertIn("$Variant.safety -eq 'maintenance' -and $script:StagePartitionGuid", SCRIPT)
+        self.assertIn("($Variant.safety -eq 'maintenance' -or (Test-DxeFirmwareTransaction $Variant)) -and $script:StagePartitionGuid", SCRIPT)
         self.assertIn("$deployVariant.safety -eq 'maintenance'", SCRIPT)
         self.assertIn("STAGE_PARTITION_GUID=", builder)
         source = (ROOT / 'src' / 'boot_state_maintenance.c').read_text(encoding='utf-8')
@@ -1267,6 +1267,15 @@ if ($Mode -eq 0) {
         self.assertIn("S3_POLICY=OPTIONAL", result["ResolvedAttestations"])
         self.assertIn("ASPM_ADMISSION_BYPASSED=1", result["ResolvedAttestations"])
         self.resolve(dxe + ["-SelectAllGpus"] + two, valid=False)
+        pin = '87654321-4321-8765-abcd-ef0123456789'
+        pinned = self.resolve(dxe + ['-SelectAllGpus', '-StagePartitionGuid', pin])
+        self.assertEqual(pinned['Switches']['StagePartitionGuid'], pin)
+        self.assertIn('STAGE_PARTITION_GUID=' + pin, pinned['ResolvedAttestations'])
+        self.assertIn('S3_POLICY=OPTIONAL', pinned['ResolvedAttestations'])
+        self.resolve(dxe + ['-StagePartitionGuid', '00000000-0000-0000-0000-000000000000'], valid=False)
+        self.resolve(dxe + ['-StagePartitionGuid', 'bad'], valid=False)
+        self.resolve(combined + ['-StagePartitionGuid', pin], valid=False)
+        self.resolve(dxe + ['-StagePartitionGuid', pin, '-StageDrive', 'G'], valid=False)
         for operation in ("Unlock", "UnlockWithResume"):
             args = ["-Only", "firmware-transaction", "-Operation", operation]
             result = self.resolve(args)

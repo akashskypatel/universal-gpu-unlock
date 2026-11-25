@@ -164,6 +164,7 @@ param(
     [string]$SelectionBdf,
     [string]$SelectionBdfs,
     [string]$WindowsEspGuid,
+    [string]$StagePartitionGuid,
     [switch]$SelectAllGpus,
     [string]$WslDistribution,
     [string]$WslUser,
@@ -216,6 +217,12 @@ if ($stageArgumentCount -gt 1 -or ($stageArgumentCount -and -not ($StageDrive -o
 }
 if ($StageDrive -and ($ResolveOnly -or $List -or $ListConfigurations)) { throw 'StageDrive cannot be combined with inspection options.' }
 $script:ProvisionedStage = $null
+$requestedDxeStagePin = $StagePartitionGuid
+if ($PSBoundParameters.ContainsKey('StagePartitionGuid') -and (
+    -not $requestedDxeStagePin -or $Only -ne 'firmware-transaction' -or $Operation -ne 'DxeTransaction' -or $ImageKind -ne 'Dxe' -or
+    (-not $SignOnly -and -not $ResolveOnly) -or $StageDrive -or $StageDisk -or $StageDxeCompanion -or $All -or $Family -or $List -or $ListConfigurations)) {
+    throw '-StagePartitionGuid requires DxeTransaction -ImageKind Dxe with SignOnly or ResolveOnly and no staging.'
+}
 $script:StagePartitionGuid = $null
 if ($script:DiskStageRequested -and ($StageDrive -or $All -or $SignOnly -or $ResolveOnly -or $List -or $ListConfigurations -or $StageDxeCompanion -or -not $Only)) {
     throw '-StageDisk requires one explicit profile and cannot be combined with StageDrive, inspection, SignOnly, All or StageDxeCompanion.'
@@ -1316,7 +1323,7 @@ function Get-ResolvedAttestations($Variant) {
         "WINDOWS_ESP_GUID=$expectedEsp"
         if ($script:StagePartitionGuid) { "STAGE_PARTITION_GUID=$script:StagePartitionGuid" }
         else { 'STAGE_PARTITION_GUID=NONE' }
-    } elseif ($Variant.safety -eq 'maintenance' -and $script:StagePartitionGuid) {
+    } elseif (($Variant.safety -eq 'maintenance' -or (Test-DxeFirmwareTransaction $Variant)) -and $script:StagePartitionGuid) {
         "STAGE_PARTITION_GUID=$script:StagePartitionGuid"
     }
 }
@@ -1353,7 +1360,7 @@ function Build-VariantArguments($Variant) {
         $arguments['WindowsEspGuid'] = $WindowsEspGuid
     }
     if ($script:StagePartitionGuid) {
-        if (-not (Test-VariantSwitch $Variant 'FirmwareReattach') -and $Variant.safety -ne 'maintenance') { throw 'Internal launch pin requires combined or maintenance application.' }
+        if (-not (Test-VariantSwitch $Variant 'FirmwareReattach') -and $Variant.safety -ne 'maintenance' -and -not (Test-DxeFirmwareTransaction $Variant)) { throw 'Internal launch pin requires combined firmware transaction or maintenance.' }
         $arguments['StagePartitionGuid'] = $script:StagePartitionGuid
     }
     if ($CapturedPromReference) {
@@ -1504,6 +1511,7 @@ try {
     }
     . $selectionHelper
     . (Join-Path (Join-Path $RepoRoot 'src') 'Windows-Esp-Build.ps1')
+    if ($requestedDxeStagePin) { $script:StagePartitionGuid = (ConvertTo-GuWindowsEspGuid $requestedDxeStagePin).ToString('D') }
     $script:SelectionSpec = New-GuGpuSelectionSpec -SelectionBdf $SelectionBdf -SelectionBdfs $SelectionBdfs
     $localProfilePath = Join-Path (Join-Path $RepoRoot 'src') 'local\boot_profile.h'
     $script:HasLocalBootProfile = Test-Path -LiteralPath $localProfilePath -PathType Leaf

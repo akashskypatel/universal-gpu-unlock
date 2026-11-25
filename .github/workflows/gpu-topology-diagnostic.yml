@@ -509,6 +509,9 @@ jobs:
             $autoDxe = & .\src\Build-Dxe-Driver.ps1 -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -SelectAllGpus *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             $autoDxeStatus = @($autoDxe | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
             if($autoDxeStatus.Count -ne 1 -or "$($autoDxeStatus[0])" -notmatch 'ASPM_ADMISSION_BYPASSED=1 INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1' -or "$($autoDxeStatus[0])" -notmatch 'FIRMWARE_REATTACH=1 S3_POLICY=OPTIONAL TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION'){throw 'Combined automatic DXE receipt mismatch'}
+            $pinnedDxe = & .\src\Build-Dxe-Driver.ps1 -EnableSingleTargetExecution -AcceptUnverifiedActuation -RuntimeSelection -RuntimeEsp -SelectAllGpus -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            $pinnedDxeStatus = @($pinnedDxe | Where-Object { "$_" -match '^STATUS=COMPLETE PATH=' })
+            if($pinnedDxeStatus.Count -ne 1 -or "$($pinnedDxeStatus[0])" -notmatch 'S3_POLICY=OPTIONAL TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789'){throw 'Dedicated DXE receipt mismatch'}
             # The waiver's own interlocks must still refuse, without compiling.
             $waiverNeedsSingle = $false
             try { & .\src\Build-Experimental-MSVC.ps1 -SelectionBdf '0000:09:02.0' -AcceptUnverifiedActuation } catch {
