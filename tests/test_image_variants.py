@@ -458,6 +458,12 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertLess(stage.index("Maintenance media is no longer isolated"),
                         stage.index("Copy-Item -LiteralPath $SignedFile -Destination $temporary"))
         self.assertIn("-MaintenanceOnly:($variant.safety -eq 'maintenance')", SCRIPT)
+        self.assertIn("$Variant.safety -eq 'maintenance' -and $script:StagePartitionGuid", SCRIPT)
+        self.assertIn("$deployVariant.safety -eq 'maintenance'", SCRIPT)
+        self.assertIn("STAGE_PARTITION_GUID=", builder)
+        source = (ROOT / 'src' / 'boot_state_maintenance.c').read_text(encoding='utf-8')
+        self.assertLess(source.index('s=VerifyStagePartition(image,t)'), source.index('GuBootStateRead(t,&reviewed)'))
+        self.assertIn('GuWindowsEspPathMatches', source)
 
     def test_the_script_never_stages_from_a_matrix_run(self):
         self.assertIn("-All must not stage", SCRIPT)
@@ -717,7 +723,9 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         provision = SCRIPT.split('function New-StagePartition(', 1)[1].split('function Assert-UsbVolume(', 1)[0]
         for forbidden in ('Clear-Disk', 'Initialize-Disk', 'Resize-Partition', 'Remove-Partition'):
             self.assertNotIn(forbidden, provision)
-        self.assertLess(provision.index('Read-Host'), provision.index('New-Partition -DiskId'))
+        self.assertLess(provision.index('Confirm-StageAction "Create ONLY'), provision.index('New-Partition -DiskId'))
+        self.assertIn("-ccontains (Read-Host", SCRIPT)
+        self.assertEqual(SCRIPT.count('Type YES/Yes/yes/y/Y to confirm'), 1)
         self.assertLess(provision.index('New-Partition -DiskId'), provision.index('Format-Volume -Partition $new[0]'))
         self.assertIn('(Get-StageLayoutKey $old) -cne $beforeKey', provision)
         self.assertIn('STAGE_PARTITION_GUID=$script:StagePartitionGuid', SCRIPT)
@@ -898,7 +906,7 @@ function Get-Partition { param($DiskNumber,$DriveLetter,$ErrorAction) if ($Drive
 function Get-Volume { param($DriveLetter,$ErrorAction) [pscustomobject]@{FileSystem='FAT32';FileSystemLabel='GPUUNLOCK';Size=1GB;UniqueId='volume-fixture'} }
 function Assert-NormalDirectory { param($Root) }
 function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
-function Read-Host { param($Prompt) if ($Mode -eq 1 -or $Mode -eq 11) { return 'NO' }; if ($Mode -eq 4) { $script:disk.UniqueId='replacement' }; if ($Mode -eq 9 -or $Mode -eq 12) { $script:parts[0].Size=2GB }; if ($Mode -ge 10) { return 'REUSE 0 11111111-1111-1111-1111-111111111111' }; return 'CREATE 0 1024' }
+function Read-Host { param($Prompt) if ($Mode -eq 1 -or $Mode -eq 11) { return 'NO' }; if ($Mode -eq 4) { $script:disk.UniqueId='replacement' }; if ($Mode -eq 9 -or $Mode -eq 12) { $script:parts[0].Size=2GB }; if ($Mode -eq 14) { return 'YeS' }; if ($Mode -ge 10) { return 'y' }; return 'Yes' }
 function New-Partition {
     param($DiskId,$Size,$GptType,[switch]$AssignDriveLetter,$ErrorAction)
     $script:creates++
@@ -923,8 +931,9 @@ if ((Get-StagePartitionSizeMB 84585936 512 0) -ne 162 -or
     (Get-StagePartitionSizeMB 84585936 512 200) -ne 200) { throw 'Unexpected automatic partition size' }
 try { [void](Get-StagePartitionSizeMB 84585936 512 100); throw 'Undersized override accepted' } catch { if ($_.Exception.Message -notlike 'PartitionSizeMB must be at least*') { throw } }
 try {
-    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7) 0 'receipt-directory'
-    if ($Mode -eq 10) {
+    $letter = if ($Mode -eq 15) { 'F' } elseif ($Mode -eq 16) { 'G' } else { '' }
+    $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7) 0 'receipt-directory' -ExistingLetter $letter -ExistingGuid ([guid]'11111111-1111-1111-1111-111111111111') -ReuseOnly:($Mode -ge 15)
+    if ($Mode -eq 10 -or $Mode -eq 15) {
         if (-not $script:ProvisionedStage.Reused -or $script:ProvisionedStage.Guid -ne [guid]'11111111-1111-1111-1111-111111111111' -or (Assert-UsbVolume 'F') -ne 'F:\') { throw 'Invalid reuse identity' }
     }
     if ($Mode -eq 0) {
@@ -935,7 +944,7 @@ try {
 } catch { $failed=$true; [Console]::Out.WriteLine($_.Exception.Message) }
 if ($Mode -eq 0) {
     if ($failed -or $script:creates -ne 1 -or $script:formats -ne 1) { throw 'Expected exact successful create/format' }
-} elseif ($Mode -eq 10) {
+} elseif ($Mode -eq 10 -or $Mode -eq 15) {
     if ($failed -or $script:creates -ne 0 -or $script:formats -ne 0) { throw 'Verified reuse must not provision or format' }
 } elseif ($Mode -eq 5) {
     if (-not $failed -or $script:creates -ne 1 -or $script:formats -ne 0) { throw 'Changed layout must prevent format' }
@@ -946,7 +955,7 @@ if ($Mode -eq 0) {
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "disk.ps1"
             script.write_text(host, encoding="utf-8")
-            for mode in range(14):
+            for mode in range(17):
                 with self.subTest(mode=mode):
                     result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-File", str(script), str(mode)],
                                             capture_output=True, text=True, timeout=30)

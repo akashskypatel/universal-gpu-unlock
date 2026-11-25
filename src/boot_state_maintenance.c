@@ -4,6 +4,25 @@
 #include "format.h"
 #include <stdarg.h>
 #include <stdint.h>
+#ifdef GU_DEDICATED_STAGE_PIN
+#include <Protocol/LoadedImage.h>
+#include <Protocol/DevicePath.h>
+#include "gpu_windows_path.h"
+#include "stage-partition-pin.h"
+static EFI_STATUS VerifyStagePartition(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
+  static EFI_GUID loaded_guid=EFI_LOADED_IMAGE_PROTOCOL_GUID;
+  static EFI_GUID path_guid=EFI_DEVICE_PATH_PROTOCOL_GUID;
+  static const uint8_t pin[16]=GU_STAGE_PARTITION_PIN_BYTES;
+  EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
+  EFI_DEVICE_PATH_PROTOCOL *path=NULL;
+  if(!image||!t||!t->BootServices||!t->BootServices->HandleProtocol)return EFI_UNSUPPORTED;
+  EFI_STATUS s=t->BootServices->HandleProtocol(image,&loaded_guid,(VOID **)&loaded);
+  if(s!=EFI_SUCCESS||!loaded||!loaded->DeviceHandle)return EFI_ACCESS_DENIED;
+  s=t->BootServices->HandleProtocol(loaded->DeviceHandle,&path_guid,(VOID **)&path);
+  if(s!=EFI_SUCCESS||!GuWindowsEspPathMatches((const uint8_t *)path,4096U,pin))return EFI_ACCESS_DENIED;
+  return EFI_SUCCESS;
+}
+#endif
 
 static EFI_STATUS Say(EFI_SYSTEM_TABLE *t,const char *fmt,...) {
   char ascii[512];
@@ -49,6 +68,13 @@ EFI_STATUS EFIAPI UefiMain(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
      !t->BootServices->SetWatchdogTimer)return EFI_UNSUPPORTED;
   EFI_STATUS s=Say(t,"\r\nBoot state maintenance only. No GPU transaction.\r\n");
   if(s!=EFI_SUCCESS)return s;
+#ifdef GU_DEDICATED_STAGE_PIN
+  s=VerifyStagePartition(image,t);
+  if(s!=EFI_SUCCESS) {
+    (VOID)Say(t,"REACTIVATION=REFUSED REASON=STAGING_PARTITION_MISMATCH\r\n");
+    return s;
+  }
+#endif
   GU_BOOT_STATE reviewed;
   s=GuBootStateRead(t,&reviewed);
   if(s!=EFI_SUCCESS) {

@@ -39,7 +39,7 @@ The catalogue labels each variant:
 One named application variant can be staged to EFI\BOOT\BOOTX64.EFI on a
 verified writable non-system FAT32 USB stick, after a verified local backup of
 the file being replaced. Stop-only/actuating images also require
--AcceptActuatingDeploy. Maintenance also requires explicit consent and isolated USB media. A DXE driver (subsystem 11) is never staged as
+-AcceptActuatingDeploy. Maintenance also requires explicit consent and isolated staging media. A DXE driver (subsystem 11) is never staged as
 BOOTX64.EFI. For the waived one-target app, -StageDxeCompanion additionally
 builds, signs and stages its matching DXE image at
 EFI\Drivers\AdaUnlockDxe.efi for the app's explicit I path.
@@ -306,7 +306,7 @@ function Resolve-StageTarget([bool]$DiskSelection,[object[]]$TargetArguments) {
             }}
         }
         Say (($diskRows | Select-Object -Property $columns | Format-Table -AutoSize | Out-String -Width 240).TrimEnd())
-        $targetText = if ($DiskSelection) { Read-Host 'Enter disk number (Enter to cancel)' } else { Read-Host 'Enter USB drive letter (Enter to cancel)' }
+        $targetText = if ($DiskSelection) { Read-Host 'Enter disk number (Enter to cancel)' } else { Read-Host 'Enter drive letter (Enter to cancel)' }
     } else {
         if ($null -eq $TargetArguments[0]) { throw 'Empty staging target.' }
         $targetText = [string]$TargetArguments[0]
@@ -441,10 +441,15 @@ function Get-StageReuseTarget($Disk,$Partition,[string]$LayoutKey,[uint64]$Requi
         Reused=$true; VolumeId=[string]$volumes[0].UniqueId; ReuseBootSha256=$evidence.Hash; OwnershipReceipt=$evidence.Receipt }
 }
 
-function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal,[uint64]$AssetBytes=0,[string]$ReceiptDirectory) {
+# All staging confirmations use the same exact accepted answers.
+function Confirm-StageAction([string]$Action) {
+    return @('YES','Yes','yes','y','Y') -ccontains (Read-Host "$Action. Type YES/Yes/yes/y/Y to confirm")
+}
+
+function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal,[uint64]$AssetBytes=0,[string]$ReceiptDirectory,[string]$ExistingLetter,[guid]$ExistingGuid=[guid]::Empty,[switch]$ReuseOnly) {
     $disk = Get-StageDiskIdentity $Number
     if ($disk.BusType -ne 'USB' -and -not $AllowInternal) {
-        throw 'Internal disk staging currently supports firmware-transaction UnlockReattach only.'
+        throw 'Internal disk staging supports firmware-transaction UnlockReattach or ReviewBootState maintenance only.'
     }
     $espType = [guid]'c12a7328-f81f-11d2-ba4b-00a0c93ec93b'
     $SizeMB = Get-StagePartitionSizeMB $AssetBytes $disk.LogicalSectorSize $SizeMB
@@ -457,12 +462,15 @@ function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal
     }
     $existingEsp = @($before | Where-Object { [guid]$_.GptType -eq $espType })
     if ($existingEsp.Count -gt 1) { throw 'Multiple existing EFI partitions; refusing ambiguous reuse.' }
+    if ($ExistingLetter -and ($existingEsp.Count -ne 1 -or [string]$existingEsp[0].DriveLetter -ne $ExistingLetter -or [guid]$existingEsp[0].Guid -ne $ExistingGuid)) {
+        throw 'Selected drive is not the verified dedicated EFI partition.'
+    }
+    if ($ReuseOnly -and $existingEsp.Count -ne 1) { throw 'Maintenance requires an existing dedicated staging partition on an internal disk.' }
     if ($existingEsp.Count -eq 1) {
         $reuse = Get-StageReuseTarget $disk $existingEsp[0] $beforeKey $size $ReceiptDirectory
         Say ("STAGE_REUSE DISK={0} ID={1} MODEL={2} SERIAL={3} GUID={4} DRIVE={5} BYTES={6} RECEIPT={7}" -f
             $disk.Number,$disk.UniqueId,$disk.FriendlyName,$disk.SerialNumber,$reuse.Guid,$reuse.Letter,$reuse.Size,$reuse.OwnershipReceipt)
-        $reuseConfirm = "REUSE $Number $($reuse.Guid.ToString('D'))"
-        if ((Read-Host "Reuse verified GPU Unlock partition without formatting. Type $reuseConfirm") -cne $reuseConfirm) {
+        if (-not (Confirm-StageAction "Reuse verified GPU Unlock partition on disk $Number, drive $($reuse.Letter), without formatting")) {
             throw 'Partition reuse cancelled.'
         }
         $live = Assert-StageDiskIdentity $disk
@@ -482,8 +490,7 @@ function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal
         Say ("EXISTING_PARTITION NUMBER={0} GUID={1} OFFSET={2} BYTES={3} TYPE={4}" -f
             $part.PartitionNumber,$part.Guid,$part.Offset,$part.Size,$part.GptType)
     }
-    $confirm = "CREATE $Number $SizeMB"
-    if ((Read-Host "Create ONLY a new $SizeMB MiB FAT32 EFI partition in free space. Type $confirm") -cne $confirm) {
+    if (-not (Confirm-StageAction "Create ONLY a new $SizeMB MiB FAT32 EFI partition on disk $Number in free space")) {
         throw 'Partition creation cancelled.'
     }
     $live = Assert-StageDiskIdentity $disk
@@ -545,7 +552,7 @@ function Assert-UsbVolume([string]$Drive) {
         throw "Refusing unsafe volume $root (requires writable, non-system FAT32 USB data drive)."
     }
     Assert-NormalDirectory $root
-    Say ("Target USB: {0} Disk={1} Model={2} FileSystem={3} Size={4}" -f
+    Say ("Target staging volume: {0} Disk={1} Model={2} FileSystem={3} Size={4}" -f
          $root, $part.DiskNumber, $disk.FriendlyName, $volume.FileSystem, $volume.Size)
     return $root
 }
@@ -923,16 +930,15 @@ function Stage-SignedEfi {
         }
     }
     if ($MaintenanceOnly -and $otherEfiCount -ne 0) {
-        throw 'Maintenance requires isolated USB media: other EFI files exist. Use separate media; no files were removed.'
+        throw 'Maintenance requires isolated staging media: other EFI files exist. Use separate media; no files were removed.'
     }
-    Say "Other EFI files preserved on USB: $otherEfiCount"
+    Say "Other EFI files preserved on staging volume: $otherEfiCount"
     Say "Install only: $destination"
 
     $backup = $null; $oldSha = $null; $savedOld = $null
     if ($oldBootPresent) {
         Say 'Existing BOOTX64.EFI will be replaced after a local verified backup.'
-        $answer = Read-Host 'Type YES/Yes/yes/y/Y to replace only USB BOOTX64.EFI (all other EFI files stay)'
-        if ($answer -cne 'YES' -and $answer -cne 'Yes' -and $answer -cne 'yes' -and $answer -cne 'y' -and $answer -cne 'Y') {
+        if (-not (Confirm-StageAction "Replace only $destination (all other EFI files stay)")) {
             throw 'BOOTX64.EFI replacement cancelled; no existing USB EFI was removed.'
         }
         $backup = Join-Path $LocalOutput ('efi-usb-backup-{0}-{1}' -f
@@ -1310,6 +1316,8 @@ function Get-ResolvedAttestations($Variant) {
         "WINDOWS_ESP_GUID=$expectedEsp"
         if ($script:StagePartitionGuid) { "STAGE_PARTITION_GUID=$script:StagePartitionGuid" }
         else { 'STAGE_PARTITION_GUID=NONE' }
+    } elseif ($Variant.safety -eq 'maintenance' -and $script:StagePartitionGuid) {
+        "STAGE_PARTITION_GUID=$script:StagePartitionGuid"
     }
 }
 
@@ -1345,7 +1353,7 @@ function Build-VariantArguments($Variant) {
         $arguments['WindowsEspGuid'] = $WindowsEspGuid
     }
     if ($script:StagePartitionGuid) {
-        if (-not (Test-VariantSwitch $Variant 'FirmwareReattach')) { throw 'Internal launch pin requires combined application.' }
+        if (-not (Test-VariantSwitch $Variant 'FirmwareReattach') -and $Variant.safety -ne 'maintenance') { throw 'Internal launch pin requires combined or maintenance application.' }
         $arguments['StagePartitionGuid'] = $script:StagePartitionGuid
     }
     if ($CapturedPromReference) {
@@ -1414,8 +1422,7 @@ function Stage-SignedDxeCompanion {
     $oldPresent = Test-Path -LiteralPath $destination -PathType Leaf
     $oldSha = $null; $backup = $null
     if ($oldPresent) {
-        $answer = Read-Host 'Type YES/Yes/yes/y/Y to replace only USB EFI\Drivers\AdaUnlockDxe.efi'
-        if ($answer -cne 'YES' -and $answer -cne 'Yes' -and $answer -cne 'yes' -and $answer -cne 'y' -and $answer -cne 'Y') {
+        if (-not (Confirm-StageAction "Replace only $destination")) {
             throw 'DXE companion replacement cancelled; existing driver preserved.'
         }
         $backup = Join-Path $LocalOutput ('dxe-usb-backup-{0}-{1}' -f
@@ -1616,15 +1623,30 @@ try {
 
     $drive = $null; $usbRoot = $null; $targetVolumeId = $null
     $selectedStageDisk = $null
+    $selectedStageLetter = $null
+    $selectedStageGuid = [guid]::Empty
     if ($script:DiskStageRequested) { $selectedStageDisk = Resolve-StageTarget $true $StageTargetArgument }
     if ($StageDrive) {
         $drive = Resolve-StageTarget $false $StageTargetArgument
-        $usbRoot = Assert-UsbVolume $drive
-        if ($assetRepoForStage) { $assetRepoForStage = $RepoRoot }
-        $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
-        if (-not $targetVolumeId) { throw 'USB volume identity unavailable; refusing staging.' }
-        if ([IO.Path]::GetPathRoot($OutputDirectory).TrimEnd('\') -ieq $usbRoot.TrimEnd('\')) {
-            throw 'Local signed outputs/backups must be on a different drive from target USB.'
+        $selectedParts = @(Get-Partition -DriveLetter $drive -ErrorAction Stop)
+        if ($selectedParts.Count -ne 1) { throw 'Expected exactly one selected drive partition.' }
+        $selectedPart = $selectedParts[0]
+        $selectedDisk = Get-Disk -Number $selectedPart.DiskNumber -ErrorAction Stop
+        if ($selectedDisk.BusType -ne 'USB') {
+            if ($deployVariant.safety -ne 'maintenance' -and -not (Test-VariantSwitch $deployVariant 'FirmwareReattach')) {
+                throw 'Internal drive staging requires the combined or maintenance application.'
+            }
+            $selectedStageDisk = $selectedPart.DiskNumber
+            $selectedStageLetter = $drive
+            $selectedStageGuid = [guid]$selectedPart.Guid
+        } else {
+            $usbRoot = Assert-UsbVolume $drive
+            if ($assetRepoForStage) { $assetRepoForStage = $RepoRoot }
+            $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
+            if (-not $targetVolumeId) { throw 'USB volume identity unavailable; refusing staging.' }
+            if ([IO.Path]::GetPathRoot($OutputDirectory).TrimEnd('\') -ieq $usbRoot.TrimEnd('\')) {
+                throw 'Local signed outputs/backups must be on a different drive from target USB.'
+            }
         }
     }
 
@@ -1647,7 +1669,7 @@ try {
 
     # Prove the WSL target can sign before spending a whole matrix of builds on it.
     [void](Test-WslSigningReady -PublicCer $PublicCertificate)
-    if ($script:DiskStageRequested) {
+    if ($null -ne $selectedStageDisk) {
         $skipReason = Test-VariantSelection $deployVariant
         if ($skipReason) { throw "Cannot provision for $($deployVariant.id): $skipReason" }
         [void](Build-VariantArguments $deployVariant)
@@ -1657,7 +1679,9 @@ try {
                 $stageAssetBytes += [uint64]$assetEntry.Pin.bytes
             }
         }
-        $script:ProvisionedStage = New-StagePartition $selectedStageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach')) $stageAssetBytes $OutputDirectory
+        $allowInternal = (Test-VariantSwitch $deployVariant 'FirmwareReattach') -or $deployVariant.safety -eq 'maintenance'
+        $reuseOnly = [bool]$selectedStageLetter -or ($deployVariant.safety -eq 'maintenance' -and (Get-Disk -Number $selectedStageDisk -ErrorAction Stop).BusType -ne 'USB')
+        $script:ProvisionedStage = New-StagePartition $selectedStageDisk $PartitionSizeMB $allowInternal $stageAssetBytes $OutputDirectory -ExistingLetter $selectedStageLetter -ExistingGuid $selectedStageGuid -ReuseOnly:$reuseOnly
         $drive = $script:ProvisionedStage.Letter
         if ($script:ProvisionedStage.Disk.BusType -ne 'USB') { $script:StagePartitionGuid = $script:ProvisionedStage.Guid.ToString('D') }
         $usbRoot = Assert-UsbVolume $drive

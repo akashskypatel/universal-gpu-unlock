@@ -427,6 +427,9 @@ jobs:
             & .\src\Build-Boot-State-Maintenance.ps1 *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC maintenance build failed: $LASTEXITCODE"}
             if(-not (Test-Path .\src\build_boot_state_maintenance\BOOT-STATE-MAINTENANCE.EFI)){throw 'Maintenance EFI missing'}
+            $pinnedMaintenance = & .\src\Build-Boot-State-Maintenance.ps1 -StagePartitionGuid '87654321-4321-8765-abcd-ef0123456789' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
+            $maintenanceStatus = @($pinnedMaintenance | Where-Object { "$_" -match '^STATUS=BUILT PATH=' })
+            if($maintenanceStatus.Count -ne 1 -or "$($maintenanceStatus[0])" -notmatch 'STAGE_PARTITION_GUID=87654321-4321-8765-abcd-ef0123456789'){throw 'Pinned maintenance attestation mismatch'}
             # Synthetic, non-deployable partition GUID: compile coverage only.
             & .\src\Build-Gpu-Topology-Diagnostic.ps1 -SaveLog -WindowsEspGuid '12345678-1234-4234-8234-123456789abc' *>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\gu-log\efi.log" -Append
             if($LASTEXITCODE -and $LASTEXITCODE -ne 0) {throw "MSVC handoff variant failed: $LASTEXITCODE"}
