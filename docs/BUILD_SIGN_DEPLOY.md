@@ -2,13 +2,19 @@
 
 ## Select a staging destination
 
-`-StageDrive G` continues to stage to an existing eligible FAT32 USB volume. `-StageDisk 2` selects a non-system, writable, online GPT disk with enough contiguous unallocated space. Review its ID, model, serial and partition layout, then type the exact `CREATE <disk> <calculated MiB>` shown. The partition defaults to twice the verified staged firmware asset bytes rounded up to a whole MiB, subject to the FAT32 minimum. The current 84,585,936-byte nine-file bundle needs 162 MiB on a 512-byte logical-sector disk (272 MiB minimum on a 4 KiB logical-sector disk). `-PartitionSizeMB` may explicitly increase the size but cannot fall below the computed requirement. The script creates a new EFI partition, checks that the old partitions are unchanged, formats only the new partition as FAT32, signs and stages one explicit profile. No erase, resize, initialize, existing ESP reuse, or boot-order changes. Internal NVMe/SATA/ATA/SAS targets initially support only the combined `firmware-transaction -Operation UnlockReattach` application; the signed image has the new partition GUID compiled in, separate from the Windows ESP. USB GPT provisioning supports ordinary stageable applications. Do not select Windows boot/system disks; keep separate recovery media. A provisioning/build/stage error may leave the new partition; inspect it rather than automatically retry or delete it. Firmware boot-menu visibility and physical launch compatibility are unverified.
+`-StageDrive G` continues to stage to an existing eligible FAT32 USB volume. `-StageDisk 2` selects a non-system, writable, online GPT disk with enough contiguous unallocated space. Review its ID, model, serial and partition layout, then type the exact `CREATE <disk> <calculated MiB>` shown. The partition defaults to twice the verified staged firmware asset bytes rounded up to a whole MiB, subject to the FAT32 minimum. The current 84,585,936-byte nine-file bundle needs 162 MiB on a 512-byte logical-sector disk (272 MiB minimum on a 4 KiB logical-sector disk). `-PartitionSizeMB` may explicitly increase the size but cannot fall below the computed requirement. The script creates a new EFI partition, checks that the old partitions are unchanged, formats only the new partition as FAT32, signs and stages one explicit profile. No erase, resize, initialize, unrelated ESP reuse, or boot-order changes. Internal NVMe/SATA/ATA/SAS targets initially support only the combined `firmware-transaction -Operation UnlockReattach` application; the signed image has the new partition GUID compiled in, separate from the Windows ESP. USB GPT provisioning supports ordinary stageable applications. Do not select Windows boot/system disks; keep separate recovery media. A provisioning/build/stage error may leave the new partition; inspect it rather than automatically retry or delete it. Firmware boot-menu visibility and physical launch compatibility are unverified.
 
 ```powershell
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -StageDisk 2 -AcceptActuatingDeploy
 ```
 
 The combined application checks its launch volume's free space at startup, before GPU work. At 90% utilization or above, it deletes previous regular RUNnnnn.TXT logs from its own AD102-UNLOCK directory in slot order until utilization falls below 90%, or no eligible logs remain. It preserves the current log, unrelated names, directories, and all logs when the recovery state is unresolved or cannot be read. Below 90%, or if volume usage is unavailable, it deletes nothing. No cleanup occurs during hardware transactions or on the Windows EFI partition. Copy any historical logs you want to preserve. Other profiles keep their existing logging policy.
+
+### Reuse a dedicated GPU Unlock partition
+
+Run the same StageDisk command for a later deployment. If exactly one EFI partition exists on the selected disk, the script checks its FAT32 GPUUNLOCK volume label, disk and partition identifiers, capacity and existing application. It requires a previous successful local deployment receipt and the matching local signed EFI artifact in OutputDirectory (default artifacts/signed). The receipt must match the disk ID, partition GUID, installed SHA-256 digest and, for an internal disk, the partition-pin build attestation. No other EFI executable may exist on the dedicated volume. A label alone does not establish ownership. The local receipt is trusted deployment evidence, not an independently authenticated ownership certificate.
+
+The partition must already have a drive letter D through Z. No automatic mounting, formatting or resizing occurs on reuse. Type the exact `REUSE <disk> <partition GUID>` confirmation shown, then confirm replacement of the old boot image when requested. Existing firmware assets are verified, missing assets and the temporary new image require sufficient free space, and existing logs remain untouched. The signed internal application keeps the existing partition GUID. Keep the previous local signed artifact and receipt. A missing or inconsistent receipt, unrelated EFI partition, multiple EFI partitions or insufficient capacity causes refusal; do not manually relabel or forge evidence to bypass this check. Physical reuse is not yet verified.
 
 ### Interactive selection
 
@@ -22,7 +28,7 @@ Run one of these commands from an elevated PowerShell session at the repository 
 .\src\Build-Sign-Deploy-UniversalGPU.ps1 -Only firmware-transaction -Operation UnlockReattach -StageDrive -AcceptActuatingDeploy
 ```
 
-`-StageDisk` displays the physical disk inventory with these columns: Number, FriendlyName, BusType, PartitionStyle, IsBoot, IsSystem, LogicalSectorSize, UnallocatedMiB. At `Enter disk number (Enter to cancel)`, enter the disk number (including 0 if applicable). The script checks eligibility and requires a separate `CREATE <disk> <calculated MiB>` confirmation before partition creation.
+`-StageDisk` displays the physical disk inventory with these columns: Number, FriendlyName, BusType, PartitionStyle, IsBoot, IsSystem, LogicalSectorSize, UnallocatedMiB. At `Enter disk number (Enter to cancel)`, enter the disk number (including 0 if applicable). The script checks eligibility and requires a separate `CREATE <disk> <calculated MiB>` confirmation before partition creation or a `REUSE <disk> <partition GUID>` confirmation for verified reuse.
 
 `-StageDrive` displays the same columns and adds DriveLetter. Multiple assigned letters on one disk appear together, for example G,H. At `Enter USB drive letter (Enter to cancel)`, enter one letter D through Z, without a colon. This mode uses an existing FAT32 USB volume; it does not create or resize a partition.
 
@@ -179,7 +185,7 @@ captured reference options apply.
 | `-ResolveOnly` | Inspect one configuration. Does not build or stage. |
 | `-SignOnly` | Build and sign. Do not stage. |
 | `-StageDrive [letter]` | Stage one EFI application to an existing verified FAT32 USB volume. Omit the letter for interactive selection. |
-| `-StageDisk [number]` | Create a dedicated staging partition in contiguous unallocated space on an eligible GPT disk. Omit the number for interactive selection. Cannot combine with StageDrive or StageDxeCompanion. |
+| `-StageDisk [number]` | Create or reuse a verified dedicated staging partition on an eligible GPT disk. Omit the number for interactive selection. Cannot combine with StageDrive or StageDxeCompanion. |
 | `-PartitionSizeMB <MiB>` | Optional StageDisk size override (64–4096 MiB, at or above the calculated minimum). Default: twice the verified staged asset bytes, rounded up, subject to the FAT32 minimum. |
 | `-AcceptActuatingDeploy` | Explicit consent required for deployment of driver-transition, firmware-transaction and maintenance images. |
 | `-All`, `-Family <builder-family>` | Build matrix controls. No canonical operation options with a matrix request. |
@@ -507,7 +513,7 @@ the sequence ones build; with one BDF it is the other way round
 (`REASON=NEEDS_TWO_OR_MORE_BDFS`). Run `-All` twice with both shapes, or use
 `-Only` for the images you actually need.
 
-Staging requires a destination and exactly one image. Use `-StageDrive [letter]` for an existing USB volume or `-StageDisk [number]` to provision a new partition. Omit the letter or number to select interactively. Use `-Only <profile>` and its arguments to select the image. Neither `-SignOnly` nor `-All` permits staging. The ordinary staging run replaces only the boot application at `EFI\BOOT\BOOTX64.EFI` and stages the required reference assets for firmware-transaction. For the waived
+Staging requires a destination and exactly one image. Use `-StageDrive [letter]` for an existing USB volume or `-StageDisk [number]` to create or reuse a verified dedicated partition. Omit the letter or number to select interactively. Use `-Only <profile>` and its arguments to select the image. Neither `-SignOnly` nor `-All` permits staging. The ordinary staging run replaces only the boot application at `EFI\BOOT\BOOTX64.EFI` and stages the required reference assets for firmware-transaction. For the waived
 one-target image, `-StageDxeCompanion` is an explicit paired build: it builds and
 signs the matching `dxe-actuate-one-target` variant first, stages that image at
 `EFI\Drivers\AdaUnlockDxe.efi` (the path the I/NVRAM installer opens), then
@@ -548,7 +554,7 @@ does not build is worse than a failed command.
 | `sbverify` | A signature the tool cannot verify |
 | Signed ≠ unsigned | A "signing" step that did nothing |
 | Target selection | Invalid, ambiguous or unlisted interactive target, conflicting staging modes or extra target arguments |
-| StageDisk provisioning | Non-GPT, system, boot, read-only or offline disk; existing EFI partition; insufficient unallocated space; changed disk identity or layout; missing creation confirmation |
+| StageDisk provisioning | Non-GPT, system, boot, read-only or offline disk; unrelated or ambiguous EFI partition; insufficient unallocated space for creation or capacity for reuse; changed disk identity or layout; missing creation confirmation |
 | Staging preflight | Non-FAT32, read-only, system or boot volume; a non-USB volume unless newly provisioned and verified by StageDisk; a changed target identity |
 | Backup and rollback | Replacing `BOOTX64.EFI` without a verified local copy, or leaving a half-written one |
 | `-AcceptActuatingDeploy` | Staging a `stop-only` or `actuates` image by habit |
@@ -603,7 +609,9 @@ skipped and why.
 | `Staging selection cancelled.` | No target was entered | Run the command again and select the intended disk or drive. |
 | `Selected disk was not uniquely listed.` / `Selected drive letter was not uniquely listed.` | The interactive target does not match exactly one listed entry | Review the inventory and select an existing target. |
 | `Insufficient contiguous unallocated space; no resize or erase is permitted.` | The selected disk cannot hold the required new partition | Select a different eligible disk or use StageDrive with an existing FAT32 USB volume. |
-| `Partition creation cancelled.` | The separate creation confirmation did not match | Review the disk identity and size before confirming a new request. |
+| `Partition creation cancelled.` / `Partition reuse cancelled.` | The separate confirmation did not match | Review the disk identity and size before confirming a new request. |
+| `Existing EFI partition has no matching verified local deployment receipt and signed artifact.` | Ownership evidence is absent or does not match the existing application | Preserve the partition. Locate the original local artifact and receipt; do not reformat. |
+| `Existing staging partition identity or free capacity is insufficient` | The existing volume changed or cannot hold the new image and missing assets | Review the volume and export old logs if necessary. Do not delete firmware assets or retry uncertain operations. |
 | `New partition verification failed` / format or staging failure after creation | A new partition may remain | Inspect the actual disk layout. Do not retry or delete automatically. |
 | `VARIANT_SKIPPED … REASON=NEEDS_SELECTION` | `-All` was run without a BDF | Pass `-SelectionBdf` or `-SelectionBdfs` |
 | `REASON=NEEDS_EXACTLY_ONE_BDF` | Two or more BDFs given, a single-target variant selected | Re-run with `-SelectionBdf '0000:01:00.0'` |
