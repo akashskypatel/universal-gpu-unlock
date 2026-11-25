@@ -90,7 +90,10 @@ class BootIoWiring(unittest.TestCase):
         self.assertIn("RuntimeEspPathCandidate(dp,bytes)&&", BOOT_IO)
         self.assertIn("RuntimeEspPathCandidate(p,bytes)", BOOT_IO)
         self.assertEqual(BOOT_IO.count("GuWindowsEspPathCandidate((const uint8_t *)"), 1)
-        self.assertEqual(BOOT_IO.count("GuWindowsEspPathMatches("), 4)
+        # Four original Windows ESP checks and one independent signed staging pin.
+        dedicated = "GuWindowsEspPathMatches((const uint8_t *)path,length,DedicatedStagePin)"
+        self.assertEqual(BOOT_IO.count(dedicated), 1)
+        self.assertEqual(BOOT_IO.replace(dedicated, "").count("GuWindowsEspPathMatches("), 4)
         self.assertIn("EspCarriesWindowsManager(b,handles[i])", BOOT_IO)
 
     def test_explicit_pin_filters_both_runtime_candidates_without_fallback(self):
