@@ -354,7 +354,15 @@ class EveryStageIsAlsoATraceLine(unittest.TestCase):
         for phase in ("prepare", "stage-windows-image", "manual-choice",
                       "close-USB-log", "start-Windows"):
             self.assertIn(phase, source)
-        self.assertIn('GuTraceDetail("manual-choice","KEY=%c TRANSACTION=%u S3_SCRIPT=%u"', source)
+        # Fixed and interactive selections now share the actual stage variable.
+        fixed = source.index('stage="build-selected-operation";GuTracePhase(stage);')
+        manual = source.index('stage="manual-choice";GuTracePhase(stage);s=GuBootChoose(&choice)')
+        key = source.index('GuTraceDetail(stage,"KEY=%c TRANSACTION=%u S3_SCRIPT=%u"')
+        self.assertLess(fixed, manual)
+        self.assertLess(manual, key)
+        self.assertLess(key, source.index('GuExecutePreparedSequence(owner,t,image,'))
+        self.assertIn("(unsigned)(choice == L'U' || choice == L'P')", source[key:])
+        self.assertIn("(unsigned)(choice == L'P')", source[key:])
         self.assertIn('GuTraceDetail("prepare","STATUS=%#llx PROFILE_VERIFIED=%u PROM_VERIFIED=%u"', source)
 
     def test_a_stopped_run_says_so_on_the_screen(self):
