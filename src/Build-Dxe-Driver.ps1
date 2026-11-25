@@ -8,10 +8,14 @@ param(
     [switch]$StopReleaseOnlyBench,
     [switch]$FileOnlyBootLog,
     [switch]$RuntimeSelection,
+    [switch]$SelectAllGpus,
     [switch]$RuntimeEsp,
     [switch]$EspResident
 )
 $ErrorActionPreference = 'Stop'
+$firmwareReattach = $AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench
+if ($firmwareReattach -and $EspResident) { throw 'DXE firmware reattachment does not support Windows ESP resident mode.' }
+if ($SelectAllGpus -and (-not $firmwareReattach -or -not $RuntimeSelection -or $SelectionBdf -or $SelectionBdfs)) { throw '-SelectAllGpus requires the runtime DXE firmware transaction without compiled targets.' }
 if ($FileOnlyBootLog -and -not $StopReleaseOnlyBench) {
     throw '-FileOnlyBootLog requires -StopReleaseOnlyBench; ordinary menu images need console output.'
 }
@@ -72,6 +76,10 @@ try {
         }
     }
 
+    if ($firmwareReattach) {
+        $clFlags += ' /DGU_FIRMWARE_REATTACH /DGU_DXE_FIRMWARE_REATTACH'
+        if ($SelectAllGpus) { $clFlags += ' /DGU_SELECT_ALL_GPUS' }
+    }
     if ($StopReleaseOnlyBench) {
         # Explicit Stop/release-only image: keep file logging, waive ASPM admission
         # only, and compile out the unlock path; AMD console checks stay active.
@@ -113,12 +121,13 @@ try {
     $binary = Join-Path $buildDir $binaryName
     if (-not (Test-Path -LiteralPath $binary)) { throw 'DXE EFI output missing' }
     $hash = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash
-    $targetOrder = if ($StopReleaseOnlyBench -and $RuntimeSelection) { 'RUNTIME_SUPPORTED_NVIDIA_ENUMERATION' } else { $selection.Locations -join ',' }
-    $reportedSelectedCount = if ($StopReleaseOnlyBench -and $RuntimeSelection) { 'RUNTIME' } else { [string]$selection.Count }
+    $targetOrder = if (($StopReleaseOnlyBench -and $RuntimeSelection) -or $SelectAllGpus) { 'RUNTIME_SUPPORTED_NVIDIA_ENUMERATION' } elseif ($firmwareReattach -and $RuntimeSelection) { 'RUNTIME_SAVED_SELECTION' } else { $selection.Locations -join ',' }
+    $reportedSelectedCount = if (($StopReleaseOnlyBench -or $firmwareReattach) -and $RuntimeSelection) { 'RUNTIME' } else { [string]$selection.Count }
     $singleTargetActive = if ($StopReleaseOnlyBench) { 0 } else { [int](($SyntheticCompileProfile -or $AcceptUnverifiedActuation) -and ($RuntimeSelection -or $selection.Count -eq 1)) }
     $stopOnlyAssertions = if ($StopReleaseOnlyBench) { 'FIRMWARE_ASSET_FILES_READ=0 PROM_READ=0 OS_HANDOFF=NONE' } else { '' }
-    $stopConsolePolicy = if ($StopReleaseOnlyBench) { 'CONDITIONAL' } else { '0' }
-    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench)) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=$stopConsolePolicy FILE_ONLY_OUTPUT=$([int][bool]$FileOnlyBootLog) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) $stopOnlyAssertions FIRMWARE_TRANSACTION=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) UNLOCK=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) REATTACH_ATTEMPTED=$([int][bool]$StopReleaseOnlyBench) REATTACH_VERIFIED=0 TARGET_ORDER=$targetOrder NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
+    $stopConsolePolicy = if ($StopReleaseOnlyBench) { 'CONDITIONAL' } elseif ($firmwareReattach) { '1' } else { '0' }
+    $s3Policy = if ($firmwareReattach) { 'OPTIONAL' } else { 'NONE' }
+    Write-Output "STATUS=COMPLETE PATH=$binary SHA256=$hash SELECTED_COUNT=$reportedSelectedCount RUNTIME_SELECTION=$([int][bool]$RuntimeSelection) RUNTIME_ESP=$([int][bool]$RuntimeEsp) PREPARATION_ONLY=$([int]($selection.Count -gt 0 -and -not $SyntheticCompileProfile -and -not $AcceptUnverifiedActuation)) SINGLE_TARGET_ACTIVE=$singleTargetActive ORDERED_SEQUENCE_COMPILE_ONLY=$([int]($SyntheticCompileProfile -and $selection.Count -gt 1)) ORDERED_SEQUENCE=$([int](($AcceptUnverifiedActuation -and $selection.Count -gt 1) -or $StopReleaseOnlyBench -or ($firmwareReattach -and $RuntimeSelection))) MULTI_GPU_MUTATION_ALLOWED=$([int][bool]$AcceptUnverifiedActuation) SYNTHETIC_PROFILE=$([int][bool]$SyntheticCompileProfile) UNVERIFIED_ACTUATION=$([int][bool]$AcceptUnverifiedActuation) ACTUATION_VERIFIED=0 CAN_DETACH=0 CAN_UNLOCK=0 CAN_FLASH=0 RECOVERY_VERIFIED=0 WAIVER=GU_ACTIVE_UNVERIFIED_ACTUATION ASPM_ADMISSION_BYPASSED=$([int][bool]$StopReleaseOnlyBench) INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=$stopConsolePolicy FILE_ONLY_OUTPUT=$([int][bool]$FileOnlyBootLog) STOP_RELEASE_ONLY=$([int][bool]$StopReleaseOnlyBench) $stopOnlyAssertions FIRMWARE_TRANSACTION=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) UNLOCK=$([int]($AcceptUnverifiedActuation -and -not $StopReleaseOnlyBench)) REATTACH_ATTEMPTED=$([int]($StopReleaseOnlyBench -or $firmwareReattach)) REATTACH_VERIFIED=0 FIRMWARE_REATTACH=$([int]$firmwareReattach) S3_POLICY=$s3Policy TARGET_ORDER=$targetOrder NOT_FOR_DEPLOYMENT=$([int]($SyntheticCompileProfile -or $AcceptUnverifiedActuation))"
 } finally {
     Pop-Location
 }

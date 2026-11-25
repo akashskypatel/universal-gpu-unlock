@@ -119,6 +119,17 @@ int main(void){
         self.assertLess(failure,body.index("GuExecutionNeedsContainment()",failure))
         self.assertIn('stage="dxe-close-USB-log";',body)
 
+    def test_combined_dxe_final_graph_and_containment_contract(self):
+        body = function_body("GuDxeRun")
+        self.assertIn("GuExecutePreparedSequence(owner,t,image,GU_S3_OPTIONAL", body)
+        self.assertLess(body.index("GuCompletePreparedSequence(s,&owner)"), body.index("GuExecutionReadyForWindows(t)"))
+        self.assertLess(body.index("GuExecutionReadyForWindows(t)"), body.index('stage="dxe-close-USB-log"'))
+        self.assertNotIn("GuBootWindows(", body)
+        self.assertNotIn("GuBootLoadWindows(", body)
+        containment = body[body.index("FIRMWARE_REATTACH_CONTAINMENT=HALT"):body.index("#else", body.index("FIRMWARE_REATTACH_CONTAINMENT=HALT"))]
+        self.assertIn("GuBootHalt()", containment)
+        self.assertNotIn("ResetSystem", containment)
+
     def test_original_active_guards_retained_in_actual_work(self):
         body = function_body("GuDxeRun")
         self.assertIn("GU_ACTIVE_SEQUENCE_PREPARE_ONLY", body)

@@ -1162,6 +1162,23 @@ static EFI_STATUS Bar(VOID) {
      Gu.bar_size>~(UINT64)0-Gu.bar_base))s=EFI_UNSUPPORTED;
   return ReleaseObservation(Plan.table->BootServices,d,s);
 }
+#ifdef GU_DXE_FIRMWARE_REATTACH
+/* Resume writes use the original physical BAR address. Revalidate its
+ * live descriptor and exact device identity after original-driver reattach.
+ * This does not establish the address that firmware will use on S3 resume. */
+EFI_STATUS GuMsiVerifyResumeBar(VOID) {
+  if(!ReleaseOwnerMatches()||!Plan.reattach_verified||Plan.claimed||Gu.owned||Gu.fault||
+     !Gu.pci||!Gu.pci->GetLocation)return EFI_NOT_READY;
+  EFI_STATUS s=ReattachedTargetPciRecognized();
+  UINTN seg=0,bus=0,dev=0,fun=0;
+  if(s==EFI_SUCCESS)s=Gu.pci->GetLocation(Gu.pci,&seg,&bus,&dev,&fun);
+  if(s==EFI_SUCCESS&&(seg!=Gu.discovery_identity.segment||bus!=Gu.discovery_identity.bus||
+     dev!=Gu.discovery_identity.device||fun!=Gu.discovery_identity.function))s=EFI_COMPROMISED_DATA;
+  if(s==EFI_SUCCESS)s=Bar();
+  GuLog("S3_RESUME_BAR=REVALIDATED STATUS=%#llx CURRENT_BOOT_ONLY=1\n",(unsigned long long)s);
+  return s;
+}
+#endif
 /* The immutable original graph is the child inventory. An idle output
  * must belong to this controller and have exactly one relationship.
  * Never classify a protected peer, console or other agent as removable. */

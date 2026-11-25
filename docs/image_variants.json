@@ -857,10 +857,16 @@
         "ORDERED_SEQUENCE=0",
         "SELECTED_COUNT=1",
         "UNVERIFIED_ACTUATION=1",
-        "ACTUATION_VERIFIED=0"
+        "ACTUATION_VERIFIED=0",
+        "FIRMWARE_REATTACH=1",
+        "REATTACH_ATTEMPTED=1",
+        "REATTACH_VERIFIED=0",
+        "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
+        "ASPM_ADMISSION_BYPASSED=0",
+        "S3_POLICY=OPTIONAL"
       ],
       "requires_selection": "single",
-      "note": "NVRAM-installed driver form; -StageDxeCompanion stages this exact paired build at EFI\\Drivers\\AdaUnlockDxe.efi, never as BOOTX64.EFI",
+      "note": "NVRAM-installed driver form; -StageDxeCompanion stages this paired build at EFI\\Drivers\\AdaUnlockDxe.efi, never as BOOTX64.EFI. Shared verified reattachment sequence and optional S3 registration; strict ASPM admission retained. Physical DXE execution unverified.",
       "requires_local_boot_profile": true,
       "profile": "firmware-transaction"
     },
@@ -879,10 +885,16 @@
         "ORDERED_SEQUENCE=1",
         "SELECTED_COUNT=<selection-count>",
         "UNVERIFIED_ACTUATION=1",
-        "ACTUATION_VERIFIED=0"
+        "ACTUATION_VERIFIED=0",
+        "FIRMWARE_REATTACH=1",
+        "REATTACH_ATTEMPTED=1",
+        "REATTACH_VERIFIED=0",
+        "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
+        "ASPM_ADMISSION_BYPASSED=0",
+        "S3_POLICY=OPTIONAL"
       ],
       "requires_selection": "sequence",
-      "note": "NVRAM-installed driver form, ordered",
+      "note": "NVRAM-installed driver form, ordered. Shared verified reattachment sequence and optional S3 registration for each selected GPU; strict ASPM admission retained. Physical DXE execution unverified.",
       "requires_local_boot_profile": true,
       "profile": "firmware-transaction"
     },
@@ -936,9 +948,18 @@
       "attestations": [
         "RUNTIME_SELECTION=1",
         "UNVERIFIED_ACTUATION=1",
-        "ACTUATION_VERIFIED=0"
+        "ACTUATION_VERIFIED=0",
+        "FIRMWARE_REATTACH=1",
+        "REATTACH_ATTEMPTED=1",
+        "REATTACH_VERIFIED=0",
+        "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED=1",
+        "ASPM_ADMISSION_BYPASSED=0",
+        "S3_POLICY=OPTIONAL",
+        "SELECTED_COUNT=RUNTIME",
+        "ORDERED_SEQUENCE=1",
+        "TARGET_ORDER=RUNTIME_SAVED_SELECTION"
       ],
-      "note": "NVRAM-installed driver, target at boot",
+      "note": "NVRAM-installed driver with saved runtime target policy, or explicit -SelectAllGpus for live enumeration. Shared verified reattachment sequence and optional S3 registration; strict ASPM admission retained. Physical DXE execution unverified.",
       "requires_local_boot_profile": true,
       "profile": "firmware-transaction"
     },

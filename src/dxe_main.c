@@ -49,7 +49,11 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   /* Read again after GuBootOpen. The earlier log observation is not admission. */
   GU_BOOT_STATE boot_state;BOOLEAN boot_state_present=FALSE;
   s=GuBootReadPriorState(t,&boot_state,&boot_state_present);
-  if(s!=EFI_SUCCESS)return s;
+  if(s!=EFI_SUCCESS) {
+    GuLog("DXE_RECOVERY=UNREADABLE STATUS=%#llx ACTION=SKIP_GPU\n",(unsigned long long)s);
+    EFI_STATUS closed=GuBootClose();
+    return closed==EFI_SUCCESS?s:closed;
+  }
 
 #if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_SEQUENCE_PREPARE_ONLY)
   if(GuBootStateRequiresRecovery(boot_state_present?&boot_state:NULL)) {
@@ -64,7 +68,7 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
 #endif
 
   const char *stage = "dxe-discover";
-#if defined(GU_STOP_RELEASE_ONLY_BENCH) && defined(GU_RUNTIME_SELECTION)
+#if (defined(GU_STOP_RELEASE_ONLY_BENCH) && defined(GU_RUNTIME_SELECTION)) || defined(GU_SELECT_ALL_GPUS)
   s=GuRuntimeSelectionSelectAll();
   if(s!=EFI_SUCCESS)goto finish;
 #endif
@@ -92,6 +96,12 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   s=GuExecuteStopReleaseSequence(owner,t,image,&stage);
 #else
   /* Name the card before the first mutation so a power loss leaves evidence. */
+#ifdef GU_DXE_FIRMWARE_REATTACH
+  GuLog("DXE_FIRMWARE_REATTACH=1 S3_POLICY=OPTIONAL OS_HANDOFF=FIRMWARE ASPM_ADMISSION_BYPASSED=0\n");
+  GuBootSay(L"\r\n[OK] GPU preparation complete. A separate warning will appear before each GPU driver release.\r\n");
+  GuBootSilence();
+  GuTracePhase("record-boot-intent");
+#endif
   s=GuBootStateRecord(t,boot_state_present?&boot_state:NULL,
                           GU_BOOT_STATE_INTENT,0,owner->device_id,
                           (UINT16)owner->discovery_identity.segment,
@@ -105,6 +115,9 @@ static EFI_STATUS GuDxeRun(EFI_HANDLE image, EFI_SYSTEM_TABLE *t) {
   s=GuExecutePreparedSequence(owner,t,image,GU_S3_OPTIONAL,&stage);
   s=GuCompletePreparedSequence(s,&owner);
   if(!owner)goto finish;
+#ifdef GU_DXE_FIRMWARE_REATTACH
+  if(s==EFI_SUCCESS&&(!GuExecutionReadyForWindows(t)||!GuBootLogOpen()))s=EFI_NOT_READY;
+#endif
 #endif
   if(s!=EFI_SUCCESS||Gu.fault)goto finish;
 
@@ -121,11 +134,17 @@ finish:
     s=EFI_SUCCESS;
 #else
     GuLog("DXE-DRIVER: final transaction checks passed; closing boot resources.\n");
+#ifdef GU_DXE_FIRMWARE_REATTACH
+    GuLog("PREBOOT OK: final environment checks passed; firmware controls OS startup; S3 resume and Windows CUDA remain unverified\n");
+#endif
 #ifdef GU_ACTIVE_UNVERIFIED_ACTUATION
     GuLog("EXPERIMENT_RESTART_BARRIER=RETAINED PHASE=INTENT OWNER_ACCEPTANCE=PENDING AUTO_RETRY=0\n");
 #endif
 #endif
     s=GuBootClose();
+#ifdef GU_DXE_FIRMWARE_REATTACH
+    if(s==EFI_SUCCESS&&Gu.fault)s=EFI_DEVICE_ERROR;
+#endif
 #if !defined(GU_STOP_RELEASE_ONLY_BENCH) && !defined(GU_ACTIVE_UNVERIFIED_ACTUATION)
     if(s==EFI_SUCCESS) {
       GU_PLATFORM *completed=GuPlatformActive;
@@ -148,7 +167,18 @@ finish:
     GuLog("DXE-DRIVER: STOP stage=%s status=%#llx mutated=%u retained=%u started=%u fault=%u\n",
           stage, (unsigned long long)s, GuMsiMutated(), Gu.retained, Gu.started, Gu.fault);
     if (GuExecutionNeedsContainment()) {
+#ifdef GU_DXE_FIRMWARE_REATTACH
+      GuBootSilence();
+#endif
       if ((Gu.started && Gu.owned) || Gu.master_attributes_pending) (VOID)GuClearMaster(&Gu);
+#ifdef GU_DXE_FIRMWARE_REATTACH
+      EFI_STATUS cancel_status=GuBootWatchdogCancel();
+      GuLog("FIRMWARE_REATTACH_CONTAINMENT=HALT NEXT_GPU=BLOCKED AUTO_WARM_RESET=0 WATCHDOG_CANCEL=%#llx\n",(unsigned long long)cancel_status);
+      GuTraceStop(stage,(UINT64)s);
+      (VOID)GuBootClose();
+      GuBootHalt();
+      return EFI_ABORTED;
+#else
       /* A partially released or live-DMA GPU cannot be handed to the OS. */
       (VOID)GuBootClose();
       GuBootUnsilence();
@@ -158,7 +188,12 @@ finish:
         t->RuntimeServices->ResetSystem(EfiResetShutdown, EFI_ABORTED, 0, NULL);
       GuBootHalt();
       return EFI_ABORTED;
+#endif
     }
+#ifdef GU_DXE_FIRMWARE_REATTACH
+    GuBootUnsilence();
+    GuTraceStop(stage,(UINT64)s);
+#endif
   }
   EFI_STATUS closed=GuBootClose();
   return closed==EFI_SUCCESS?s:closed;

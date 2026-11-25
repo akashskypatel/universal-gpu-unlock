@@ -204,8 +204,10 @@ foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','O
     if ($PSBoundParameters.ContainsKey($optionName)) { $script:ExplicitProfileOptions += $optionName }
 }
 $script:RequestedCanonicalProfile = $null
-if ($SelectAllGpus -and ($Only -ne 'firmware-transaction' -or $Operation -ne 'UnlockReattach' -or $All -or $Family -or $List -or $ListConfigurations)) {
-    throw '-SelectAllGpus requires -Only firmware-transaction -Operation UnlockReattach.'
+if ($SelectAllGpus -and ($Only -ne 'firmware-transaction' -or
+    ($Operation -ne 'UnlockReattach' -and -not ($Operation -eq 'DxeTransaction' -and $ImageKind -eq 'Dxe')) -or
+    $SelectionBdf -or $SelectionBdfs -or $All -or $Family -or $List -or $ListConfigurations)) {
+    throw '-SelectAllGpus requires UnlockReattach or DxeTransaction with runtime selection and no compiled addresses.'
 }
 $script:DiskStageRequested = $PSBoundParameters.ContainsKey('StageDisk') -and $StageDisk
 $stageArgumentCount = if ($null -eq $StageTargetArgument) { 0 } else { $StageTargetArgument.Count }
@@ -1232,6 +1234,10 @@ function Test-PairedTransactionVariant($Variant, [string]$Family) {
             (Test-VariantSwitch $Variant 'AcceptUnverifiedActuation'))
 }
 
+function Test-DxeFirmwareTransaction($Variant) {
+    return ($Variant.family -eq 'prepare-dxe' -and (Test-VariantSwitch $Variant 'AcceptUnverifiedActuation') -and -not (Test-VariantSwitch $Variant 'StopReleaseOnlyBench'))
+}
+
 function Test-CompiledStopSelection($Variant) {
     return ((Get-SelectionCount) -ge 1 -and
             (Test-VariantSwitch $Variant 'StopReleaseOnlyBench') -and
@@ -1291,8 +1297,8 @@ function Get-ResolvedAttestations($Variant) {
             $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION',
                 ('TARGET_ORDER=' + ($script:SelectionSpec.Locations -join ',')))
         }
-        if ($SelectAllGpus -and (Test-VariantSwitch $Variant 'FirmwareReattach')) {
-            $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_OPERATOR_SELECTION', 'TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION')
+        if ($SelectAllGpus -and ((Test-VariantSwitch $Variant 'FirmwareReattach') -or (Test-DxeFirmwareTransaction $Variant))) {
+            $attestation = $attestation.Replace('TARGET_ORDER=RUNTIME_OPERATOR_SELECTION', 'TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION').Replace('TARGET_ORDER=RUNTIME_SAVED_SELECTION', 'TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION')
         }
         if ($attestation -match '<[^>]+>') {
             throw "Unknown attestation placeholder for $($Variant.id): $declared"
@@ -1332,7 +1338,7 @@ function Build-VariantArguments($Variant) {
         elseif ($SelectionBdfs) { $arguments['SelectionBdfs'] = $SelectionBdfs }
         else { throw 'SELECTION_REQUIRED' }
     }
-    if ((Test-VariantSwitch $Variant 'FirmwareReattach') -and $SelectAllGpus) {
+    if ($SelectAllGpus -and ((Test-VariantSwitch $Variant 'FirmwareReattach') -or (Test-DxeFirmwareTransaction $Variant))) {
         $arguments['SelectAllGpus'] = $true
     }
     if ((Test-VariantSwitch $Variant 'FirmwareReattach') -and $WindowsEspGuid) {

@@ -160,6 +160,11 @@ typedef struct {EFI_BOOT_SERVICES *bs;UINT64 bar_base,bar_size;int fault,retaine
 static GU_PLATFORM Gu,peer,*GuPlatformActive=&Gu;
 static int drift_at;
 static int ready,safe=1,available=1,fail_at,write_calls,locate_calls;
+#ifdef GU_DXE_FIRMWARE_REATTACH
+static int bar_checks,bar_fail_at;
+static EFI_STATUS GuMsiVerifyResumeBar(void){return ++bar_checks==bar_fail_at?EFI_DEVICE_ERROR:EFI_SUCCESS;}
+static int GuBootLogOpen(void){return 1;}
+#endif
 static UINT64 first_address,second_address;
 static UINT32 first_value,second_value;
 static EFI_STATUS Write(EFI_S3_SAVE_STATE_PROTOCOL *script,int opcode,int width,
@@ -270,7 +275,17 @@ int main(int argc,char **argv) {
   } else if(mode==16){
     drift_at=2;CHECK(GuRegisterS3(&Gu,&table)==EFI_NOT_READY);
     CHECK(write_calls==2&&Gu.retained&&Gu.s3_script_attempted&&!peer.retained&&!peer.s3_script_attempted);
-  } else return 2;
+  }
+#ifdef GU_DXE_FIRMWARE_REATTACH
+  else if(mode==17){
+    bar_fail_at=1;CHECK(GuRegisterS3(&Gu,&table)==EFI_DEVICE_ERROR);
+    CHECK(bar_checks==1&&!write_calls&&Gu.fault&&!Gu.s3_script_attempted);
+  } else if(mode==18){
+    bar_fail_at=2;CHECK(GuRegisterS3(&Gu,&table)==EFI_DEVICE_ERROR);
+    CHECK(bar_checks==2&&write_calls==1&&Gu.retained&&Gu.s3_script_attempted);
+  }
+#endif
+  else return 2;
   return 0;
 }
 """
@@ -278,18 +293,19 @@ int main(int argc,char **argv) {
             source = Path(directory) / "s3_source.c"
             source.write_text(mock, encoding="utf-8")
             for compiler in ("gcc", "clang"):
-                output = Path(directory) / ("s3_source_" + compiler)
-                built = subprocess.run(
-                    [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
-                     "-Werror", "-pedantic", str(source), "-o", str(output)],
-                    capture_output=True, text=True)
-                self.assertEqual(built.returncode, 0, built.stderr)
-                for mode in range(17):
-                    with self.subTest(compiler=compiler, mode=mode):
-                        result = subprocess.run([str(output), str(mode)],
-                                                capture_output=True, text=True)
-                        self.assertEqual(result.returncode, 0,
-                                         result.stdout + result.stderr)
+                for flags in ([], ["-DGU_DXE_FIRMWARE_REATTACH"]):
+                    output = Path(directory) / ("s3_source_" + compiler)
+                    built = subprocess.run(
+                        [compiler, "-std=c11", "-O2", "-Wall", "-Wextra",
+                         "-Werror", "-pedantic", *flags, str(source), "-o", str(output)],
+                        capture_output=True, text=True)
+                    self.assertEqual(built.returncode, 0, built.stderr)
+                    for mode in range(19 if flags else 17):
+                        with self.subTest(compiler=compiler, flags=flags, mode=mode):
+                            result = subprocess.run([str(output), str(mode)],
+                                                    capture_output=True, text=True)
+                            self.assertEqual(result.returncode, 0,
+                                             result.stdout + result.stderr)
 
     def test_prepared_sequence_preserves_s3_policy_and_stops_on_failure(self):
         """Compile the real preparation and coordinator with simulated services."""
@@ -308,6 +324,13 @@ int main(int argc,char **argv) {
 #define EFI_DEVICE_ERROR 3
 #define EFI_NOT_READY 4
 #define EFI_INVALID_PARAMETER 5
+#define EFI_UNSUPPORTED 6
+#define TRUE 1
+#define FALSE 0
+#ifdef GU_FIRMWARE_REATTACH
+static void GuBootTraceSuccessorPreparation(int enable){(void)enable;}
+static void GuTraceScreen(const char *message){(void)message;}
+#endif
 typedef int EFI_STATUS;
 typedef void *EFI_HANDLE;
 typedef struct {void *BootServices;} EFI_SYSTEM_TABLE;
@@ -435,6 +458,9 @@ int main(void){
     CHECK(init==EFI_SUCCESS);
     if(scenario==16)log_failed=1;
     EFI_STATUS status=GuExecutePreparedSequence(active,&table,&table,(GU_S3_POLICY)policy,&stage);
+#ifdef GU_DXE_FIRMWARE_REATTACH
+    if(policy!=GU_S3_OPTIONAL){CHECK(status==EFI_UNSUPPORTED&&!executions&&!script_calls&&!select_calls&&!aborted);continue;}
+#endif
     int success=scenario==0||(policy==GU_S3_DISABLED&&scenario>=8&&scenario<=11)||
        (policy==GU_S3_OPTIONAL&&scenario==8)||(count==1&&(scenario==13||scenario==15));
     CHECK((status==EFI_SUCCESS)==success);
@@ -468,13 +494,14 @@ int main(void){
             src=Path(directory)/"sequence.c"
             src.write_text(mock,encoding="utf-8")
             for compiler in ("gcc","clang"):
-                binary=Path(directory)/compiler
-                compiled=subprocess.run(
-                    [compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",str(src),"-o",str(binary)],
-                    capture_output=True,text=True)
-                self.assertEqual(compiled.returncode,0,compiled.stderr)
-                result=subprocess.run([str(binary)],capture_output=True,text=True)
-                self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+                for flags in ([], ["-DGU_FIRMWARE_REATTACH", "-DGU_DXE_FIRMWARE_REATTACH"]):
+                    binary=Path(directory)/compiler
+                    compiled=subprocess.run(
+                        [compiler,"-std=c11","-O2","-Wall","-Wextra","-Werror","-pedantic",*flags,str(src),"-o",str(binary)],
+                        capture_output=True,text=True)
+                    self.assertEqual(compiled.returncode,0,compiled.stderr)
+                    result=subprocess.run([str(binary)],capture_output=True,text=True)
+                    self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
     def test_successor_binding_refuses_invalid_owner_and_log(self):
         actual = "static EFI_STATUS GuPrepareNextSelectedGpu(GU_PLATFORM **owner,EFI_SYSTEM_TABLE *table,const char **stage) {\n" + body(SHARED,"GuPrepareNextSelectedGpu") + "\n}\n"

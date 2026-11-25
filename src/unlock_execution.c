@@ -220,7 +220,9 @@ EFI_STATUS GuExecutePreparedSequence(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table,
      (policy!=GU_S3_DISABLED&&policy!=GU_S3_REQUIRED&&policy!=GU_S3_OPTIONAL))
     return EFI_INVALID_PARAMETER;
   if(!owner||owner!=GuPlatformActive)return EFI_NOT_READY;
-#ifdef GU_FIRMWARE_REATTACH
+#ifdef GU_DXE_FIRMWARE_REATTACH
+  if(policy!=GU_S3_OPTIONAL)return EFI_UNSUPPORTED;
+#elif defined(GU_FIRMWARE_REATTACH)
   if(policy!=GU_S3_DISABLED)return EFI_UNSUPPORTED;
 #endif
   EFI_STATUS s;
@@ -408,6 +410,13 @@ EFI_STATUS GuRegisterS3(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table)
   EFI_STATUS status=table->BootServices->LocateProtocol(&save_guid,NULL,(VOID **)&s3);
   if(status!=EFI_SUCCESS||!s3||!s3->Write)return status==EFI_SUCCESS?EFI_UNSUPPORTED:status;
   if(owner!=GuPlatformActive)return EFI_NOT_READY;
+#ifdef GU_DXE_FIRMWARE_REATTACH
+  status=GuMsiVerifyResumeBar();
+  if(status!=EFI_SUCCESS||owner!=GuPlatformActive||!GuBootLogOpen()) {
+    owner->fault=TRUE;
+    return status!=EFI_SUCCESS?status:EFI_NOT_READY;
+  }
+#endif
   UINT32 ss0=0x88888888U,ss1=8U;
   UINT64 addr0=(UINT64)owner->bar_base+0x0082381cULL;
   UINT64 addr1=(UINT64)owner->bar_base+0x00823820ULL;
@@ -424,6 +433,14 @@ EFI_STATUS GuRegisterS3(GU_PLATFORM *owner,EFI_SYSTEM_TABLE *table)
   if(owner!=GuPlatformActive) {
     owner->retained=TRUE;return EFI_NOT_READY;
   }
+#ifdef GU_DXE_FIRMWARE_REATTACH
+  status=GuMsiVerifyResumeBar();
+  if(status!=EFI_SUCCESS||owner!=GuPlatformActive||!GuBootLogOpen()) {
+    owner->retained=TRUE;
+    GuLog("S3 second write refused: previous entry retained; OS handover blocked\n");
+    return status!=EFI_SUCCESS?status:EFI_NOT_READY;
+  }
+#endif
   EFI_STATUS b=s3->Write(s3,EFI_BOOT_SCRIPT_MEM_WRITE_OPCODE,
                   EfiBootScriptWidthUint32,addr1,(UINTN)1,&ss1);
   if(b!=EFI_SUCCESS||owner!=GuPlatformActive)owner->retained=TRUE;

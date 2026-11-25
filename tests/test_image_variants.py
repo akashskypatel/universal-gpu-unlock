@@ -268,32 +268,34 @@ class TheAttestationsAreWhatTheBuilderWouldPrint(unittest.TestCase):
         runtime_esp = 1 if switches.get("RuntimeEsp") else 0
         unsafe_bench = 1 if switches.get("StopReleaseOnlyBench") else 0
         combined = 1 if switches.get("FirmwareReattach") else 0
+        combined_dxe = int(variant["family"] == "prepare-dxe" and accept and not unsafe_bench)
         operation = switches.get("ApplicationOperation", "Menu")
         firmware_transaction = int(accept and not unsafe_bench and operation not in ("InstallDriver", "RemoveDriver"))
         count = {"single": 1, "sequence": 2, "any": 1}.get(variant.get("requires_selection") or "", 0)
         return count, {
-            "SELECTED_COUNT": "RUNTIME" if combined else count,
+            "SELECTED_COUNT": "RUNTIME" if combined or (combined_dxe and runtime) else count,
             "RUNTIME_SELECTION": runtime,
             "RUNTIME_ESP": runtime_esp,
             "PREPARATION_ONLY": int(count > 0 and not synthetic and not accept),
             "SINGLE_TARGET_ACTIVE": int((synthetic or accept) and (runtime or count == 1)),
             "ORDERED_SEQUENCE_COMPILE_ONLY": int(synthetic and count > 1),
-            "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench or combined),
+            "ORDERED_SEQUENCE": int((accept and count > 1) or unsafe_bench or combined or (combined_dxe and runtime)),
             "ASPM_ADMISSION_BYPASSED": int(unsafe_bench or combined),
-            "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": 1 if combined else "CONDITIONAL" if unsafe_bench else 0,
+            "INDEPENDENT_SURVIVOR_DISPLAY_REQUIRED": 1 if combined or combined_dxe else "CONDITIONAL" if unsafe_bench else 0,
             "FILE_ONLY_OUTPUT": unsafe_bench,
             "STOP_RELEASE_ONLY": unsafe_bench,
             "APP_OPERATION": operation,
             "FIXED_OPERATION": int(operation != "Menu"),
             "FIRMWARE_TRANSACTION": firmware_transaction,
             "UNLOCK": firmware_transaction,
-            "REATTACH_ATTEMPTED": int(unsafe_bench or combined),
-            "FIRMWARE_REATTACH": combined,
+            "REATTACH_ATTEMPTED": int(unsafe_bench or combined or combined_dxe),
+            "FIRMWARE_REATTACH": int(combined or combined_dxe),
+            "S3_POLICY": "OPTIONAL" if combined_dxe else "NONE",
             "REATTACH_VERIFIED": 0,
             "FIRMWARE_ASSET_FILES_READ": 0 if unsafe_bench else None,
             "PROM_READ": 0 if unsafe_bench else None,
             "OS_HANDOFF": ("WINDOWS_AFTER_SUCCESS" if switches.get("StopReleaseWindowsHandoff") else "NONE") if unsafe_bench else None,
-            "TARGET_ORDER": "RUNTIME_OPERATOR_SELECTION" if combined else "RUNTIME_SUPPORTED_NVIDIA_ENUMERATION" if unsafe_bench else "",
+            "TARGET_ORDER": "RUNTIME_OPERATOR_SELECTION" if combined else "RUNTIME_SUPPORTED_NVIDIA_ENUMERATION" if unsafe_bench else "RUNTIME_SAVED_SELECTION" if combined_dxe and runtime else "",
             "MULTI_GPU_MUTATION_ALLOWED": accept,
             "SYNTHETIC_PROFILE": synthetic,
             "UNVERIFIED_ACTUATION": accept,
@@ -1230,6 +1232,17 @@ if ($Mode -eq 0) {
         self.assertIn("WINDOWS_ESP_GUID=" + guid, result["ResolvedAttestations"])
         self.resolve(combined + ["-SelectAllGpus"] + two, valid=False)
         self.resolve(["-Only", "diagnostic", "-SelectAllGpus"], valid=False)
+        dxe = ["-Only", "firmware-transaction", "-Operation", "DxeTransaction", "-ImageKind", "Dxe"]
+        result = self.resolve(dxe)
+        self.assertIn("TARGET_ORDER=RUNTIME_SAVED_SELECTION", result["ResolvedAttestations"])
+        self.assertIn("S3_POLICY=OPTIONAL", result["ResolvedAttestations"])
+        result = self.resolve(dxe + ["-SelectAllGpus"])
+        self.assertTrue(result["Switches"]["SelectAllGpus"])
+        self.assertIn("TARGET_ORDER=RUNTIME_SUPPORTED_NVIDIA_ENUMERATION", result["ResolvedAttestations"])
+        self.assertIn("FIRMWARE_REATTACH=1", result["ResolvedAttestations"])
+        self.assertIn("S3_POLICY=OPTIONAL", result["ResolvedAttestations"])
+        self.assertIn("ASPM_ADMISSION_BYPASSED=0", result["ResolvedAttestations"])
+        self.resolve(dxe + ["-SelectAllGpus"] + two, valid=False)
         for operation in ("Unlock", "UnlockWithResume"):
             args = ["-Only", "firmware-transaction", "-Operation", operation]
             result = self.resolve(args)

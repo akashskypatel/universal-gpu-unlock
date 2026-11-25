@@ -23,6 +23,9 @@ EFI_STATUS GuMsiStopReleaseTryPeerConsole(VOID);
  * the still-valid original non-target GOP; never use a stale ConOut. */
 EFI_STATUS GuMsiStopReleaseShowReattachFailureNotice(VOID);
 #endif
+#ifdef GU_DXE_FIRMWARE_REATTACH
+EFI_STATUS GuMsiVerifyResumeBar(VOID);
+#endif
 EFI_STATUS GuMsiFinish(VOID);
 BOOLEAN GuMsiReadyForWindows(VOID);
 BOOLEAN GuMsiMutated(VOID);

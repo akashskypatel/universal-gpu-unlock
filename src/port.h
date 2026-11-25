@@ -115,13 +115,27 @@ static inline BOOLEAN GuIsSupportedPciId(UINT32 id) {
 #if defined(GU_RUNTIME_ESP_PIN) && (!defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_ESP))
 #error Explicit runtime ESP pin requires the combined runtime application
 #endif
+#if defined(GU_DXE_FIRMWARE_REATTACH) && (!defined(GU_FIRMWARE_REATTACH) || defined(GU_APP_OPERATION) || defined(GU_INTERACTIVE_WINDOWS_ESP) || defined(GU_RUNTIME_ESP_PIN) || defined(GU_DEDICATED_STAGE_PIN))
+#error DXE reattachment cannot use application entry or handover policy
+#endif
 #ifdef GU_FIRMWARE_REATTACH
-#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET) || !defined(GU_RUNTIME_SELECTION) || !defined(GU_RUNTIME_ESP) || !defined(GU_APP_OPERATION)
+#if !defined(GU_ACTIVE_UNVERIFIED_ACTUATION) || !defined(GU_ACTIVE_SINGLE_TARGET)
+#error Firmware reattachment requires explicit ordered actuation consent
+#endif
+#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_ESP_RESIDENT)
+#error Firmware reattachment cannot use the broad bench override or resident Windows ESP
+#endif
+#ifndef GU_DXE_FIRMWARE_REATTACH
+#if !defined(GU_RUNTIME_SELECTION) || !defined(GU_RUNTIME_ESP) || !defined(GU_APP_OPERATION)
 #error Firmware reattachment requires the explicitly waived runtime application
 #endif
-#if defined(GU_STOP_RELEASE_ONLY_BENCH) || defined(GU_UNVERIFIED_BENCH_CONDITIONS) || defined(GU_ESP_RESIDENT) || GU_APP_OPERATION != 85
-#error Firmware reattachment cannot use the broad bench override, install a driver or register resume writes
+#if GU_APP_OPERATION != 85
+#error Combined application cannot install a driver or register resume writes
 #endif
+#endif
+#endif
+#if defined(GU_SELECT_ALL_GPUS) && (!defined(GU_FIRMWARE_REATTACH) || !defined(GU_RUNTIME_SELECTION))
+#error Automatic all-GPU selection requires combined runtime firmware reattachment
 #endif
 
 /* GU_RUNTIME_SELECTION moves the target list out of the build: the image reads

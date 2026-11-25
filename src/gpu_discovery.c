@@ -297,7 +297,7 @@ static EFI_STATUS ResolveRuntimeSelection(EFI_SYSTEM_TABLE *table,
                                           size_t *requested_count,BOOLEAN *all) {
   if(!requested||!requested_count||!all)return EFI_INVALID_PARAMETER;
   if(!g_runtime_selection_loaded) {
-#ifdef GU_FIRMWARE_REATTACH
+#if defined(GU_FIRMWARE_REATTACH) && !defined(GU_DXE_FIRMWARE_REATTACH)
     (void)table;
     GuLog("ACTIVE_SELECTION=REFUSED REASON=FRESH_OPERATOR_CHOICE_REQUIRED\n");
     return EFI_NOT_READY;
