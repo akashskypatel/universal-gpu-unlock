@@ -707,7 +707,10 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
         self.assertNotIn("nothing is copied without -Deploy", SCRIPT)
 
     def test_disk_stage_is_explicit_and_non_destructive(self):
-        self.assertIn("[uint32]$StageDisk", SCRIPT)
+        self.assertIn("[switch]$StageDisk", SCRIPT)
+        self.assertIn("[switch]$StageDrive", SCRIPT)
+        self.assertIn("[Parameter(ValueFromRemainingArguments=$true)]", SCRIPT)
+        self.assertIn("New-StagePartition $selectedStageDisk $PartitionSizeMB", SCRIPT)
         self.assertIn("$PSBoundParameters.ContainsKey('StageDisk')", SCRIPT)
         provision = SCRIPT.split('function New-StagePartition(', 1)[1].split('function Assert-UsbVolume(', 1)[0]
         for forbidden in ('Clear-Disk', 'Initialize-Disk', 'Resize-Partition', 'Remove-Partition'):
@@ -794,6 +797,81 @@ class CanonicalProfileResolution(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return json.loads(result.stdout.strip())
 
+
+    def test_stage_target_binding_and_interactive_selection(self):
+        import subprocess
+        # Use the real parameter declaration and argument gates plus the
+        # real selector. Stub storage and stop before any staging code.
+        header = SCRIPT[SCRIPT.index("[CmdletBinding("):SCRIPT.index("$KeyInWsl =")]
+        selector = SCRIPT[SCRIPT.index("function Resolve-StageTarget("):SCRIPT.index("# Disk provisioning is separate")]
+        harness = header + r'''
+function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
+function Get-Disk {
+    param($ErrorAction)
+    [pscustomobject]@{Number=0;FriendlyName='Test SATA';BusType='SATA';PartitionStyle='GPT';IsBoot=$false;IsSystem=$false;LogicalSectorSize=512;LargestFreeExtent=256MB}
+    [pscustomobject]@{Number=3;FriendlyName='Test USB';BusType='USB';PartitionStyle='MBR';IsBoot=$false;IsSystem=$false;LogicalSectorSize=512;LargestFreeExtent=0}
+}
+function Get-Partition {
+    param($ErrorAction)
+    [pscustomobject]@{DiskNumber=0;DriveLetter='F'}
+    [pscustomobject]@{DiskNumber=3;DriveLetter='G'}
+    [pscustomobject]@{DiskNumber=3;DriveLetter='H'}
+}
+function Read-Host { param($Prompt) [Console]::Out.WriteLine("PROMPT=$Prompt"); return $env:GU_TEST_STAGE_INPUT }
+''' + selector + r'''
+if ($script:DiskStageRequested) {
+    $chosen = Resolve-StageTarget $true $StageTargetArgument
+    [Console]::Out.WriteLine("DISK=$chosen")
+} elseif ($StageDrive) {
+    $chosen = Resolve-StageTarget $false $StageTargetArgument
+    [Console]::Out.WriteLine("DRIVE=$chosen")
+} else { [Console]::Out.WriteLine('NO_STAGE') }
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "selector.ps1"
+            script.write_text(harness, encoding="utf-8")
+            import os
+            cases = [
+                ("-StageDisk 0 -AcceptActuatingDeploy", "", "DISK=0", False),
+                ("-StageDisk -AcceptActuatingDeploy", "0", "DISK=0", True),
+                ("-AcceptActuatingDeploy -StageDisk", "3", "DISK=3", True),
+                ("-StageDrive g -AcceptActuatingDeploy", "", "DRIVE=G", False),
+                ("-StageDrive -AcceptActuatingDeploy", "h", "DRIVE=H", True),
+                ("-AcceptActuatingDeploy -StageDrive", "G", "DRIVE=G", True),
+                ("", "", "NO_STAGE", False),
+                ("-StageDisk", "", None, True),
+                ("-StageDisk", "99", None, True),
+                ("-StageDisk", "-1", None, True),
+                ("-StageDrive", "Z", None, True),
+                ("-StageDrive", "C", None, True),
+                ("-StageDrive GG", "", None, False),
+                ("-StageDisk abc", "", None, False),
+                ("-StageDisk 0 3", "", None, False),
+                ("-StageDisk -StageDrive", "0", None, False),
+                ("-StageDisk -ResolveOnly", "0", None, False),
+                ("-StageDrive -ResolveOnly", "G", None, False),
+                ("-StageDrive -List", "G", None, False),
+                ("-StageDisk -Typo", "0", None, False),
+                ("0", "", None, False),
+            ]
+            for options, answer, expected, prompt in cases:
+                with self.subTest(options=options, answer=answer):
+                    command = "& '" + str(script).replace("'", "''") + "' -Only diagnostic " + options
+                    result = subprocess.run([self.shell, "-NoProfile", "-NonInteractive", "-Command", command],
+                                            capture_output=True, text=True, timeout=30,
+                                            env={**os.environ, "GU_TEST_STAGE_INPUT": answer})
+                    if expected is None:
+                        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertIn(expected, result.stdout)
+                    self.assertEqual("PROMPT=" in result.stdout, prompt, result.stdout + result.stderr)
+                    if prompt:
+                        for name in ("Number", "FriendlyName", "BusType", "PartitionStyle", "IsBoot", "IsSystem", "LogicalSectorSize", "UnallocatedMiB"):
+                            self.assertIn(name, result.stdout)
+                        if "-StageDrive" in options:
+                            self.assertIn("DriveLetter", result.stdout)
+                            self.assertIn("G,H", result.stdout)
 
     def test_disk_provisioning_with_mock_storage_services(self):
         import subprocess

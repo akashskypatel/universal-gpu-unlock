@@ -59,13 +59,15 @@ configuration without compiling, signing or staging. Firmware transaction stagin
 diagnostic, prepare, prepare-dxe, stop-observation or maintenance. Selects a build matrix family, not an individual configuration.
 
 .PARAMETER StageDrive
-The USB drive letter to stage onto. This is the switch that stages: it takes the
+The USB drive letter to stage onto, or omit the letter to select interactively.
+This is the switch that stages: it takes the
 one image -Only selected, builds it, signs it and copies it to
 EFI\BOOT\BOOTX64.EFI after a verified backup. Anything actuating also needs
 -AcceptActuatingDeploy, and a matrix run (-All) can never stage.
 
 .PARAMETER StageDisk
-Select an existing GPT physical disk by number. Create one new FAT32 EFI
+Select an existing GPT physical disk by number, or omit the number to list
+disks and select interactively. Create one new FAT32 EFI
 partition in unallocated space after explicit confirmation. Never initialize,
 erase or resize a disk. Internal disks support UnlockReattach only.
 .PARAMETER PartitionSizeMB
@@ -150,14 +152,13 @@ alone does not make a build hardware-verified; the recent U/P/I captures do not
 verify the fixes in the current source. The
 Windows 617.42 Booter provenance is external evidence that no build here produces.
 #>
-[CmdletBinding()]
+[CmdletBinding(PositionalBinding=$false)]
 param(
     [string]$RepoRoot = (Split-Path -Parent $PSScriptRoot),
     [string]$OutputDirectory,
     [string]$PublicCertificate,
-    [ValidatePattern('^[D-Zd-z]$')]
-    [string]$StageDrive,
-    [uint32]$StageDisk,
+    [switch]$StageDrive,
+    [switch]$StageDisk,
     [ValidateRange(64,4096)]
     [uint32]$PartitionSizeMB,
     [string]$SelectionBdf,
@@ -190,7 +191,9 @@ param(
     [switch]$CapturedPromReference,
     [switch]$SkipDbCheck,
     [switch]$List,
-    [switch]$ListConfigurations
+    [switch]$ListConfigurations,
+    [Parameter(ValueFromRemainingArguments=$true)]
+    [object[]]$StageTargetArgument
 )
 
 Set-StrictMode -Version Latest
@@ -200,7 +203,12 @@ foreach ($optionName in @('Probe','SaveLog','Operation','ImageKind','Handoff','O
     if ($PSBoundParameters.ContainsKey($optionName)) { $script:ExplicitProfileOptions += $optionName }
 }
 $script:RequestedCanonicalProfile = $null
-$script:DiskStageRequested = $PSBoundParameters.ContainsKey('StageDisk')
+$script:DiskStageRequested = $PSBoundParameters.ContainsKey('StageDisk') -and $StageDisk
+$stageArgumentCount = if ($null -eq $StageTargetArgument) { 0 } else { $StageTargetArgument.Count }
+if ($stageArgumentCount -gt 1 -or ($stageArgumentCount -and -not ($StageDrive -or $script:DiskStageRequested))) {
+    throw 'Supply at most one disk number or drive letter with the corresponding staging option; unexpected arguments refused.'
+}
+if ($StageDrive -and ($ResolveOnly -or $List -or $ListConfigurations)) { throw 'StageDrive cannot be combined with inspection options.' }
 $script:ProvisionedStage = $null
 $script:StagePartitionGuid = $null
 if ($script:DiskStageRequested -and ($StageDrive -or $All -or $SignOnly -or $ResolveOnly -or $List -or $ListConfigurations -or $StageDxeCompanion -or -not $Only)) {
@@ -267,6 +275,54 @@ function Assert-EfiImage([string]$Path, [int]$ExpectedSubsystem) {
             }
         } finally { $reader.Dispose() }
     } finally { $stream.Dispose() }
+}
+
+# A switch plus one optional trailing argument lets PowerShell accept a bare
+# -StageDisk/-StageDrive without consuming the next named option. The resolver
+# validates the single target explicitly; no implicit positional binding.
+function Resolve-StageTarget([bool]$DiskSelection,[object[]]$TargetArguments) {
+    $interactive = $null -eq $TargetArguments -or $TargetArguments.Count -eq 0
+    if (-not $interactive -and $TargetArguments.Count -ne 1) { throw 'Expected at most one staging target.' }
+    $diskRows = @()
+    $partRows = @()
+    if ($interactive) {
+        $diskRows = @(Get-Disk -ErrorAction Stop)
+        if (-not $diskRows.Count) { throw 'No physical disks found.' }
+        $columns = @('Number','FriendlyName','BusType','PartitionStyle','IsBoot','IsSystem','LogicalSectorSize',
+            @{N='UnallocatedMiB';E={[Math]::Round($_.LargestFreeExtent/1MB,2)}})
+        if (-not $DiskSelection) {
+            $partRows = @(Get-Partition -ErrorAction Stop)
+            $columns = @('Number','DriveLetter') + $columns[1..($columns.Count-1)]
+            $columns[1] = @{N='DriveLetter';E={
+                $diskNumber = $_.Number
+                (@($partRows | Where-Object { $_.DiskNumber -eq $diskNumber -and [string]$_.DriveLetter -match '^[A-Z]$' } |
+                    ForEach-Object { [string]$_.DriveLetter } | Sort-Object -Unique) -join ',')
+            }}
+        }
+        Say (($diskRows | Select-Object -Property $columns | Format-Table -AutoSize | Out-String -Width 240).TrimEnd())
+        $targetText = if ($DiskSelection) { Read-Host 'Enter disk number (Enter to cancel)' } else { Read-Host 'Enter USB drive letter (Enter to cancel)' }
+    } else {
+        if ($null -eq $TargetArguments[0]) { throw 'Empty staging target.' }
+        $targetText = [string]$TargetArguments[0]
+    }
+    if ([string]::IsNullOrWhiteSpace($targetText)) { throw 'Staging selection cancelled.' }
+    $targetText = $targetText.Trim()
+    if ($DiskSelection) {
+        [uint32]$selectedNumber = 0
+        if ($targetText -notmatch '^[0-9]+$' -or -not [uint32]::TryParse($targetText,[ref]$selectedNumber)) {
+            throw 'Enter a valid physical disk number.'
+        }
+        if ($interactive -and @($diskRows | Where-Object { $_.Number -eq $selectedNumber }).Count -ne 1) {
+            throw 'Selected disk was not uniquely listed.'
+        }
+        return $selectedNumber
+    }
+    if ($targetText -notmatch '^[D-Zd-z]$') { throw 'Enter one drive letter from D through Z.' }
+    $selectedLetter = $targetText.ToUpperInvariant()
+    if ($interactive -and @($partRows | Where-Object { [string]$_.DriveLetter -eq $selectedLetter }).Count -ne 1) {
+        throw 'Selected drive letter was not uniquely listed.'
+    }
+    return $selectedLetter
 }
 
 # Disk provisioning is separate from ordinary USB staging. All later writes
@@ -1361,7 +1417,7 @@ try {
         exit 0
     }
     if ($StageDxeCompanion) {
-        if (-not $StageDrive) { throw '-StageDxeCompanion requires -StageDrive <letter>.' }
+        if (-not $StageDrive) { throw '-StageDxeCompanion requires -StageDrive (optional letter).' }
         if ($variants.Count -ne 1 -or (Get-SelectionCount) -ne 1 -or
             -not (Test-PairedTransactionVariant $variants[0] 'prepare')) {
             throw '-StageDxeCompanion requires firmware-transaction -Operation Menu, one selected BDF and the pinned application configuration.'
@@ -1445,8 +1501,10 @@ try {
     }
 
     $drive = $null; $usbRoot = $null; $targetVolumeId = $null
+    $selectedStageDisk = $null
+    if ($script:DiskStageRequested) { $selectedStageDisk = Resolve-StageTarget $true $StageTargetArgument }
     if ($StageDrive) {
-        $drive = $StageDrive.ToUpperInvariant()
+        $drive = Resolve-StageTarget $false $StageTargetArgument
         $usbRoot = Assert-UsbVolume $drive
         if ($assetRepoForStage) { $assetRepoForStage = $RepoRoot }
         $targetVolumeId = [string](Get-Volume -DriveLetter $drive -ErrorAction Stop).UniqueId
@@ -1485,7 +1543,7 @@ try {
                 $stageAssetBytes += [uint64]$assetEntry.Pin.bytes
             }
         }
-        $script:ProvisionedStage = New-StagePartition $StageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach')) $stageAssetBytes
+        $script:ProvisionedStage = New-StagePartition $selectedStageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach')) $stageAssetBytes
         $drive = $script:ProvisionedStage.Letter
         if ($script:ProvisionedStage.Disk.BusType -ne 'USB') { $script:StagePartitionGuid = $script:ProvisionedStage.Guid.ToString('D') }
         $usbRoot = Assert-UsbVolume $drive
