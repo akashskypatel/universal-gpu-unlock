@@ -356,6 +356,62 @@ static BOOLEAN TraceClock(UINTN *seconds) {
   return TRUE;
 }
 
+/* UEFI 2.4 Timestamp protocol: optional, platform-independent free-running
+ * counter. Only diagnostics use it; no hardware timeout or admission depends
+ * on its availability. Reject ambiguous short counters and backward samples. */
+typedef struct {UINT64 Frequency,EndValue;} GU_TIMESTAMP_PROPERTIES;
+typedef UINT64 (EFIAPI *GU_TIMESTAMP_GET)(VOID);
+typedef EFI_STATUS (EFIAPI *GU_TIMESTAMP_PROPERTIES_GET)(GU_TIMESTAMP_PROPERTIES *);
+typedef struct {
+  GU_TIMESTAMP_GET GetTimestamp;
+  GU_TIMESTAMP_PROPERTIES_GET GetProperties;
+} GU_TIMESTAMP_PROTOCOL;
+static EFI_GUID TimestampGuid={0xafbfde41,0x2e6e,0x4262,{0xba,0x65,0x62,0xb9,0x23,0x6e,0x54,0x95}};
+static GU_TIMESTAMP_PROTOCOL *TraceTimestamp;
+static GU_TIMESTAMP_GET TraceTimestampGet;
+static GU_TIMESTAMP_PROPERTIES_GET TraceTimestampProperties;
+static GU_TIMESTAMP_PROPERTIES TraceTimestampInfo;
+static UINT64 TraceBootFineStart;
+static BOOLEAN TraceBootFineValid;
+
+static BOOLEAN TraceFineInit(VOID) {
+  EFI_BOOT_SERVICES *bs=Table?Table->BootServices:NULL;
+  GU_TIMESTAMP_PROTOCOL *p=NULL;
+  GU_TIMESTAMP_PROPERTIES info={0};
+  if(!bs||!bs->LocateProtocol||
+     bs->LocateProtocol(&TimestampGuid,NULL,(VOID **)&p)!=EFI_SUCCESS||
+     !p||!p->GetTimestamp||!p->GetProperties||
+     p->GetProperties(&info)!=EFI_SUCCESS||
+     !info.Frequency||info.Frequency>1000000000000ULL||
+     info.EndValue/info.Frequency<86400ULL)return FALSE;
+  TraceTimestamp=p;TraceTimestampGet=p->GetTimestamp;
+  TraceTimestampProperties=p->GetProperties;TraceTimestampInfo=info;
+  return TRUE;
+}
+static BOOLEAN TraceFineClock(UINT64 *ticks) {
+  EFI_BOOT_SERVICES *bs=Table?Table->BootServices:NULL;
+  GU_TIMESTAMP_PROTOCOL *p=NULL;
+  if(!ticks||!TraceTimestamp||!bs||!bs->LocateProtocol||
+     bs->LocateProtocol(&TimestampGuid,NULL,(VOID **)&p)!=EFI_SUCCESS||
+     p!=TraceTimestamp||!p||p->GetTimestamp!=TraceTimestampGet||
+     p->GetProperties!=TraceTimestampProperties)return FALSE;
+  *ticks=p->GetTimestamp();
+  return *ticks<=TraceTimestampInfo.EndValue;
+}
+static BOOLEAN TraceFineDelta(UINT64 start,UINT64 end,UINT64 *ms) {
+  UINT64 hz=TraceTimestampInfo.Frequency,delta;
+  if(!ms||!hz||end<start||end>TraceTimestampInfo.EndValue)return FALSE;
+  delta=end-start;
+  if(delta/hz>=86400ULL)return FALSE;
+  *ms=(delta/hz)*1000ULL+((delta%hz)*1000ULL)/hz;
+  return TRUE;
+}
+static const char *TraceMsText(BOOLEAN valid,UINT64 ms,char *out,UINTN capacity) {
+  if(!valid)return "NA";
+  TraceFormat(out,capacity,"%llu",(unsigned long long)ms);
+  return out;
+}
+
 static const char *TraceElapsedText(char *buffer,UINTN size) {
   UINTN now=0;
   if(!TraceClockStarted) {
@@ -451,7 +507,7 @@ VOID GuTraceReset(VOID) {
 }
 
 VOID GuTraceDetail(const char *phase,const char *format,...) {
-  char detail[160];
+  char detail[256];
   va_list args;
   if(!Log)return;
   if(!format)format="";
@@ -480,8 +536,15 @@ VOID GuTracePhase(const char *phase) {
     const char *a=phase,*b="close-USB-log";
     while(*a&&*a==*b){a++;b++;}
     UINTN now=0;
-    if(!*a&&!*b&&TraceClock(&now))GuLog("TRACE_BOOT TOTAL_SECONDS=%u\n",
+    if(!*a&&!*b) {
+      if(TraceClock(&now))GuLog("TRACE_BOOT TOTAL_SECONDS=%u\n",
         (unsigned)((now+86400U-TraceBootStartSeconds)%86400U));
+      UINT64 end=0,ms=0;char value[24];
+      BOOLEAN fine=TraceBootFineValid&&TraceFineClock(&end)&&
+        TraceFineDelta(TraceBootFineStart,end,&ms);
+      GuLog("TRACE_BOOT TOTAL_MS=%s SCOPE=BOOT_OPEN_TO_CLOSE_MARKER\n",
+        TraceMsText(fine,ms,value,sizeof(value)));
+    }
   }
 }
 
@@ -573,6 +636,7 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
 
   Table=t;Self=image;
   TraceBootClockStarted=TraceClock(&TraceBootStartSeconds);
+  TraceBootFineValid=TraceFineInit()&&TraceFineClock(&TraceBootFineStart);
 
   EFI_BOOT_SERVICES *b=t->BootServices;EFI_LOADED_IMAGE_PROTOCOL *loaded=NULL;
 
@@ -657,6 +721,9 @@ EFI_STATUS GuBootOpen(EFI_HANDLE image,EFI_SYSTEM_TABLE *t) {
   EFI_STATUS closed=CloseBootFile(&dir);
   if(closed!=EFI_SUCCESS){s=closed;goto failed;}
   if(s!=EFI_SUCCESS||!Log){if(s==EFI_SUCCESS)s=EFI_OUT_OF_RESOURCES;goto failed;}
+  GuLog("TRACE_CLOCK SOURCE=%s FREQUENCY_HZ=%llu RTC_SECONDS=1\n",
+        TraceBootFineValid?"UEFI_TIMESTAMP":"RTC_OR_UNAVAILABLE",
+        (unsigned long long)(TraceBootFineValid?TraceTimestampInfo.Frequency:0));
 
   if(!BootFromUsb) {
     /* The last gate: a resident image needs its own writable log directory, which
@@ -764,6 +831,11 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
 
   *data=NULL;EFI_FILE_PROTOCOL *f=NULL;UINT64 info_words[128];UINTN info_bytes=sizeof(info_words);
   if(BootFileStatus!=EFI_SUCCESS)return BootFileStatus;
+  UINT64 file_start=0,file_end=0,file_ms=0,read_ms=0,progress_ms=0;
+  UINTN file_rtc_start=0,file_rtc_end=0;
+  BOOLEAN fine_file=TraceAssetReadActive&&TraceFineClock(&file_start);
+  BOOLEAN fine_reads=fine_file,fine_progress=fine_file;
+  BOOLEAN file_rtc=TraceAssetReadActive&&TraceClock(&file_rtc_start);
 
   EFI_STATUS s=root->Open(root,&f,(CHAR16 *)name,EFI_FILE_MODE_READ,0);
   s=BootFileOpenResult(s,&f);
@@ -823,14 +895,15 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
         if(s==EFI_SUCCESS)s=f->GetPosition(f,&pos);
         if(s==EFI_SUCCESS&&pos!=(UINT64)expected)s=EFI_DEVICE_ERROR;
         if(s==EFI_SUCCESS) {
-          UINTN start=0,end=0;
-          BOOLEAN timed=TraceClock(&start);
+          UINTN start=0,end=0;UINT64 ticks=0,finish=0,ms=0;char value[24];
+          BOOLEAN timed=TraceClock(&start),fine=TraceFineClock(&ticks);
           memcpy(p,source->data,expected);
+          fine=fine&&TraceFineClock(&finish)&&TraceFineDelta(ticks,finish,&ms);
           at=expected;
           timed=timed&&TraceClock(&end);
-          GuTraceDetail("asset-cache","HIT=1 BYTES=%u COPY_SECONDS=%u CLOCK=%u INDEPENDENT_BUFFER=1",
+          GuTraceDetail("asset-cache","HIT=1 BYTES=%u COPY_SECONDS=%u CLOCK=%u INDEPENDENT_BUFFER=1 COPY_MS=%s",
                         (unsigned)expected,(unsigned)(timed?(end+86400U-start)%86400U:0),
-                        (unsigned)timed);
+                        (unsigned)timed,TraceMsText(fine,ms,value,sizeof(value)));
           GuTraceProgress("asset-read-bytes",at,expected);
           if(BootFileStatus!=EFI_SUCCESS)s=BootFileStatus;
         }
@@ -842,7 +915,11 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
     UINTN n=expected-at;if(n>chunk)n=chunk;UINTN wanted=n;
     UINTN before=0,after=0;
     BOOLEAN measured=adaptive&&TraceClock(&before);
+    UINT64 tick_start=0,tick_end=0,ms=0;
+    BOOLEAN fine=fine_reads&&TraceFineClock(&tick_start);
     s=f->Read(f,&n,(UINT8 *)p+at);reads++;
+    fine_reads=fine&&TraceFineClock(&tick_end)&&TraceFineDelta(tick_start,tick_end,&ms);
+    if(fine_reads)read_ms+=ms;
     measured=measured&&TraceClock(&after);
     if(adaptive&&!measured)timing=FALSE;
     UINTN elapsed=measured?(after+86400U-before)%86400U:0;
@@ -887,7 +964,11 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
        * durability or suppress phase/intent/result records. */
       if(!reported||at==expected||at-reported>=4194304U||
          (clock&&(now+86400U-last_report)%86400U>=2U)) {
+        UINT64 start=0,end=0,ms=0;
+        BOOLEAN fine=fine_progress&&TraceFineClock(&start);
         GuTraceProgress("asset-read-bytes",at,expected);
+        fine_progress=fine&&TraceFineClock(&end)&&TraceFineDelta(start,end,&ms);
+        if(fine_progress)progress_ms+=ms;
         reported=at;
         if(clock&&TraceClock(&finished)) {
           progress_seconds+=(finished+86400U-now)%86400U;
@@ -908,6 +989,18 @@ static EFI_STATUS ReadFile(EFI_FILE_PROTOCOL *root,const CHAR16 *name,UINTN expe
   EFI_STATUS closed=CloseBootFile(&f);if(closed!=EFI_SUCCESS)s=closed;
 
   if(s!=EFI_SUCCESS){GuFree(p);return s;}
+  if(adaptive) {
+    char file_value[24],read_value[24],progress_value[24],rtc_value[24];
+    fine_file=fine_file&&TraceFineClock(&file_end)&&TraceFineDelta(file_start,file_end,&file_ms);
+    file_rtc=file_rtc&&TraceClock(&file_rtc_end);
+    GuTraceDetail("asset-file-timing","SOURCE=%s BYTES=%u FILE_SECONDS=%s FILE_MS=%s READ_MS=%s PROGRESS_MS=%s",
+      root==Root?"LAUNCH_ROOT":"ESP_FALLBACK",(unsigned)expected,
+      TraceMsText(file_rtc,(file_rtc_end+86400U-file_rtc_start)%86400U,rtc_value,sizeof(rtc_value)),
+      TraceMsText(fine_file,file_ms,file_value,sizeof(file_value)),
+      TraceMsText(fine_reads,read_ms,read_value,sizeof(read_value)),
+      TraceMsText(fine_progress,progress_ms,progress_value,sizeof(progress_value)));
+    if(BootFileStatus!=EFI_SUCCESS){GuFree(p);return BootFileStatus;}
+  }
   if(learn&&expected>=1048576U&&reads){AssetReadSize=proven;AssetReadBestBytes=best_bytes;
     AssetReadBestSeconds=best_seconds;AssetReadSizeSettled=settled;}
 #ifdef GU_ACTIVE_SINGLE_TARGET
@@ -1333,16 +1426,19 @@ EFI_STATUS GuBootLoadAssets(VOID) {
     /* Verify every fallback immediately; do not accept matching filenames
      * from the internal partition without the original signed-data digest. */
 #ifdef GU_ACTIVE_SINGLE_TARGET
-    UINTN hash_start=0,hash_end=0;
+    UINTN hash_start=0,hash_end=0;UINT64 hash_ticks=0,hash_finish=0,hash_ms=0;
     BOOLEAN hash_timed=i==2&&TraceClock(&hash_start);
+    BOOLEAN hash_fine=i==2&&TraceFineClock(&hash_ticks);
 #endif
     BOOLEAN hash_ok=GuHashMatches(p,a->bytes,a->sha256);
 #ifdef GU_ACTIVE_SINGLE_TARGET
     if(i==2) {
       hash_timed=hash_timed&&TraceClock(&hash_end);
-      GuTraceDetail("asset-hash-timing","BYTES=%u SECONDS=%u CLOCK=%u MATCH=%u",
+      char value[24];
+      hash_fine=hash_fine&&TraceFineClock(&hash_finish)&&TraceFineDelta(hash_ticks,hash_finish,&hash_ms);
+      GuTraceDetail("asset-hash-timing","BYTES=%u SECONDS=%u CLOCK=%u MATCH=%u HASH_MS=%s",
         (unsigned)a->bytes,(unsigned)(hash_timed?(hash_end+86400U-hash_start)%86400U:0),
-        (unsigned)hash_timed,(unsigned)hash_ok);
+        (unsigned)hash_timed,(unsigned)hash_ok,TraceMsText(hash_fine,hash_ms,value,sizeof(value)));
     }
 #endif
     if(!hash_ok) {

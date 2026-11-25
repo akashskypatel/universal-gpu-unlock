@@ -253,6 +253,9 @@ static BOOLEAN GuCpuPoolOwns(const GU_PLATFORM *owner,const VOID *p,UINTN bytes)
          (owner==&cards[0]&&p==cached_bytes&&cached_bytes));
 }
 static BOOLEAN TraceClock(UINTN *seconds){*seconds=clock_seconds;return mode!=11;}
+static BOOLEAN TraceFineClock(UINT64 *ticks){*ticks=clock_seconds*1000ULL;return mode!=11;}
+static BOOLEAN TraceFineDelta(UINT64 start,UINT64 end,UINT64 *ms){if(end<start)return FALSE;*ms=end-start;return TRUE;}
+static const char *TraceMsText(BOOLEAN valid,UINT64 ms,char *out,UINTN capacity){if(!valid)return "NA";snprintf(out,capacity,"%llu",(unsigned long long)ms);return out;}
 static VOID GuTraceDetail(const char *phase,const char *fmt,...){(void)phase;(void)fmt;}
 static VOID GuTraceProgress(const char *phase,UINTN done,UINTN total) {
   (void)phase;(void)total;progress_calls++;last_progress=done;

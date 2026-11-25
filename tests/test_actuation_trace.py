@@ -234,6 +234,79 @@ int main(void) {
         self.assertIn("if(!seconds||!rt||!rt->GetTime)return FALSE;", body)
         self.assertIn('return "NA";', self.boot)
 
+    def test_optional_timestamp_clock_reports_only_valid_intervals(self):
+        start = self.boot.index("typedef struct {UINT64 Frequency,EndValue;}")
+        end = self.boot.index("static const char *TraceElapsedText(", start)
+        actual = self.boot[start:end]
+        host = r'''
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+typedef uint64_t UINT64;
+typedef size_t UINTN;
+typedef void VOID;
+typedef int BOOLEAN;
+typedef int EFI_STATUS;
+#define TRUE 1
+#define FALSE 0
+#define EFI_SUCCESS 0
+#define EFIAPI
+typedef struct {unsigned a,b,c;unsigned char d[8];} EFI_GUID;
+typedef struct {
+  EFI_STATUS (*LocateProtocol)(EFI_GUID *,void *,void **);
+} EFI_BOOT_SERVICES;
+typedef struct {EFI_BOOT_SERVICES *BootServices;} EFI_SYSTEM_TABLE;
+static EFI_SYSTEM_TABLE *Table;
+static size_t TraceFormat(char *out,size_t n,const char *fmt,...){
+  va_list args;va_start(args,fmt);int result=vsnprintf(out,n,fmt,args);va_end(args);return (size_t)result;
+}
+''' + actual + r'''
+static GU_TIMESTAMP_PROTOCOL protocol;
+static int unavailable,properties_fail;
+static UINT64 ticks;
+static GU_TIMESTAMP_PROPERTIES properties={1000000ULL,UINT64_MAX};
+static UINT64 Sample(void){return ticks;}
+static UINT64 Other(void){return ticks;}
+static EFI_STATUS Properties(GU_TIMESTAMP_PROPERTIES *p){*p=properties;return properties_fail;}
+static EFI_STATUS Locate(EFI_GUID *g,void *r,void **p){
+  (void)r;if(g!=&TimestampGuid||unavailable)return 1;*p=&protocol;return 0;
+}
+#define CHECK(x) do{if(!(x)){fprintf(stderr,"FAIL %d %s\n",__LINE__,#x);return 1;}}while(0)
+int main(void){
+  EFI_BOOT_SERVICES bs={Locate};EFI_SYSTEM_TABLE table={&bs};Table=&table;
+  protocol.GetTimestamp=Sample;protocol.GetProperties=Properties;
+  UINT64 start=0,end=0,ms=0;char value[24];
+  unavailable=1;CHECK(!TraceFineInit()&&!TraceFineClock(&start));
+  unavailable=0;properties_fail=1;CHECK(!TraceFineInit());
+  properties_fail=0;properties.Frequency=0;CHECK(!TraceFineInit());
+  properties.Frequency=1000000;properties.EndValue=1000;CHECK(!TraceFineInit());
+  properties.EndValue=UINT64_MAX;CHECK(TraceFineInit());
+  TraceBootFineValid=TraceFineClock(&TraceBootFineStart);CHECK(TraceBootFineValid);
+  ticks=100000;CHECK(TraceFineClock(&start));
+  ticks=350000;CHECK(TraceFineClock(&end)&&TraceFineDelta(start,end,&ms)&&ms==250);
+  CHECK(strcmp(TraceMsText(TRUE,ms,value,sizeof(value)),"250")==0);
+  CHECK(!TraceFineDelta(end,start,&ms));
+  CHECK(!TraceFineDelta(0,86400ULL*properties.Frequency,&ms));
+  CHECK(strcmp(TraceMsText(FALSE,0,value,sizeof(value)),"NA")==0);
+  protocol.GetTimestamp=Other;CHECK(!TraceFineClock(&end));
+  protocol.GetTimestamp=Sample;unavailable=1;CHECK(!TraceFineClock(&end));
+  return 0;
+}
+'''
+        if not shutil.which("gcc"):
+            self.skipTest("gcc unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            source = pathlib.Path(tmp) / "timestamp.c"
+            binary = pathlib.Path(tmp) / "timestamp"
+            source.write_text(host, encoding="utf-8")
+            built = subprocess.run(["gcc", "-std=c11", "-Wall", "-Wextra", "-Werror",
+                                    str(source), "-o", str(binary)], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_the_vendor_wait_is_rate_limited_by_accumulated_delay(self):
         body = self.boot.split("VOID GuTraceDelay(UINT64 ticks) {")[1].split("\n}")[0]
         self.assertIn("if(ticks<TraceDelayShown+250000ULL)return;", body)
