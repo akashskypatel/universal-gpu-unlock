@@ -1276,6 +1276,8 @@ if ($Mode -eq 0) {
         self.resolve(dxe + ['-StagePartitionGuid', 'bad'], valid=False)
         self.resolve(combined + ['-StagePartitionGuid', pin], valid=False)
         self.resolve(dxe + ['-StagePartitionGuid', pin, '-StageDrive', 'G'], valid=False)
+        self.resolve(dxe + ['-WindowsEspGuid', guid], valid=False)
+        self.resolve(dxe + ['-StagePartitionGuid', pin, '-WindowsEspGuid', guid], valid=False)
         for operation in ("Unlock", "UnlockWithResume"):
             args = ["-Only", "firmware-transaction", "-Operation", operation]
             result = self.resolve(args)
@@ -1538,7 +1540,10 @@ class TheReviewedProfileSkipSaysWhatToCreate(unittest.TestCase):
         self.assertEqual([v["id"] for v in MANIFEST["variants"] if v["switches"].get("FirmwareReattach")],
                          ["app-firmware-reattach"])
         dxe = (ROOT / "src" / "Build-Dxe-Driver.ps1").read_text(encoding="utf-8")
-        self.assertNotIn("WindowsEspGuid", dxe)
+        # The shared GUID parser is not a Windows ESP input. Check the actual
+        # PowerShell variable (including braced spelling), not the helper name.
+        self.assertNotRegex(dxe, r"(?i)\$(?:\{WindowsEspGuid\}|WindowsEspGuid\b)")
+        self.assertIn("ConvertTo-GuWindowsEspGuid $StagePartitionGuid", dxe)
         profile = (ROOT / "src" / "boot_profile.h").read_text(encoding="utf-8")
         self.assertIn('#include "local/boot_profile.h"', profile)
         for variant in MANIFEST["variants"]:
