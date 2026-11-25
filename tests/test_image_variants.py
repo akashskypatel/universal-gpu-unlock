@@ -735,7 +735,7 @@ class TheScriptHonoursTheCatalogue(unittest.TestCase):
 
     def test_firmware_asset_paths_match_the_reference_verifier(self):
         import verify_reference_assets
-        stage = SCRIPT.split("function Stage-FirmwareAssets {", 1)[1].split("function Stage-SignedEfi", 1)[0]
+        stage = SCRIPT.split("function Get-FirmwareAssetPlan {", 1)[1].split("function Stage-FirmwareAssets", 1)[0]
         paths = stage.split("$assetPaths = @(", 1)[1].split(")", 1)[0]
         self.assertEqual(set(re.findall(r"'([^']+\.bin)'", paths)), set(verify_reference_assets.PINS))
         provenance = json.loads((ROOT / "docs" / "asset_provenance.json").read_text(encoding="utf-8"))
@@ -805,7 +805,7 @@ $ErrorActionPreference = 'Stop'
 $script:ProvisionedStage = $null
 $script:creates = 0
 $script:formats = 0
-$script:disk = [pscustomobject]@{ Number=0; UniqueId='disk-fixture'; SerialNumber='serial'; Size=10GB; LargestFreeExtent=2GB; BusType='NVMe'; PartitionStyle='GPT'; IsBoot=$false; IsSystem=$false; IsOffline=$false; IsReadOnly=$false; FriendlyName='fixture' }
+$script:disk = [pscustomobject]@{ Number=0; UniqueId='disk-fixture'; SerialNumber='serial'; Size=10GB; LargestFreeExtent=2GB; LogicalSectorSize=512; BusType='NVMe'; PartitionStyle='GPT'; IsBoot=$false; IsSystem=$false; IsOffline=$false; IsReadOnly=$false; FriendlyName='fixture' }
 $script:parts = @([pscustomobject]@{ Guid='11111111-1111-1111-1111-111111111111'; Offset=1MB; Size=1GB; PartitionNumber=1; DiskNumber=0; GptType='ebd0a0a2-b9e5-4433-87c0-68b6b72699c7'; IsSystem=$false; IsBoot=$false; DriveLetter='F' })
 $script:newGuid = '22222222-2222-2222-2222-222222222222'
 if ($Mode -eq 2) { $script:disk.LargestFreeExtent=256MB }
@@ -828,12 +828,17 @@ function New-Partition {
     return $p
 }
 function Format-Volume {
-    param($Partition,$FileSystem,$NewFileSystemLabel,$Confirm,$ErrorAction)
+    param($Partition,$FileSystem,$AllocationUnitSize,$NewFileSystemLabel,$Confirm,$ErrorAction)
     $script:formats++
-    if ($Partition.Guid -ne $script:newGuid -or $FileSystem -ne 'FAT32') { throw 'Unexpected format target' }
+    if ($Partition.Guid -ne $script:newGuid -or $FileSystem -ne 'FAT32' -or $AllocationUnitSize -ne 512) { throw 'Unexpected format target' }
 }
 ''' + functions + r'''
 $failed=$false
+if ((Get-StagePartitionSizeMB 84585936 512 0) -ne 162 -or
+    (Get-StagePartitionSizeMB 84585936 4096 0) -ne 272 -or
+    (Get-StagePartitionSizeMB 0 512 0) -ne 64 -or
+    (Get-StagePartitionSizeMB 84585936 512 200) -ne 200) { throw 'Unexpected automatic partition size' }
+try { [void](Get-StagePartitionSizeMB 84585936 512 100); throw 'Undersized override accepted' } catch { if ($_.Exception.Message -notlike 'PartitionSizeMB must be at least*') { throw } }
 try {
     $script:ProvisionedStage = New-StagePartition 0 1024 ($Mode -ne 7)
     if ($Mode -eq 0) {
@@ -878,6 +883,8 @@ if ($Mode -eq 0) {
                 "function Get-Volume { param($DriveLetter, $ErrorAction) return [pscustomobject]@{ UniqueId = 'fixture' } }\n"
                 "function Say([string]$Text) { [Console]::Out.WriteLine($Text) }\n"
                 + helpers + "\n"
+                "$plan = @(Get-FirmwareAssetPlan -AssetRepo $Repo)\n"
+                "if (($plan | ForEach-Object { [int64]$_.Pin.bytes } | Measure-Object -Sum).Sum -ne 84585936) { throw 'Wrong bundle size' }\n"
                 "$result = @(Stage-FirmwareAssets -AssetRepo $Repo -Root $Media -Drive X -ExpectedVolumeId fixture)\n"
                 "if ($result.Count -ne 9) { throw 'Unexpected asset count' }\n",
                 encoding="utf-8")

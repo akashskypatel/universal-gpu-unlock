@@ -69,7 +69,8 @@ Select an existing GPT physical disk by number. Create one new FAT32 EFI
 partition in unallocated space after explicit confirmation. Never initialize,
 erase or resize a disk. Internal disks support UnlockReattach only.
 .PARAMETER PartitionSizeMB
-New partition size in MiB (default 1024; 512 through 4096). Requires -StageDisk.
+Optional size override in MiB (64 through 4096). Default is twice the verified staged
+asset bytes rounded up, with a FAT32 sector-size minimum. Requires -StageDisk.
 .PARAMETER StageDxeCompanion
 For -Only firmware-transaction -Operation Menu with one selected BDF and the pinned ESP policy: build and sign the matching
 `dxe-actuate-one-target` image, stage it at EFI\Drivers\AdaUnlockDxe.efi,
@@ -157,8 +158,8 @@ param(
     [ValidatePattern('^[D-Zd-z]$')]
     [string]$StageDrive,
     [uint32]$StageDisk,
-    [ValidateRange(512,4096)]
-    [uint32]$PartitionSizeMB = 1024,
+    [ValidateRange(64,4096)]
+    [uint32]$PartitionSizeMB,
     [string]$SelectionBdf,
     [string]$SelectionBdfs,
     [string]$WindowsEspGuid,
@@ -299,19 +300,34 @@ function Get-StageLayoutKey($Partitions) {
 function Assert-StageDiskIdentity($Expected) {
     $live = Get-StageDiskIdentity $Expected.Number
     if ($live.UniqueId -cne $Expected.UniqueId -or $live.Size -ne $Expected.Size -or
-        $live.BusType -ne $Expected.BusType -or $live.SerialNumber -cne $Expected.SerialNumber) {
+        $live.BusType -ne $Expected.BusType -or $live.SerialNumber -cne $Expected.SerialNumber -or
+        $live.LogicalSectorSize -ne $Expected.LogicalSectorSize) {
         throw 'Physical disk identity changed.'
     }
     return $live
 }
 
-function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal) {
+# FAT32 needs at least 65,525 data clusters; allow for FAT/reserved sectors.
+function Get-StagePartitionSizeMB([uint64]$AssetBytes,[uint32]$LogicalSectorSize,[uint32]$OverrideMB) {
+    if ($LogicalSectorSize -eq 512) { $minimumMB = 64 }
+    elseif ($LogicalSectorSize -eq 4096) { $minimumMB = 272 }
+    else { throw 'Unsupported logical sector size for automatic FAT32 provisioning.' }
+    if ($AssetBytes -gt 2GB) { throw 'Firmware bundle exceeds automatic partition size policy.' }
+    $requiredMB = [uint32][Math]::Max($minimumMB, [Math]::Ceiling((2.0 * $AssetBytes) / 1MB))
+    if ($OverrideMB -and $OverrideMB -lt $requiredMB) { throw "PartitionSizeMB must be at least $requiredMB for this bundle and sector size." }
+    if ($OverrideMB) { return $OverrideMB }
+    return $requiredMB
+}
+
+function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal,[uint64]$AssetBytes=0) {
     $disk = Get-StageDiskIdentity $Number
     if ($disk.BusType -ne 'USB' -and -not $AllowInternal) {
         throw 'Internal disk staging currently supports firmware-transaction UnlockReattach only.'
     }
     $espType = [guid]'c12a7328-f81f-11d2-ba4b-00a0c93ec93b'
+    $SizeMB = Get-StagePartitionSizeMB $AssetBytes $disk.LogicalSectorSize $SizeMB
     $size = [uint64]$SizeMB * 1MB
+    Say ("STAGE_SIZE ASSET_BYTES={0} LOGICAL_SECTOR={1} PARTITION_MIB={2}" -f $AssetBytes,$disk.LogicalSectorSize,$SizeMB)
     $before = @(Get-StageLayout $disk)
     $beforeKey = Get-StageLayoutKey $before
     if (@($before | Where-Object { $_.IsBoot -or $_.IsSystem -or ([guid]$_.GptType -eq $espType) }).Count) {
@@ -349,7 +365,7 @@ function New-StagePartition([uint32]$Number,[uint32]$SizeMB,[bool]$AllowInternal
     }
     $letter = [string]$new[0].DriveLetter
     # Format only the just-created and independently re-observed partition object.
-    [void](Format-Volume -Partition $new[0] -FileSystem FAT32 -NewFileSystemLabel GPUUNLOCK -Confirm:$false -ErrorAction Stop)
+    [void](Format-Volume -Partition $new[0] -FileSystem FAT32 -AllocationUnitSize $disk.LogicalSectorSize -NewFileSystemLabel GPUUNLOCK -Confirm:$false -ErrorAction Stop)
     $live = Assert-StageDiskIdentity $disk
     $after = @(Get-StageLayout $live)
     if ((Get-StageLayoutKey $after) -cne (Get-StageLayoutKey @($old + $new | Sort-Object Offset))) {
@@ -651,8 +667,8 @@ function Assert-FirmwareAssetFile($AssetPath, $AssetPin) {
     }
 }
 
-function Stage-FirmwareAssets {
-    param([string]$AssetRepo, [string]$Root, [string]$Drive, [string]$ExpectedVolumeId)
+function Get-FirmwareAssetPlan {
+    param([string]$AssetRepo, [string]$Root)
     # The loader accepts the shared GSP file in AD102-ASSETS for both architectures.
     $assetManifest = Get-Content -LiteralPath (Join-Path $AssetRepo 'docs/asset_provenance.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $assetPaths = @(
@@ -668,8 +684,8 @@ function Stage-FirmwareAssets {
     )
     # An old Ampere GSP copy takes precedence over the shared file. Verify it too.
     $alternateAsset = 'GA102-ASSETS/gsp_ga10x.bin'
-    if (Test-Path -LiteralPath (Join-Path $Root $alternateAsset)) { $assetPaths += $alternateAsset }
-    $assetPlan = @(foreach ($assetRelative in $assetPaths) {
+    if ($Root -and (Test-Path -LiteralPath (Join-Path $Root $alternateAsset))) { $assetPaths += $alternateAsset }
+    foreach ($assetRelative in $assetPaths) {
         $assetName = [IO.Path]::GetFileName($assetRelative)
         $assetPins = @($assetManifest.records | Where-Object { $_.asset -ceq "gpu-unlock/610.43.03/$assetName" })
         if ($assetPins.Count -ne 1 -or $assetPins[0].sha256 -cnotmatch '^[0-9a-f]{64}$' -or [int64]$assetPins[0].bytes -le 0) {
@@ -679,12 +695,20 @@ function Stage-FirmwareAssets {
         $assetSource = Join-Path $AssetRepo $assetSourceRelative
         Assert-NormalDirectory (Split-Path -Parent $assetSource)
         Assert-FirmwareAssetFile $assetSource $assetPins[0]
-        $assetDestination = Join-Path $Root $assetRelative
-        $assetDirectory = Split-Path -Parent $assetDestination
-        if (Test-Path -LiteralPath $assetDirectory) { Assert-NormalDirectory $assetDirectory }
-        if (Test-Path -LiteralPath $assetDestination) { Assert-FirmwareAssetFile $assetDestination $assetPins[0] }
+        $assetDestination = $null
+        if ($Root) {
+            $assetDestination = Join-Path $Root $assetRelative
+            $assetDirectory = Split-Path -Parent $assetDestination
+            if (Test-Path -LiteralPath $assetDirectory) { Assert-NormalDirectory $assetDirectory }
+            if (Test-Path -LiteralPath $assetDestination) { Assert-FirmwareAssetFile $assetDestination $assetPins[0] }
+        }
         [pscustomobject]@{ Source = $assetSource; Destination = $assetDestination; Pin = $assetPins[0] }
-    })
+    }
+}
+
+function Stage-FirmwareAssets {
+    param([string]$AssetRepo, [string]$Root, [string]$Drive, [string]$ExpectedVolumeId)
+    $assetPlan = @(Get-FirmwareAssetPlan -AssetRepo $AssetRepo -Root $Root)
     foreach ($assetEntry in $assetPlan) {
         if ((Assert-UsbVolume $Drive) -ne $Root -or
             [string](Get-Volume -DriveLetter $Drive -ErrorAction Stop).UniqueId -ne $ExpectedVolumeId) {
@@ -1455,7 +1479,13 @@ try {
         $skipReason = Test-VariantSelection $deployVariant
         if ($skipReason) { throw "Cannot provision for $($deployVariant.id): $skipReason" }
         [void](Build-VariantArguments $deployVariant)
-        $script:ProvisionedStage = New-StagePartition $StageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach'))
+        [uint64]$stageAssetBytes = 0
+        if ($assetRepoForStage) {
+            foreach ($assetEntry in @(Get-FirmwareAssetPlan -AssetRepo $assetRepoForStage)) {
+                $stageAssetBytes += [uint64]$assetEntry.Pin.bytes
+            }
+        }
+        $script:ProvisionedStage = New-StagePartition $StageDisk $PartitionSizeMB ([bool](Test-VariantSwitch $deployVariant 'FirmwareReattach')) $stageAssetBytes
         $drive = $script:ProvisionedStage.Letter
         if ($script:ProvisionedStage.Disk.BusType -ne 'USB') { $script:StagePartitionGuid = $script:ProvisionedStage.Guid.ToString('D') }
         $usbRoot = Assert-UsbVolume $drive
