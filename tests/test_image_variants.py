@@ -921,7 +921,7 @@ function Get-Disk { param($Number,$ErrorAction) $script:disk | Select-Object * }
 function Get-Partition { param($DiskNumber,$DriveLetter,$ErrorAction) if ($DriveLetter) { $script:parts | Where-Object DriveLetter -eq $DriveLetter } else { $script:parts | ForEach-Object { $_ | Select-Object * } } }
 function Get-Volume { param($DriveLetter,$ErrorAction) [pscustomobject]@{FileSystem='FAT32';FileSystemLabel='GPUUNLOCK';Size=1GB;UniqueId='volume-fixture'} }
 function Assert-NormalDirectory { param($Root) }
-function Set-Content { param($LiteralPath,$Encoding,$ErrorAction,[Parameter(ValueFromPipeline=$true)]$Value) process { if ($LiteralPath -notlike '*GPUUNLOCK-partition-*.json') { throw 'Unexpected receipt path' } } }
+function Set-Content { param($LiteralPath,$Encoding,[Parameter(ValueFromPipeline=$true)]$Value) process { if ($LiteralPath -notlike '*GPUUNLOCK-partition-*.json') { throw 'Unexpected receipt path' } } }
 function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
 function Read-Host { param($Prompt) if ($Mode -eq 1 -or $Mode -eq 11) { return 'NO' }; if ($Mode -eq 4) { $script:disk.UniqueId='replacement' }; if ($Mode -eq 9 -or $Mode -eq 12) { $script:parts[0].Size=2GB }; if ($Mode -eq 14) { return 'YeS' }; if ($Mode -ge 10) { return 'y' }; return 'Yes' }
 function New-Partition {
@@ -1089,7 +1089,7 @@ $script:parts=@(
 if ($Mode -eq 4) { $script:parts[1].IsSystem=$true }
 function Get-Disk { param($Number,$ErrorAction) $script:disk | Select-Object * }
 function Get-Partition { param($ErrorAction) $script:parts | ForEach-Object { $_ | Select-Object * } }
-function Get-Volume { param([Parameter(ValueFromPipeline=$true)]$Partition,$ErrorAction) process {
+function Get-Volume { param([Parameter(ValueFromPipeline=$true)]$Partition) process {
     [pscustomobject]@{FileSystem='FAT32';FileSystemLabel=$(if($Mode -eq 3){'OTHER'}else{'GPUUNLOCK'});UniqueId='volume-fixture'}
 } }
 function Say([string]$Text) { [Console]::Out.WriteLine($Text) }
